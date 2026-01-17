@@ -1,0 +1,22 @@
+Django==5.2.8
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+django-cors-headers==4.9.0
+django-filter==24.3
+# Testcoverage
+coverage==7.5.1
+factory-boy==3.3.0
+# Label generation (local, no external API)
+Pillow==10.4.0
+python-barcode==0.15.1
+# Azure Function integration
+requests>=2.31.0
+python-dotenv>=1.0.0
+# Azure Storage (for SAS token generation if container is private)
+azure-storage-blob>=12.19.0
+# Redis cache support (for external Redis services)
+django-redis>=5.4.0
+# PostgreSQL support
+# Use psycopg2-binary for easier installation (pre-compiled, no build dependencies)
+# For PostgreSQL 9.6, use version 2.9.x (last version with 9.6 support)
+psycopg2-binary>=2.9.0,<2.10.0

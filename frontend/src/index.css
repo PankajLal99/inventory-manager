@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scale down on mobile devices for better fit */
+@media (max-width: 768px) {
+  html {
+    font-size: 87.5%; /* 14px base instead of 16px (0.875 * 16 = 14) */
+  }
+}
+
+/* Even smaller on very small devices */
+@media (max-width: 480px) {
+  html {
+    font-size: 81.25%; /* 13px base (0.8125 * 16 = 13) */
+  }
+}
