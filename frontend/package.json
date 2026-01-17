@@ -11,7 +11,9 @@
     "build": "tsc -b && vite build",
     "start": "node server.js",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sandbox": "NODE_OPTIONS='--require ./scripts/fix-env.js' ampx sandbox",
+    "configure": "NODE_OPTIONS='--require ./scripts/fix-env.js' ampx configure profile"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.17",
