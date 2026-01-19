@@ -58,3 +58,9 @@ backend/.ipynb_checkpoints
 backend/.pytype/
 backend/.meson-python.egg-info/
 backend/*/__pycache__/*
+
+*.conf
+venv/
+venv
+static/
+static

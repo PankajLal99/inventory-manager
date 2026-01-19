@@ -34,8 +34,12 @@ DEBUG = False
 if DEBUG:
     ALLOWED_HOSTS = ['*']
 else:
-    ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'mtpos-api.intratechnosolutions.com', 'mtims-api.intratechnosolutions.com']
+    ALLOWED_HOSTS = ['ec2-13-127-116-174.ap-south-1.compute.amazonaws.com','127.0.0.1','13.127.116.174', 'localhost', 'mtpos-api.intratechnosolutions.com', 'mtims-api.intratechnosolutions.com']
+    #ALLOWED_HOSTS = ['*']
 
+SECURE_SSL_REDIRECT = True
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = None
 
 # Application definition
 
@@ -213,8 +217,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5176",
-    "http://127.0.0.1:3000",
-    "http://mtpos.intratechnosolutions.com",
+    "http://127.0.0.1:3000","http://13.127.116.174:8000",
+    "http://mtpos.intratechnosolutions.com","http://13.127.116.174",
     "https://mtpos.intratechnosolutions.com",
     "http://localhost","http://localhost:8765",
     "http://127.0.0.1","http://127.0.0.1:8765",
