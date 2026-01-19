@@ -1,7 +1,14 @@
 from rest_framework import serializers
 from .models import Purchase, PurchaseItem
-from backend.core.utils import create_audit_log
 from backend.catalog.utils import generate_category_based_short_code, get_prefix_for_product, get_max_number_for_prefix
+from backend.core.cache_signals import (
+    suspend_cache_signals, 
+    suspend_cache_signals_decorator,
+    invalidate_products_cache_manual,
+    invalidate_purchases_cache_manual,
+    invalidate_stock_cache_manual
+)
+from backend.core.utils import create_audit_log
 import uuid
 
 
@@ -24,65 +31,85 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
     created_barcodes = []
     
     if product.track_inventory:
-        # Find the highest serial number for this product (and variant) across all existing barcodes
-        # Serial numbers are incremental and unique irrespective of date
-        existing_barcodes_query = Barcode.objects.filter(product=product)
-        if purchase_item.variant:
-            existing_barcodes_query = existing_barcodes_query.filter(variant=purchase_item.variant)
-        else:
-            existing_barcodes_query = existing_barcodes_query.filter(variant__isnull=True)
+        # Lock the product to prevent race conditions during serial generation
+        # This ensures sequential serials even with rapid parallel requests
+        from django.db import transaction
         
-        max_serial = -1
-        for existing_barcode in existing_barcodes_query:
-            # Split barcode by '-' and get the serial number (third part, index 2)
-            parts = existing_barcode.barcode.split('-')
-            if len(parts) >= 3:
-                try:
-                    # Serial number is the third part (index 2), ignore collision counters (index 3+)
-                    serial_str = parts[2]
-                    serial_num = int(serial_str)
-                    max_serial = max(max_serial, serial_num)
-                except (ValueError, IndexError):
-                    # Skip if can't parse serial number
-                    continue
+        # We need to be in a transaction to use select_for_update
+        # The view/serializer usually wraps in strict atomic block? 
+        # If not, we should ensure we have one, but nested atomic is tricky with locks.
+        # Assuming the caller provides a transaction or we are in autocommit (which we shouldn't lock in).
+        # Let's verify we are in a transaction or create one.
         
-        # Start from max_serial + 1 (or 1 if no existing barcodes)
-        start_serial = max_serial + 1 if max_serial >= 0 else 1
-        
-        # Get the starting number for short_code (to ensure sequential numbering)
-        prefix = get_prefix_for_product(product)
-        max_short_code_number = get_max_number_for_prefix(prefix)
-        short_code_start = max_short_code_number + 1
-        
-        # Generate barcodes for each unit with incremental serial numbers
-        for i in range(quantity_int):
-            # Use incremental serial number starting from the next available number
-            serial_number = str(start_serial + i).zfill(4)  # Format as 0000, 0001, 0002, etc.
-            barcode_value = f"{base_name}-{timestamp}-{serial_number}"
+        # Find the highest serial number
+        # Use select_for_update on the product to serialize generation for this product
+        try:
+            with transaction.atomic():
+                _locked_product = product.__class__.objects.select_for_update().get(pk=product.pk)
+                
+                existing_barcodes_query = Barcode.objects.filter(product=product)
+                if purchase_item.variant:
+                    existing_barcodes_query = existing_barcodes_query.filter(variant=purchase_item.variant)
+                else:
+                    existing_barcodes_query = existing_barcodes_query.filter(variant__isnull=True)
+                
+                max_serial = -1
+                for existing_barcode in existing_barcodes_query:
+                    # Split barcode by '-' and get the serial number (third part, index 2)
+                    parts = existing_barcode.barcode.split('-')
+                    if len(parts) >= 3:
+                        try:
+                            # Serial number is the third part (index 2), ignore collision counters (index 3+)
+                            # Validates that it's actually a number
+                            serial_str = parts[2]
+                            serial_num = int(serial_str)
+                            max_serial = max(max_serial, serial_num)
+                        except (ValueError, IndexError):
+                            continue
+                
+                # Start from max_serial + 1
+                start_serial = max_serial + 1 if max_serial >= 0 else 1
+                
+                # Get the starting number for short_code (to ensure sequential numbering)
+                prefix = get_prefix_for_product(product)
+                max_short_code_number = get_max_number_for_prefix(prefix)
+                short_code_start = max_short_code_number + 1
+                
+                # Generate barcodes for each unit with incremental serial numbers
+                for i in range(quantity_int):
+                    # Use incremental serial number starting from the next available number
+                    serial_number = str(start_serial + i).zfill(4)  # Format as 0000, 0001, 0002, etc.
+                    barcode_value = f"{base_name}-{timestamp}-{serial_number}"
+                    
+                    # Ensure barcode uniqueness (in case of collision)
+                    counter = 0
+                    while Barcode.objects.filter(barcode=barcode_value).exists():
+                        counter += 1
+                        # If collision, append counter to make unique
+                        barcode_value = f"{base_name}-{timestamp}-{serial_number}-{counter}"
+                    
+                    # Generate unique short_code using category-based format with sequential numbering
+                    short_code = generate_category_based_short_code(product, start_number=short_code_start + i)
+                    
+                    # Create barcode linked to this purchase
+                    barcode = Barcode.objects.create(
+                        product=product,
+                        variant=purchase_item.variant,
+                        barcode=barcode_value,
+                        short_code=short_code,
+                        is_primary=(i == 0),  # First barcode is primary
+                        tag='new',  # Fresh from purchase
+                        purchase=purchase_item.purchase,
+                        purchase_item=purchase_item
+                    )
+                    created_barcodes.append(barcode)
+        except Exception as e:
+            # Fallback if locking fails (shouldn't happen in standard DBs)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error generating barcodes with lock: {e}")
+            raise e
             
-            # Ensure barcode uniqueness (in case of collision)
-            counter = 0
-            original_barcode = barcode_value
-            while Barcode.objects.filter(barcode=barcode_value).exists():
-                counter += 1
-                # If collision, append counter to make unique
-                barcode_value = f"{base_name}-{timestamp}-{serial_number}-{counter}"
-            
-            # Generate unique short_code using category-based format with sequential numbering
-            short_code = generate_category_based_short_code(product, start_number=short_code_start + i)
-            
-            # Create barcode linked to this purchase
-            barcode = Barcode.objects.create(
-                product=product,
-                variant=purchase_item.variant,
-                barcode=barcode_value,
-                short_code=short_code,
-                is_primary=(i == 0),  # First barcode is primary
-                tag='new',  # Fresh from purchase
-                purchase=purchase_item.purchase,
-                purchase_item=purchase_item
-            )
-            created_barcodes.append(barcode)
     else:
         # For non-tracked products, create single barcode if doesn't exist
         if not product.barcodes.filter(purchase_item=purchase_item).exists():
@@ -139,24 +166,35 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
 
 
 def auto_generate_labels_for_barcodes(barcodes, product_name):
-    """Auto-generate labels for barcodes (non-blocking, fails silently)
+    """Auto-generate labels for barcodes (non-blocking, background thread)
     
+    Spins off a background thread to handle label generation so the API response isn't delayed.
     Always tries Azure Function first (bulk), falls back to local generation if Azure fails.
-    Uses sequential processing (no threading) for maximum compatibility.
     """
-    try:
-        from backend.catalog.models import BarcodeLabel
-        from backend.catalog.label_generator import generate_label_image
-        from django.db import transaction
-        
-        # Collect barcodes that need generation for bulk processing
-        barcodes_to_queue = []
-        barcode_label_map = {}  # Map barcode_id to label_obj and created flag
-        
-        for barcode in barcodes:
-            try:
-                with transaction.atomic():
-                    label_obj, created = BarcodeLabel.objects.select_for_update().get_or_create(
+    import threading
+    
+    def _generate_labels_task(barcodes_list, prod_name):
+        try:
+            from backend.catalog.models import BarcodeLabel, Barcode
+            from backend.catalog.label_generator import generate_label_image
+            from django.db import transaction
+            
+            # Re-fetch barcodes to avoid detached instance issues in thread
+            barcode_ids = [b.id for b in barcodes_list]
+            barcodes = Barcode.objects.filter(id__in=barcode_ids)
+            
+            # Collect barcodes that need generation for bulk processing
+            barcodes_to_queue = []
+            barcode_label_map = {}  # Map barcode_id to label_obj and created flag
+            
+            for barcode in barcodes:
+                try:
+                    # Use a new connection for threading safety if needed, 
+                    # but standard Django ORM usually handles new thread = new connection.
+                    # We avoid select_for_update inside thread if possible, or handle transaction carefully.
+                    
+                    # Check if label exists without locking first
+                    label_obj, created = BarcodeLabel.objects.get_or_create(
                         barcode=barcode,
                         defaults={'label_image': ''}
                     )
@@ -168,16 +206,18 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                                       (label_obj.label_image.startswith('data:image') or 
                                        label_obj.label_image.startswith('https://'))):
                         # Get vendor name and purchase date from purchase
-                        # Reload barcode with purchase and supplier to ensure they're loaded
                         vendor_name = None
                         purchase_date = None
                         if barcode.purchase_id:
-                            from backend.catalog.models import Barcode as BarcodeModel
-                            barcode_with_purchase = BarcodeModel.objects.select_related('purchase', 'purchase__supplier').get(pk=barcode.pk)
-                            if barcode_with_purchase.purchase:
-                                if barcode_with_purchase.purchase.supplier:
-                                    vendor_name = barcode_with_purchase.purchase.supplier.name
-                                purchase_date = barcode_with_purchase.purchase.purchase_date.strftime('%d-%m-%Y')
+                            # Use select_related to minimize queries
+                            try:
+                                barcode_with_purchase = Barcode.objects.select_related('purchase', 'purchase__supplier').get(pk=barcode.pk)
+                                if barcode_with_purchase.purchase:
+                                    if barcode_with_purchase.purchase.supplier:
+                                        vendor_name = barcode_with_purchase.purchase.supplier.name
+                                    purchase_date = barcode_with_purchase.purchase.purchase_date.strftime('%d-%m-%Y')
+                            except Exception:
+                                pass
                         
                         # Extract serial number from barcode
                         # For barcodes like "FALC-20260101-0022-1", extract "0022-1" (last two parts)
@@ -193,7 +233,7 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                         
                         # Collect for bulk processing
                         barcodes_to_queue.append({
-                            'product_name': product_name,
+                            'product_name': prod_name,
                             'barcode_value': barcode.barcode,
                             'short_code': barcode.short_code if hasattr(barcode, 'short_code') else None,
                             'barcode_id': barcode.id,
@@ -205,80 +245,78 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                             'label_obj': label_obj,
                             'created': created
                         }
-            except Exception as e:
-                # Skip individual barcode errors, continue with others
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Auto-label generation failed for barcode {barcode.id}: {str(e)}")
-                continue
-        
-        # Bulk queue all barcodes that need generation via Azure Function
-        if barcodes_to_queue:
-            try:
-                from backend.catalog.azure_label_service import queue_bulk_label_generation_via_azure
-                # Queue all barcodes in one request
-                blob_urls = queue_bulk_label_generation_via_azure(barcodes_to_queue)
-                
-                # Save blob URLs to database
-                for item in barcodes_to_queue:
-                    barcode_id = item['barcode_id']
-                    blob_url = blob_urls.get(barcode_id)
-                    label_info = barcode_label_map.get(barcode_id)
+                except Exception as e:
+                    # Skip individual barcode errors
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Auto-label generation prep failed for barcode {barcode.id}: {str(e)}")
+                    continue
+            
+            # Bulk queue all barcodes that need generation via Azure Function
+            if barcodes_to_queue:
+                try:
+                    from backend.catalog.azure_label_service import queue_bulk_label_generation_via_azure
+                    # Queue all barcodes in one request
+                    blob_urls = queue_bulk_label_generation_via_azure(barcodes_to_queue)
                     
-                    if not label_info:
-                        continue
-                    
-                    if blob_url:
-                        label_info['label_obj'].label_image = blob_url
-                        label_info['label_obj'].save(update_fields=['label_image'])
-                    else:
-                        # Azure not configured or failed, fallback to local generation
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Azure bulk queuing failed for barcode {barcode_id}, falling back to local generation")
+                    # Save blob URLs to database
+                    for item in barcodes_to_queue:
+                        barcode_id = item['barcode_id']
+                        blob_url = blob_urls.get(barcode_id)
+                        label_info = barcode_label_map.get(barcode_id)
                         
-                        # Fallback to local generation
-                        image_data_url = generate_label_image(
-                            product_name=item['product_name'],
-                            barcode_value=item['barcode_value'],
-                            sku=item['barcode_value'],
-                            vendor_name=item['vendor_name'],
-                            purchase_date=item['purchase_date'],
-                            serial_number=item['serial_number']
-                        )
-                        label_info['label_obj'].label_image = image_data_url
-                        label_info['label_obj'].save(update_fields=['label_image'])
-            except Exception as e:
-                # If bulk queuing fails, fallback to local generation for all
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Azure bulk label queuing failed: {str(e)}, falling back to local generation for all barcodes")
-                
-                for item in barcodes_to_queue:
-                    try:
-                        label_info = barcode_label_map.get(item['barcode_id'])
                         if not label_info:
                             continue
                         
-                        image_data_url = generate_label_image(
-                            product_name=item['product_name'],
-                            barcode_value=item['barcode_value'],
-                            sku=item['barcode_value'],
-                            vendor_name=item['vendor_name'],
-                            purchase_date=item['purchase_date'],
-                            serial_number=item['serial_number']
-                        )
-                        label_info['label_obj'].label_image = image_data_url
-                        label_info['label_obj'].save(update_fields=['label_image'])
-                    except Exception as e2:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Local label generation failed for barcode {item['barcode_id']}: {str(e2)}")
-    except Exception as e:
-        # Don't fail purchase creation if label generation fails
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Auto-label generation failed: {str(e)}")
+                        if blob_url:
+                            label_info['label_obj'].label_image = blob_url
+                            label_info['label_obj'].save(update_fields=['label_image'])
+                        else:
+                            # Azure fallback to local
+                            _generate_local_fallback(item, label_info)
+                except Exception as e:
+                    # Bulk failure fallback
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Azure bulk label queuing failed: {str(e)}, falling back to local")
+                    
+                    for item in barcodes_to_queue:
+                        label_info = barcode_label_map.get(item['barcode_id'])
+                        if label_info:
+                            _generate_local_fallback(item, label_info)
+                            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Background label generation task failed: {str(e)}")
+
+    def _generate_local_fallback(item, label_info):
+        try:
+            from backend.catalog.label_generator import generate_label_image
+            image_data_url = generate_label_image(
+                product_name=item['product_name'],
+                barcode_value=item['barcode_value'],
+                sku=item['barcode_value'],
+                vendor_name=item['vendor_name'],
+                purchase_date=item['purchase_date'],
+                serial_number=item['serial_number']
+            )
+            label_info['label_obj'].label_image = image_data_url
+            label_info['label_obj'].save(update_fields=['label_image'])
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Local label generation failed for barcode {item['barcode_id']}: {str(e)}")
+
+    # Start the background thread
+    if barcodes:
+        # We must convert QuerySet to list of IDs or objects to pass to thread safely if DB closes
+        # Best to pass list of objects which are already in memory, 
+        # but to be safe against DB cursor issues, we'll extract IDs inside or outside.
+        # Here we pass the list of barcode objects (which are standard Python objects once evaluated)
+        thread = threading.Thread(target=_generate_labels_task, args=(list(barcodes), product_name))
+        thread.daemon = True # Daemon thread so it doesn't block program exit
+        thread.start()
 
 
 class PurchaseItemSerializer(serializers.ModelSerializer):
@@ -335,6 +373,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
     def get_total(self, obj):
         return float(obj.get_total())
     
+    @suspend_cache_signals_decorator
     def create(self, validated_data):
         # Check if this is a vendor purchase (from vendor_purchases endpoint)
         # Vendor purchases should always be draft
@@ -361,6 +400,9 @@ class PurchaseSerializer(serializers.ModelSerializer):
             validated_data['purchase_number'] = purchase_number
         
         items_data = self.context.get('items_data', [])
+        
+        # Use suspended cache signals to prevent mass invalidation during loop
+        # Use suspended cache signals to prevent mass invalidation during loop
         purchase = super().create(validated_data)
         
         # Safety check: Only enforce draft for vendor purchases
@@ -478,29 +520,37 @@ class PurchaseSerializer(serializers.ModelSerializer):
                         )
         
         # Create audit log for purchase creation
-        request = self.context.get('request')
-        if request:
-            items_summary = [f"{item.product.name if item.product else 'Unknown'} x{item.quantity}" for item in purchase.items.all()]
-            create_audit_log(
-                request=request,
-                action='create',
-                model_name='Purchase',
-                object_id=str(purchase.id),
-                object_name=f"Purchase {purchase.purchase_number}",
-                object_reference=purchase.purchase_number,
-                barcode=None,
-                changes={
-                    'purchase_number': purchase.purchase_number,
-                    'supplier': purchase.supplier.name if purchase.supplier else None,
-                    'purchase_date': str(purchase.purchase_date),
-                    'items_count': purchase.items.count(),
-                    'items': items_summary,
-                    'total': str(purchase.get_total()),
-                }
-            )
+            request = self.context.get('request')
+            if request:
+                items_summary = [f"{item.product.name if item.product else 'Unknown'} x{item.quantity}" for item in purchase.items.all()]
+                create_audit_log(
+                    request=request,
+                    action='create',
+                    model_name='Purchase',
+                    object_id=str(purchase.id),
+                    object_name=f"Purchase {purchase.purchase_number}",
+                    object_reference=purchase.purchase_number,
+                    barcode=None,
+                    changes={
+                        'purchase_number': purchase.purchase_number,
+                        'supplier': purchase.supplier.name if purchase.supplier else None,
+                        'purchase_date': str(purchase.purchase_date),
+                        'items_count': purchase.items.count(),
+                        'items': items_summary,
+                        'total': str(purchase.get_total()),
+                    }
+                )
         
+        # Manually invalidate cache once after all operations
+        invalidate_purchases_cache_manual()
+        invalidate_products_cache_manual()
+        # Only invalidate stock if we potentially touched it (e.g. status finalized)
+        if purchase.status == 'finalized':
+            invalidate_stock_cache_manual()
+            
         return purchase
     
+    @suspend_cache_signals_decorator
     def update(self, instance, validated_data):
         items_data = self.context.get('items_data', None)
         
@@ -773,54 +823,25 @@ class PurchaseSerializer(serializers.ModelSerializer):
             # Let's stick to the difference approach for cleaner audit logs if possible, 
             # OR replicate the "Reverse Old, Add New" pattern but per item.
             
-            # If status changed from Draft -> Finalized:
-            # We need to add stock for UPDATED items (they weren't in stock before)
-            if False:# old_status != 'finalized' and new_status == 'finalized':
-                 for old_item, _ in items_to_update:
-                    # Item is already updated in DB with new quantity
-                    # Add FULL new quantity to stock
-                    store = instance.store
-                    warehouse = instance.warehouse
-                    # (Location fallback logic...)
-                    if not store and not warehouse:
-                        from backend.locations.models import Store, Warehouse
-                        store = Store.objects.filter(is_active=True).first()
-                        warehouse = Warehouse.objects.filter(is_active=True).first() if not store else None
+            # --- HANDLE DELETED ITEMS ---
+            for old_item in items_to_delete:
+                # Delete all non-sold barcodes
+                barcodes_to_delete = Barcode.objects.filter(
+                    purchase_item=old_item
+                ).exclude(tag__in=['sold', 'in-cart'])
+                
+                barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
+                
+                if barcode_ids:
+                    try:
+                        from backend.catalog.azure_label_service import delete_blobs_for_barcodes
+                        delete_blobs_for_barcodes(barcode_ids)
+                    except Exception:
+                        pass
+                
+                barcodes_to_delete.delete()
+                old_item.delete()
 
-                    if store or warehouse:
-                        stock, _ = Stock.objects.get_or_create(
-                             product=old_item.product,
-                             variant=old_item.variant,
-                             store=store,
-                             warehouse=warehouse,
-                             defaults={'quantity': Decimal('0.000')}
-                        )
-                        stock.quantity += old_item.quantity
-                        stock.save()
-                        # (Audit log...)
-
-            # If status was Finalized -> Finalized (just update):
-            elif False:# old_status == 'finalized' and new_status == 'finalized':
-                for old_item, item_data in items_to_update:
-                    # We have old_quantity (from before update loop) and new_quantity (current)
-                    # We saved old_quantity in a variable inside the loop above? No, variables scope.
-                    # We need to recalculate diff.
-                    
-                    # Wait, inside the `items_to_update` loop above, we already updated the instance.
-                    # We should handle stock update THERE while we have `old_quantity`.
-                    pass
-            
-            # If status Finalized -> Draft (un-finalize):
-            # Reverse all stock.
-            
-            # Actually, let's look at how I implemented the loop above.
-            # I can't easily handle stock inside the loop if I want to keep this structure clean.
-            # AND I need to handle the stock adjustment logic carefully.
-            
-            # Let's Refine the Loop above to handle Stock immediately.
-            
-
-            
             # Create new items and update stock
             for item_data in items_to_create:
                 product_id = item_data.get('product')
@@ -1041,4 +1062,10 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 }
             )
         
+        # Manually invalidate cache once after all operations
+        invalidate_purchases_cache_manual()
+        invalidate_products_cache_manual()
+        if new_status == 'finalized' or old_status == 'finalized':
+            invalidate_stock_cache_manual()
+
         return instance

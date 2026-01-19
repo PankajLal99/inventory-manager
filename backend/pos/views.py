@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from decimal import Decimal, InvalidOperation
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair
@@ -511,6 +511,8 @@ def cart_detail(request, pk):
             # Handle barcodes for tracked inventory items - restore from 'in-cart' or 'sold' to 'new'
             if cart_item.scanned_barcodes:
                 for barcode_value in cart_item.scanned_barcodes:
+                    if not barcode_value:
+                        continue
                     try:
                         barcode_obj = Barcode.objects.get(barcode=barcode_value)
                         # Restore from 'in-cart' or 'sold' back to 'new' when cart is deleted
@@ -1099,9 +1101,14 @@ def cart_items(request, pk):
     # Check if this barcode is already sold (assigned to an invoice item)
     # Allow 'new' and 'returned' tags to be added to cart - they are available for sale
     if scanned_value_str:
-        # Try to find the barcode object
+        # Try to find the barcode object - check BOTH barcode and short_code
         try:
-            barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
+            barcode_obj = Barcode.objects.filter(
+                Q(barcode=scanned_value_str) | Q(short_code=scanned_value_str)
+            ).first()
+            
+            if not barcode_obj:
+                raise Barcode.DoesNotExist
             
             # Allow 'new' and 'returned' tags - they are available for sale
             if barcode_obj.tag in ['new', 'returned']:
@@ -1144,9 +1151,12 @@ def cart_items(request, pk):
     barcode_value_to_use = None
     
     if scanned_value_str:
-        # Try to find the barcode object
+        # Try to find the barcode object - check BOTH barcode and short_code
         try:
-            barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
+            barcode_obj = Barcode.objects.get(
+                Q(barcode=scanned_value_str) | Q(short_code=scanned_value_str)
+            )
+
             # Verify this barcode belongs to the product being added
             if barcode_obj.product_id != product_id:
                 return Response({
@@ -1168,7 +1178,6 @@ def cart_items(request, pk):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Check if barcode is already in any cart item across ALL active carts
-            # Get all active carts (not just the current cart)
             all_active_carts = Cart.objects.filter(status='active')
             all_cart_items = CartItem.objects.filter(cart__in=all_active_carts)
             for item in all_cart_items:
@@ -1188,7 +1197,6 @@ def cart_items(request, pk):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Check if already sold - only block if tag is 'sold'
-            # 'returned' items can be sold again even if they were previously in an invoice
             if barcode_obj.tag == 'sold':
                 sold_item = InvoiceItem.objects.filter(
                     barcode=barcode_obj
@@ -1208,12 +1216,19 @@ def cart_items(request, pk):
                     'error': 'Barcode is not available',
                     'message': f'Barcode {scanned_value_str} is already in another cart and cannot be added to this cart.',
                     'current_tag': barcode_obj.tag
-                    }, status=status.HTTP_400_BAD_REQUEST)
+                }, status=status.HTTP_400_BAD_REQUEST)
             
-            barcode_value_to_use = scanned_value_str
+            # ALWAYS use the actual barcode string from the database object
+            # This ensures that if the user scanned a short_code (e.g. GLA-123), we store the full barcode (e.g. OCA-...)
+            barcode_value_to_use = barcode_obj.barcode
         except Barcode.DoesNotExist:
-            # Barcode not found, will find available one below
-            barcode_obj = None
+            # STRICT MODE: If a specific barcode/SKU was scanned but not found, 
+            # DO NOT fall back to assigning a random available unit.
+            # This prevents incorrect item assignment.
+            return Response({
+                'error': 'Item not found',
+                'message': f'Scanned item "{scanned_value_str}" does not exist in the database. Please check the barcode.'
+            }, status=status.HTTP_404_NOT_FOUND)
     
     # If no barcode provided or not found, find an available barcode for this product
     if not barcode_obj:
@@ -1261,7 +1276,8 @@ def cart_items(request, pk):
         # Add barcode to the list if not already present
         if not existing_item.scanned_barcodes:
             existing_item.scanned_barcodes = []
-        if barcode_value_to_use not in existing_item.scanned_barcodes:
+            
+        if barcode_value_to_use and barcode_value_to_use not in existing_item.scanned_barcodes:
             with transaction.atomic():
                 existing_item.scanned_barcodes.append(barcode_value_to_use)
                 existing_item.quantity = Decimal(len(existing_item.scanned_barcodes))
@@ -1384,7 +1400,13 @@ def cart_items(request, pk):
     )
     if serializer.is_valid():
         with transaction.atomic():
-            cart_item = serializer.save()
+            # Explicitly pass scanned_barcodes to save() to ensure it's saved correctly
+            # This overrides any potential issues with request.data.copy() or QueryDict handling
+            save_kwargs = {}
+            if barcode_value_to_use:
+                save_kwargs['scanned_barcodes'] = [barcode_value_to_use]
+            
+            cart_item = serializer.save(**save_kwargs)
             
             # Mark barcode as 'in-cart' when added to cart
             if barcode_obj and barcode_obj.tag in ['new', 'returned']:
@@ -1417,7 +1439,6 @@ def cart_items(request, pk):
                 'barcode': barcode_str,
             }
         )
-        
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1466,6 +1487,8 @@ def cart_item_update(request, pk, item_id):
         # Handle barcodes for tracked inventory items - restore from 'in-cart' or 'sold' to 'new'
         if cart_item.product.track_inventory and cart_item.scanned_barcodes:
             for barcode_value in cart_item.scanned_barcodes:
+                if not barcode_value:
+                    continue
                 try:
                     barcode_obj = Barcode.objects.get(barcode=barcode_value)
                     # Restore from 'in-cart' or 'sold' back to 'new' when cart item is deleted
@@ -1498,7 +1521,7 @@ def cart_item_update(request, pk, item_id):
         
         # Audit log: Item removed from cart
         # For tracked products, include all barcodes separated by comma
-        barcodes_list = cart_item.scanned_barcodes if cart_item.scanned_barcodes else []
+        barcodes_list = [b for b in cart_item.scanned_barcodes if b] if cart_item.scanned_barcodes else []
         barcode_display = ', '.join(barcodes_list) if barcodes_list else None
         
         create_audit_log(

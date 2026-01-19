@@ -230,16 +230,19 @@ class ProductListSerializer(serializers.ModelSerializer):
         """
         # Get tag filter from request context
         request = self.context.get('request')
+        tag_filter = request.query_params.get('tag', None) if request else None
+        
+        # Check if we should force include barcodes based on tag
+        # We need barcodes for specific tags to show them in the list (including in-cart)
+        force_include = tag_filter in ['defective', 'returned', 'sold', 'in-cart']
         
         # OPTIMIZATION: Check if barcodes should be included in response
         # Default to 'false' for better performance (smaller payload)
         include_barcodes = request.query_params.get('include_barcodes', 'false') if request else 'false'
         
-        if include_barcodes.lower() != 'true':
+        if include_barcodes.lower() != 'true' and not force_include:
             # Skip barcode serialization for better performance
             return []
-        
-        tag_filter = request.query_params.get('tag', None) if request else None
         
         # Get active cart data from context (fast path)
         active_cart_barcodes = self.context.get('active_cart_barcodes', set())

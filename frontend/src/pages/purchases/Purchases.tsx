@@ -327,12 +327,12 @@ export default function Purchases() {
           // Invalidate cache first to get fresh data, then check
           const cacheKey = ['label-status', productId, purchaseId];
           const cachedData = queryClient.getQueryData(cacheKey);
-          
+
           if (cachedData && (cachedData as any).data?.all_generated) {
             // Already generated according to cache, skip
             return;
           }
-          
+
           // If not in cache or not generated, check via API (will be cached)
           try {
             const statusResponse = await productsApi.labelsStatus(productId, purchaseId);
@@ -422,8 +422,10 @@ export default function Purchases() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => purchasingApi.purchases.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['purchases'] });
+    onSuccess: async () => {
+      // Invalidate and immediately refetch to remove deleted purchase from UI
+      await queryClient.invalidateQueries({ queryKey: ['purchases'] });
+      await queryClient.refetchQueries({ queryKey: ['purchases'] });
     },
     onError: (error: any) => {
       alert(error?.response?.data?.message || 'Failed to delete purchase');
@@ -745,7 +747,7 @@ export default function Purchases() {
       await queryClient.invalidateQueries({ queryKey: ['label-status', productId, purchaseId] });
       // Also invalidate without purchaseId in case it's checked elsewhere
       await queryClient.invalidateQueries({ queryKey: ['label-status', productId] });
-      
+
       // Refetch the label status to get the actual updated status
       try {
         const statusResponse = await productsApi.labelsStatus(productId, purchaseId);
@@ -776,7 +778,7 @@ export default function Purchases() {
           }
         }));
       }
-      
+
       setGeneratingLabelsFor(null);
       const newlyGenerated = data.data?.newly_generated || 0;
       const total = data.data?.total_labels || 0;
@@ -914,10 +916,10 @@ export default function Purchases() {
   // Get all product-purchase combinations that need label status checks (with caching)
   const labelStatusQueriesData = useMemo(() => {
     if (!purchases || purchases.length === 0) return [];
-    
+
     const queries: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
     const seenKeys = new Set<string>();
-    
+
     purchases.forEach((purchase: any) => {
       if (purchase.items && purchase.items.length > 0) {
         purchase.items.forEach((item: any) => {
@@ -925,7 +927,7 @@ export default function Purchases() {
           if (productId && item.product_track_inventory) {
             const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
             const labelKey = `${productId}`;
-            
+
             // Only add if we haven't seen this product yet (avoid duplicates)
             if (!seenKeys.has(labelKey)) {
               seenKeys.add(labelKey);
@@ -935,10 +937,10 @@ export default function Purchases() {
         });
       }
     });
-    
+
     return queries;
   }, [purchases]);
-  
+
   // Use React Query to cache label status checks for all products in purchases
   const labelStatusQueries = useQueries({
     queries: labelStatusQueriesData.map(({ productId, purchaseId, labelKey }) => ({
@@ -961,13 +963,13 @@ export default function Purchases() {
       enabled: productId > 0,
     })),
   });
-  
+
   // Update labelStatuses state from cached queries
   // Use ref to track processed states and prevent infinite loops
   type LabelStatusQueryData = { productId: number; purchaseId?: number; labelKey: string; data: { all_generated?: boolean }; error: null } | { productId: number; purchaseId?: number; labelKey: string; data: { all_generated: boolean }; error: string };
-  
+
   const queriesDataRef = useRef<string>('');
-  
+
   // Create a dependency string that includes query data and status
   const queriesDependencyString = useMemo(() => {
     return labelStatusQueries.map((q, idx) => {
@@ -985,31 +987,31 @@ export default function Purchases() {
     }))),
     labelStatusQueries.length,
   ]);
-  
+
   useEffect(() => {
     // Only process if data actually changed
     if (queriesDataRef.current === queriesDependencyString) {
       return;
     }
-    
+
     queriesDataRef.current = queriesDependencyString;
-    
+
     labelStatusQueries.forEach((query) => {
       const queryData = query.data as LabelStatusQueryData | undefined;
       if (queryData && queryData.labelKey) {
         const labelKey = queryData.labelKey;
         const all_generated = queryData.data?.all_generated || false;
         const generating = query.isFetching || false;
-        
+
         // Update state only if it changed
         setLabelStatuses(prev => {
           const current = prev[labelKey];
-          
+
           // Only update if the value actually changed
           if (current?.all_generated === all_generated && current?.generating === generating) {
             return prev;
           }
-          
+
           return {
             ...prev,
             [labelKey]: {

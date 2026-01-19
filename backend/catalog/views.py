@@ -1810,6 +1810,7 @@ def bulk_update_barcode_tags(request):
                 except Exception as e:
                     errors.append(f'Error updating invoice {invoice_id}: {str(e)}')
     
+    
     if requires_confirmation:
         return Response({
             'error': 'Confirmation required',
@@ -1819,6 +1820,16 @@ def bulk_update_barcode_tags(request):
             'new_tag': new_tag
         }, status=status.HTTP_400_BAD_REQUEST)
     
+    # Invalidate products list cache significantly changed
+    from backend.core.cache_utils import invalidate_products_cache
+    try:
+        invalidate_products_cache()
+    except Exception as e:
+        # Don't fail the request if cache clearing fails
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to invalidate products cache: {str(e)}")
+
     response_data = {
         'message': f'Updated {len(updated_barcodes)} barcode(s)',
         'updated_barcodes': updated_barcodes,

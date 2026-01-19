@@ -35,6 +35,7 @@ export default function POS() {
   const [barcodeStatus, setBarcodeStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [barcodeMessage, setBarcodeMessage] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed'>('cash');
   const [cashAmount, setCashAmount] = useState<string>('');
@@ -60,10 +61,51 @@ export default function POS() {
   const [repairBookingAmount, setRepairBookingAmount] = useState('');
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
+  // Barcode Queue Types and State
+  interface QueueItem {
+    id: string;
+    code: string;
+    status: 'pending' | 'processing' | 'success' | 'error';
+    message?: string;
+    timestamp: number;
+  }
+
+  const [scanQueue, setScanQueue] = useState<QueueItem[]>([]);
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const priceInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const isTypingInPriceInput = useRef(false);
   const processingBarcodesRef = useRef<Set<string>>(new Set());
+
+  // Helper to add item to queue
+  const addToQueue = useCallback((barcodes: string[]) => {
+    const newItems: QueueItem[] = barcodes
+      .filter(code => code.trim().length > 0)
+      .map(code => ({
+        id: Math.random().toString(36).substring(7),
+        code: code.trim(),
+        status: 'pending',
+        timestamp: Date.now()
+      }));
+
+    setScanQueue(prev => [...prev, ...newItems]);
+  }, []);
+
+  // Clear queue items that are done (success/error) after delay
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setScanQueue(prev => {
+        const now = Date.now();
+        // Keep pending/processing items, and recent completed items (< 5 seconds old)
+        return prev.filter(item =>
+          item.status === 'pending' ||
+          item.status === 'processing' ||
+          (now - item.timestamp < 5000)
+        );
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Debounce barcode input for search
   useEffect(() => {
@@ -150,10 +192,10 @@ export default function POS() {
   // RetailAdmin, WholesaleAdmin, Retail, Wholesale, Repair → auto-select based on shop_type
   const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
-  
+
   // Check if user is in Retail group or RetailAdmin (both get store selector)
   const isRetailGroup = user?.groups && (user.groups.includes('Retail') || user.groups.includes('RetailAdmin'));
-  
+
   // Filter stores based on user group
   // - Admin: All stores
   // - Retail/RetailAdmin group: Only retail and repair shop types (backend already filters, but we filter here too for consistency)
@@ -161,7 +203,7 @@ export default function POS() {
   const filteredStores = (() => {
     if (isRetailGroup && !isAdmin) {
       // Retail/RetailAdmin group users see only retail and repair stores (lowercase as per backend)
-      return stores.filter((s: any) => 
+      return stores.filter((s: any) =>
         s.is_active && (s.shop_type === 'retail' || s.shop_type === 'repair')
       );
     }
@@ -176,9 +218,9 @@ export default function POS() {
   const defaultStore = useMemo(() => {
     if ((isAdmin || isRetailGroup) && selectedStoreId) {
       // Admin/Retail has selected a store
-      return filteredStores.find((s: any) => s.id === selectedStoreId) || 
-             filteredStores.find((s: any) => s.is_active) || 
-             filteredStores[0];
+      return filteredStores.find((s: any) => s.id === selectedStoreId) ||
+        filteredStores.find((s: any) => s.is_active) ||
+        filteredStores[0];
     }
     // Auto-select first active store (for non-admin/retail, backend already filtered)
     return filteredStores.find((s: any) => s.is_active) || filteredStores[0];
@@ -231,7 +273,7 @@ export default function POS() {
   const hasRefetchedForZeroPrice = useRef(false);
   useEffect(() => {
     if (cart?.data?.items && cartId && !hasRefetchedForZeroPrice.current) {
-      const hasItemsWithZeroPrice = cart.data.items.some((item: any) => 
+      const hasItemsWithZeroPrice = cart.data.items.some((item: any) =>
         (item.product_purchase_price === 0 || item.product_purchase_price === null || item.product_purchase_price === undefined) &&
         item.product && // Only refetch if product exists (legitimate case)
         !item.product_track_inventory // Only for non-tracked products (tracked should always have barcode)
@@ -282,7 +324,7 @@ export default function POS() {
   const shouldCheckBarcode = useMemo(() => {
     // Don't run query if scanner is active (scanner handles barcode scanning directly)
     if (showScanner) return false;
-    
+
     // Don't run query if barcode input is too short
     if (trimmedBarcodeInput.length < 3) return false;
 
@@ -384,7 +426,7 @@ export default function POS() {
       try {
         // For typed input that looks like a barcode, check if it's an actual barcode
         // Use barcode_only=true to only search in Barcode table, not Product SKU
-        const response = await productsApi.byBarcode(trimmedBarcodeInput, true);
+        const response = await productsApi.byBarcode(trimmedBarcodeInput, strictBarcodeMode);
         if (response.data) {
           // Check barcode tag status
           const barcodeTag = response.data.barcode_tag;
@@ -443,9 +485,11 @@ export default function POS() {
     // 1. Scanner is active
     // 2. Barcode is unavailable (sold/defective)
     // 3. Input looks like a barcode AND barcode check found a match (prioritize barcode over name search)
-    enabled: debouncedBarcodeInput.trim().length > 0 
-      && !searchedBarcodeStatus?.isUnavailable 
+    // 4. Strict barcode mode is ON (only search barcodes, not product names)
+    enabled: debouncedBarcodeInput.trim().length > 0
+      && !searchedBarcodeStatus?.isUnavailable
       && !showScanner
+      && !strictBarcodeMode // Disable product search in strict mode
       && !(looksLikeBarcode(debouncedBarcodeInput.trim()) && _barcodeCheck?.product && !_barcodeCheck?.isUnavailable),
     retry: false,
   });
@@ -459,6 +503,155 @@ export default function POS() {
     enabled: customerSearch.trim().length > 0,
     retry: false,
   });
+
+  // ------- QUEUE PROCESSING LOGIC -------
+
+  // Create a separate mutation wrapper that returns a promise we can await
+  const processItemMutation = useMutation({
+    mutationFn: (data: any) => ensureCartAndAddItem(data),
+    // We don't use global onSuccess/onError here because we need per-item handling
+  });
+
+  // Process the queue
+  useEffect(() => {
+    const processNextItem = async () => {
+      // If already processing or no pending items, stop
+      if (isProcessingQueue) return;
+
+      const nextItem = scanQueue.find(item => item.status === 'pending');
+      if (!nextItem) return;
+
+      setIsProcessingQueue(true);
+
+      // Mark as processing
+      setScanQueue(prev => prev.map(item =>
+        item.id === nextItem.id ? { ...item, status: 'processing' } : item
+      ));
+
+      const barcodeToScan = nextItem.code;
+
+      // Use queryClient to get the LATEST cart data directly from cache
+      // The 'cart' closure variable might be stale during rapid processing
+      const currentCartData = queryClient.getQueryData(['cart', cartId]) as any;
+      const currentItems = currentCartData?.data?.items || [];
+
+      // Check against current processing/success items in queue to prevent race conditions within the queue itself
+      // If we have another item with same code in queue that is already 'success' or 'processing', we should wait or skip?
+      // Actually, if 'success' is in queue, it means we handled it.
+      const isAlreadyProcessedInQueue = scanQueue.some(item =>
+        item.id !== nextItem.id &&
+        item.code === barcodeToScan &&
+        (item.status === 'success' || item.status === 'processing')
+      );
+
+      if (isAlreadyProcessedInQueue) {
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'error', message: 'Duplicate scan' } : item
+        ));
+        setIsProcessingQueue(false);
+        return;
+      }
+
+      try {
+        // UI-LEVEL CHECK: Check if barcode is already in cart items (using FRESH data)
+        let alreadyInCart = false;
+        // Check both raw scan and potential variations (though raw scan is most important first)
+        for (const item of currentItems) {
+          const scannedBarcodes = item.scanned_barcodes || [];
+          if (scannedBarcodes.some((bc: string) => bc && typeof bc === 'string' && bc.trim() === barcodeToScan)) {
+            alreadyInCart = true;
+            break;
+          }
+          // Also check if the matched_barcode matches (will be done after API lookup too, but good to check here)
+          if (item.barcode === barcodeToScan) {
+            alreadyInCart = true;
+            break;
+          }
+        }
+
+        if (alreadyInCart) {
+          setScanQueue(prev => prev.map(item =>
+            item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
+          ));
+          setIsProcessingQueue(false);
+          return;
+        }
+
+        // Check product existence and availability via API
+        // Use barcode_only=true to strictly match barcodes
+        let productData = null;
+        let scannedBarcode = barcodeToScan;
+
+        try {
+          const barcodeCheck = await productsApi.byBarcode(barcodeToScan, strictBarcodeMode);
+          if (barcodeCheck.data) {
+            if (barcodeCheck.data.barcode_available === false) {
+              const errorMsg = barcodeCheck.data.sold_invoice
+                ? `Sold (Inv #${barcodeCheck.data.sold_invoice})`
+                : `Sold / Unavailable`;
+
+              setScanQueue(prev => prev.map(item =>
+                item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
+              ));
+              setIsProcessingQueue(false);
+              return;
+            }
+            productData = barcodeCheck.data;
+            scannedBarcode = barcodeCheck.data.matched_barcode || barcodeToScan;
+          }
+        } catch (err: any) {
+          // Not found as strict barcode
+          // Verify if it is really not found or some other error
+          const errorMsg = err?.response?.data?.message || err?.message || 'Product not found';
+          setScanQueue(prev => prev.map(item =>
+            item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
+          ));
+          setIsProcessingQueue(false);
+          return;
+        }
+
+        if (!productData) {
+          setScanQueue(prev => prev.map(item =>
+            item.id === nextItem.id ? { ...item, status: 'error', message: 'Product not found' } : item
+          ));
+          setIsProcessingQueue(false);
+          return;
+        }
+
+
+
+        // Add to cart
+        // IMPORTANT: Pass the scannedBarcode to ensure backend uses THIS specific barcode
+        // and doesn't auto-assign a new one if it's a serialized product
+        const result = await processItemMutation.mutateAsync({
+          product: productData.id,
+          quantity: 1,
+          unit_price: 0,
+          barcode: scannedBarcode
+        });
+
+        const msg = result?.data?.message || 'Added';
+
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'success', message: msg } : item
+        ));
+
+        // Refetch cart to ensure next item sees correct state
+        // We do this via the global mutation onSuccess usually, but here manually awaiting
+        await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+
+      } catch (error: any) {
+        const errorMsg = error?.response?.data?.message || error?.message || 'Failed';
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
+        ));
+      } finally {
+        setIsProcessingQueue(false);
+      }
+    };
+
+    processNextItem();
+  }, [scanQueue, isProcessingQueue, cartId, queryClient, strictBarcodeMode]); // Added strictBarcodeMode dependency
 
   // Initialize username and load carts on mount
   useEffect(() => {
@@ -562,7 +755,7 @@ export default function POS() {
         if (localTab.storeId !== currentStoreId) {
           continue; // Skip tabs from other stores
         }
-        
+
         if (!processedIds.has(localTab.id)) {
           try {
             // Verify cart still exists in backend
@@ -570,7 +763,7 @@ export default function POS() {
             if (cartResponse.data && cartResponse.data.status === 'active') {
               const cart = cartResponse.data;
               const cartStoreId = cart.store || defaultStore.id;
-              
+
               // Only add if cart matches current store
               if (cartStoreId === currentStoreId) {
                 const cartTab: CartTab = {
@@ -699,7 +892,7 @@ export default function POS() {
     },
     onSuccess: async (data) => {
       const newCartId = data.data.id;
-      
+
       // Update invoiceType state from cart
       const cartInvoiceType = backendToFrontendInvoiceType(data.data.invoice_type || 'cash');
       setInvoiceType(cartInvoiceType);
@@ -762,7 +955,7 @@ export default function POS() {
     // 3. Not already creating a cart
     // 4. Mutation is not pending
     const storeChanged = selectedStoreId !== null && selectedStoreId !== lastStoreIdRef.current;
-    
+
     if (storeChanged && (isAdmin || isRetailGroup) && selectedStoreId && defaultStore?.id && username && !cartId && !isCreatingCartRef.current && !createCartMutation.isPending) {
       lastStoreIdRef.current = selectedStoreId;
       isCreatingCartRef.current = true;
@@ -936,7 +1129,7 @@ export default function POS() {
         const newErrors = { ...priceErrors };
         delete newErrors[variables.itemId];
         setPriceErrors(newErrors);
-        
+
         // Clear editing state after successful save
         setEditingManualPrice((prev) => {
           const newEditingPrices = { ...prev };
@@ -967,7 +1160,7 @@ export default function POS() {
           errorMessage.toLowerCase().includes('selling price') ||
           errorMessage.toLowerCase().includes('cannot be less')
         ) && variables.data.manual_unit_price !== undefined;
-        
+
         if (isPriceValidationError) {
           const purchasePrice = errorData.purchase_price ? parseFloat(errorData.purchase_price || '0') : 0;
           setPriceErrors({
@@ -1690,18 +1883,18 @@ export default function POS() {
       alert('Cart is empty');
       return;
     }
-    
+
     // Validate split payments for mixed type
     if (invoiceType === 'mixed') {
       const total = calculateTotal();
       const cash = parseFloat(cashAmount) || 0;
       const upi = parseFloat(upiAmount) || 0;
-      
+
       if (!cashAmount || !upiAmount || cash <= 0 || upi <= 0) {
         alert('Please enter both cash and UPI amounts for split payment');
         return;
       }
-      
+
       if (Math.abs((cash + upi) - total) > 0.01) { // Allow small floating point differences
         alert(`Split payment amounts (₹${(cash + upi).toFixed(2)}) do not match invoice total (₹${total.toFixed(2)})`);
         return;
@@ -1712,13 +1905,13 @@ export default function POS() {
       invoice_type: frontendToBackendInvoiceType(invoiceType),
       customer: selectedCustomer?.id || null,
     };
-    
+
     // Add split payment amounts for mixed type
     if (invoiceType === 'mixed') {
       checkoutData.cash_amount = parseFloat(cashAmount);
       checkoutData.upi_amount = parseFloat(upiAmount);
     }
-    
+
     checkoutAndPrintThermalMutation.mutate(checkoutData);
   };
 
@@ -1767,11 +1960,11 @@ export default function POS() {
       let product = null;
       let matchedBarcode: string | null = null;
       let isActualBarcode = false;
-      
+
       try {
         // Use barcode_only=true to only search in Barcode table, not Product SKU
         // This ensures we only find actual barcodes, not product SKUs
-        const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true);
+        const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, strictBarcodeMode);
         if (barcodeResponse.data) {
           product = barcodeResponse.data;
           // Check if the API returned a matched_barcode field
@@ -1822,7 +2015,7 @@ export default function POS() {
       // Additional validation: Check if product is in stock and purchase is finalized
       // Custom products (with "Other -" prefix) are always available - skip stock check
       const isCustomProduct = product.name && product.name.startsWith('Other -');
-      
+
       if (!isCustomProduct) {
         // For tracked products: Check if stock_quantity > 0 (stock only exists for finalized purchases)
         // For non-tracked products: Check if stock_quantity > 0 (stock only exists for finalized purchases)
@@ -1981,7 +2174,7 @@ export default function POS() {
     if (cart?.data?.invoice_type) {
       return;
     }
-    
+
     if (defaultStore?.shop_type === 'repair') {
       // Only change if not already pending (to avoid unnecessary updates)
       if (invoiceType !== 'pending') {
@@ -2123,15 +2316,15 @@ export default function POS() {
                   value={selectedStoreId?.toString() || ''}
                   onChange={async (e) => {
                     const storeId = parseInt(e.target.value);
-                    
+
                     // Prevent switching to the same store
                     if (storeId === selectedStoreId) {
                       return;
                     }
-                    
+
                     // Find the selected store to check its shop_type
                     const selectedStore = filteredStores.find((s: any) => s.id === storeId);
-                    
+
                     // If repair shop is selected, automatically set invoice type to 'pending'
                     if (selectedStore && selectedStore.shop_type === 'repair') {
                       setInvoiceType('pending');
@@ -2139,7 +2332,7 @@ export default function POS() {
                       // If switching from repair to non-repair shop, reset to 'cash' if currently 'pending'
                       setInvoiceType('cash');
                     }
-                    
+
                     // Clear current cart when switching stores (cart is tied to a specific store)
                     // This ensures the cart's store matches the selected store
                     if (cartId && username) {
@@ -2166,7 +2359,7 @@ export default function POS() {
                         setActiveTabId(null);
                       }
                     }
-                    
+
                     // Update selected store - new cart will be created via useEffect
                     // The useEffect at line 746 will handle cart creation
                     // The useEffect at line 672 will handle syncing (it watches defaultStore.id which changes when selectedStoreId changes)
@@ -2489,7 +2682,7 @@ export default function POS() {
                       <Wrench className="h-4 w-4 text-blue-600" />
                       <span className="text-sm font-semibold text-blue-900">Repair Information</span>
                     </div>
-                    
+
                     {/* Contact Number */}
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1.5">
@@ -2693,7 +2886,7 @@ export default function POS() {
                       // Check if custom option is selected
                       const searchLower = debouncedBarcodeInput.trim().toLowerCase();
                       const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
-                      
+
                       if (productSearchSelectedIndex === 0 && showCustomOption) {
                         e.preventDefault();
                         setShowCustomProductModal(true);
@@ -2701,7 +2894,7 @@ export default function POS() {
                         setProductSearchSelectedIndex(-1);
                         return;
                       }
-                      
+
                       // If a product is selected in dropdown, select it instead of scanning
                       if (productSearchSelectedIndex >= 0 && products) {
                         const productList = (() => {
@@ -2775,7 +2968,7 @@ export default function POS() {
 
                               try {
                                 // Use barcode_only=true to only search in Barcode table, not Product SKU
-                                const barcodeCheck = await productsApi.byBarcode(searchValue, true);
+                                const barcodeCheck = await productsApi.byBarcode(searchValue, strictBarcodeMode);
                                 if (barcodeCheck.data) {
                                   if (barcodeCheck.data.barcode_available === false) {
                                     const errorMsg = barcodeCheck.data.sold_invoice
@@ -2829,37 +3022,21 @@ export default function POS() {
                           return; // Don't proceed with handleBarcodeScan
                         }
                       }
-                      // For physical barcode scanner OR typed barcode: Try barcode lookup first
-                      // handleBarcodeScan will:
-                      // 1. Always use barcode_only=true (only search Barcode table, not Product SKU)
-                      // 2. Find exact barcode match
-                      // 3. Check if available
-                      // 4. Auto-add to cart
-                      // This works for both physical scanners (which scan actual barcodes) and typed barcodes
-                      setTimeout(async () => {
-                        try {
-                          // Double-check value from DOM one more time before processing
-                          const finalValue = (inputElement.value || barcodeToScan).trim();
-                          if (finalValue) {
-                            // handleBarcodeScan always treats input as a barcode (uses barcode_only=true)
-                            // It will try barcode lookup first, then fall back to product name search if 404
-                            await handleBarcodeScan(finalValue);
-                            // Clear input after successful scan
-                            setBarcodeInput('');
-                            setIsSearchTyped(false);
-                            setProductSearchSelectedIndex(-1);
-                          }
-                        } catch (error: any) {
-                          // Error is already handled in handleBarcodeScan with proper error messages
-                          // If barcode not found or product unavailable, error will be shown
-                          console.error('Barcode scan error:', error);
-                        }
-                      }, 100);
+                      // Queue Implementation for rapid scanning
+                      // Split input by newlines or pipes (common descriptors) in case multiple scans were pasted or buffered
+                      const barcodes = barcodeToScan.split(/[\n|]+/).map(s => s.trim()).filter(Boolean);
+
+                      if (barcodes.length > 0) {
+                        addToQueue(barcodes);
+                        setBarcodeInput('');
+                        setIsSearchTyped(false);
+                        setProductSearchSelectedIndex(-1);
+                      }
                     } else if (e.key === 'ArrowDown') {
                       e.preventDefault();
                       const searchLower = debouncedBarcodeInput.trim().toLowerCase();
                       const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
-                      
+
                       if (products && !searchedBarcodeStatus?.isUnavailable) {
                         const productList = (() => {
                           if (Array.isArray(products?.results)) return products.results;
@@ -2867,13 +3044,13 @@ export default function POS() {
                           if (Array.isArray(products)) return products;
                           return [];
                         })();
-                        
+
                         // If custom option is shown and we're at -1, go to 0 (custom option)
                         if (showCustomOption && productSearchSelectedIndex === -1) {
                           setProductSearchSelectedIndex(0);
                           return;
                         }
-                        
+
                         if (productList.length > 0) {
                           // Find next available (in-stock) product
                           const findNextAvailable = (startIndex: number) => {
@@ -2906,7 +3083,7 @@ export default function POS() {
                       e.preventDefault();
                       const searchLower = debouncedBarcodeInput.trim().toLowerCase();
                       const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
-                      
+
                       if (products && !searchedBarcodeStatus?.isUnavailable) {
                         const productList = (() => {
                           if (Array.isArray(products?.results)) return products.results;
@@ -2914,13 +3091,13 @@ export default function POS() {
                           if (Array.isArray(products)) return products;
                           return [];
                         })();
-                        
+
                         // If at custom option (index 0), go to -1
                         if (showCustomOption && productSearchSelectedIndex === 0) {
                           setProductSearchSelectedIndex(-1);
                           return;
                         }
-                        
+
                         // Find previous available (in-stock) product
                         const findPrevAvailable = (startIndex: number) => {
                           const start = showCustomOption ? Math.max(1, startIndex) : startIndex;
@@ -2979,7 +3156,19 @@ export default function POS() {
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 z-10 pointer-events-none">
                   <Search className="h-5 w-5 text-gray-400" />
                 </div>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10">
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex gap-1">
+                  <Button
+                    onClick={() => setStrictBarcodeMode(!strictBarcodeMode)}
+                    variant="outline"
+                    size="sm"
+                    className={`whitespace-nowrap transition-all ${strictBarcodeMode
+                      ? '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700 hover:!border-blue-700'
+                      : '!bg-white !text-gray-600 !border-gray-300 hover:!bg-gray-50'
+                      }`}
+                    title={strictBarcodeMode ? "Strict barcode matching (ON)" : "Flexible search (OFF)"}
+                  >
+                    <Barcode className="h-4 w-4" />
+                  </Button>
                   <Button
                     onClick={() => setShowScanner(true)}
                     variant="outline"
@@ -2990,6 +3179,40 @@ export default function POS() {
                     <Camera className="h-4 w-4" />
                   </Button>
                 </div>
+                {/* Queue Display */}
+                {scanQueue.length > 0 && (
+                  <div className="absolute z-50 w-full mb-1 bottom-full bg-white border border-gray-200 rounded-lg shadow-xl max-h-40 overflow-y-auto mb-2">
+                    <div className="p-2 border-b border-gray-100 bg-gray-50 flex justify-between items-center sticky top-0 z-10">
+                      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Scanning Queue</h4>
+                      <button onClick={() => setScanQueue([])} className="text-xs text-blue-600 hover:text-blue-800">Clear</button>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {[...scanQueue].reverse().map(item => (
+                        <div key={item.id} className="p-2 flex items-center justify-between text-sm hover:bg-gray-50">
+                          <div className="flex items-center gap-3">
+                            {item.status === 'pending' && <span className="w-2 h-2 rounded-full bg-gray-400 animate-pulse"></span>}
+                            {item.status === 'processing' && <Sparkles className="h-4 w-4 text-blue-500 animate-spin" />}
+                            {item.status === 'success' && <CheckCircle className="h-4 w-4 text-green-500" />}
+                            {item.status === 'error' && <XCircle className="h-4 w-4 text-red-500" />}
+                            <div className="flex flex-col">
+                              <span className={`font-mono font-medium ${item.status === 'success' ? 'text-gray-900' : 'text-gray-600'}`}>
+                                {item.code}
+                              </span>
+                              {item.message && (
+                                <span className={`text-xs ${item.status === 'error' ? 'text-red-500' :
+                                  item.status === 'success' ? 'text-green-600' : 'text-gray-400'
+                                  }`}>
+                                  {item.message}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Search Results Dropdown */}
                 {(() => {
                   if (!barcodeInput.trim()) return null;
@@ -3075,20 +3298,20 @@ export default function POS() {
                   }
 
                   // Include barcode-check product if available and not unavailable
-                  const barcodeCheckProduct = _barcodeCheck?.product && !_barcodeCheck?.isUnavailable 
-                    ? _barcodeCheck.product 
+                  const barcodeCheckProduct = _barcodeCheck?.product && !_barcodeCheck?.isUnavailable
+                    ? _barcodeCheck.product
                     : null;
 
                   if (!products && !barcodeCheckProduct) return null;
 
                   const productList = (() => {
                     const list: any[] = [];
-                    
+
                     // First, add barcode-check product if available (highest priority)
                     if (barcodeCheckProduct) {
                       list.push(barcodeCheckProduct);
                     }
-                    
+
                     // Then add products from search results
                     if (products) {
                       if (Array.isArray(products?.results)) {
@@ -3103,7 +3326,7 @@ export default function POS() {
                         list.push(...products.filter((p: any) => !existingIds.has(p.id)));
                       }
                     }
-                    
+
                     return list;
                   })();
 
@@ -3132,11 +3355,10 @@ export default function POS() {
                               setBarcodeInput('');
                               setProductSearchSelectedIndex(-1);
                             }}
-                            className={`w-full text-left px-4 py-3 transition-colors border-b border-gray-100 group ${
-                              productSearchSelectedIndex === 0
-                                ? 'bg-blue-100 hover:bg-blue-100'
-                                : 'hover:bg-blue-50 active:bg-blue-100'
-                            }`}
+                            className={`w-full text-left px-4 py-3 transition-colors border-b border-gray-100 group ${productSearchSelectedIndex === 0
+                              ? 'bg-blue-100 hover:bg-blue-100'
+                              : 'hover:bg-blue-50 active:bg-blue-100'
+                              }`}
                             onMouseEnter={() => {
                               setProductSearchSelectedIndex(0);
                             }}
@@ -3212,7 +3434,7 @@ export default function POS() {
                                   try {
                                     // Try to check if it's a barcode that's sold
                                     // Use barcode_only=true to only search in Barcode table, not Product SKU
-                                    const barcodeCheck = await productsApi.byBarcode(searchValue, true);
+                                    const barcodeCheck = await productsApi.byBarcode(searchValue, strictBarcodeMode);
                                     if (barcodeCheck.data) {
                                       // If it's a barcode and it's sold, show error and prevent adding
                                       if (barcodeCheck.data.barcode_available === false) {
@@ -3298,25 +3520,25 @@ export default function POS() {
                                         if (product.matched_barcode) {
                                           return `Barcode: ${product.matched_barcode}`;
                                         }
-                                        
+
                                         // Otherwise, show barcode that matches search input, or first available barcode
                                         const searchValue = barcodeInput.trim().toUpperCase();
                                         const barcodes = product.barcodes || [];
-                                        
+
                                         // Try to find barcode that matches search input
                                         let displayBarcode = null;
                                         if (searchValue && barcodes.length > 0) {
                                           // First try to find by short_code match
-                                          const matchingShortCode = barcodes.find((b: any) => 
-                                            b.short_code && 
-                                            (b.short_code.toUpperCase().includes(searchValue) || 
-                                             searchValue.includes(b.short_code.toUpperCase()))
+                                          const matchingShortCode = barcodes.find((b: any) =>
+                                            b.short_code &&
+                                            (b.short_code.toUpperCase().includes(searchValue) ||
+                                              searchValue.includes(b.short_code.toUpperCase()))
                                           );
                                           if (matchingShortCode) {
                                             displayBarcode = matchingShortCode.short_code || matchingShortCode.barcode;
                                           } else {
                                             // Try to find by full barcode match
-                                            const matchingBarcode = barcodes.find((b: any) => 
+                                            const matchingBarcode = barcodes.find((b: any) =>
                                               b.barcode && b.barcode.toUpperCase().includes(searchValue)
                                             );
                                             if (matchingBarcode) {
@@ -3324,13 +3546,13 @@ export default function POS() {
                                             }
                                           }
                                         }
-                                        
+
                                         // If no match found, show first available barcode's short_code or barcode
                                         if (!displayBarcode && barcodes.length > 0) {
                                           const firstBarcode = barcodes[0];
                                           displayBarcode = firstBarcode.short_code || firstBarcode.barcode;
                                         }
-                                        
+
                                         return displayBarcode ? `Barcode: ${displayBarcode}` : (product.sku ? `SKU: ${product.sku}` : '');
                                       })()}
                                     </span>
@@ -3515,15 +3737,15 @@ export default function POS() {
                                     const price = parseFloat(value);
                                     if (!isNaN(price) && price > 0) {
                                       // Check selling_price first, then fall back to purchase_price
-                                      const sellingPrice = item.product_selling_price && item.product_selling_price > 0 
-                                        ? parseFloat(item.product_selling_price) 
+                                      const sellingPrice = item.product_selling_price && item.product_selling_price > 0
+                                        ? parseFloat(item.product_selling_price)
                                         : null;
                                       // Ensure we have a valid purchase price - if it's 0 or undefined, it might be cached
                                       let purchasePrice = parseFloat(item.product_purchase_price || '0');
                                       // Use selling_price if available and > 0, otherwise use purchase_price
                                       const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
                                       const canGoBelow = item.product_can_go_below_purchase_price || false;
-                                      
+
                                       // Validate if canGoBelow is false
                                       // Note: If minPrice is 0, we can't validate on frontend, but backend will catch it
                                       if (!canGoBelow) {
@@ -3584,18 +3806,18 @@ export default function POS() {
                                         setEditingManualPrice(newEditingPrices);
                                         return;
                                       }
-                                      
+
                                       if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed') {
                                         // Check selling_price first, then fall back to purchase_price
-                                        const sellingPrice = item.product_selling_price && item.product_selling_price > 0 
-                                          ? parseFloat(item.product_selling_price) 
+                                        const sellingPrice = item.product_selling_price && item.product_selling_price > 0
+                                          ? parseFloat(item.product_selling_price)
                                           : null;
                                         // Ensure we have a valid purchase price - if it's 0 or undefined, it might be cached
                                         let purchasePrice = parseFloat(item.product_purchase_price || '0');
                                         // Use selling_price if available and > 0, otherwise use purchase_price
                                         const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
                                         const canGoBelow = item.product_can_go_below_purchase_price || false;
-                                        
+
                                         // Validate if canGoBelow is false
                                         if (!canGoBelow) {
                                           if (minPrice > 0 && price < minPrice) {

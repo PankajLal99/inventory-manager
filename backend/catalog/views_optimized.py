@@ -94,10 +94,10 @@ def _optimized_product_list_internal(request):
     include_barcodes = request.query_params.get('include_barcodes', 'false')
     
     # Only fetch barcodes when:
-    # 1. Tag-based filters require them (defective, returned, sold)
+    # 1. Tag-based filters require them (defective, returned, sold, in-cart)
     # 2. OR frontend explicitly requests them (include_barcodes=true)
     needs_barcode_prefetch = (
-        tag in ['defective', 'returned', 'sold'] or 
+        tag in ['defective', 'returned', 'sold', 'in-cart'] or 
         include_barcodes.lower() == 'true'
     )
     
@@ -109,6 +109,8 @@ def _optimized_product_list_internal(request):
             barcode_tags = ['returned']
         elif tag == 'sold':
             barcode_tags = ['sold']
+        elif tag == 'in-cart':
+            barcode_tags = ['in-cart']
         else:
             barcode_tags = ['new', 'returned']  # Fallback
         
