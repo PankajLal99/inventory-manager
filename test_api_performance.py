@@ -22,8 +22,8 @@ BASE_URL = "http://127.0.0.1:8765/api/v1"
 ADMIN_BASE_URL = "http://127.0.0.1:8765/admin"
 
 # You need to set these credentials
-USERNAME = "pankajlal"  # Set your username
-PASSWORD = "9009"  # Set your password
+USERNAME = ""  # Set your username
+PASSWORD = ""  # Set your password
 
 # Global session with auth token
 session = requests.Session()
