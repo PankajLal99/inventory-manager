@@ -41,6 +41,11 @@ class Purchase(models.Model):
     class Meta:
         db_table = 'purchases'
         ordering = ['-purchase_date', '-created_at']
+        indexes = [
+            models.Index(fields=['status'], name='idx_purchase_status'),
+            models.Index(fields=['supplier', 'status'], name='idx_purchase_supplier_status'),
+            models.Index(fields=['-purchase_date', '-created_at'], name='idx_purchase_date_created'),
+        ]
 
 
 class PurchaseItem(models.Model):
@@ -59,3 +64,6 @@ class PurchaseItem(models.Model):
     class Meta:
         db_table = 'purchase_items'
         ordering = ['id']
+        indexes = [
+            models.Index(fields=['purchase', 'product'], name='idx_puritem_pur_product'),
+        ]

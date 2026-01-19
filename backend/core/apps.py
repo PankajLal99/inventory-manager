@@ -8,3 +8,4 @@ class CoreConfig(AppConfig):
     def ready(self):
         """Import signals when app is ready"""
         import backend.core.model_cache  # noqa: F401
+        import backend.core.cache_signals  # noqa: F401  # Cache invalidation signals

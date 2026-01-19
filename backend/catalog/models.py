@@ -78,6 +78,11 @@ class Product(models.Model):
 
     class Meta:
         db_table = 'products'
+        indexes = [
+            models.Index(fields=['-updated_at', '-created_at'], name='idx_product_updated'),
+            models.Index(fields=['category', 'is_active'], name='idx_product_category_active'),
+            models.Index(fields=['brand', 'is_active'], name='idx_product_brand_active'),
+        ]
 
 
 class ProductVariant(models.Model):
@@ -191,6 +196,11 @@ class Barcode(models.Model):
     class Meta:
         db_table = 'barcodes'
         unique_together = [['product', 'variant', 'barcode']]
+        indexes = [
+            models.Index(fields=['product', 'tag'], name='idx_barcode_product_tag'),
+            models.Index(fields=['tag', 'product'], name='idx_barcode_tag_product'),
+            models.Index(fields=['purchase', 'tag'], name='idx_barcode_purchase_tag'),
+        ]
 
 
 class ProductComponent(models.Model):

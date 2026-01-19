@@ -5,13 +5,14 @@ from .views import (
     stock_adjustment_list_create, stock_adjustment_detail,
     stock_transfer_list_create, stock_transfer_detail
 )
+from .views_optimized import optimized_stock_list, optimized_stock_low, optimized_stock_out_of_stock
 
 urlpatterns = [
     # Stock endpoints
-    path('stock/', stock_list, name='stock-list'),
+    path('stock/', optimized_stock_list, name='stock-list'),  # 🚀 OPTIMIZED!
     path('stock/<int:pk>/', stock_detail, name='stock-detail'),
-    path('stock/low/', stock_low, name='stock-low'),
-    path('stock/out-of-stock/', stock_out_of_stock, name='stock-out-of-stock'),
+    path('stock/low/', optimized_stock_low, name='stock-low'),  # 🚀 OPTIMIZED!
+    path('stock/out-of-stock/', optimized_stock_out_of_stock, name='stock-out-of-stock'),  # 🚀 OPTIMIZED!
     
     # StockBatch endpoints
     path('stock/batches/', stock_batch_list, name='stock-batch-list'),

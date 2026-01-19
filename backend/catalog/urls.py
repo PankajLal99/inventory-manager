@@ -13,6 +13,18 @@ from .views import (
     data_validation_check,
     defective_product_move_out, defective_product_move_out_list, defective_product_move_out_detail
 )
+from .views_optimized import _optimized_product_list_internal
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+
+# Wrapper to handle both GET (optimized) and POST (original)
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def product_list_wrapper(request):
+    if request.method == 'GET':
+        return _optimized_product_list_internal(request)
+    else:
+        return product_list_create(request)
 
 urlpatterns = [
     # Category endpoints
@@ -28,7 +40,7 @@ urlpatterns = [
     path('tax-rates/<int:pk>/', tax_rate_detail, name='tax-rate-detail'),
     
     # Product endpoints
-    path('products/', product_list_create, name='product-list-create'),
+    path('products/', product_list_wrapper, name='product-list-create'),  # 🚀 OPTIMIZED GET!
     path('products/<int:pk>/', product_detail, name='product-detail'),
     path('products/<int:pk>/variants/', product_variants, name='product-variants'),
     path('products/<int:pk>/barcodes/', product_barcodes, name='product-barcodes'),
