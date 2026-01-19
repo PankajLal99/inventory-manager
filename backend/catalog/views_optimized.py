@@ -85,16 +85,21 @@ def _optimized_product_list_internal(request):
     )
     
     # OPTIMIZATION 2: Only fetch barcodes when needed
-    # Check if we need barcode data based on filters
+    # Check if we need barcode data based on filters AND frontend request
     search = request.query_params.get('search', None)
     tag = request.query_params.get('tag', None)
     in_stock = request.query_params.get('in_stock', None)
     low_stock = request.query_params.get('low_stock', None)
     out_of_stock = request.query_params.get('out_of_stock', None)
+    include_barcodes = request.query_params.get('include_barcodes', 'false')
     
-    # Only fetch barcodes for tag-based filters (defective, returned, sold)
-    # Skip for simple lists, searches, and stock filters
-    needs_barcode_prefetch = tag in ['defective', 'returned', 'sold']
+    # Only fetch barcodes when:
+    # 1. Tag-based filters require them (defective, returned, sold)
+    # 2. OR frontend explicitly requests them (include_barcodes=true)
+    needs_barcode_prefetch = (
+        tag in ['defective', 'returned', 'sold'] or 
+        include_barcodes.lower() == 'true'
+    )
     
     if needs_barcode_prefetch:
         # Determine which barcode tags to fetch based on filter
