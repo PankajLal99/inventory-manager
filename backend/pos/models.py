@@ -78,6 +78,9 @@ class CartItem(models.Model):
 
     class Meta:
         db_table = 'cart_items'
+        indexes = [
+            models.Index(fields=['cart', 'product'], name='idx_cartitem_cart_product'),
+        ]
 
 
 class Invoice(models.Model):
@@ -172,6 +175,11 @@ class InvoiceItem(models.Model):
 
     class Meta:
         db_table = 'invoice_items'
+        indexes = [
+            models.Index(fields=['barcode'], name='idx_invitem_barcode'),
+            models.Index(fields=['invoice', 'barcode'], name='idx_invitem_inv_barcode'),
+            models.Index(fields=['invoice', 'product'], name='idx_invitem_inv_product'),
+        ]
 
 
 class Payment(models.Model):

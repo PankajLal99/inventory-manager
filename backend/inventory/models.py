@@ -29,6 +29,11 @@ class Stock(models.Model):
         # Note: unique_together with nullable fields can have issues
         # We handle uniqueness at application level via get_or_create
         unique_together = [['product', 'variant', 'store', 'warehouse']]
+        indexes = [
+            models.Index(fields=['product', 'store'], name='idx_stock_product_store'),
+            models.Index(fields=['product', 'warehouse'], name='idx_stock_product_warehouse'),
+            models.Index(fields=['store'], name='idx_stock_store'),
+        ]
 
 
 class StockBatch(models.Model):

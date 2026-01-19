@@ -53,10 +53,14 @@ def purchase_list_create(request):
             'page_size': limit,
             'total_pages': paginator.num_pages,
         })
-        # Add cache headers for browser-level caching
-        # Use private cache since this is authenticated content
-        # Max-age of 3 minutes for purchase lists (they change moderately)
-        response['Cache-Control'] = 'private, max-age=180, stale-while-revalidate=600'
+        # Reduced cache time + must-revalidate for fresh data
+        # Frontend React Query will handle caching better
+        response['Cache-Control'] = 'private, max-age=10, must-revalidate'
+        
+        # Add timestamp to help with cache busting
+        from django.utils import timezone
+        response['X-Data-Version'] = timezone.now().isoformat()
+        
         return response
     else:  # POST
         data = request.data.copy()

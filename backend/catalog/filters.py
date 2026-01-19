@@ -1,6 +1,6 @@
 import django_filters
 import re
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Exists, OuterRef
 from .models import Product, Barcode
 from backend.pos.models import InvoiceItem, CartItem
 from backend.purchasing.models import PurchaseItem
@@ -318,7 +318,7 @@ def find_barcode_by_search_value(search_value: str, logger=None):
                 pass  # Cache failure shouldn't break the lookup
             return barcode_obj
     
-    # PRIORITY 4: Case-insensitive match on short_code
+    # PRIORITY 4: Case-insensitive match on short_code ONLY (barcode must be exact)
     barcode_obj = Barcode.objects.filter(short_code__iexact=barcode_clean).select_related(
         'product', 'product__category', 'product__brand'
     ).first()
@@ -333,22 +333,7 @@ def find_barcode_by_search_value(search_value: str, logger=None):
                 pass  # Cache failure shouldn't break the lookup
             return barcode_obj
     
-    # PRIORITY 5: Case-insensitive match on full barcode
-    barcode_obj = Barcode.objects.filter(barcode__iexact=barcode_clean).select_related(
-        'product', 'product__category', 'product__brand'
-    ).first()
-    if barcode_obj:
-        product = barcode_obj.product
-        if product and product.is_active:
-            # Cache the result for future lookups
-            try:
-                from .barcode_cache import cache_barcode_data
-                cache_barcode_data(barcode_obj)
-            except Exception:
-                pass  # Cache failure shouldn't break the lookup
-            return barcode_obj
-    
-    # PRIORITY 6: Contains match for short_code only (not for barcode)
+    # PRIORITY 5: Contains match for short_code only (not for barcode)
     # short_code can use icontains, but barcode must be exact
     if len(barcode_clean) >= 3:
         barcode_obj = Barcode.objects.filter(
@@ -450,10 +435,10 @@ class ProductFilter(django_filters.FilterSet):
         else:
             # Search across all fields (default behavior)
             # Always search product names, SKUs, descriptions, brands, and categories
-            # For barcodes: use exact matching (not icontains)
+            # For barcodes: use EXACT matching ONLY (case-sensitive, no icontains/iexact)
             # For short_code: can use icontains for flexible matching
             barcode_matches = Barcode.objects.filter(
-                Q(barcode=search) | Q(barcode__iexact=search) | 
+                Q(barcode=search) |  # EXACT case-sensitive match for barcode
                 Q(short_code=search) | Q(short_code__iexact=search) | Q(short_code__icontains=search),
                 tag__in=['new', 'returned']
             ).values_list('product_id', flat=True).distinct()
@@ -617,7 +602,11 @@ class ProductFilter(django_filters.FilterSet):
         return queryset.filter(is_active=is_active)
     
     def filter_barcode(self, queryset, name, value):
-        """Filter by barcode or short_code with flexible matching"""
+        """Filter by barcode or short_code
+        
+        IMPORTANT: barcode field uses EXACT case-sensitive matching only
+        short_code field can use flexible matching (iexact, icontains)
+        """
         if not value:
             return queryset
         
@@ -625,6 +614,8 @@ class ProductFilter(django_filters.FilterSet):
         normalized_input = normalize_barcode_for_search(value)
         
         # Try exact matches first (most efficient)
+        # barcode: EXACT case-sensitive only
+        # short_code: exact match
         queryset_exact = queryset.filter(
             Q(barcodes__barcode=value) | Q(barcodes__short_code=value)
         ).distinct()
@@ -632,9 +623,9 @@ class ProductFilter(django_filters.FilterSet):
         if queryset_exact.exists():
             return queryset_exact
         
-        # Try case-insensitive matches
+        # Try case-insensitive match on short_code ONLY (not barcode)
         queryset_iexact = queryset.filter(
-            Q(barcodes__barcode__iexact=value) | Q(barcodes__short_code__iexact=value)
+            Q(barcodes__short_code__iexact=value)
         ).distinct()
         
         if queryset_iexact.exists():
@@ -769,7 +760,11 @@ class ProductFilter(django_filters.FilterSet):
         return queryset
     
     def filter_tag(self, queryset, name, value):
-        """Filter by barcode tag"""
+        """Filter by barcode tag
+        
+        OPTIMIZATION: Use Q objects and annotate instead of set operations
+        This avoids loading all IDs into memory and lets the database handle it
+        """
         if not value:
             return queryset
         
@@ -779,39 +774,39 @@ class ProductFilter(django_filters.FilterSet):
         
         if value == 'sold':
             # For 'sold' tag: tracked products with 'sold' barcodes OR non-tracked products with sold InvoiceItems
-            tracked_product_ids = Barcode.objects.filter(
-                tag='sold'
-            ).values_list('product_id', flat=True).distinct()
-            
-            non_tracked_product_ids = InvoiceItem.objects.filter(
-                product__track_inventory=False,
-                invoice__status__in=['paid', 'credit', 'partial'],
-                invoice__invoice_type__in=['cash', 'upi']
-            ).exclude(
-                invoice__status='void'
-            ).values_list('product_id', flat=True).distinct()
-            
-            all_product_ids = set(tracked_product_ids) | set(non_tracked_product_ids)
-            return queryset.filter(id__in=all_product_ids)
+            # Use Q objects for efficient OR query
+            return queryset.filter(
+                Q(barcodes__tag='sold') |
+                Q(
+                    track_inventory=False,
+                    invoice_items__invoice__status__in=['paid', 'credit', 'partial'],
+                    invoice_items__invoice__invoice_type__in=['cash', 'upi']
+                ) & ~Q(invoice_items__invoice__status='void')
+            ).distinct()
         elif value == 'new':
             # For 'new' tag: products with 'new' barcodes OR products without any barcodes
-            product_ids_with_new_barcodes = Barcode.objects.filter(
+            # OPTIMIZATION: Use Exists() subqueries - most efficient for large datasets
+            # Exists() generates optimized SQL with EXISTS clause instead of IN
+            
+            # Subquery: Check if product has any barcode with tag='new'
+            has_new_barcode = Barcode.objects.filter(
+                product_id=OuterRef('pk'),
                 tag='new'
-            ).values_list('product_id', flat=True).distinct()
+            )
             
-            products_with_barcodes = Barcode.objects.values_list('product_id', flat=True).distinct()
-            products_without_barcodes = Product.objects.exclude(
-                id__in=products_with_barcodes
-            ).values_list('id', flat=True)
+            # Subquery: Check if product has ANY barcodes at all
+            has_any_barcode = Barcode.objects.filter(
+                product_id=OuterRef('pk')
+            )
             
-            all_product_ids = set(product_ids_with_new_barcodes) | set(products_without_barcodes)
-            return queryset.filter(id__in=all_product_ids)
+            # Filter: Products with 'new' barcodes OR no barcodes at all
+            # Exists() is lazily evaluated and very efficient
+            return queryset.filter(
+                Q(Exists(has_new_barcode)) | ~Q(Exists(has_any_barcode))
+            ).distinct()
         else:
-            # For other tags: filter by barcode tag
-            product_ids_with_tag = Barcode.objects.filter(
-                tag=value
-            ).values_list('product_id', flat=True).distinct()
-            return queryset.filter(id__in=product_ids_with_tag)
+            # For other tags: filter by barcode tag using Q object (more efficient)
+            return queryset.filter(barcodes__tag=value).distinct()
     
     def _is_likely_sku(self, search_term):
         """Detect if search term is likely a SKU/barcode vs product name
