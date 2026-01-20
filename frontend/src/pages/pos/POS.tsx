@@ -196,6 +196,9 @@ export default function POS() {
   // Check if user is in Retail group or RetailAdmin (both get store selector)
   const isRetailGroup = user?.groups && (user.groups.includes('Retail') || user.groups.includes('RetailAdmin'));
 
+  // Check if user is in Wholesale or WholesaleAdmin group (invoice type should be 'pending' only)
+  const isWholesaleGroup = user?.groups && (user.groups.includes('Wholesale') || user.groups.includes('WholesaleAdmin'));
+
   // Filter stores based on user group
   // - Admin: All stores
   // - Retail/RetailAdmin group: Only retail and repair shop types (backend already filters, but we filter here too for consistency)
@@ -674,6 +677,14 @@ export default function POS() {
     };
     initUser();
   }, []);
+
+  // Auto-set invoice type to 'pending' for Wholesale and WholesaleAdmin users
+  useEffect(() => {
+    if (isWholesaleGroup && invoiceType !== 'pending') {
+      setInvoiceType('pending');
+    }
+  }, [isWholesaleGroup, invoiceType]);
+
 
   // Helper function to convert backend invoice type to frontend invoice type
   // Backend now supports 'cash', 'upi', 'pending', and 'mixed' directly
@@ -2656,6 +2667,11 @@ export default function POS() {
                       (Repair shop - use PENDING for repair invoices)
                     </span>
                   )}
+                  {isWholesaleGroup && (
+                    <span className="ml-2 text-xs text-orange-600 font-normal">
+                      (Wholesale - PENDING invoices only)
+                    </span>
+                  )}
                 </label>
                 <Select
                   value={invoiceType}
@@ -2670,6 +2686,7 @@ export default function POS() {
                     updateCartMutation.mutate({ invoice_type: frontendToBackendInvoiceType(newType) });
                   }}
                   className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg hover:border-gray-400 cursor-pointer transition-all"
+                  disabled={isWholesaleGroup}
                 >
                   <option value="cash">CASH</option>
                   <option value="upi">UPI</option>
