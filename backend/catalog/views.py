@@ -510,6 +510,16 @@ def product_list_create(request):
             changes={'name': product.name, 'sku': product.sku, 'track_inventory': product.track_inventory}
         )
         
+        # Invalidate product list cache AFTER transaction commits
+        # This ensures the new product is in the database before cache is rebuilt
+        from django.db import transaction
+        from backend.core.cache_signals import invalidate_products_cache_manual
+        
+        def invalidate_cache():
+            invalidate_products_cache_manual()
+        
+        transaction.on_commit(invalidate_cache)
+        
         serializer = ProductSerializer(product)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -598,6 +608,7 @@ def product_detail(request, pk):
         product_name = product.name
         product_sku = product.sku
         product_id = str(product.id)
+        
         product.delete()
         create_audit_log(
             request=request,
@@ -609,6 +620,16 @@ def product_detail(request, pk):
             barcode=None,
             changes={'name': product_name, 'sku': product_sku}
         )
+        
+        # Invalidate cache AFTER transaction commits
+        from django.db import transaction
+        from backend.core.cache_signals import invalidate_products_cache_manual
+        
+        def invalidate_cache():
+            invalidate_products_cache_manual()
+        
+        transaction.on_commit(invalidate_cache)
+        
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1161,6 +1182,101 @@ def product_labels_status(request, pk):
         'needs_generation': generated_count < total_barcodes,
         'purchase_id': purchase_id
     }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def product_regenerate_labels(request, pk):
+    """Regenerate labels for a product via Azure API
+    
+    Request body:
+        purchase_id: Optional. Filter barcodes by purchase ID
+    """
+    from .azure_label_service import queue_bulk_label_generation_via_azure
+    
+    product = get_object_or_404(Product, pk=pk)
+    
+    # Get purchase_id from request body if provided
+    purchase_id = request.data.get('purchase_id', None)
+    
+    # Filter barcodes by product and optionally by purchase
+    barcodes_query = product.barcodes.select_related('product', 'purchase', 'purchase__supplier').all()
+    if purchase_id:
+        try:
+            purchase_id_int = int(purchase_id)
+            barcodes_query = barcodes_query.filter(purchase_id=purchase_id_int)
+        except (ValueError, TypeError):
+            pass  # Invalid purchase_id, ignore filter
+    
+    barcodes = list(barcodes_query)
+    
+    if not barcodes:
+        return Response({
+            'error': 'No barcodes found for this product',
+            'message': 'The product has no barcodes to regenerate labels for.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Prepare barcode data for Azure API
+    barcodes_data = []
+    for barcode in barcodes:
+        # Get vendor name and purchase date
+        vendor_name = None
+        purchase_date = None
+        if barcode.purchase:
+            if barcode.purchase.supplier:
+                vendor_name = barcode.purchase.supplier.name
+            purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
+        
+        # Extract serial number from barcode
+        serial_number = None
+        if barcode.barcode:
+            parts = barcode.barcode.split('-')
+            if len(parts) >= 4:
+                serial_number = '-'.join(parts[-2:])
+            elif len(parts) >= 3:
+                serial_number = parts[-1]
+        
+        barcodes_data.append({
+            'product_name': product.name,
+            'barcode_value': barcode.barcode,
+            'short_code': barcode.short_code if hasattr(barcode, 'short_code') else None,
+            'barcode_id': barcode.id,
+            'vendor_name': vendor_name,
+            'purchase_date': purchase_date,
+            'serial_number': serial_number,
+        })
+    
+    # Queue regeneration via Azure API
+    try:
+        blob_urls = queue_bulk_label_generation_via_azure(barcodes_data)
+        
+        # Update label_image with blob URLs
+        updated_count = 0
+        for barcode in barcodes:
+            if barcode.id in blob_urls:
+                blob_url = blob_urls[barcode.id]
+                if blob_url:
+                    # Get or create BarcodeLabel
+                    label_obj, created = BarcodeLabel.objects.get_or_create(barcode=barcode)
+                    label_obj.label_image = blob_url
+                    label_obj.save(update_fields=['label_image', 'updated_at'])
+                    updated_count += 1
+        
+        return Response({
+            'success': True,
+            'product_id': product.id,
+            'product_name': product.name,
+            'total_barcodes': len(barcodes),
+            'queued_for_regeneration': updated_count,
+            'message': f'Successfully queued {updated_count} label(s) for regeneration. Labels will be generated by Azure Function.'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'error': 'Failed to regenerate labels',
+            'message': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 # ProductVariant views

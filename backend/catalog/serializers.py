@@ -105,6 +105,27 @@ class ProductSerializer(serializers.ModelSerializer):
     variants = ProductVariantSerializer(many=True, read_only=True)
     barcodes = serializers.SerializerMethodField()
     components = ProductComponentSerializer(many=True, read_only=True)
+    
+    # For reading: return full nested objects
+    category = CategorySerializer(read_only=True)
+    brand = BrandSerializer(read_only=True)
+    
+    # For writing: accept integer IDs
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        source='category',
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+    brand_id = serializers.PrimaryKeyRelatedField(
+        queryset=Brand.objects.all(),
+        source='brand',
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+    
     category_name = serializers.CharField(source='category.name', read_only=True)
     brand_name = serializers.CharField(source='brand.name', read_only=True)
     sku = serializers.CharField(read_only=True)
@@ -202,7 +223,8 @@ class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'sku', 'product_type', 'category', 'category_name', 'brand', 'brand_name',
+            'id', 'name', 'sku', 'product_type', 'category', 'category_id', 'category_name', 
+            'brand', 'brand_id', 'brand_name',
             'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
             'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
             'created_at', 'updated_at', 'stock_quantity', 'available_quantity'

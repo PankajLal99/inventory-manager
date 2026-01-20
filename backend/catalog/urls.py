@@ -7,6 +7,7 @@ from .views import (
     product_variants, product_barcodes, product_components,
     product_backfill_barcodes, product_generate_label,
     product_generate_labels, product_get_labels, product_labels_status,
+    product_regenerate_labels,
     product_variant_list_create, product_variant_detail,
     barcode_list_create, barcode_detail, barcode_by_barcode,
     update_barcode_tag, bulk_update_barcode_tags,
@@ -24,7 +25,8 @@ def product_list_wrapper(request):
     if request.method == 'GET':
         return _optimized_product_list_internal(request)
     else:
-        return product_list_create(request)
+        # Pass the underlying Django request to avoid double-wrapping
+        return product_list_create(request._request)
 
 urlpatterns = [
     # Category endpoints
@@ -50,6 +52,7 @@ urlpatterns = [
     path('products/<int:pk>/generate-labels/', product_generate_labels, name='product-generate-labels'),
     path('products/<int:pk>/labels/', product_get_labels, name='product-get-labels'),
     path('products/<int:pk>/labels-status/', product_labels_status, name='product-labels-status'),
+    path('products/<int:pk>/regenerate-labels/', product_regenerate_labels, name='product-regenerate-labels'),
     
     # ProductVariant endpoints
     path('variants/', product_variant_list_create, name='variant-list-create'),

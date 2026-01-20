@@ -13,7 +13,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Pagination from '../../components/ui/Pagination';
-import { Plus, Edit, Trash2, FileText, UserPlus, Filter, Search, X, Printer, Loader2 } from 'lucide-react';
+import { Plus, Edit, Trash2, FileText, UserPlus, Filter, Search, X, Printer, Loader2, RotateCcw } from 'lucide-react';
 import Badge from '../../components/ui/Badge';
 import ProductForm from '../products/ProductForm';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
@@ -820,14 +820,34 @@ export default function Purchases() {
     }
   };
 
-  const handleGenerateLabels = async (productId: number, purchaseId: number) => {
+  const handleGenerateLabels = (productId: number, purchaseId?: number) => {
     setGeneratingLabelsFor(productId);
-    const key = `${productId}`;
-    setLabelStatuses(prev => ({
-      ...prev,
-      [key]: { all_generated: false, generating: true }
-    }));
     generateLabelsMutation.mutate({ productId, purchaseId });
+  };
+
+  const regenerateLabelsMutation = useMutation({
+    mutationFn: ({ productId, purchaseId }: { productId: number; purchaseId?: number }) =>
+      productsApi.regenerateLabels(productId, purchaseId),
+    onSuccess: async (data, { productId, purchaseId }) => {
+      // Invalidate and refetch label status cache after regenerating labels
+      await queryClient.invalidateQueries({ queryKey: ['label-status', productId, purchaseId] });
+      await queryClient.invalidateQueries({ queryKey: ['label-status', productId] });
+
+      setGeneratingLabelsFor(null);
+      alert(data.data?.message || 'Labels queued for regeneration');
+    },
+    onError: (error: any) => {
+      setGeneratingLabelsFor(null);
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to regenerate labels';
+      alert(errorMsg);
+    },
+  });
+
+  const handleRegenerateLabels = (productId: number, purchaseId?: number) => {
+    if (window.confirm('Regenerate all labels for this product? This will replace existing labels.')) {
+      setGeneratingLabelsFor(productId);
+      regenerateLabelsMutation.mutate({ productId, purchaseId });
+    }
   };
 
   // Compute suppliers array (must be before hooks that use it)
@@ -926,7 +946,7 @@ export default function Purchases() {
           const productId = item.product;
           if (productId && item.product_track_inventory) {
             const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
-            const labelKey = `${productId}`;
+            const labelKey = `${productId} `;
 
             // Only add if we haven't seen this product yet (avoid duplicates)
             if (!seenKeys.has(labelKey)) {
@@ -976,7 +996,7 @@ export default function Purchases() {
       const qData = q.data as LabelStatusQueryData | undefined;
       const isSuccess = q.isSuccess;
       const isFetching = q.isFetching;
-      return qData ? `${qData.labelKey}:${qData.data?.all_generated ?? false}:${isFetching}:${isSuccess}` : `empty:${idx}`;
+      return qData ? `${qData.labelKey}:${qData.data?.all_generated ?? false}:${isFetching}:${isSuccess} ` : `empty:${idx} `;
     }).join('|');
   }, [
     // Use JSON.stringify to create a stable dependency that changes when query data changes
@@ -1186,7 +1206,7 @@ export default function Purchases() {
                     <TableRow>
                       <TableCell>
                         <span className="font-mono font-semibold text-gray-900">
-                          {purchase.purchase_number || `PUR-${purchase.id}`}
+                          {purchase.purchase_number || `PUR - ${purchase.id} `}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -1261,7 +1281,7 @@ export default function Purchases() {
                       </TableCell>
                     </TableRow>
                     {purchase.items && purchase.items.length > 0 && (
-                      <TableRow key={`${purchase.id}-expanded`} className="bg-gray-50">
+                      <TableRow key={`${purchase.id} -expanded`} className="bg-gray-50">
                         <TableCell colSpan={8} className="p-0">
                           <div className="p-4">
                             <h4 className="text-sm font-semibold text-gray-900 mb-3">Purchase Items</h4>
@@ -1281,11 +1301,11 @@ export default function Purchases() {
                                   {purchase.items.map((item: any, idx: number) => {
                                     const productId = item.product;
                                     const trackInventory = item.product_track_inventory;
-                                    const labelKey = `${productId}`;
+                                    const labelKey = `${productId} `;
                                     const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
 
                                     return (
-                                      <tr key={item.id || `${purchase.id}-item-${idx}`}>
+                                      <tr key={item.id || `${purchase.id} -item - ${idx} `}>
                                         <td className="px-3 py-2">
                                           <div className="text-sm font-medium text-gray-900">{item.product_name || '-'}</div>
                                           <div className="text-xs text-gray-500">{item.product_sku || 'N/A'}</div>
@@ -1333,16 +1353,27 @@ export default function Purchases() {
 
                                                 if (allGenerated) {
                                                   return (
-                                                    <Button
-                                                      variant="outline"
-                                                      size="sm"
-                                                      onClick={() => handlePrintLabels(productId, purchase.id)}
-                                                      className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                                      title="Print Labels"
-                                                    >
-                                                      <Printer className="h-3.5 w-3.5" />
-                                                      <span className="hidden sm:inline">Print Labels</span>
-                                                    </Button>
+                                                    <div className="flex items-center gap-1.5">
+                                                      <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handlePrintLabels(productId, purchase.id)}
+                                                        className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
+                                                        title="Print Labels"
+                                                      >
+                                                        <Printer className="h-3.5 w-3.5" />
+                                                        <span className="hidden sm:inline">Print Labels</span>
+                                                      </Button>
+                                                      <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => handleRegenerateLabels(productId, purchase.id)}
+                                                        className="flex items-center gap-1.5 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
+                                                        title="Regenerate Labels"
+                                                      >
+                                                        <RotateCcw className="h-3.5 w-3.5" />
+                                                      </Button>
+                                                    </div>
                                                   );
                                                 }
 
@@ -1400,7 +1431,7 @@ export default function Purchases() {
                         <div className="flex items-center gap-2 mb-1">
                           <FileText className="h-4 w-4 text-blue-600 flex-shrink-0" />
                           <span className="font-mono font-semibold text-gray-900 text-base">
-                            {purchase.purchase_number || `PUR-${purchase.id}`}
+                            {purchase.purchase_number || `PUR - ${purchase.id} `}
                           </span>
                         </div>
                         <div className="text-sm text-gray-600 mb-1">
@@ -1476,11 +1507,11 @@ export default function Purchases() {
                         {purchase.items.map((item: any, idx: number) => {
                           const productId = item.product;
                           const trackInventory = item.product_track_inventory;
-                          const labelKey = `${productId}`;
+                          const labelKey = `${productId} `;
                           const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
 
                           return (
-                            <div key={item.id || `${purchase.id}-item-${idx}`} className="bg-white rounded-md p-3 border border-gray-200">
+                            <div key={item.id || `${purchase.id} -item - ${idx} `} className="bg-white rounded-md p-3 border border-gray-200">
                               <div className="flex justify-between items-start mb-1">
                                 <div className="flex-1 min-w-0">
                                   <div className="text-sm font-medium text-gray-900">{item.product_name || '-'}</div>
@@ -1533,16 +1564,28 @@ export default function Purchases() {
 
                                       if (allGenerated) {
                                         return (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => handlePrintLabels(productId, purchase.id)}
-                                            className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                            title="Print Labels"
-                                          >
-                                            <Printer className="h-3.5 w-3.5" />
-                                            <span>Print Labels</span>
-                                          </Button>
+                                          <div className="flex flex-col gap-2">
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              onClick={() => handlePrintLabels(productId, purchase.id)}
+                                              className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
+                                              title="Print Labels"
+                                            >
+                                              <Printer className="h-3.5 w-3.5" />
+                                              <span>Print Labels</span>
+                                            </Button>
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              onClick={() => handleRegenerateLabels(productId, purchase.id)}
+                                              className="flex items-center gap-1.5 w-full text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
+                                              title="Regenerate Labels"
+                                            >
+                                              <RotateCcw className="h-3.5 w-3.5" />
+                                              <span>Regenerate</span>
+                                            </Button>
+                                          </div>
                                         );
                                       }
 
@@ -1800,7 +1843,7 @@ export default function Purchases() {
                                 <div className="text-sm font-medium text-gray-900">{item.product_name || 'Product'}</div>
                                 <div className="text-xs text-gray-500">
                                   {item.product_sku || 'N/A'}
-                                  {item.variant_name && ` • Variant: ${item.variant_name}`}
+                                  {item.variant_name && ` • Variant: ${item.variant_name} `}
                                 </div>
                                 {editingPurchase && soldCount > 0 && (
                                   <div className="text-xs text-amber-600 mt-1 font-medium">
@@ -1828,7 +1871,7 @@ export default function Purchases() {
                                       const val = e.target.value === '' ? 1 : Math.max(1, parseInt(e.target.value) || 1);
                                       handleItemChange(index, 'quantity', val.toString());
                                     }}
-                                    className={`w-20 text-sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                    className={`w - 20 text - sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
                                     required
                                     title={editingPurchase && soldCount > 0 ? `Minimum quantity: ${soldCount} (${soldCount} items already sold)` : undefined}
                                   />
@@ -1919,7 +1962,7 @@ export default function Purchases() {
                               <div className="text-sm font-medium text-gray-900">{item.product_name || 'Product'}</div>
                               <div className="text-xs text-gray-500 mt-0.5">
                                 {item.product_sku || 'N/A'}
-                                {item.variant_name && ` • Variant: ${item.variant_name}`}
+                                {item.variant_name && ` • Variant: ${item.variant_name} `}
                               </div>
                               {editingPurchase && soldCount > 0 && (
                                 <div className="text-xs text-amber-600 mt-1 font-medium">
@@ -1956,7 +1999,7 @@ export default function Purchases() {
                                   const val = e.target.value === '' ? 1 : Math.max(1, parseInt(e.target.value) || 1);
                                   handleItemChange(index, 'quantity', val.toString());
                                 }}
-                                className={`w-full text-sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                className={`w - full text - sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
                                 required
                               />
                               {hasQuantityError && (

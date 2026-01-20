@@ -4055,15 +4055,44 @@ def replacement_replace(request):
     
     # Find new barcode for replacement product
     new_barcode = None
+    scanned_barcode = request.data.get('scanned_barcode')  # Get the exact barcode scanned/searched
+    
     if new_product:
-        new_barcode_query = Barcode.objects.filter(
-            product=new_product,
-            variant=invoice_item.variant,
-            tag='new'
-        )
-        new_barcode = new_barcode_query.filter(is_primary=True).first()
-        if not new_barcode:
-            new_barcode = new_barcode_query.first()
+        # Only allow barcodes with tag='new' or tag='returned' (available inventory)
+        if scanned_barcode:
+            # Try to find the exact barcode that was scanned
+            # Check both barcode and short_code fields
+            from django.db.models import Q
+            
+            try:
+                # First try: exact match with product, variant, and available tags
+                # Match either barcode OR short_code
+                new_barcode = Barcode.objects.get(
+                    Q(barcode=scanned_barcode) | Q(short_code=scanned_barcode),
+                    product=new_product,
+                    variant=invoice_item.variant,
+                    tag__in=['new', 'returned']  # Only available inventory
+                )
+            except Barcode.DoesNotExist:
+                # Second try: exact match without variant constraint
+                try:
+                    new_barcode = Barcode.objects.get(
+                        Q(barcode=scanned_barcode) | Q(short_code=scanned_barcode),
+                        product=new_product,
+                        tag__in=['new', 'returned']  # Only available inventory
+                    )
+                except Barcode.DoesNotExist:
+                    # Exact barcode not found or not available
+                    return Response({
+                        'error': f'Barcode {scanned_barcode} not found or not available for sale',
+                        'message': f'The barcode {scanned_barcode} is either not found, already sold, or not in available inventory (must be tagged as "new" or "returned").'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # No scanned barcode provided - this should not happen in normal flow
+            return Response({
+                'error': 'No barcode specified for replacement product',
+                'message': 'Please scan or search for a specific barcode to use for replacement.'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         # Mark new barcode as sold
         if new_barcode:
@@ -4071,7 +4100,7 @@ def replacement_replace(request):
             new_barcode.tag = 'sold'
             new_barcode.save()
             
-            # Audit log: New barcode tag changed (new -> sold)
+            # Audit log: New barcode tag changed (unknown -> sold)
             create_audit_log(
                 request=request,
                 action='barcode_tag_change',
@@ -4088,6 +4117,7 @@ def replacement_replace(request):
                     'invoice_id': invoice.id,
                     'invoice_number': invoice.invoice_number,
                     'context': 'replacement_replace_new',
+                    'scanned_barcode': scanned_barcode,  # Track which barcode was scanned
                 }
             )
     
@@ -4113,24 +4143,7 @@ def replacement_replace(request):
         # New unit price provided (use as manual_unit_price)
         invoice_item.manual_unit_price = Decimal(str(new_unit_price))
         invoice_item.unit_price = Decimal(str(new_unit_price))
-    else:
-        # No price provided - try to get price from new product's barcode
-        if new_barcode:
-            selling_price = new_barcode.get_selling_price()
-            purchase_price = new_barcode.get_purchase_price()
-            # Use selling_price if available, otherwise purchase_price
-            if selling_price and selling_price > Decimal('0.00'):
-                invoice_item.unit_price = selling_price
-                invoice_item.manual_unit_price = None  # Use default selling price
-            elif purchase_price and purchase_price > Decimal('0.00'):
-                invoice_item.unit_price = purchase_price
-                invoice_item.manual_unit_price = None  # Use default purchase price
-            else:
-                # Keep existing price if no price found
-                pass
-        else:
-            # No barcode - keep existing price
-            pass
+    # else: Keep original price - don't change unless explicitly requested
     
     # Recalculate line_total
     effective_price = invoice_item.manual_unit_price or invoice_item.unit_price
@@ -4202,13 +4215,13 @@ def replacement_replace(request):
     new_total = invoice.total
     price_difference = new_total - old_total
     
-    # Return old barcode back to inventory (mark as 'new' and add to stock)
+    # Return old barcode back to inventory (mark as 'unknown' and add to stock)
     if old_barcode:
         old_tag = old_barcode.tag
-        old_barcode.tag = 'new'
+        old_barcode.tag = 'unknown'
         old_barcode.save()
         
-        # Audit log: Old barcode tag changed (sold -> new)
+        # Audit log: Old barcode tag changed (sold -> unknown)
         create_audit_log(
             request=request,
             action='barcode_tag_change',
@@ -4218,7 +4231,7 @@ def replacement_replace(request):
             object_reference=invoice.invoice_number,
             barcode=old_barcode.barcode,
             changes={
-                'tag': {'old': old_tag, 'new': 'new'},
+                'tag': {'old': old_tag, 'new': 'unknown'},
                 'barcode': old_barcode.barcode,
                 'product_id': old_product.id,
                 'product_name': old_product.name,

@@ -302,50 +302,61 @@ def model_pre_save(sender, instance, **kwargs):
 
 @receiver(post_save)
 def model_post_save(sender, instance, **kwargs):
-    """Invalidate and refresh cache when model is saved"""
+    """Invalidate and refresh cache when model is saved
+    
+    NOTE: Product cache is handled by cache_signals.py to avoid duplication.
+    This handler only manages Store and Customer instance caching.
+    """
+    from django.db import transaction
+    
     model_name = sender.__name__
     
     if model_name == 'Store':
         from backend.locations.models import Store
         if isinstance(instance, Store):
-            invalidate_store_cache(instance)
-            cache_store_data(instance)
-            logger.debug(f"Cache refreshed for store: {instance.name} (ID: {instance.id})")
+            def refresh_store_cache():
+                invalidate_store_cache(instance)
+                cache_store_data(instance)
+                logger.debug(f"Cache refreshed for store: {instance.name} (ID: {instance.id})")
+            
+            transaction.on_commit(refresh_store_cache)
     
     elif model_name == 'Customer':
         from backend.parties.models import Customer
         if isinstance(instance, Customer):
-            invalidate_customer_cache(instance)
-            cache_customer_data(instance)
-            logger.debug(f"Cache refreshed for customer: {instance.name} (ID: {instance.id})")
-    
-    elif model_name == 'Product':
-        from backend.catalog.models import Product
-        if isinstance(instance, Product):
-            invalidate_product_cache(instance)
-            cache_product_data(instance)
-            logger.debug(f"Cache refreshed for product: {instance.name} (ID: {instance.id})")
+            def refresh_customer_cache():
+                invalidate_customer_cache(instance)
+                cache_customer_data(instance)
+                logger.debug(f"Cache refreshed for customer: {instance.name} (ID: {instance.id})")
+            
+            transaction.on_commit(refresh_customer_cache)
     
 @receiver(post_delete)
 def model_post_delete(sender, instance, **kwargs):
-    """Invalidate cache when model is deleted"""
+    """Invalidate cache when model is deleted
+    
+    NOTE: Product cache is handled by cache_signals.py to avoid duplication.
+    This handler only manages Store and Customer instance caching.
+    """
+    from django.db import transaction
+    
     model_name = sender.__name__
     
     if model_name == 'Store':
         from backend.locations.models import Store
         if isinstance(instance, Store):
-            invalidate_store_cache(instance)
-            logger.debug(f"Cache invalidated for deleted store: {instance.name} (ID: {instance.id})")
+            def invalidate_store():
+                invalidate_store_cache(instance)
+                logger.debug(f"Cache invalidated for deleted store: {instance.name} (ID: {instance.id})")
+            
+            transaction.on_commit(invalidate_store)
     
     elif model_name == 'Customer':
         from backend.parties.models import Customer
         if isinstance(instance, Customer):
-            invalidate_customer_cache(instance)
-            logger.debug(f"Cache invalidated for deleted customer: {instance.name} (ID: {instance.id})")
-    
-    elif model_name == 'Product':
-        from backend.catalog.models import Product
-        if isinstance(instance, Product):
-            invalidate_product_cache(instance)
-            logger.debug(f"Cache invalidated for deleted product: {instance.name} (ID: {instance.id})")
+            def invalidate_customer():
+                invalidate_customer_cache(instance)
+                logger.debug(f"Cache invalidated for deleted customer: {instance.name} (ID: {instance.id})")
+            
+            transaction.on_commit(invalidate_customer)
     

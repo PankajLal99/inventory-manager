@@ -2713,6 +2713,14 @@ export default function Products() {
         <ProductForm
           productId={editingProduct}
           onClose={() => { setShowForm(false); setEditingProduct(undefined); }}
+          onProductCreated={() => {
+            // Invalidate and refetch products to show new product immediately
+            queryClient.invalidateQueries({ queryKey: ['products'] });
+            queryClient.refetchQueries({ queryKey: ['products'] });
+            // Close the modal
+            setShowForm(false);
+            setEditingProduct(undefined);
+          }}
         />
       )}
 

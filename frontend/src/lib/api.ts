@@ -4,7 +4,7 @@ import axios from 'axios';
 // Priority: window.__ENV__ > import.meta.env.VITE_API_URL > default
 const getApiBaseUrl = (): string => {
   let baseUrl: string;
-  
+
   // Check for runtime config injected by server.js
   if (typeof window !== 'undefined') {
     // Check for window.__ENV__ (injected by server.js)
@@ -21,7 +21,7 @@ const getApiBaseUrl = (): string => {
     const buildTimeUrl = import.meta.env.VITE_API_URL;
     baseUrl = buildTimeUrl || 'http://localhost:8765/api/v1';
   }
-  
+
   // Normalize URL: remove trailing slash to prevent double slashes
   return baseUrl.replace(/\/+$/, '');
 };
@@ -133,6 +133,10 @@ export const productsApi = {
   labelsStatus: (productId: number, purchaseId?: number) => {
     const params = purchaseId ? { purchase_id: purchaseId } : {};
     return api.get(`/products/${productId}/labels-status/`, { params });
+  },
+  regenerateLabels: (productId: number, purchaseId?: number) => {
+    const data = purchaseId ? { purchase_id: purchaseId } : {};
+    return api.post(`/products/${productId}/regenerate-labels/`, data);
   },
 };
 

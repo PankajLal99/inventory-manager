@@ -48,12 +48,25 @@ def suspend_cache_signals_decorator(func):
 def invalidate_cache_pattern(pattern):
     """
     Invalidate all cache keys matching a pattern
-    For simple Django cache, we'll use specific keys
+    Uses Redis SCAN to find and delete matching keys
     """
     try:
-        # For production with Redis, you'd use SCAN here
-        # For now, just delete specific known keys
-        logger.info(f"Cache invalidation requested for pattern: {pattern}")
+        from django_redis import get_redis_connection
+        redis_conn = get_redis_connection("default")
+        
+        keys = []
+        cursor = 0
+        while True:
+            cursor, partial_keys = redis_conn.scan(cursor, match=f"*{pattern}*", count=100)
+            keys.extend(partial_keys)
+            if cursor == 0:
+                break
+        
+        if keys:
+            redis_conn.delete(*keys)
+            logger.info(f"Cache invalidation requested for pattern: {pattern} - Deleted {len(keys)} keys")
+        else:
+            logger.info(f"Cache invalidation requested for pattern: {pattern} - No keys found")
     except Exception as e:
         logger.warning(f"Could not invalidate cache pattern {pattern}: {str(e)}")
 
@@ -71,10 +84,7 @@ def invalidate_products_cache_manual():
 def invalidate_purchases_cache_manual():
     """Manually invalidate purchases cache"""
     try:
-        cache.delete_many([
-            'purchases_list',
-            'purchases_list_paginated',
-        ])
+        invalidate_cache_pattern("purchases_list")
         logger.info("Invalidated purchases cache (Manual/Signal)")
     except Exception as e:
         logger.warning(f"Error invalidating purchases cache: {e}")
@@ -110,8 +120,15 @@ def invalidate_products_cache(sender, instance, **kwargs):
     if model_name in ['Product', 'Barcode']:
         try:
             from backend.catalog.models import Product, Barcode
+            from django.db import transaction
+            
             if isinstance(instance, (Product, Barcode)):
-                invalidate_products_cache_manual()
+                # Use transaction.on_commit to ensure cache is invalidated AFTER DB commit
+                # This prevents cache from being repopulated with stale data
+                def invalidate_after_commit():
+                    invalidate_products_cache_manual()
+                
+                transaction.on_commit(invalidate_after_commit)
         except Exception as e:
             logger.warning(f"Error in invalidate_products_cache signal: {e}")
 

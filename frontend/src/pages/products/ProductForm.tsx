@@ -187,6 +187,7 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
   useEffect(() => {
     if (product?.data) {
       const productData = product.data;
+
       // Convert category and brand to strings, handling both number and object formats
       const categoryId = productData.category
         ? (typeof productData.category === 'object' ? productData.category.id : productData.category)
@@ -361,16 +362,17 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
     // Products are created without quantity - quantity comes from purchases
 
     // Convert category and brand to integers if they have values
+    // Use category_id and brand_id field names to match backend writable fields
     if (categoryId && categoryId !== '') {
-      baseData.category = parseInt(categoryId);
+      baseData.category_id = parseInt(categoryId);
     } else {
-      baseData.category = null;
+      baseData.category_id = null;
     }
 
     if (brandId && brandId !== '') {
-      baseData.brand = parseInt(brandId);
+      baseData.brand_id = parseInt(brandId);
     } else {
-      baseData.brand = null;
+      baseData.brand_id = null;
     }
 
     mutation.mutate(baseData);

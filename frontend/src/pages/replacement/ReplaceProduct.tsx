@@ -8,7 +8,7 @@ import BarcodeScanner from '../../components/BarcodeScanner';
 import Card from '../../components/ui/Card';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { Search, Camera, AlertTriangle, Package, Plus, Minus, FileText, ArrowLeft, DollarSign } from 'lucide-react';
+import { Search, Camera, AlertTriangle, Package, Plus, Minus, FileText, ArrowLeft, DollarSign, Barcode } from 'lucide-react';
 interface InvoiceItem {
   id: number;
   product: number;
@@ -42,6 +42,7 @@ interface ReplacementItem {
   quantity: number;
   new_unit_price?: number | null;
   manual_unit_price?: number | null;
+  scanned_barcode?: string | null; // Store the exact barcode that was scanned/searched
 }
 
 export default function ReplaceProduct() {
@@ -58,6 +59,7 @@ export default function ReplaceProduct() {
   const [debouncedProductSearches, setDebouncedProductSearches] = useState<Record<number, string>>({});
   const [showProductScanner, setShowProductScanner] = useState<Record<number, boolean>>({});
   const [productSearchSelectedIndex, setProductSearchSelectedIndex] = useState<Record<number, number>>({});
+  const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode like POS
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -69,7 +71,7 @@ export default function ReplaceProduct() {
     const hasSpaces = /\s/.test(input);
     const isMostlyNumeric = /^\d+$/.test(input);
     const hasSpecialChars = /[^a-zA-Z0-9\s-]/.test(input);
-    
+
     // If it has spaces or special chars (except dashes), it's likely a product name
     if (hasSpaces || hasSpecialChars) return false;
     // If it's mostly numeric or alphanumeric without spaces, it's likely a barcode
@@ -125,7 +127,7 @@ export default function ReplaceProduct() {
       if (!searchValue.trim()) return null;
       try {
         const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(searchValue.trim()) && searchValue.trim().length >= 3;
-        
+
         const response = await posApi.replacement.findInvoiceByBarcode({
           barcode: isInvoiceNumber ? undefined : searchValue.trim(),
           sku: isInvoiceNumber ? undefined : searchValue.trim(),
@@ -134,16 +136,16 @@ export default function ReplaceProduct() {
         if (response.data?.invoice) {
           setInvoice(response.data.invoice);
           setSearchError(null);
-          
+
           // Auto-select item if barcode/SKU matches
           const initialReplacements: Record<number, ReplacementItem> = {};
           const initialProductSearch: Record<number, string> = {};
           const searchBarcode = searchValue.trim().toUpperCase();
-          
+
           response.data.invoice.items.forEach((item: InvoiceItem) => {
             const itemBarcode = item.barcode_value?.toUpperCase() || '';
             const itemSku = item.product_sku?.toUpperCase() || '';
-            
+
             // Auto-select item if barcode or SKU matches
             if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
               initialReplacements[item.id] = {
@@ -154,7 +156,7 @@ export default function ReplaceProduct() {
               };
             }
           });
-          
+
           setReplacements(initialReplacements);
           setProductSearch(initialProductSearch);
           return response.data;
@@ -175,16 +177,16 @@ export default function ReplaceProduct() {
   const [activeProductSearchItemId, setActiveProductSearchItemId] = useState<number | null>(null);
   const activeSearchTerm = activeProductSearchItemId ? debouncedProductSearches[activeProductSearchItemId] : '';
   const trimmedActiveSearch = activeSearchTerm?.trim() || '';
-  
+
   // Barcode check query for replacement product search
   const barcodeCheckQuery = useQuery({
     queryKey: ['barcode-check-replacement', activeProductSearchItemId, trimmedActiveSearch],
     queryFn: async () => {
       if (!trimmedActiveSearch || trimmedActiveSearch.length < 3) return null;
       if (!looksLikeBarcode(trimmedActiveSearch)) return null;
-      
+
       try {
-        const response = await productsApi.byBarcode(trimmedActiveSearch, true);
+        const response = await productsApi.byBarcode(trimmedActiveSearch, strictBarcodeMode);
         if (response.data) {
           return { product: response.data, isUnavailable: !response.data.barcode_available };
         }
@@ -196,33 +198,35 @@ export default function ReplaceProduct() {
     enabled: Boolean(trimmedActiveSearch.length >= 3 && looksLikeBarcode(trimmedActiveSearch) && activeProductSearchItemId !== null),
     retry: false,
   });
-  
+
   const productSearchQuery = useQuery({
     queryKey: ['products-replacement', activeProductSearchItemId, activeSearchTerm],
     queryFn: async () => {
       if (!activeSearchTerm || activeSearchTerm.trim().length < 1) return { results: [] };
       try {
-        const response = await productsApi.list({ search: activeSearchTerm.trim(), tag: 'new' });
+        const response = await productsApi.list({ search: activeSearchTerm.trim(), tag: 'new' }); // Only show available inventory
         return response.data;
       } catch (error) {
         return { results: [] };
       }
     },
-    enabled: Boolean(activeSearchTerm && activeSearchTerm.trim().length >= 1 && activeProductSearchItemId !== null && !(looksLikeBarcode(trimmedActiveSearch) && barcodeCheckQuery.data?.product && !barcodeCheckQuery.data?.isUnavailable)),
+    enabled: Boolean(activeSearchTerm && activeSearchTerm.trim().length >= 1 && activeProductSearchItemId !== null && !strictBarcodeMode && !(looksLikeBarcode(trimmedActiveSearch) && barcodeCheckQuery.data?.product && !barcodeCheckQuery.data?.isUnavailable)),
     retry: false,
   });
 
   // Process replacement mutation
   const processReplacementMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number }> }) => {
+    mutationFn: async (data: { invoice_id: number; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string }> }) => {
       const results = [];
       for (const replacement of data.replacements) {
+        console.log('Calling API with:', replacement);
         const result = await posApi.replacement.replace({
           invoice_item_id: replacement.invoice_item_id,
           new_product_id: replacement.new_product_id,
           store_id: replacement.store_id || data.invoice_id, // Use invoice store if not provided
           new_unit_price: replacement.new_unit_price,
           manual_unit_price: replacement.manual_unit_price,
+          scanned_barcode: replacement.scanned_barcode, // Pass the scanned barcode!
         });
         results.push(result.data);
       }
@@ -304,10 +308,17 @@ export default function ReplaceProduct() {
     }
   };
 
-  const handleProductSelect = (itemId: number, product: any) => {
+  const handleProductSelect = (itemId: number, product: any, searchedValue?: string) => {
     // Get price from product (selling_price or purchase_price)
     const productPrice = product.selling_price || product.purchase_price || product.unit_price || 0;
-    
+
+    // Get the barcode to use for replacement
+    // Priority: searchedValue (what user typed) > matched_barcode (from API) > product.barcode
+    // We want the EXACT barcode the user searched for, not what the API matched
+    const barcodeToUse = searchedValue || product.matched_barcode || product.barcode || null;
+
+    console.log('handleProductSelect:', { itemId, searchedValue, matched_barcode: product.matched_barcode, barcodeToUse });
+
     setReplacements(prev => ({
       ...prev,
       [itemId]: {
@@ -316,6 +327,7 @@ export default function ReplaceProduct() {
         new_product_name: product.name,
         new_unit_price: productPrice,
         manual_unit_price: null, // Will be set if user manually adjusts
+        scanned_barcode: barcodeToUse, // Store the exact barcode that was searched
       }
     }));
     setProductSearch(prev => ({ ...prev, [itemId]: product.name }));
@@ -370,7 +382,7 @@ export default function ReplaceProduct() {
   const handleProductSearchKeyDown = async (itemId: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     const products = getProductsForItem(itemId);
     const searchValue = productSearch[itemId] || '';
-    
+
     if (e.key === 'Enter') {
       e.preventDefault();
       if (productSearchSelectedIndex[itemId] >= 0 && products.length > 0) {
@@ -380,19 +392,19 @@ export default function ReplaceProduct() {
           return;
         }
       }
-      
+
       // If barcode check found a product, select it
       if (barcodeCheckQuery.data?.product && !barcodeCheckQuery.data.isUnavailable && activeProductSearchItemId === itemId) {
-        handleProductSelect(itemId, barcodeCheckQuery.data.product);
+        handleProductSelect(itemId, barcodeCheckQuery.data.product, searchValue.trim());
         return;
       }
-      
+
       // Try barcode lookup
       if (searchValue.trim().length >= 3 && looksLikeBarcode(searchValue.trim())) {
         try {
-          const barcodeCheck = await productsApi.byBarcode(searchValue.trim(), true);
+          const barcodeCheck = await productsApi.byBarcode(searchValue.trim(), strictBarcodeMode);
           if (barcodeCheck.data && barcodeCheck.data.barcode_available) {
-            handleProductSelect(itemId, barcodeCheck.data);
+            handleProductSelect(itemId, barcodeCheck.data, searchValue.trim());
             setProductSearch(prev => ({ ...prev, [itemId]: '' }));
             return;
           }
@@ -419,26 +431,42 @@ export default function ReplaceProduct() {
   const handleProcessReplacement = () => {
     if (!invoice) return;
 
-    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number }> = [];
-    
+    console.log('=== handleProcessReplacement START ===');
+    console.log('All replacements:', replacements);
+
+    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string }> = [];
+
     Object.values(replacements).forEach(replacement => {
+      console.log('Processing replacement:', replacement);
+
       if (replacement.new_product_id && replacement.quantity > 0) {
         const replacementData: any = {
           invoice_item_id: replacement.item_id,
           new_product_id: replacement.new_product_id,
           store_id: invoice.store,
         };
-        
-        // Only include price if manually set
+
+        // Include the scanned barcode if available
+        if (replacement.scanned_barcode) {
+          replacementData.scanned_barcode = replacement.scanned_barcode;
+          console.log('✅ Adding scanned_barcode:', replacement.scanned_barcode);
+        } else {
+          console.log('❌ NO scanned_barcode in replacement!', replacement);
+        }
+
+        // Only include price if user manually adjusted it
+        // Don't send new_unit_price - let backend keep original sold price
         if (replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined) {
           replacementData.manual_unit_price = replacement.manual_unit_price;
-        } else if (replacement.new_unit_price) {
-          replacementData.new_unit_price = replacement.new_unit_price;
         }
-        
+
+        console.log('Final replacementData:', replacementData);
         replacementsToProcess.push(replacementData);
       }
     });
+
+    console.log('=== Sending to backend:', replacementsToProcess);
+    console.log('=== handleProcessReplacement END ===');
 
     if (replacementsToProcess.length === 0) {
       showToast('Please select at least one item with a replacement product', 'info');
@@ -474,19 +502,19 @@ export default function ReplaceProduct() {
   // Get products for each item
   const getProductsForItem = (itemId: number) => {
     if (activeProductSearchItemId !== itemId) return [];
-    
+
     const productList: any[] = [];
-    
+
     // Add barcode-check product if available (highest priority)
     if (barcodeCheckQuery.data?.product && !barcodeCheckQuery.data.isUnavailable) {
       productList.push(barcodeCheckQuery.data.product);
     }
-    
+
     // Add products from search results
     if (productSearchQuery?.data) {
       const data = productSearchQuery.data;
       const existingIds = new Set(productList.map(p => p.id));
-      
+
       if (Array.isArray(data?.results)) {
         productList.push(...data.results.filter((p: any) => !existingIds.has(p.id)));
       } else if (Array.isArray(data?.data)) {
@@ -495,7 +523,7 @@ export default function ReplaceProduct() {
         productList.push(...data.filter((p: any) => !existingIds.has(p.id)));
       }
     }
-    
+
     return productList;
   };
 
@@ -518,7 +546,7 @@ export default function ReplaceProduct() {
         </Button>
         <h1 className="text-2xl font-bold text-gray-900">Replace Product</h1>
       </div>
-      
+
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <div className="flex items-start gap-2">
           <AlertTriangle className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
@@ -589,7 +617,19 @@ export default function ReplaceProduct() {
                     ))}
                   </div>
                 )}
-                <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
+                <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
+                  <Button
+                    onClick={() => setStrictBarcodeMode(!strictBarcodeMode)}
+                    variant="outline"
+                    size="sm"
+                    className={`whitespace-nowrap transition-all ${strictBarcodeMode
+                      ? '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700 hover:!border-blue-700'
+                      : '!bg-white !text-gray-600 !border-gray-300 hover:!bg-gray-50'
+                      }`}
+                    title={strictBarcodeMode ? "Strict barcode matching (ON)" : "Flexible search (OFF)"}
+                  >
+                    <Barcode className="h-4 w-4" />
+                  </Button>
                   <Button
                     onClick={() => setShowScanner(true)}
                     variant="outline"
@@ -677,9 +717,8 @@ export default function ReplaceProduct() {
                     return (
                       <div
                         key={item.id}
-                        className={`p-3 hover:bg-gray-50 transition-colors ${
-                          isSelected ? 'bg-blue-50' : ''
-                        }`}
+                        className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''
+                          }`}
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 flex items-start gap-3">
@@ -704,7 +743,7 @@ export default function ReplaceProduct() {
                             </div>
                           </div>
                         </div>
-                        
+
                         {isSelected && (
                           <div className="mt-3 ml-7 space-y-3">
                             {/* Quantity Selection */}
@@ -757,9 +796,21 @@ export default function ReplaceProduct() {
                                   onChange={(e) => handleProductSearchChange(item.id, e.target.value)}
                                   onKeyDown={(e) => handleProductSearchKeyDown(item.id, e)}
                                   placeholder="Search by name, SKU, or scan barcode..."
-                                  className="w-full pr-24"
+                                  className="w-full pr-32"
                                 />
-                                <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
+                                <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
+                                  <Button
+                                    onClick={() => setStrictBarcodeMode(!strictBarcodeMode)}
+                                    variant="outline"
+                                    size="sm"
+                                    className={`whitespace-nowrap transition-all ${strictBarcodeMode
+                                      ? '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700 hover:!border-blue-700'
+                                      : '!bg-white !text-gray-600 !border-gray-300 hover:!bg-gray-50'
+                                      }`}
+                                    title={strictBarcodeMode ? "Strict barcode matching (ON)" : "Flexible search (OFF)"}
+                                  >
+                                    <Barcode className="h-4 w-4" />
+                                  </Button>
                                   <Button
                                     onClick={() => setShowProductScanner(prev => ({ ...prev, [item.id]: true }))}
                                     variant="outline"
@@ -771,7 +822,7 @@ export default function ReplaceProduct() {
                                   </Button>
                                 </div>
                               </div>
-                              
+
                               {/* Barcode Scanner for Product Search */}
                               {showProductScanner[item.id] && (
                                 <div className="mt-2 border rounded-lg p-4 bg-gray-50 flex justify-center">
@@ -785,7 +836,7 @@ export default function ReplaceProduct() {
                                   </div>
                                 </div>
                               )}
-                              
+
                               {showDropdown && (
                                 <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
                                   {products.length === 0 ? (
@@ -799,14 +850,21 @@ export default function ReplaceProduct() {
                                         <button
                                           key={product.id}
                                           type="button"
-                                          onClick={() => handleProductSelect(item.id, product)}
-                                          className={`w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors ${
-                                            isSelected ? 'bg-blue-50' : ''
-                                          }`}
+                                          onClick={() => handleProductSelect(item.id, product, productSearch[item.id])}
+                                          className={`w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors ${isSelected ? 'bg-blue-50' : ''
+                                            }`}
                                         >
                                           <div className="font-medium text-gray-900">{product.name}</div>
-                                          <div className="text-sm text-gray-600 mt-1">
-                                            SKU: {product.sku || 'N/A'}
+                                          <div className="text-sm text-gray-600 mt-1 space-y-0.5">
+                                            {product.matched_barcode && (
+                                              <div>Short Code: {product.matched_barcode}</div>
+                                            )}
+                                            {product.barcode && product.barcode !== product.matched_barcode && (
+                                              <div>Barcode: {product.barcode}</div>
+                                            )}
+                                            {!product.matched_barcode && !product.barcode && product.sku && (
+                                              <div>SKU: {product.sku}</div>
+                                            )}
                                           </div>
                                         </button>
                                       );
@@ -814,7 +872,7 @@ export default function ReplaceProduct() {
                                   )}
                                 </div>
                               )}
-                              
+
                               {/* Barcode status message */}
                               {activeProductSearchItemId === item.id && barcodeCheckQuery.data?.isUnavailable && (
                                 <div className="mt-2 text-sm text-red-600 flex items-center gap-1">
@@ -822,14 +880,14 @@ export default function ReplaceProduct() {
                                   {barcodeCheckQuery.data.product?.barcode_status_message || 'This barcode is not available'}
                                 </div>
                               )}
-                              
+
                               {replacement?.new_product_name && (
                                 <>
                                   <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
                                     <Package className="h-4 w-4" />
                                     Selected: {replacement.new_product_name}
                                   </div>
-                                  
+
                                   {/* Price Adjustment */}
                                   <div className="mt-3 space-y-2">
                                     <label className="block text-sm font-medium text-gray-700">
@@ -872,8 +930,8 @@ export default function ReplaceProduct() {
                                                 }));
                                               }
                                             }}
-                                            placeholder={replacement.new_unit_price 
-                                              ? `Default: ₹${replacement.new_unit_price.toFixed(2)}` 
+                                            placeholder={replacement.new_unit_price
+                                              ? `Default: ₹${replacement.new_unit_price.toFixed(2)}`
                                               : `Default: ₹${parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)}`}
                                             className="w-full"
                                           />
@@ -889,22 +947,21 @@ export default function ReplaceProduct() {
                                         </div>
                                       </div>
                                     </div>
-                                    
+
                                     {/* Price Difference Calculation */}
                                     {replacement.new_product_id && (
                                       <div className="mt-2 p-2 bg-gray-50 rounded border">
                                         <div className="flex justify-between items-center text-sm">
                                           <span className="text-gray-600">Price Difference (Total):</span>
-                                          <span className={`font-semibold ${
-                                            (() => {
-                                              const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                              const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                                ? replacement.manual_unit_price
-                                                : (replacement.new_unit_price || oldPrice);
-                                              const diff = (newPrice - oldPrice) * selectedQuantity;
-                                              return diff >= 0 ? 'text-green-600' : 'text-red-600';
-                                            })()
-                                          }`}>
+                                          <span className={`font-semibold ${(() => {
+                                            const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
+                                            const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+                                              ? replacement.manual_unit_price
+                                              : (replacement.new_unit_price || oldPrice);
+                                            const diff = (newPrice - oldPrice) * selectedQuantity;
+                                            return diff >= 0 ? 'text-green-600' : 'text-red-600';
+                                          })()
+                                            }`}>
                                             {(() => {
                                               const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
                                               const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
@@ -923,15 +980,15 @@ export default function ReplaceProduct() {
                                               : (replacement.new_unit_price || oldPrice);
                                             const diff = newPrice - oldPrice;
                                             const totalDiff = diff * selectedQuantity;
-                                            
+
                                             return (
                                               <>
                                                 <div>
-                                                  {diff > 0 
+                                                  {diff > 0
                                                     ? `Customer pays ₹${diff.toFixed(2)} more per unit`
                                                     : diff < 0
-                                                    ? `Customer gets ₹${Math.abs(diff).toFixed(2)} refund per unit`
-                                                    : 'No price difference per unit'}
+                                                      ? `Customer gets ₹${Math.abs(diff).toFixed(2)} refund per unit`
+                                                      : 'No price difference per unit'}
                                                 </div>
                                                 {selectedQuantity > 1 && (
                                                   <div className="font-medium">
@@ -1001,9 +1058,9 @@ export default function ReplaceProduct() {
 
               {/* Actions */}
               <div className="flex gap-2 justify-end pt-2 border-t">
-                <Button 
-                  variant="outline" 
-                  onClick={handleReset} 
+                <Button
+                  variant="outline"
+                  onClick={handleReset}
                   disabled={processReplacementMutation.isPending}
                 >
                   Reset

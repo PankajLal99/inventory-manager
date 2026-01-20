@@ -71,7 +71,7 @@ def _optimized_product_list_internal(request):
             logger.info(f"Products list cache HIT (user: {request.user.username})")
             response = Response(cached_data)
             response['X-Cache'] = 'HIT'
-            response['Cache-Control'] = 'private, max-age=10, must-revalidate'
+            response['Cache-Control'] = 'private, max-age=0, must-revalidate'
             return response
         logger.info(f"Products list cache MISS (user: {request.user.username})")
     except Exception as e:
@@ -310,7 +310,7 @@ def _optimized_product_list_internal(request):
     
     response = Response(response_data)
     response['X-Cache'] = 'MISS'
-    response['Cache-Control'] = 'private, max-age=10, must-revalidate'  # Reduced cache time
+    response['Cache-Control'] = 'private, max-age=0, must-revalidate'  # No browser cache, only server cache
     
     # Add timestamp for cache busting
     from django.utils import timezone
