@@ -188,10 +188,10 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
     if (product?.data) {
       const productData = product.data;
       // Convert category and brand to strings, handling both number and object formats
-      const categoryId = productData.category 
+      const categoryId = productData.category
         ? (typeof productData.category === 'object' ? productData.category.id : productData.category)
         : null;
-      const brandId = productData.brand 
+      const brandId = productData.brand
         ? (typeof productData.brand === 'object' ? productData.brand.id : productData.brand)
         : null;
 
@@ -213,7 +213,7 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
   // Update search fields when formData changes AND categories/brands are loaded (for edit mode)
   useEffect(() => {
     if (formData.category && categories.length > 0) {
-      const selectedCategory = categories.find((cat: any) => 
+      const selectedCategory = categories.find((cat: any) =>
         cat.id.toString() === formData.category.toString()
       );
       if (selectedCategory) {
@@ -229,7 +229,7 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
 
   useEffect(() => {
     if (formData.brand && brands.length > 0) {
-      const selectedBrand = brands.find((brand: any) => 
+      const selectedBrand = brands.find((brand: any) =>
         brand.id.toString() === formData.brand.toString()
       );
       if (selectedBrand) {
@@ -247,7 +247,19 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
     mutationFn: (data: any) =>
       productId ? productsApi.update(productId, data) : productsApi.create(data),
     onSuccess: (response) => {
-      queryClient.invalidateQueries({ queryKey: ['products'] });
+      // Invalidate all product-related queries across the application
+      // This ensures all pages (Products, POS, Purchases, Reports, etc.) refresh with updated data
+      queryClient.invalidateQueries({ queryKey: ['products'] }); // Main products list
+      queryClient.invalidateQueries({ queryKey: ['product-barcodes'] }); // Product barcodes
+      queryClient.invalidateQueries({ queryKey: ['label-status'] }); // Label status
+      queryClient.invalidateQueries({ queryKey: ['top-products'] }); // Reports
+
+      // Invalidate the individual product query cache when editing
+      if (productId) {
+        queryClient.invalidateQueries({ queryKey: ['product', productId] });
+      }
+
+      // Refetch the main products list to update the UI immediately
       queryClient.refetchQueries({ queryKey: ['products'] });
 
       // If callback is provided, call it with the created/updated product
@@ -305,17 +317,17 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // Prevent submission if category or brand creation is in progress
     if (createCategoryMutation.isPending || createBrandMutation.isPending) {
       alert('Please wait for category/brand creation to complete before submitting.');
       return;
     }
-    
+
     // Check if category search matches an existing category but formData.category is not set
     let categoryId = formData.category;
     if (!categoryId && categorySearch.trim()) {
-      const matchingCategory = categories.find((cat: any) => 
+      const matchingCategory = categories.find((cat: any) =>
         cat.name.toLowerCase() === categorySearch.trim().toLowerCase()
       );
       if (matchingCategory) {
@@ -324,11 +336,11 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
         setFormData((prev) => ({ ...prev, category: categoryId }));
       }
     }
-    
+
     // Check if brand search matches an existing brand but formData.brand is not set
     let brandId = formData.brand;
     if (!brandId && brandSearch.trim()) {
-      const matchingBrand = brands.find((brand: any) => 
+      const matchingBrand = brands.find((brand: any) =>
         brand.name.toLowerCase() === brandSearch.trim().toLowerCase()
       );
       if (matchingBrand) {
@@ -337,7 +349,7 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
         setFormData((prev) => ({ ...prev, brand: brandId }));
       }
     }
-    
+
     const baseData: any = {
       name: formData.name.trim(),
       description: (formData.description || '').trim(),

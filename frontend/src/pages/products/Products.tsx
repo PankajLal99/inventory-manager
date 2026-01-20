@@ -197,7 +197,7 @@ export default function Products() {
       .map((product: any) => product.id)
       .filter((id: number) => id > 0); // Filter out invalid IDs
   }, [allProducts]);
-  
+
   // Use React Query to cache label status checks for all products
   const labelStatusQueries = useQueries({
     queries: productIdsForLabelCheck.map((productId: number) => ({
@@ -220,13 +220,13 @@ export default function Products() {
       enabled: productId > 0,
     })),
   });
-  
+
   // Update labelStatuses state from cached queries
   // Use ref to track processed states and prevent infinite loops
   type LabelStatusQueryData = { productId: number; data: { all_generated?: boolean }; error: null } | { productId: number; data: { all_generated: boolean }; error: string };
-  
+
   const queriesDataRef = useRef<string>('');
-  
+
   // Create a stable dependency string that doesn't change size
   const productIdsString = useMemo(() => {
     return productIdsForLabelCheck.join(',');
@@ -234,7 +234,7 @@ export default function Products() {
     productIdsForLabelCheck.length,
     productIdsForLabelCheck.join(',')
   ]);
-  
+
   const queriesDependencyString = useMemo(() => {
     return labelStatusQueries.map(q => {
       const qData = q.data as LabelStatusQueryData | undefined;
@@ -244,31 +244,31 @@ export default function Products() {
     productIdsString,
     labelStatusQueries.length
   ]);
-  
+
   useEffect(() => {
     // Only process if data actually changed
     if (queriesDataRef.current === queriesDependencyString) {
       return;
     }
-    
+
     queriesDataRef.current = queriesDependencyString;
-    
+
     labelStatusQueries.forEach((query) => {
       const queryData = query.data as LabelStatusQueryData | undefined;
       if (queryData && typeof queryData.productId === 'number') {
         const productId = queryData.productId;
         const all_generated = queryData.data?.all_generated || false;
         const generating = query.isFetching || false;
-        
+
         // Update state only if it changed
         setLabelStatuses(prev => {
           const current = prev[productId];
-          
+
           // Only update if the value actually changed
           if (current?.all_generated === all_generated && current?.generating === generating) {
             return prev;
           }
-          
+
           return {
             ...prev,
             [productId]: {
@@ -438,8 +438,8 @@ export default function Products() {
       }
     },
     onError: (error: any) => {
-      const errorMsg = error?.response?.data?.error || 
-        error?.response?.data?.message || 
+      const errorMsg = error?.response?.data?.error ||
+        error?.response?.data?.message ||
         'Failed to update barcode tag';
       alert(errorMsg);
     },
@@ -602,8 +602,8 @@ export default function Products() {
       }
     },
     onError: (error: any) => {
-      const errorMsg = error?.response?.data?.error || 
-        error?.response?.data?.message || 
+      const errorMsg = error?.response?.data?.error ||
+        error?.response?.data?.message ||
         'Failed to mark items as fresh';
       alert(errorMsg);
     },
@@ -672,9 +672,9 @@ export default function Products() {
     }
 
     if (window.confirm(`Are you sure you want to mark all ${allInCartBarcodeIds.length} in-cart item(s) as fresh and add them back to inventory? This action will be logged in activities.`)) {
-      markAsFreshMutation.mutate({ 
-        barcodeIds: allInCartBarcodeIds, 
-        fromTag: 'in-cart' 
+      markAsFreshMutation.mutate({
+        barcodeIds: allInCartBarcodeIds,
+        fromTag: 'in-cart'
       });
     }
   };
@@ -712,7 +712,7 @@ export default function Products() {
     for (const product of filteredProducts) {
       // Check if product has barcodes array
       const barcodes = product.barcodes || [];
-      
+
       // Try to find matching barcode in the barcodes array
       const matchingBarcode = barcodes.find((b: any) => {
         // Handle different barcode formats
@@ -783,7 +783,7 @@ export default function Products() {
 
       // Process the barcode scan
       handleBarcodeScan(barcodeToScan);
-      
+
       // Clear input after processing
       inputElement.value = '';
       setBarcodeInput('');
@@ -1066,18 +1066,6 @@ export default function Products() {
       </div>
     );
   }
-
-  const handleAdjustStock = (productId: number) => {
-    setAdjustingProduct(productId);
-    setAdjustmentData({
-      adjustment_type: 'in',
-      product: productId.toString(),
-      quantity: '',
-      reason: 'correction',
-      notes: '',
-    });
-    setShowAdjustmentForm(true);
-  };
 
   const handleViewSKUs = (product: any) => {
     setViewingProduct(product);
@@ -1460,526 +1448,517 @@ export default function Products() {
             <div className="flex-1">
               <Table headers={getTableHeaders(tagFilter)}>
                 {filteredProducts.length > 0 ? filteredProducts.map((product: any) => {
-            // Store current tagFilter to avoid type narrowing issues - use type assertion
-            const currentTagFilter = tagFilter as 'new' | 'sold' | 'unknown' | 'returned' | 'defective' | 'in-cart';
-            // Determine status - show stock/tag status as clickable badge to change barcode tags
-            let statusBadge;
-            if (currentTagFilter === 'new') {
-              // Check if product has no barcodes (not purchased yet)
-              const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-              const hasStock = (product.barcodeCount || 0) > 0;
+                  // Store current tagFilter to avoid type narrowing issues - use type assertion
+                  const currentTagFilter = tagFilter as 'new' | 'sold' | 'unknown' | 'returned' | 'defective' | 'in-cart';
+                  // Determine status - show stock/tag status as clickable badge to change barcode tags
+                  let statusBadge;
+                  if (currentTagFilter === 'new') {
+                    // Check if product has no barcodes (not purchased yet)
+                    const hasBarcodes = product.barcodes && product.barcodes.length > 0;
+                    const hasStock = (product.barcodeCount || 0) > 0;
 
-              if (!hasBarcodes && !hasStock) {
-                statusBadge = <Badge variant="warning">Not Purchased</Badge>;
-              } else if (product.isOutOfStock) {
-                statusBadge = <Badge variant="danger">Out of Stock</Badge>;
-              } else if (product.isLowStock) {
-                statusBadge = <Badge variant="warning">Low Stock</Badge>;
-              } else {
-                statusBadge = <Badge variant="success">In Stock</Badge>;
-              }
-            } else {
-              // For non-fresh products, show tag badge as clickable to change tag
-              const tagLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' }> = {
-                'sold': { label: 'Sold', variant: 'info' },
-                'unknown': { label: 'Unknown', variant: 'warning' },
-                'returned': { label: 'Returned', variant: 'info' },
-                'defective': { label: 'Defective', variant: 'danger' },
-                'in-cart': { label: 'In Cart', variant: 'warning' },
-              };
-              const tagInfo = tagLabels[currentTagFilter] || { label: currentTagFilter, variant: 'info' as const };
-              statusBadge = (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    setStatusProduct(product);
-                    setNewTag(currentTagFilter); // Set current tag as default
-                    setShowStatusModal(true);
-                  }}
-                  className="cursor-pointer hover:opacity-80 transition-opacity inline-flex items-center"
-                  title="Click to change barcode tag"
-                  style={{ background: 'transparent', border: 'none', padding: 0 }}
-                >
-                  <Badge variant={tagInfo.variant} className="pointer-events-none">{tagInfo.label}</Badge>
-                </button>
-              );
-            }
-
-            // Render table cells based on tag
-            const renderTableCell = (column: string, cellKey: string) => {
-              switch (column) {
-                case 'Name':
-                  return (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-gray-900">{product.name}</span>
-                        {currentTagFilter !== 'defective' && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingProduct(product.id);
-                              setShowForm(true);
-                            }}
-                            className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors"
-                            title="Edit Product"
-                          >
-                            <Edit className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  );
-                case 'SKU':
-                  // Show barcodes instead of product SKU - limit to 2, show "view more" if more exist
-                  const barcodes = product.barcodes || [];
-                  const barcodeList = Array.isArray(barcodes)
-                    ? barcodes.map((b: any) => b.barcode || b).filter((b: any) => b)
-                    : [];
-
-                  const maxVisible = 2;
-                  const visibleBarcodes = barcodeList.slice(0, maxVisible);
-                  const hasMore = barcodeList.length > maxVisible;
-
-                  return (
-                    <td key={cellKey} className="px-6 py-4 text-sm text-gray-600 font-mono">
-                      <div className="max-w-md">
-                        {barcodeList.length > 0 ? (
-                          <div className="flex flex-wrap items-center gap-1">
-                            <span className="break-words">
-                              {visibleBarcodes.join(', ')}
-                            </span>
-                            {hasMore && (
-                              <>
-                                <span className="text-gray-400">...</span>
-                                <button
-                                  onClick={() => handleViewSKUs(product)}
-                                  className="text-blue-600 hover:text-blue-800 underline font-normal cursor-pointer"
-                                  title="View all barcodes"
-                                >
-                                  view more
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        ) : (
-                          <span>{product.sku || '-'}</span>
-                        )}
-                      </div>
-                    </td>
-                  );
-                case 'Brand':
-                  return (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {product.brand_name || '-'}
-                    </td>
-                  );
-                case 'Category':
-                  return (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {product.category_name || '-'}
-                    </td>
-                  );
-                case 'Total Stock':
-                  return currentTagFilter === 'new' ? (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <div className="flex flex-col">
-                        {/* For tracked products, show Stock model quantity (from stock_quantity) */}
-                        {/* For non-tracked products, show available_quantity */}
-                        <span className="font-medium">
-                          {product.track_inventory !== false
-                            ? (product.stock_quantity || 0)  // Show Stock model quantity for tracked products
-                            : (product.barcodeCount || 0)    // Show barcode count for non-tracked products
-                          }
-                        </span>
-                        {(!product.barcodes || product.barcodes.length === 0) && (product.stock_quantity || 0) === 0 && (
-                          <span className="text-xs text-gray-500 mt-0.5">Not purchased</span>
-                        )}
-                        {/* Show barcode count as additional info for tracked products if different from stock */}
-                        {/* Only show warning if stock is 0 but barcodes exist (indicating draft purchase) */}
-                        {product.track_inventory !== false && product.barcodes && product.barcodes.length > 0 && (product.stock_quantity || 0) === 0 && (
-                          <span className="text-xs text-amber-600 mt-0.5">
-                            ({product.barcodes.length} barcodes, purchase not finalized)
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  ) : null;
-                case 'Quantity Sold':
-                  return currentTagFilter === 'sold' ? (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <span className="font-medium">{product.barcodeCount || 0}</span>
-                    </td>
-                  ) : null;
-                case 'Quantity':
-                  return (currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') ? (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <span className="font-medium">{product.barcodeCount || 0}</span>
-                    </td>
-                  ) : null;
-                case 'Status':
-                  return (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                      {statusBadge}
-                    </td>
-                  );
-                case 'Actions':
-                  return (
-                    <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm">
-                      <div className="flex items-center gap-2">
-                        {/* Fresh (new) products - full actions */}
-                        {currentTagFilter === 'new' && (
-                          <>
-                            {/* Show "Create Purchase" button for unpurchased products */}
-                            {/* Use stock_quantity (Total Stock) from backend - count of all barcodes not sold or defective */}
-                            {/* If stock_quantity === 0, product has no barcodes, show purchase button */}
-                            {(() => {
-                              const stockQty = typeof product.stock_quantity === 'number' 
-                                ? product.stock_quantity 
-                                : parseFloat(product.stock_quantity || '0') || 0;
-                              return stockQty === 0;
-                            })() ? (
-                              <button
-                                onClick={() => {
-                                  const params = new URLSearchParams();
-                                  params.set('product', product.id.toString());
-                                  navigate(`/purchases?${params.toString()}`);
-                                }}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                                title="Create Purchase for this Product"
-                              >
-                                <ShoppingCart className="h-3.5 w-3.5" />
-                                <span>Purchase</span>
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleAdjustStock(product.id)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                title="Edit (Stock Adjustment)"
-                              >
-                                <Edit className="h-3.5 w-3.5" />
-                                <span>Edit</span>
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handleViewSKUs(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                              title="View SKUs"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>View SKUs</span>
-                            </button>
-                            {(() => {
-                              const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-                              const status = labelStatuses[product.id];
-                              const isGenerating = generatingLabelsFor === product.id || (status?.generating);
-                              const allGenerated = status?.all_generated;
-
-                              if (!hasBarcodes) return null;
-
-                              if (isGenerating) {
-                                return (
-                                  <button
-                                    disabled
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-md cursor-not-allowed"
-                                    title="Generating Labels..."
-                                  >
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    <span>Generating...</span>
-                                  </button>
-                                );
-                              }
-
-                              if (allGenerated) {
-                                return (
-                                  <button
-                                    onClick={() => handlePrintLabels(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                                    title="Print Labels"
-                                  >
-                                    <Printer className="h-3.5 w-3.5" />
-                                    <span>Print Labels</span>
-                                  </button>
-                                );
-                              }
-
-                              return (
-                                <button
-                                  onClick={() => handleGenerateLabels(product)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                  title="Generate Labels"
-                                >
-                                  <Printer className="h-3.5 w-3.5" />
-                                  <span>Generate Labels</span>
-                                </button>
-                              );
-                            })()}
-                            {!isRetailUser && (
-                              <button
-                                onClick={() => handleDeleteProduct(product.id, product.name)}
-                                className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Delete Product"
-                                disabled={deleteProductMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {/* Sold products - view only */}
-                        {currentTagFilter === 'sold' && (
-                          <>
-                            <button
-                              onClick={() => handleViewSKUs(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                              title="View SKUs"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>View SKUs</span>
-                            </button>
-                            {!isRetailUser && (
-                              <button
-                                onClick={() => handleDeleteProduct(product.id, product.name)}
-                                className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Delete Product"
-                                disabled={deleteProductMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {/* Unknown products - mark as returned/defective */}
-                        {currentTagFilter === 'unknown' && (
-                          <>
-                            <button
-                              onClick={() => handleViewSKUs(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                              title="View SKUs"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>View SKUs</span>
-                            </button>
-                            <button
-                              onClick={() => handleMarkAsReturned(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                              title="Mark as Returned"
-                              disabled={markAsReturnedMutation.isPending}
-                            >
-                              <CheckCircle className="h-3.5 w-3.5" />
-                              <span>Mark Returned</span>
-                            </button>
-                            <button
-                              onClick={() => handleMarkAsDefective(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 transition-all duration-200"
-                              title="Mark as Defective"
-                              disabled={markAsDefectiveMutation.isPending}
-                            >
-                              <XCircle className="h-3.5 w-3.5" />
-                              <span>Mark Defective</span>
-                            </button>
-                            {!isRetailUser && (
-                              <button
-                                onClick={() => handleDeleteProduct(product.id, product.name)}
-                                className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Delete Product"
-                                disabled={deleteProductMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {/* Returned products - mark as fresh */}
-                        {currentTagFilter === 'returned' && (
-                          <>
-                            <button
-                              onClick={() => handleViewSKUs(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                              title="View SKUs"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>View SKUs</span>
-                            </button>
-                            <button
-                              onClick={() => handleMarkAsFresh(product, 'returned')}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                              title="Mark as Fresh (Re-add to Inventory)"
-                              disabled={markAsFreshMutation.isPending}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                              <span>Mark Fresh</span>
-                            </button>
-                            {!isRetailUser && (
-                              <button
-                                onClick={() => handleDeleteProduct(product.id, product.name)}
-                                className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Delete Product"
-                                disabled={deleteProductMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {/* Defective products - mark as fresh (no edit button) */}
-                        {currentTagFilter === 'defective' && (
-                          <>
-                            <button
-                              onClick={() => handleViewSKUs(product)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                              title="View SKUs"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>View SKUs</span>
-                            </button>
-                            <button
-                              onClick={() => handleMarkAsFresh(product, 'defective')}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                              title="Mark as Fresh (Re-add to Inventory)"
-                              disabled={markAsFreshMutation.isPending}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                              <span>Mark Fresh</span>
-                            </button>
-                            {!isRetailUser && (
-                              <button
-                                onClick={() => handleDeleteProduct(product.id, product.name)}
-                                className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Delete Product"
-                                disabled={deleteProductMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                          </>
-                        )}
-
-                        {/* In-Cart products - no actions */}
-                        {currentTagFilter === 'in-cart' && (
-                          <span className="text-xs text-gray-400">-</span>
-                        )}
-                      </div>
-                    </td>
-                  );
-                default:
-                  return null;
-              }
-            };
-
-            const barcodes = product.barcodes || [];
-            const hasMultipleBarcodes = barcodes.length > 1;
-            const isExpanded = expandedProducts[product.id] || false;
-            const showExpandable = (currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') && hasMultipleBarcodes;
-
-            return (
-              <Fragment key={product.id}>
-                <tr className="hover:bg-gray-50">
-                  {getTableHeaders(currentTagFilter).map((header, idx) => {
-                    const cellKey = `${product.id}-${header}-${idx}`;
-                    if (idx === (currentTagFilter === 'defective' ? 1 : 0) && showExpandable) {
-                      // Add expand/collapse button in first column (Name)
-                      return (
-                        <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => toggleProductExpand(product.id)}
-                              className="p-1 hover:bg-gray-100 rounded transition-colors"
-                              title={isExpanded ? 'Collapse' : 'Expand'}
-                            >
-                              {isExpanded ? (
-                                <ChevronDown className="h-4 w-4 text-gray-600" />
-                              ) : (
-                                <ChevronRight className="h-4 w-4 text-gray-600" />
-                              )}
-                            </button>
-                            <span className="text-sm font-medium text-gray-900">{product.name}</span>
-                          </div>
-                        </td>
-                      );
+                    if (!hasBarcodes && !hasStock) {
+                      statusBadge = <Badge variant="warning">Not Purchased</Badge>;
+                    } else if (product.isOutOfStock) {
+                      statusBadge = <Badge variant="danger">Out of Stock</Badge>;
+                    } else if (product.isLowStock) {
+                      statusBadge = <Badge variant="warning">Low Stock</Badge>;
+                    } else {
+                      statusBadge = <Badge variant="success">In Stock</Badge>;
                     }
-                    return renderTableCell(header, cellKey);
-                  })}
-                </tr>
-                {/* Expanded barcode rows */}
-                {showExpandable && isExpanded && barcodes.map((barcode: any) => (
-                  <tr key={`${product.id}-barcode-${barcode.id}`} className="bg-gray-50 hover:bg-gray-100">
-                    <td className="px-6 py-3">
-                      <div className="flex items-center gap-2 pl-8">
-                        <Barcode className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="text-xs font-mono text-gray-700">{barcode.barcode}</span>
-                        {barcode.tag && (
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${barcode.tag === 'unknown' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
-                            barcode.tag === 'returned' ? 'bg-purple-100 text-purple-700 border-purple-200' :
-                              barcode.tag === 'defective' ? 'bg-red-100 text-red-700 border-red-200' :
-                                barcode.tag === 'in-cart' ? 'bg-orange-100 text-orange-700 border-orange-200' :
-                                  'bg-gray-100 text-gray-700 border-gray-200'
-                            }`}>
-                            {barcode.tag === 'in-cart' ? 'In Cart' : barcode.tag}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-3"></td>
-                    <td className="px-6 py-3"></td>
-                    <td className="px-6 py-3"></td>
-                    <td className="px-6 py-3"></td>
-                    <td className="px-6 py-3"></td>
-                    <td className="px-6 py-3">
-                      <div className="flex items-center gap-2">
-                        {currentTagFilter === 'unknown' && (
-                          <>
-                            <button
-                              onClick={() => handleMarkBarcodeAsReturned(barcode.id)}
-                              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
-                              title="Mark as Returned"
-                              disabled={markAsReturnedMutation.isPending}
-                            >
-                              <CheckCircle className="h-3 w-3" />
-                              Returned
-                            </button>
-                            <button
-                              onClick={() => handleMarkBarcodeAsDefective(barcode.id)}
-                              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
-                              title="Mark as Defective"
-                              disabled={markAsDefectiveMutation.isPending}
-                            >
-                              <XCircle className="h-3 w-3" />
-                              Defective
-                            </button>
-                          </>
-                        )}
-                        {(currentTagFilter === 'returned' || currentTagFilter === 'defective') && (
-                          <button
-                            onClick={() => handleMarkBarcodeAsFresh(barcode.id, currentTagFilter)}
-                            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
-                            title="Mark as Fresh"
-                            disabled={markAsFreshMutation.isPending}
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                            Fresh
-                          </button>
-                        )}
-                      </div>
+                  } else {
+                    // For non-fresh products, show tag badge as clickable to change tag
+                    const tagLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' }> = {
+                      'sold': { label: 'Sold', variant: 'info' },
+                      'unknown': { label: 'Unknown', variant: 'warning' },
+                      'returned': { label: 'Returned', variant: 'info' },
+                      'defective': { label: 'Defective', variant: 'danger' },
+                      'in-cart': { label: 'In Cart', variant: 'warning' },
+                    };
+                    const tagInfo = tagLabels[currentTagFilter] || { label: currentTagFilter, variant: 'info' as const };
+                    statusBadge = (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          setStatusProduct(product);
+                          setNewTag(currentTagFilter); // Set current tag as default
+                          setShowStatusModal(true);
+                        }}
+                        className="cursor-pointer hover:opacity-80 transition-opacity inline-flex items-center"
+                        title="Click to change barcode tag"
+                        style={{ background: 'transparent', border: 'none', padding: 0 }}
+                      >
+                        <Badge variant={tagInfo.variant} className="pointer-events-none">{tagInfo.label}</Badge>
+                      </button>
+                    );
+                  }
+
+                  // Render table cells based on tag
+                  const renderTableCell = (column: string, cellKey: string) => {
+                    switch (column) {
+                      case 'Name':
+                        return (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                              {currentTagFilter !== 'defective' && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingProduct(product.id);
+                                    setShowForm(true);
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors"
+                                  title="Edit Product"
+                                >
+                                  <Edit className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      case 'SKU':
+                        // Show barcodes instead of product SKU - limit to 2, show "view more" if more exist
+                        const barcodes = product.barcodes || [];
+                        const barcodeList = Array.isArray(barcodes)
+                          ? barcodes.map((b: any) => b.barcode || b).filter((b: any) => b)
+                          : [];
+
+                        const maxVisible = 2;
+                        const visibleBarcodes = barcodeList.slice(0, maxVisible);
+                        const hasMore = barcodeList.length > maxVisible;
+
+                        return (
+                          <td key={cellKey} className="px-6 py-4 text-sm text-gray-600 font-mono">
+                            <div className="max-w-md">
+                              {barcodeList.length > 0 ? (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span className="break-words">
+                                    {visibleBarcodes.join(', ')}
+                                  </span>
+                                  {hasMore && (
+                                    <>
+                                      <span className="text-gray-400">...</span>
+                                      <button
+                                        onClick={() => handleViewSKUs(product)}
+                                        className="text-blue-600 hover:text-blue-800 underline font-normal cursor-pointer"
+                                        title="View all barcodes"
+                                      >
+                                        view more
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <span>{product.sku || '-'}</span>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      case 'Brand':
+                        return (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {product.brand_name || '-'}
+                          </td>
+                        );
+                      case 'Category':
+                        return (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {product.category_name || '-'}
+                          </td>
+                        );
+                      case 'Total Stock':
+                        return currentTagFilter === 'new' ? (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div className="flex flex-col">
+                              {/* For tracked products, show Stock model quantity (from stock_quantity) */}
+                              {/* For non-tracked products, show available_quantity */}
+                              <span className="font-medium">
+                                {product.track_inventory !== false
+                                  ? (product.stock_quantity || 0)  // Show Stock model quantity for tracked products
+                                  : (product.barcodeCount || 0)    // Show barcode count for non-tracked products
+                                }
+                              </span>
+                              {(!product.barcodes || product.barcodes.length === 0) && (product.stock_quantity || 0) === 0 && (
+                                <span className="text-xs text-gray-500 mt-0.5">Not purchased</span>
+                              )}
+                              {/* Show barcode count as additional info for tracked products if different from stock */}
+                              {/* Only show warning if stock is 0 but barcodes exist (indicating draft purchase) */}
+                              {product.track_inventory !== false && product.barcodes && product.barcodes.length > 0 && (product.stock_quantity || 0) === 0 && (
+                                <span className="text-xs text-amber-600 mt-0.5">
+                                  ({product.barcodes.length} barcodes, purchase not finalized)
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        ) : null;
+                      case 'Quantity Sold':
+                        return currentTagFilter === 'sold' ? (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <span className="font-medium">{product.barcodeCount || 0}</span>
+                          </td>
+                        ) : null;
+                      case 'Quantity':
+                        return (currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') ? (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <span className="font-medium">{product.barcodeCount || 0}</span>
+                          </td>
+                        ) : null;
+                      case 'Status':
+                        return (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
+                            {statusBadge}
+                          </td>
+                        );
+                      case 'Actions':
+                        return (
+                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm">
+                            <div className="flex items-center gap-2">
+                              {/* Fresh (new) products - full actions */}
+                              {currentTagFilter === 'new' && (
+                                <>
+                                  {/* Show "Create Purchase" button for unpurchased products */}
+                                  {/* Use stock_quantity (Total Stock) from backend - count of all barcodes not sold or defective */}
+                                  {/* If stock_quantity === 0, product has no barcodes, show purchase button */}
+                                  {(() => {
+                                    const stockQty = typeof product.stock_quantity === 'number'
+                                      ? product.stock_quantity
+                                      : parseFloat(product.stock_quantity || '0') || 0;
+                                    return stockQty === 0;
+                                  })() && (
+                                      <button
+                                        onClick={() => {
+                                          const params = new URLSearchParams();
+                                          params.set('product', product.id.toString());
+                                          navigate(`/purchases?${params.toString()}`);
+                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
+                                        title="Create Purchase for this Product"
+                                      >
+                                        <ShoppingCart className="h-3.5 w-3.5" />
+                                        <span>Purchase</span>
+                                      </button>
+                                    )}
+                                  <button
+                                    onClick={() => handleViewSKUs(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                    title="View SKUs"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span>View SKUs</span>
+                                  </button>
+                                  {(() => {
+                                    const hasBarcodes = product.barcodes && product.barcodes.length > 0;
+                                    const status = labelStatuses[product.id];
+                                    const isGenerating = generatingLabelsFor === product.id || (status?.generating);
+                                    const allGenerated = status?.all_generated;
+
+                                    if (!hasBarcodes) return null;
+
+                                    if (isGenerating) {
+                                      return (
+                                        <button
+                                          disabled
+                                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-md cursor-not-allowed"
+                                          title="Generating Labels..."
+                                        >
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          <span>Generating...</span>
+                                        </button>
+                                      );
+                                    }
+
+                                    if (allGenerated) {
+                                      return (
+                                        <button
+                                          onClick={() => handlePrintLabels(product)}
+                                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
+                                          title="Print Labels"
+                                        >
+                                          <Printer className="h-3.5 w-3.5" />
+                                          <span>Print Labels</span>
+                                        </button>
+                                      );
+                                    }
+
+                                    return (
+                                      <button
+                                        onClick={() => handleGenerateLabels(product)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
+                                        title="Generate Labels"
+                                      >
+                                        <Printer className="h-3.5 w-3.5" />
+                                        <span>Generate Labels</span>
+                                      </button>
+                                    );
+                                  })()}
+                                  {!isRetailUser && (
+                                    <button
+                                      onClick={() => handleDeleteProduct(product.id, product.name)}
+                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title="Delete Product"
+                                      disabled={deleteProductMutation.isPending}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Sold products - view only */}
+                              {currentTagFilter === 'sold' && (
+                                <>
+                                  <button
+                                    onClick={() => handleViewSKUs(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                    title="View SKUs"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span>View SKUs</span>
+                                  </button>
+                                  {!isRetailUser && (
+                                    <button
+                                      onClick={() => handleDeleteProduct(product.id, product.name)}
+                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title="Delete Product"
+                                      disabled={deleteProductMutation.isPending}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Unknown products - mark as returned/defective */}
+                              {currentTagFilter === 'unknown' && (
+                                <>
+                                  <button
+                                    onClick={() => handleViewSKUs(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                    title="View SKUs"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span>View SKUs</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleMarkAsReturned(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
+                                    title="Mark as Returned"
+                                    disabled={markAsReturnedMutation.isPending}
+                                  >
+                                    <CheckCircle className="h-3.5 w-3.5" />
+                                    <span>Mark Returned</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleMarkAsDefective(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 transition-all duration-200"
+                                    title="Mark as Defective"
+                                    disabled={markAsDefectiveMutation.isPending}
+                                  >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                    <span>Mark Defective</span>
+                                  </button>
+                                  {!isRetailUser && (
+                                    <button
+                                      onClick={() => handleDeleteProduct(product.id, product.name)}
+                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title="Delete Product"
+                                      disabled={deleteProductMutation.isPending}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Returned products - mark as fresh */}
+                              {currentTagFilter === 'returned' && (
+                                <>
+                                  <button
+                                    onClick={() => handleViewSKUs(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                    title="View SKUs"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span>View SKUs</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleMarkAsFresh(product, 'returned')}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
+                                    title="Mark as Fresh (Re-add to Inventory)"
+                                    disabled={markAsFreshMutation.isPending}
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    <span>Mark Fresh</span>
+                                  </button>
+                                  {!isRetailUser && (
+                                    <button
+                                      onClick={() => handleDeleteProduct(product.id, product.name)}
+                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title="Delete Product"
+                                      disabled={deleteProductMutation.isPending}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Defective products - mark as fresh (no edit button) */}
+                              {currentTagFilter === 'defective' && (
+                                <>
+                                  <button
+                                    onClick={() => handleViewSKUs(product)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                    title="View SKUs"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    <span>View SKUs</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleMarkAsFresh(product, 'defective')}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
+                                    title="Mark as Fresh (Re-add to Inventory)"
+                                    disabled={markAsFreshMutation.isPending}
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    <span>Mark Fresh</span>
+                                  </button>
+                                  {!isRetailUser && (
+                                    <button
+                                      onClick={() => handleDeleteProduct(product.id, product.name)}
+                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      title="Delete Product"
+                                      disabled={deleteProductMutation.isPending}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* In-Cart products - no actions */}
+                              {currentTagFilter === 'in-cart' && (
+                                <span className="text-xs text-gray-400">-</span>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      default:
+                        return null;
+                    }
+                  };
+
+                  const barcodes = product.barcodes || [];
+                  const hasMultipleBarcodes = barcodes.length > 1;
+                  const isExpanded = expandedProducts[product.id] || false;
+                  const showExpandable = (currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') && hasMultipleBarcodes;
+
+                  return (
+                    <Fragment key={product.id}>
+                      <tr className="hover:bg-gray-50">
+                        {getTableHeaders(currentTagFilter).map((header, idx) => {
+                          const cellKey = `${product.id}-${header}-${idx}`;
+                          if (idx === (currentTagFilter === 'defective' ? 1 : 0) && showExpandable) {
+                            // Add expand/collapse button in first column (Name)
+                            return (
+                              <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => toggleProductExpand(product.id)}
+                                    className="p-1 hover:bg-gray-100 rounded transition-colors"
+                                    title={isExpanded ? 'Collapse' : 'Expand'}
+                                  >
+                                    {isExpanded ? (
+                                      <ChevronDown className="h-4 w-4 text-gray-600" />
+                                    ) : (
+                                      <ChevronRight className="h-4 w-4 text-gray-600" />
+                                    )}
+                                  </button>
+                                  <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                                </div>
+                              </td>
+                            );
+                          }
+                          return renderTableCell(header, cellKey);
+                        })}
+                      </tr>
+                      {/* Expanded barcode rows */}
+                      {showExpandable && isExpanded && barcodes.map((barcode: any) => (
+                        <tr key={`${product.id}-barcode-${barcode.id}`} className="bg-gray-50 hover:bg-gray-100">
+                          <td className="px-6 py-3">
+                            <div className="flex items-center gap-2 pl-8">
+                              <Barcode className="h-3.5 w-3.5 text-gray-400" />
+                              <span className="text-xs font-mono text-gray-700">{barcode.barcode}</span>
+                              {barcode.tag && (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${barcode.tag === 'unknown' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
+                                  barcode.tag === 'returned' ? 'bg-purple-100 text-purple-700 border-purple-200' :
+                                    barcode.tag === 'defective' ? 'bg-red-100 text-red-700 border-red-200' :
+                                      barcode.tag === 'in-cart' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                                        'bg-gray-100 text-gray-700 border-gray-200'
+                                  }`}>
+                                  {barcode.tag === 'in-cart' ? 'In Cart' : barcode.tag}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-6 py-3"></td>
+                          <td className="px-6 py-3"></td>
+                          <td className="px-6 py-3"></td>
+                          <td className="px-6 py-3"></td>
+                          <td className="px-6 py-3"></td>
+                          <td className="px-6 py-3">
+                            <div className="flex items-center gap-2">
+                              {currentTagFilter === 'unknown' && (
+                                <>
+                                  <button
+                                    onClick={() => handleMarkBarcodeAsReturned(barcode.id)}
+                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
+                                    title="Mark as Returned"
+                                    disabled={markAsReturnedMutation.isPending}
+                                  >
+                                    <CheckCircle className="h-3 w-3" />
+                                    Returned
+                                  </button>
+                                  <button
+                                    onClick={() => handleMarkBarcodeAsDefective(barcode.id)}
+                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
+                                    title="Mark as Defective"
+                                    disabled={markAsDefectiveMutation.isPending}
+                                  >
+                                    <XCircle className="h-3 w-3" />
+                                    Defective
+                                  </button>
+                                </>
+                              )}
+                              {(currentTagFilter === 'returned' || currentTagFilter === 'defective') && (
+                                <button
+                                  onClick={() => handleMarkBarcodeAsFresh(barcode.id, currentTagFilter)}
+                                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
+                                  title="Mark as Fresh"
+                                  disabled={markAsFreshMutation.isPending}
+                                >
+                                  <RotateCcw className="h-3 w-3" />
+                                  Fresh
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                }) : (
+                  <tr>
+                    <td colSpan={getTableHeaders('defective').length} className="px-6 py-8 text-center text-gray-500">
+                      {productsList.length === 0
+                        ? 'No products found. Add products first.'
+                        : 'No defective products found.'}
                     </td>
                   </tr>
-                ))}
-              </Fragment>
-            );
-          }) : (
-            <tr>
-              <td colSpan={getTableHeaders('defective').length} className="px-6 py-8 text-center text-gray-500">
-                {productsList.length === 0
-                  ? 'No products found. Add products first.'
-                  : 'No defective products found.'}
-              </td>
-            </tr>
-          )}
+                )}
               </Table>
               {paginationInfo && (
                 <Pagination
@@ -2003,8 +1982,8 @@ export default function Products() {
                   ) : (
                     <div className="space-y-3 max-h-[600px] overflow-y-auto">
                       {Array.from(selectedDefectiveProducts).map((productId) => {
-                        const product = selectedDefectiveProductsData.get(productId) || 
-                                       filteredProducts.find((p: any) => p.id === productId);
+                        const product = selectedDefectiveProductsData.get(productId) ||
+                          filteredProducts.find((p: any) => p.id === productId);
                         if (!product) return null;
                         return (
                           <div
@@ -2063,7 +2042,7 @@ export default function Products() {
                 // Use the same rendering logic as the defective section above
                 // This ensures Purchase/Edit buttons show correctly for all products
                 const currentTagFilter = tagFilter as 'new' | 'sold' | 'unknown' | 'returned' | 'defective' | 'in-cart';
-                
+
                 // Determine status badge
                 let statusBadge;
                 if (currentTagFilter === 'new') {
@@ -2096,7 +2075,22 @@ export default function Products() {
                     case 'Name':
                       return (
                         <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                          <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                            {currentTagFilter !== 'defective' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingProduct(product.id);
+                                  setShowForm(true);
+                                }}
+                                className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors"
+                                title="Edit Product"
+                              >
+                                <Edit className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       );
                     case 'SKU':
@@ -2181,33 +2175,24 @@ export default function Products() {
                               <>
                                 {/* Show Purchase button when stock_quantity === 0 */}
                                 {(() => {
-                                  const stockQty = typeof product.stock_quantity === 'number' 
-                                    ? product.stock_quantity 
+                                  const stockQty = typeof product.stock_quantity === 'number'
+                                    ? product.stock_quantity
                                     : parseFloat(product.stock_quantity || '0') || 0;
                                   return stockQty === 0;
-                                })() ? (
-                                  <button
-                                    onClick={() => {
-                                      const params = new URLSearchParams();
-                                      params.set('product', product.id.toString());
-                                      navigate(`/purchases?${params.toString()}`);
-                                    }}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                                    title="Create Purchase for this Product"
-                                  >
-                                    <ShoppingCart className="h-3.5 w-3.5" />
-                                    <span>Purchase</span>
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => handleAdjustStock(product.id)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                    title="Edit (Stock Adjustment)"
-                                  >
-                                    <Edit className="h-3.5 w-3.5" />
-                                    <span>Edit</span>
-                                  </button>
-                                )}
+                                })() && (
+                                    <button
+                                      onClick={() => {
+                                        const params = new URLSearchParams();
+                                        params.set('product', product.id.toString());
+                                        navigate(`/purchases?${params.toString()}`);
+                                      }}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
+                                      title="Create Purchase for this Product"
+                                    >
+                                      <ShoppingCart className="h-3.5 w-3.5" />
+                                      <span>Purchase</span>
+                                    </button>
+                                  )}
                                 <button
                                   onClick={() => handleViewSKUs(product)}
                                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
@@ -2463,7 +2448,22 @@ export default function Products() {
                   <div className="flex items-start gap-2 flex-1 min-w-0">
                     <Package className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-semibold text-gray-900 text-base break-words leading-tight">{product.name}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-semibold text-gray-900 text-base break-words leading-tight">{product.name}</h4>
+                        {tagFilter !== 'defective' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingProduct(product.id);
+                              setShowForm(true);
+                            }}
+                            className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0"
+                            title="Edit Product"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
                       {tagFilter === 'new' && (!product.barcodes || product.barcodes.length === 0) && (product.barcodeCount || 0) === 0 && (
                         <p className="text-xs text-gray-500 mt-0.5">Not purchased yet</p>
                       )}
@@ -2489,31 +2489,23 @@ export default function Products() {
                       {/* Use stock_quantity (Total Stock) from backend - count of all barcodes not sold or defective */}
                       {/* If stock_quantity === 0, product has no barcodes, show purchase button */}
                       {(() => {
-                        const stockQty = typeof product.stock_quantity === 'number' 
-                          ? product.stock_quantity 
+                        const stockQty = typeof product.stock_quantity === 'number'
+                          ? product.stock_quantity
                           : parseFloat(product.stock_quantity || '0') || 0;
                         return stockQty === 0;
-                      })() ? (
-                        <button
-                          onClick={() => {
-                            const params = new URLSearchParams();
-                            params.set('product', product.id.toString());
-                            navigate(`/purchases?${params.toString()}`);
-                          }}
-                          className="flex items-center justify-center w-7 h-7 text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
-                          title="Create Purchase"
-                        >
-                          <ShoppingCart className="h-3.5 w-3.5" />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleAdjustStock(product.id)}
-                          className="flex items-center justify-center w-7 h-7 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
-                          title="Edit"
-                        >
-                          <Edit className="h-3.5 w-3.5" />
-                        </button>
-                      )}
+                      })() && (
+                          <button
+                            onClick={() => {
+                              const params = new URLSearchParams();
+                              params.set('product', product.id.toString());
+                              navigate(`/purchases?${params.toString()}`);
+                            }}
+                            className="flex items-center justify-center w-7 h-7 text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
+                            title="Create Purchase"
+                          >
+                            <ShoppingCart className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       <button
                         onClick={() => handleViewSKUs(product)}
                         className="flex items-center justify-center w-7 h-7 text-purple-600 bg-purple-50 border border-purple-200 rounded hover:bg-purple-100 transition-colors"
@@ -2883,18 +2875,18 @@ export default function Products() {
               <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg">
                 <Badge variant={
                   tagFilter === 'sold' ? 'info' :
-                  tagFilter === 'returned' ? 'info' :
-                  tagFilter === 'defective' ? 'danger' :
-                  tagFilter === 'unknown' ? 'warning' :
-                  tagFilter === 'in-cart' ? 'warning' :
-                  'success'
+                    tagFilter === 'returned' ? 'info' :
+                      tagFilter === 'defective' ? 'danger' :
+                        tagFilter === 'unknown' ? 'warning' :
+                          tagFilter === 'in-cart' ? 'warning' :
+                            'success'
                 }>
                   {tagFilter === 'sold' ? 'Sold' :
-                   tagFilter === 'returned' ? 'Returned' :
-                   tagFilter === 'defective' ? 'Defective' :
-                   tagFilter === 'unknown' ? 'Unknown' :
-                   tagFilter === 'in-cart' ? 'In Cart' :
-                   'Fresh (New)'}
+                    tagFilter === 'returned' ? 'Returned' :
+                      tagFilter === 'defective' ? 'Defective' :
+                        tagFilter === 'unknown' ? 'Unknown' :
+                          tagFilter === 'in-cart' ? 'In Cart' :
+                            'Fresh (New)'}
                 </Badge>
               </div>
             </div>
@@ -2924,7 +2916,7 @@ export default function Products() {
             </div>
             {newTag && (
               <div className="text-sm text-gray-600">
-                This will update all barcodes for this product that are currently tagged as "{tagFilter}" to "{newTag}". 
+                This will update all barcodes for this product that are currently tagged as "{tagFilter}" to "{newTag}".
                 The change will be logged in activities.
               </div>
             )}
@@ -2951,12 +2943,12 @@ export default function Products() {
                       .filter((b: any) => b.tag === tagFilter)
                       .map((b: any) => b.id)
                       .filter((id: any) => id);
-                    
+
                     if (barcodeIds.length === 0) {
                       alert(`No barcodes found for this product with tag "${tagFilter}"`);
                       return;
                     }
-                    
+
                     updateBarcodeTagMutation.mutate({
                       barcodeIds,
                       newTag,
