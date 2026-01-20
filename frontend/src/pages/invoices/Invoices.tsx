@@ -2,9 +2,9 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { 
-  FileText, 
-  Search, 
+import {
+  FileText,
+  Search,
   Filter,
   Eye,
   CheckCircle,
@@ -86,8 +86,19 @@ export default function Invoices() {
   })();
 
   // Check if user is Admin (only Admin group gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || 
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
+
+  // Check if user can see KPI stats (hide from Retail and Repair groups)
+  const canSeeKPIStats = (() => {
+    const userGroups = user?.groups || [];
+    // Hide from Retail and Repair groups only
+    if (userGroups.includes('Retail') || userGroups.includes('Repair')) {
+      return false;
+    }
+    // Show to everyone else (Admin, RetailAdmin, WholesaleAdmin, Wholesale, etc.)
+    return true;
+  })();
 
   // Determine the active store:
   // - For Admin: Use selectedStoreId if set, otherwise first active store
@@ -143,14 +154,14 @@ export default function Invoices() {
   const filteredInvoices = invoices
     .filter((invoice) => invoice.invoice_type !== 'defective')
     .filter((invoice) => {
-    if (!search) return true;
-    const searchLower = search.toLowerCase();
-    return (
-      invoice.invoice_number.toLowerCase().includes(searchLower) ||
-      invoice.customer_name?.toLowerCase().includes(searchLower) ||
-      invoice.total.toLowerCase().includes(searchLower)
-    );
-  });
+      if (!search) return true;
+      const searchLower = search.toLowerCase();
+      return (
+        invoice.invoice_number.toLowerCase().includes(searchLower) ||
+        invoice.customer_name?.toLowerCase().includes(searchLower) ||
+        invoice.total.toLowerCase().includes(searchLower)
+      );
+    });
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -244,44 +255,46 @@ export default function Invoices() {
         )}
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Total Revenue</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">
-                {formatCurrency(totalRevenue.toString())}
-              </p>
+      {/* Stats Cards - Hidden from Retail and Repair groups */}
+      {canSeeKPIStats && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Revenue</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">
+                  {formatCurrency(totalRevenue.toString())}
+                </p>
+              </div>
+              <div className="p-3 bg-green-100 rounded-lg">
+                <Coins className="h-6 w-6 text-green-600" />
+              </div>
             </div>
-            <div className="p-3 bg-green-100 rounded-lg">
-              <Coins className="h-6 w-6 text-green-600" />
+          </Card>
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Total Invoices</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">{totalInvoices}</p>
+              </div>
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <FileText className="h-6 w-6 text-blue-600" />
+              </div>
             </div>
-          </div>
-        </Card>
-        <Card>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Total Invoices</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{totalInvoices}</p>
+          </Card>
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Paid Invoices</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">{paidInvoices}</p>
+              </div>
+              <div className="p-3 bg-green-100 rounded-lg">
+                <CheckCircle className="h-6 w-6 text-green-600" />
+              </div>
             </div>
-            <div className="p-3 bg-blue-100 rounded-lg">
-              <FileText className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Paid Invoices</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{paidInvoices}</p>
-            </div>
-            <div className="p-3 bg-green-100 rounded-lg">
-              <CheckCircle className="h-6 w-6 text-green-600" />
-            </div>
-          </div>
-        </Card>
-      </div>
+          </Card>
+        </div>
+      )}
 
       {/* Filters */}
       <Card>
@@ -370,10 +383,10 @@ export default function Invoices() {
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        {invoice.invoice_type === 'cash' ? 'Cash' : 
-                         invoice.invoice_type === 'upi' ? 'UPI' : 
-                         invoice.invoice_type === 'pending' ? 'Pending' : 
-                         invoice.invoice_type || 'Cash'}
+                        {invoice.invoice_type === 'cash' ? 'Cash' :
+                          invoice.invoice_type === 'upi' ? 'UPI' :
+                            invoice.invoice_type === 'pending' ? 'Pending' :
+                              invoice.invoice_type || 'Cash'}
                       </span>
                     </TableCell>
                     <TableCell align="right">
@@ -416,27 +429,27 @@ export default function Invoices() {
                 >
                   <div className="p-4">
                     <div className="mb-3">
-                        <div className="flex items-center gap-2 mb-1">
-                          <FileText className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                          <span className="font-mono font-semibold text-gray-900 text-base">
-                            {invoice.invoice_number}
-                          </span>
-                        </div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <FileText className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                        <span className="font-mono font-semibold text-gray-900 text-base">
+                          {invoice.invoice_number}
+                        </span>
+                      </div>
                       <div className="text-sm text-gray-600 mb-1">
                         {formatDate(invoice.created_at)}
                       </div>
                       <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                          <User className="h-3.5 w-3.5 text-gray-400" />
-                          <span className="truncate">
-                            {invoice.customer_name || 'Walk-in Customer'}
-                          </span>
-                        </div>
+                        <User className="h-3.5 w-3.5 text-gray-400" />
+                        <span className="truncate">
+                          {invoice.customer_name || 'Walk-in Customer'}
+                        </span>
+                      </div>
                       <div className="mt-1">
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {invoice.invoice_type === 'cash' ? 'Cash' : 
-                           invoice.invoice_type === 'upi' ? 'UPI' : 
-                           invoice.invoice_type === 'pending' ? 'Pending' : 
-                           invoice.invoice_type || 'Cash'}
+                          {invoice.invoice_type === 'cash' ? 'Cash' :
+                            invoice.invoice_type === 'upi' ? 'UPI' :
+                              invoice.invoice_type === 'pending' ? 'Pending' :
+                                invoice.invoice_type || 'Cash'}
                         </span>
                       </div>
                     </div>
@@ -447,12 +460,12 @@ export default function Invoices() {
                           <div className="text-base font-bold text-gray-900">{formatCurrency(invoice.total)}</div>
                         </div>
                         {parseFloat(invoice.paid_amount || '0') > 0 && (
-                        <div>
+                          <div>
                             <div className="text-xs font-medium text-green-600 uppercase tracking-wide mb-1">Paid</div>
-                              <div className="text-sm font-semibold text-green-600">{formatCurrency(invoice.paid_amount)}</div>
-                            </div>
-                          )}
-                        </div>
+                            <div className="text-sm font-semibold text-green-600">{formatCurrency(invoice.paid_amount)}</div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
