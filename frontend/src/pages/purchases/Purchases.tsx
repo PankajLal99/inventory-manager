@@ -17,6 +17,7 @@ import { Plus, Edit, Trash2, FileText, UserPlus, Filter, Search, X, Printer, Loa
 import Badge from '../../components/ui/Badge';
 import ProductForm from '../products/ProductForm';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
+import DatePicker from '../../components/ui/DatePicker';
 
 interface PurchaseItem {
   id?: number;
@@ -730,11 +731,17 @@ export default function Purchases() {
   };
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+    if (!dateString) return '-';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return dateString;
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    } catch (e) {
+      return dateString;
+    }
   };
 
 
@@ -1714,12 +1721,10 @@ export default function Purchases() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Purchase Date *</label>
-                <input
-                  type="date"
+                <DatePicker
+                  label="Purchase Date *"
                   value={formData.purchase_date}
-                  onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  onChange={(date) => setFormData({ ...formData, purchase_date: date })}
                   required
                 />
               </div>
