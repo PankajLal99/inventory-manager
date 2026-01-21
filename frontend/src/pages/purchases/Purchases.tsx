@@ -731,11 +731,10 @@ export default function Purchases() {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
   };
 
 
@@ -1714,13 +1713,16 @@ export default function Purchases() {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <Input
-                label="Purchase Date *"
-                type="date"
-                value={formData.purchase_date}
-                onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })}
-                required
-              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Purchase Date *</label>
+                <input
+                  type="date"
+                  value={formData.purchase_date}
+                  onChange={(e) => setFormData({ ...formData, purchase_date: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  required
+                />
+              </div>
               <Input
                 label="Bill Number"
                 value={formData.bill_number}
