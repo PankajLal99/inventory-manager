@@ -4483,9 +4483,9 @@ def replacement_return(request):
     
     invoice.save()
     
-    # Return barcode back to inventory (mark as 'returned' or 'new')
+    # Return barcode back to inventory (mark as 'unknown')
     if barcode_obj:
-        barcode_obj.tag = 'returned'
+        barcode_obj.tag = 'unknown'
         barcode_obj.save()
     
     # Add product back to inventory (if track_inventory is enabled)
@@ -4504,22 +4504,6 @@ def replacement_return(request):
                 stock.save()
         except Exception as e:
             print(f'Error updating inventory: {str(e)}')
-    
-    # Create ledger entry for return (CREDIT - refunding customer)
-    if invoice.customer and refund_amount > 0:
-        from backend.parties.models import LedgerEntry
-        entry = LedgerEntry.objects.create(
-            customer=invoice.customer,
-            invoice=invoice,
-            entry_type='credit',
-            amount=refund_amount,
-            description=f'Return for Invoice {invoice.invoice_number} (Qty: {return_qty})',
-            created_by=request.user,
-            created_at=timezone.now()
-        )
-        # Update customer credit_balance
-        invoice.customer.credit_balance += entry.amount
-        invoice.customer.save()
     
     # Audit log: Item returned
     create_audit_log(
@@ -5307,13 +5291,13 @@ def replacement_credit_note(request, invoice_id):
                     'remaining_quantity': str(remaining_quantity)
                 })
             
-            # Return barcode back to inventory (mark as 'returned' and add to stock)
+            # Return barcode back to inventory (mark as 'unknown' and add to stock)
             if barcode_obj:
                 old_tag = barcode_obj.tag
-                barcode_obj.tag = 'returned'
+                barcode_obj.tag = 'unknown'
                 barcode_obj.save()
                 
-                # Audit log: Barcode tag changed (sold -> returned)
+                # Audit log: Barcode tag changed (sold -> unknown)
                 create_audit_log(
                     request=request,
                     action='barcode_tag_change',
@@ -5323,7 +5307,7 @@ def replacement_credit_note(request, invoice_id):
                     object_reference=invoice.invoice_number,
                     barcode=barcode_obj.barcode,
                     changes={
-                        'tag': {'old': old_tag, 'new': 'returned'},
+                        'tag': {'old': old_tag, 'new': 'unknown'},
                         'barcode': barcode_obj.barcode,
                         'product_id': product.id,
                         'product_name': product.name,
@@ -5331,7 +5315,7 @@ def replacement_credit_note(request, invoice_id):
                         'invoice_number': invoice.invoice_number,
                         'invoice_item_id': invoice_item.id if total_replaced < original_quantity else 'deleted',
                         'quantity': str(quantity),
-                        'reason': 'Credit note replacement - marked as returned',
+                        'reason': 'Credit note replacement - marked as unknown',
                     }
                 )
             

@@ -8,11 +8,11 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
-import { 
-  Plus, Minus, FileText, Users, TrendingUp, TrendingDown, 
+import {
+  Plus, Minus, FileText, Users, TrendingUp, TrendingDown,
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search, ArrowUpDown, ArrowUp, ArrowDown,
-  ExternalLink, Clock, Store, ChevronDown, UserPlus
+  ExternalLink, Clock, Store, ChevronDown, UserPlus, Receipt
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -34,7 +34,7 @@ export default function Ledger() {
     email: '',
     address: '',
   });
-  
+
   // Filters - Default to all time (no date filter) to show all entries
   const [filters, setFilters] = useState({
     dateFrom: '',
@@ -44,9 +44,10 @@ export default function Ledger() {
     customerGroup: '',
     search: '',
   });
+  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(true); // Default enabled
   const [showFilters, setShowFilters] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
-  
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -82,7 +83,7 @@ export default function Ledger() {
   })();
 
   // Check if user is Admin (only Admin group gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || 
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
 
   // Determine the active store:
@@ -137,12 +138,14 @@ export default function Ledger() {
   });
 
   const { data: ledgerSummary } = useQuery({
-    queryKey: ['ledger-summary', defaultStore?.id],
+    queryKey: ['ledger-summary', defaultStore?.id, showCreditInvoicesOnly],
     queryFn: async () => {
       const params: any = {};
       if (defaultStore?.id) params.store = defaultStore.id;
-      // Filter to show only credit invoices
-      params.invoice_status = 'credit';
+      // Filter to show only credit invoices (if toggle is enabled)
+      if (showCreditInvoicesOnly) {
+        params.invoice_status = 'credit';
+      }
       const response = await customersApi.ledger.summary(params);
       return response.data;
     },
@@ -151,7 +154,7 @@ export default function Ledger() {
   });
 
   const { data: ledgerEntries, isLoading, error } = useQuery({
-    queryKey: ['ledger-entries', filters, defaultStore?.id],
+    queryKey: ['ledger-entries', filters, defaultStore?.id, showCreditInvoicesOnly],
     queryFn: async () => {
       const params: any = {};
       if (filters.dateFrom) params.date_from = filters.dateFrom;
@@ -161,9 +164,11 @@ export default function Ledger() {
       if (filters.customerGroup) params.customer_group = filters.customerGroup;
       if (filters.search) params.search = filters.search;
       if (defaultStore?.id) params.store = defaultStore.id;
-      // Filter to show only credit invoices
-      params.invoice_status = 'credit';
-      
+      // Filter to show only credit invoices (if toggle is enabled)
+      if (showCreditInvoicesOnly) {
+        params.invoice_status = 'credit';
+      }
+
       const response = await customersApi.ledger.entries.list(params);
       return response.data;
     },
@@ -217,7 +222,7 @@ export default function Ledger() {
       toast('Please enter a valid amount', 'error');
       return;
     }
-    
+
     createEntryMutation.mutate({
       customer: selectedCustomer.id,
       entry_type: entryType,
@@ -255,12 +260,12 @@ export default function Ledger() {
 
   const filteredEntries = useMemo(() => {
     let sorted = [...entries];
-    
+
     if (sortConfig) {
       sorted.sort((a, b) => {
         let aValue: any;
         let bValue: any;
-        
+
         switch (sortConfig.key) {
           case 'date':
             aValue = new Date(a.created_at).getTime();
@@ -281,20 +286,20 @@ export default function Ledger() {
           default:
             return 0;
         }
-        
+
         if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
         if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
       });
     }
-    
+
     return sorted;
   }, [entries, sortConfig]);
 
   const handleSort = (key: string) => {
     setSortConfig(prev => {
       if (prev?.key === key) {
-        return prev.direction === 'asc' 
+        return prev.direction === 'asc'
           ? { key, direction: 'desc' }
           : null;
       }
@@ -306,7 +311,7 @@ export default function Ledger() {
     if (sortConfig?.key !== key) {
       return <ArrowUpDown className="h-3 w-3 ml-1 text-gray-400" />;
     }
-    return sortConfig.direction === 'asc' 
+    return sortConfig.direction === 'asc'
       ? <ArrowUp className="h-3 w-3 ml-1 text-blue-600" />
       : <ArrowDown className="h-3 w-3 ml-1 text-blue-600" />;
   };
@@ -337,18 +342,18 @@ export default function Ledger() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Ledger Entries');
-    
+
     const fileName = `ledger_entries_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
   const handleExportPDF = () => {
     const doc = new jsPDF();
-    
+
     // Add title
     doc.setFontSize(18);
     doc.text('Ledger Entries Report', 14, 20);
-    
+
     // Add date range if filtered
     doc.setFontSize(10);
     doc.text(
@@ -356,7 +361,7 @@ export default function Ledger() {
       14,
       30
     );
-    
+
     // Prepare table data
     const tableData = filteredEntries.map((entry: any) => [
       new Date(entry.created_at).toLocaleDateString(),
@@ -523,21 +528,21 @@ export default function Ledger() {
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
           <div className="flex gap-2">
-          <Button
-            onClick={() => handleCreateEntry('credit')}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Credit (+)
-          </Button>
-          <Button
-            onClick={() => handleCreateEntry('debit')}
-            variant="outline"
-            className="border-red-300 text-red-600 hover:bg-red-50"
-          >
-            <Minus className="h-4 w-4 mr-2" />
-            Debit (-)
-          </Button>
+            <Button
+              onClick={() => handleCreateEntry('credit')}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Credit (+)
+            </Button>
+            <Button
+              onClick={() => handleCreateEntry('debit')}
+              variant="outline"
+              className="border-red-300 text-red-600 hover:bg-red-50"
+            >
+              <Minus className="h-4 w-4 mr-2" />
+              Debit (-)
+            </Button>
           </div>
         </div>
       </div>
@@ -586,6 +591,15 @@ export default function Ledger() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4">
           <h2 className="text-xl font-semibold">Ledger Entries</h2>
           <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowCreditInvoicesOnly(!showCreditInvoicesOnly)}
+              className={`flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 sm:py-2 ${!showCreditInvoicesOnly ? 'bg-blue-100 text-blue-700 border-blue-300' : ''}`}
+              title={showCreditInvoicesOnly ? 'Click to show all invoices' : 'Click to show credit invoices only'}
+            >
+              <Receipt className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="hidden sm:inline">{showCreditInvoicesOnly ? 'Credit Only' : 'All Invoices'}</span>
+            </Button>
             <Button
               variant="outline"
               onClick={() => setShowFilters(!showFilters)}
@@ -740,173 +754,168 @@ export default function Ledger() {
                 <div className="inline-block min-w-full align-middle">
                   <div className="overflow-hidden">
                     <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gradient-to-r from-gray-50 to-gray-100 sticky top-0 z-10">
-                      <tr>
-                        <th 
-                          className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                          onClick={() => handleSort('date')}
-                        >
-                          <div className="flex items-center">
-                            <Clock className="h-4 w-4 mr-2 text-gray-500" />
-                            Date
-                            {getSortIcon('date')}
-                          </div>
-                        </th>
-                        <th 
-                          className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                          onClick={() => handleSort('customer')}
-                        >
-                          <div className="flex items-center">
-                            <Users className="h-4 w-4 mr-2 text-gray-500" />
-                            Customer
-                            {getSortIcon('customer')}
-                          </div>
-                        </th>
-                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Group
-                        </th>
-                        <th 
-                          className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                          onClick={() => handleSort('type')}
-                        >
-                          <div className="flex items-center">
-                            Type
-                            {getSortIcon('type')}
-                          </div>
-                        </th>
-                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Description
-                        </th>
-                        <th 
-                          className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                          onClick={() => handleSort('amount')}
-                        >
-                          <div className="flex items-center justify-end">
-                            Amount
-                            {getSortIcon('amount')}
-                          </div>
-                        </th>
-                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Invoice
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredEntries.map((entry: any, index: number) => (
-                        <tr 
-                          key={entry.id} 
-                          className={`transition-all duration-150 ${
-                            index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
-                          } hover:bg-blue-50 hover:shadow-sm`}
-                        >
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex flex-col">
-                              <span className="text-sm font-medium text-gray-900">
-                                {new Date(entry.created_at).toLocaleDateString('en-IN', {
-                                  year: 'numeric',
-                                  month: 'short',
-                                  day: 'numeric'
-                                })}
-                              </span>
-                              <span className="text-xs text-gray-500">
-                                {new Date(entry.created_at).toLocaleTimeString('en-IN', {
-                                  hour: '2-digit',
-                                  minute: '2-digit'
-                                })}
-                              </span>
+                      <thead className="bg-gradient-to-r from-gray-50 to-gray-100 sticky top-0 z-10">
+                        <tr>
+                          <th
+                            className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
+                            onClick={() => handleSort('date')}
+                          >
+                            <div className="flex items-center">
+                              <Clock className="h-4 w-4 mr-2 text-gray-500" />
+                              Date
+                              {getSortIcon('date')}
                             </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <button
-                              onClick={() => navigate(`/ledger/${entry.customer}`)}
-                              className="group flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
-                            >
-                              {entry.customer_name || 'Anonymous'}
-                              <ExternalLink className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </button>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="text-sm text-gray-600">
-                              {entry.customer_group_name || '-'}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-bold shadow-sm ${
-                              entry.entry_type === 'credit'
-                                ? 'bg-green-100 text-green-800 border border-green-200'
-                                : 'bg-red-100 text-red-800 border border-red-200'
-                            }`}>
-                              {entry.entry_type === 'credit' ? (
-                                <TrendingUp className="h-3 w-3 mr-1" />
-                              ) : (
-                                <TrendingDown className="h-3 w-3 mr-1" />
-                              )}
-                              {entry.entry_type.toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
-                              {entry.description || <span className="text-gray-400 italic">No description</span>}
+                          </th>
+                          <th
+                            className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
+                            onClick={() => handleSort('customer')}
+                          >
+                            <div className="flex items-center">
+                              <Users className="h-4 w-4 mr-2 text-gray-500" />
+                              Customer
+                              {getSortIcon('customer')}
                             </div>
-                          </td>
-                          <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${
-                            entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                          }`}>
+                          </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Group
+                          </th>
+                          <th
+                            className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
+                            onClick={() => handleSort('type')}
+                          >
+                            <div className="flex items-center">
+                              Type
+                              {getSortIcon('type')}
+                            </div>
+                          </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Description
+                          </th>
+                          <th
+                            className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
+                            onClick={() => handleSort('amount')}
+                          >
                             <div className="flex items-center justify-end">
-                              <span className={`inline-flex items-center px-2 py-1 rounded ${
-                                entry.entry_type === 'credit' 
-                                  ? 'bg-green-50 border border-green-200' 
-                                  : 'bg-red-50 border border-red-200'
-                              }`}>
-                                {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
-                              </span>
+                              Amount
+                              {getSortIcon('amount')}
                             </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {entry.invoice_number ? (
+                          </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Invoice
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {filteredEntries.map((entry: any, index: number) => (
+                          <tr
+                            key={entry.id}
+                            className={`transition-all duration-150 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                              } hover:bg-blue-50 hover:shadow-sm`}
+                          >
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-medium text-gray-900">
+                                  {new Date(entry.created_at).toLocaleDateString('en-IN', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric'
+                                  })}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  {new Date(entry.created_at).toLocaleTimeString('en-IN', {
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
                               <button
-                                onClick={() => navigate(`/invoices/${entry.invoice}`)}
-                                className="group inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                                onClick={() => navigate(`/ledger/${entry.customer}`)}
+                                className="group flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
                               >
-                                <FileText className="h-3 w-3 mr-1" />
-                                {entry.invoice_number}
+                                {entry.customer_name || 'Anonymous'}
                                 <ExternalLink className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
                               </button>
-                            ) : (
-                              <span className="text-gray-400 text-sm">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-gray-50 border-t-2 border-gray-300">
-                      <tr>
-                        <td colSpan={5} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
-                          Totals:
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right">
-                          <div className="space-y-1">
-                            <div className="text-sm">
-                              <span className="text-gray-600">Credit: </span>
-                              <span className="font-bold text-green-700">+₹{totalCredit.toFixed(2)}</span>
-                            </div>
-                            <div className="text-sm">
-                              <span className="text-gray-600">Debit: </span>
-                              <span className="font-bold text-red-700">-₹{totalDebit.toFixed(2)}</span>
-                            </div>
-                            <div className="text-sm pt-1 border-t border-gray-300">
-                              <span className="text-gray-700">Net: </span>
-                              <span className={`font-bold ${
-                                (totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
-                              }`}>
-                                {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className="text-sm text-gray-600">
+                                {entry.customer_group_name || '-'}
                               </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
+                                ? 'bg-green-100 text-green-800 border border-green-200'
+                                : 'bg-red-100 text-red-800 border border-red-200'
+                                }`}>
+                                {entry.entry_type === 'credit' ? (
+                                  <TrendingUp className="h-3 w-3 mr-1" />
+                                ) : (
+                                  <TrendingDown className="h-3 w-3 mr-1" />
+                                )}
+                                {entry.entry_type.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
+                                {entry.description || <span className="text-gray-400 italic">No description</span>}
+                              </div>
+                            </td>
+                            <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
+                              }`}>
+                              <div className="flex items-center justify-end">
+                                <span className={`inline-flex items-center px-2 py-1 rounded ${entry.entry_type === 'credit'
+                                  ? 'bg-green-50 border border-green-200'
+                                  : 'bg-red-50 border border-red-200'
+                                  }`}>
+                                  {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              {entry.invoice_number ? (
+                                <button
+                                  onClick={() => navigate(`/invoices/${entry.invoice}`)}
+                                  className="group inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                                >
+                                  <FileText className="h-3 w-3 mr-1" />
+                                  {entry.invoice_number}
+                                  <ExternalLink className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </button>
+                              ) : (
+                                <span className="text-gray-400 text-sm">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-gray-50 border-t-2 border-gray-300">
+                        <tr>
+                          <td colSpan={5} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
+                            Totals:
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right">
+                            <div className="space-y-1">
+                              <div className="text-sm">
+                                <span className="text-gray-600">Credit: </span>
+                                <span className="font-bold text-green-700">+₹{totalCredit.toFixed(2)}</span>
+                              </div>
+                              <div className="text-sm">
+                                <span className="text-gray-600">Debit: </span>
+                                <span className="font-bold text-red-700">-₹{totalDebit.toFixed(2)}</span>
+                              </div>
+                              <div className="text-sm pt-1 border-t border-gray-300">
+                                <span className="text-gray-700">Net: </span>
+                                <span className={`font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
+                                  }`}>
+                                  {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4"></td>
-                      </tr>
-                    </tfoot>
+                          </td>
+                          <td className="px-6 py-4"></td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 </div>
@@ -958,11 +967,10 @@ export default function Ledger() {
                         </span>
                       </div>
                     </div>
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${
-                      entry.entry_type === 'credit'
-                        ? 'bg-green-100 text-green-800 border border-green-200'
-                        : 'bg-red-100 text-red-800 border border-red-200'
-                    }`}>
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
+                      ? 'bg-green-100 text-green-800 border border-green-200'
+                      : 'bg-red-100 text-red-800 border border-red-200'
+                      }`}>
                       {entry.entry_type === 'credit' ? (
                         <TrendingUp className="h-3 w-3 mr-1" />
                       ) : (
@@ -1000,14 +1008,12 @@ export default function Ledger() {
 
                   {/* Amount and Invoice */}
                   <div className="flex items-center justify-between pt-3 border-t border-gray-200">
-                    <div className={`text-lg font-bold ${
-                      entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                    }`}>
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded ${
-                        entry.entry_type === 'credit' 
-                          ? 'bg-green-50 border border-green-200' 
-                          : 'bg-red-50 border border-red-200'
+                    <div className={`text-lg font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
                       }`}>
+                      <span className={`inline-flex items-center px-2.5 py-1 rounded ${entry.entry_type === 'credit'
+                        ? 'bg-green-50 border border-green-200'
+                        : 'bg-red-50 border border-red-200'
+                        }`}>
                         {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
                       </span>
                     </div>
@@ -1038,9 +1044,8 @@ export default function Ledger() {
                   </div>
                   <div className="pt-2 border-t border-gray-300 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Net:</span>
-                    <span className={`text-sm font-bold ${
-                      (totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
-                    }`}>
+                    <span className={`text-sm font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
+                      }`}>
                       {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
                     </span>
                   </div>
@@ -1093,30 +1098,30 @@ export default function Ledger() {
                 <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                   {customers.length > 0 ? (
                     <>
-                  {customers.map((customer: any) => (
-                    <button
-                      key={customer.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedCustomer(customer);
-                        setCustomerSearch('');
-                      }}
-                      className="w-full text-left px-4 py-2 hover:bg-blue-50 border-b last:border-b-0"
-                    >
-                      <div className="font-medium">{customer.name}</div>
-                      {customer.phone && (
-                        <div className="text-sm text-gray-500">{customer.phone}</div>
-                      )}
-                    </button>
-                  ))}
+                      {customers.map((customer: any) => (
+                        <button
+                          key={customer.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCustomer(customer);
+                            setCustomerSearch('');
+                          }}
+                          className="w-full text-left px-4 py-2 hover:bg-blue-50 border-b last:border-b-0"
+                        >
+                          <div className="font-medium">{customer.name}</div>
+                          {customer.phone && (
+                            <div className="text-sm text-gray-500">{customer.phone}</div>
+                          )}
+                        </button>
+                      ))}
                       <button
                         type="button"
                         onClick={() => {
-                          setNewCustomerData({ 
-                            name: customerSearch.trim(), 
-                            phone: '', 
-                            email: '', 
-                            address: '' 
+                          setNewCustomerData({
+                            name: customerSearch.trim(),
+                            phone: '',
+                            email: '',
+                            address: ''
                           });
                           setShowCreateCustomerModal(true);
                           setCustomerSearch('');
@@ -1134,11 +1139,11 @@ export default function Ledger() {
                     <button
                       type="button"
                       onClick={() => {
-                        setNewCustomerData({ 
-                          name: customerSearch.trim(), 
-                          phone: '', 
-                          email: '', 
-                          address: '' 
+                        setNewCustomerData({
+                          name: customerSearch.trim(),
+                          phone: '',
+                          email: '',
+                          address: ''
                         });
                         setShowCreateCustomerModal(true);
                         setCustomerSearch('');

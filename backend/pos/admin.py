@@ -43,6 +43,24 @@ class PaymentInline(admin.TabularInline):
     readonly_fields = ['payment_method', 'amount', 'reference', 'created_by', 'created_at']
 
 
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ['id', 'invoice', 'payment_method', 'amount', 'reference', 'created_by', 'created_at']
+    list_filter = ['payment_method', 'created_at']
+    search_fields = ['invoice__invoice_number', 'reference', 'notes']
+    ordering = ['-created_at']
+    readonly_fields = ['created_at']
+    
+    fieldsets = (
+        ('Payment Information', {
+            'fields': ('invoice', 'payment_method', 'amount', 'reference')
+        }),
+        ('Additional Details', {
+            'fields': ('notes', 'created_by', 'created_at')
+        }),
+    )
+
+
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
     list_display = ['invoice_number', 'store', 'customer', 'status', 'total', 'paid_amount', 'due_amount', 'created_by', 'created_at']
