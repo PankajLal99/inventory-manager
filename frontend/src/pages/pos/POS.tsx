@@ -2802,13 +2802,20 @@ export default function POS() {
                         />
                       </div>
                     </div>
-                    {cart?.data && cashAmount && upiAmount && (
-                      <div className="text-xs mt-2">
-                        <span className="text-gray-600">Total: </span>
-                        <span className={`font-semibold ${(parseFloat(cashAmount) + parseFloat(upiAmount)).toFixed(2) === calculateTotal().toFixed(2) ? 'text-green-600' : 'text-red-600'}`}>
-                          ₹{(parseFloat(cashAmount) + parseFloat(upiAmount)).toFixed(2)}
-                        </span>
-                        <span className="text-gray-600"> / Invoice Total: ₹{calculateTotal().toFixed(2)}</span>
+                    {cart?.data && (
+                      <div className="flex justify-between items-center text-xs mt-2 border-t pt-2">
+                        <div className="text-gray-600">
+                          Total Qty: <span className="font-semibold text-gray-900">{calculateTotalQuantity()}</span>
+                        </div>
+                        {cashAmount && upiAmount && (
+                          <div>
+                            <span className="text-gray-600">Total: </span>
+                            <span className={`font-semibold ${(parseFloat(cashAmount) + parseFloat(upiAmount)).toFixed(2) === calculateTotal().toFixed(2) ? 'text-green-600' : 'text-red-600'}`}>
+                              ₹{(parseFloat(cashAmount) + parseFloat(upiAmount)).toFixed(2)}
+                            </span>
+                            <span className="text-gray-600"> / Invoice Total: ₹{calculateTotal().toFixed(2)}</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
