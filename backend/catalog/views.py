@@ -1453,6 +1453,13 @@ def barcode_by_barcode(request, barcode=None):
         
         # Clean the barcode (trim whitespace, handle URL encoding, normalize)
         barcode_clean = unquote(str(barcode)).strip()
+
+        # Check if we should only search barcodes (skip SKU fallback) - MOVED UP to allow uppercase enforcement
+        # This is strictly for POS/strict scanning where we want to enforce uppercase
+        barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'
+        
+        if barcode_only:
+            barcode_clean = barcode_clean.upper()
         
         # Reject reserved keywords that are barcode tags, not actual barcodes
         reserved_keywords = ['new', 'sold', 'returned', 'defective', 'unknown']
@@ -1502,9 +1509,7 @@ def barcode_by_barcode(request, barcode=None):
         # All barcode search logic is now handled by find_barcode_by_search_value() above
         # The rest below is for SKU and product name fallback searches
         
-        # Check if we should only search barcodes (skip SKU fallback)
-        # This is important for POS scanning where we only want actual barcodes, not product SKUs
-        barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'
+
         
         # Strategy 3: Try exact match on Product SKU (fallback) - only if barcode_only is False
         if not barcode_only:
