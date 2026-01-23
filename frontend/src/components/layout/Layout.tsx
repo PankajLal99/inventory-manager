@@ -240,7 +240,7 @@ export default function Layout() {
       title: 'Core Operations',
       items: [
         { path: '/', icon: ShoppingCart, label: 'POS', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/pos-repair', icon: Wrench, label: 'Repair Shop', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair'] },
+        { path: '/pos-repair', icon: Wrench, label: 'Repair Shop', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair','Retail', 'Wholesale'] },
         { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/search', icon: Search, label: 'Search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
       ],
@@ -249,10 +249,10 @@ export default function Layout() {
       title: 'Sales & Transactions',
       items: [
         { path: '/invoices', icon: FileText, label: 'Invoices', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/customers', icon: Users, label: 'Customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/replacement', icon: RefreshCw, label: 'Replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin','WholesaleAdmin', 'Repair'] },
+        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin','WholesaleAdmin', 'Repair','Retail', 'Wholesale'] },
       ],
     },
     {
@@ -268,7 +268,7 @@ export default function Layout() {
       items: [
         { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin'] },
         { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
-        { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: 'admin' },
+        { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
       ],
     },
     {
