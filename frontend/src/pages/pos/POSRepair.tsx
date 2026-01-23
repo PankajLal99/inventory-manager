@@ -2678,19 +2678,11 @@ export default function POS() {
                   onChange={(e) => {
                     const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed';
                     setInvoiceType(newType);
-                    // Clear split amounts when switching away from mixed
-                    if (newType !== 'mixed') {
-                      setCashAmount('');
-                      setUpiAmount('');
-                    }
                     updateCartMutation.mutate({ invoice_type: frontendToBackendInvoiceType(newType) });
                   }}
-                  className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg hover:border-gray-400 cursor-pointer transition-all"
-                  disabled={isWholesaleGroup}
+                  className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg hover:border-gray-400 cursor-pointer transition-all bg-gray-50 text-gray-500"
+                  disabled={true}
                 >
-                  <option value="cash">CASH</option>
-                  <option value="upi">UPI</option>
-                  <option value="mixed">CASH + UPI</option>
                   <option value="pending">PENDING</option>
                 </Select>
                 {defaultStore?.shop_type === 'repair' && (
