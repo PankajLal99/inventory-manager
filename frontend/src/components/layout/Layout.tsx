@@ -139,7 +139,7 @@ export default function Layout() {
         } else if (Array.isArray(searchData)) {
           products = searchData;
         }
-        
+
         // If we found products, use the first one
         if (products.length > 0) {
           setSearchResults(products[0]);
@@ -182,7 +182,7 @@ export default function Layout() {
   const canAccessCustomers = user?.can_access_customers === true;
   const canAccessLedger = user?.can_access_ledger === true;
   const canAccessHistory = user?.can_access_history === true;
-  
+
   // Debug logging
   if (user && userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin')) {
     console.log('Retail user permissions check:', {
@@ -195,7 +195,7 @@ export default function Layout() {
       isAdmin
     });
   }
-  
+
   // Helper function to check if user has access based on showFor value
   const hasAccess = (showFor: string | string[] | ((user: any, groups: string[]) => boolean)): boolean => {
     if (typeof showFor === 'function') {
@@ -234,12 +234,13 @@ export default function Layout() {
     if (user) {
     }
   }, [user, userGroups, isAdmin]);
-  
+
   const menuGroups = [
     {
       title: 'Core Operations',
       items: [
-        { path: '/', icon: ShoppingCart, label: 'POS', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
+        { path: '/', icon: ShoppingCart, label: 'POS', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/pos-repair', icon: Wrench, label: 'Repair Shop', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair'] },
         { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/search', icon: Search, label: 'Search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
       ],
@@ -250,8 +251,8 @@ export default function Layout() {
         { path: '/invoices', icon: FileText, label: 'Invoices', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
         { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
         { path: '/customers', icon: Users, label: 'Customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/replacement', icon: RefreshCw, label: 'Replacement', showFor: ['Admin', 'Retail','RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
+        { path: '/replacement', icon: RefreshCw, label: 'Replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin','WholesaleAdmin', 'Repair'] },
       ],
     },
     {
@@ -300,9 +301,8 @@ export default function Layout() {
     <div className="min-h-screen bg-gray-50">
       {/* Mobile sidebar overlay */}
       <div
-        className={`fixed inset-0 z-40 lg:hidden transition-opacity duration-300 ${
-          sidebarOpen ? 'opacity-100 visible' : 'opacity-0 invisible'
-        }`}
+        className={`fixed inset-0 z-40 lg:hidden transition-opacity duration-300 ${sidebarOpen ? 'opacity-100 visible' : 'opacity-0 invisible'
+          }`}
         onClick={() => setSidebarOpen(false)}
       >
         <div className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm" />
@@ -310,19 +310,15 @@ export default function Layout() {
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 shadow-lg transform transition-all duration-300 ease-in-out lg:translate-x-0 flex flex-col w-72 ${
-          sidebarCollapsed ? 'lg:w-20' : 'lg:w-72'
-        } ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        className={`fixed inset-y-0 left-0 z-50 bg-white border-r border-gray-200 shadow-lg transform transition-all duration-300 ease-in-out lg:translate-x-0 flex flex-col w-72 ${sidebarCollapsed ? 'lg:w-20' : 'lg:w-72'
+          } ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
       >
         {/* Sidebar Header */}
-        <div className={`flex items-center justify-between h-20 border-b border-gray-200 flex-shrink-0 px-6 ${
-          sidebarCollapsed ? 'lg:px-3' : 'lg:px-6'
-        }`}>
-          <div className={`flex items-center space-x-3 ${
-            sidebarCollapsed ? 'lg:hidden' : ''
+        <div className={`flex items-center justify-between h-20 border-b border-gray-200 flex-shrink-0 px-6 ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-6'
           }`}>
+          <div className={`flex items-center space-x-3 ${sidebarCollapsed ? 'lg:hidden' : ''
+            }`}>
             <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center">
               <Package className="h-6 w-6 text-white" />
             </div>
@@ -362,14 +358,12 @@ export default function Layout() {
         </div>
 
         {/* Navigation */}
-        <nav className={`flex-1 overflow-y-auto py-6 space-y-6 min-h-0 px-4 ${
-          sidebarCollapsed ? 'lg:px-2' : 'lg:px-4'
-        }`}>
+        <nav className={`flex-1 overflow-y-auto py-6 space-y-6 min-h-0 px-4 ${sidebarCollapsed ? 'lg:px-2' : 'lg:px-4'
+          }`}>
           {filteredMenuGroups.map((group, groupIndex) => (
             <div key={groupIndex} className="space-y-2">
-              <h3 className={`px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider ${
-                sidebarCollapsed ? 'lg:hidden' : ''
-              }`}>
+              <h3 className={`px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider ${sidebarCollapsed ? 'lg:hidden' : ''
+                }`}>
                 {group.title}
               </h3>
               <div className="space-y-1">
@@ -382,30 +376,24 @@ export default function Layout() {
                     <Link
                       key={item.path}
                       to={item.path}
-                      className={`group flex items-center rounded-xl transition-all duration-200 px-4 py-3 ${
-                        sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''
-                      } ${
-                        isActive
+                      className={`group flex items-center rounded-xl transition-all duration-200 px-4 py-3 ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''
+                        } ${isActive
                           ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white'
                           : 'text-gray-700 hover:bg-gray-100'
-                      }`}
+                        }`}
                       onClick={() => setSidebarOpen(false)}
                       title={sidebarCollapsed ? item.label : undefined}
                     >
                       <Icon
-                        className={`h-5 w-5 transition-transform duration-200 mr-3 ${
-                          sidebarCollapsed ? 'lg:mr-0' : ''
-                        } ${
-                          isActive ? 'scale-110' : 'group-hover:scale-110'
-                        }`}
+                        className={`h-5 w-5 transition-transform duration-200 mr-3 ${sidebarCollapsed ? 'lg:mr-0' : ''
+                          } ${isActive ? 'scale-110' : 'group-hover:scale-110'
+                          }`}
                       />
-                      <span className={`font-medium ${
-                        sidebarCollapsed ? 'lg:hidden' : ''
-                      }`}>{item.label}</span>
+                      <span className={`font-medium ${sidebarCollapsed ? 'lg:hidden' : ''
+                        }`}>{item.label}</span>
                       {isActive && (
-                        <div className={`ml-auto w-1.5 h-1.5 bg-white rounded-full ${
-                          sidebarCollapsed ? 'lg:hidden' : ''
-                        }`} />
+                        <div className={`ml-auto w-1.5 h-1.5 bg-white rounded-full ${sidebarCollapsed ? 'lg:hidden' : ''
+                          }`} />
                       )}
                     </Link>
                   );
@@ -416,12 +404,10 @@ export default function Layout() {
         </nav>
 
         {/* User Section at Bottom */}
-        <div className={`flex-shrink-0 border-t border-gray-200 bg-gray-50 mt-auto p-4 ${
-          sidebarCollapsed ? 'lg:p-2' : ''
-        }`}>
-          <div className={`flex items-center space-x-3 mb-3 px-2 ${
-            sidebarCollapsed ? 'lg:hidden' : ''
+        <div className={`flex-shrink-0 border-t border-gray-200 bg-gray-50 mt-auto p-4 ${sidebarCollapsed ? 'lg:p-2' : ''
           }`}>
+          <div className={`flex items-center space-x-3 mb-3 px-2 ${sidebarCollapsed ? 'lg:hidden' : ''
+            }`}>
             <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
               <User className="h-5 w-5 text-white" />
             </div>
@@ -441,34 +427,30 @@ export default function Layout() {
           )}
           <button
             onClick={handleLogout}
-            className={`flex items-center w-full text-gray-700 rounded-lg hover:bg-red-50 hover:text-red-600 transition-all duration-200 group px-4 py-2.5 ${
-              sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''
-            }`}
+            className={`flex items-center w-full text-gray-700 rounded-lg hover:bg-red-50 hover:text-red-600 transition-all duration-200 group px-4 py-2.5 ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''
+              }`}
             title={sidebarCollapsed ? 'Logout' : undefined}
           >
-            <LogOut className={`h-4 w-4 group-hover:rotate-12 transition-transform mr-3 ${
-              sidebarCollapsed ? 'lg:mr-0' : ''
-            }`} />
-            <span className={`text-sm font-medium ${
-              sidebarCollapsed ? 'lg:hidden' : ''
-            }`}>Logout</span>
+            <LogOut className={`h-4 w-4 group-hover:rotate-12 transition-transform mr-3 ${sidebarCollapsed ? 'lg:mr-0' : ''
+              }`} />
+            <span className={`text-sm font-medium ${sidebarCollapsed ? 'lg:hidden' : ''
+              }`}>Logout</span>
           </button>
         </div>
       </div>
 
       {/* Main content */}
-      <div className={`transition-all duration-300 ${
-        sidebarCollapsed ? 'lg:pl-20' : 'lg:pl-72'
-      }`}>
+      <div className={`transition-all duration-300 ${sidebarCollapsed ? 'lg:pl-20' : 'lg:pl-72'
+        }`}>
         {/* Top Navigation Bar */}
         <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-200/50 shadow-sm">
           <div className="flex items-center justify-between h-16 px-6">
             {/* Left side - Mobile menu & Page title */}
             <div className="flex items-center space-x-4">
-            <button
-              onClick={() => setSidebarOpen(true)}
+              <button
+                onClick={() => setSidebarOpen(true)}
                 className="lg:hidden text-gray-600 hover:text-gray-900 transition-colors p-2 rounded-lg hover:bg-gray-100"
-            >
+              >
                 <Menu className="h-5 w-5" />
               </button>
               <div className="hidden lg:block">
@@ -512,24 +494,23 @@ export default function Layout() {
                     <p className="text-xs text-gray-500">Admin</p>
                   </div>
                   <ChevronDown
-                    className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${
-                      userMenuOpen ? 'rotate-180' : ''
-                    }`}
+                    className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${userMenuOpen ? 'rotate-180' : ''
+                      }`}
                   />
-            </button>
+                </button>
 
                 {/* Dropdown Menu */}
                 {userMenuOpen && (
                   <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
                     <div className="px-4 py-3 border-b border-gray-100">
                       <p className="text-sm font-medium text-gray-900">
-              {auth.getUser()?.username || 'User'}
+                        {auth.getUser()?.username || 'User'}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5">
                         {auth.getUser()?.email || 'user@example.com'}
                       </p>
                     </div>
-                    <button 
+                    <button
                       onClick={() => {
                         setUserMenuOpen(false);
                         setPrintSettingsOpen(true);
@@ -646,7 +627,7 @@ export default function Layout() {
                 </div>
                 <Package className="h-8 w-8 text-green-600 flex-shrink-0" />
               </div>
-              
+
               <div className="flex gap-2 pt-2 border-t border-green-200">
                 <Button
                   onClick={() => {

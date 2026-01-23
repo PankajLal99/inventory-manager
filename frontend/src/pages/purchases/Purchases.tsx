@@ -32,6 +32,8 @@ interface PurchaseItem {
   selling_price?: string | null;
   line_total?: number;
   sold_count?: number; // Number of items already sold (for validation)
+  printed?: boolean;
+  printed_at?: string | null;
 }
 
 export default function Purchases() {
@@ -856,6 +858,61 @@ export default function Purchases() {
     }
   };
 
+  const updatePrintedMutation = useMutation({
+    mutationFn: ({ itemId, printed }: { itemId: number; printed: boolean }) =>
+      purchasingApi.purchases.items.updatePrinted(itemId, printed),
+    // Optimistic update: Update UI immediately before API call
+    onMutate: async ({ itemId, printed }) => {
+      // Cancel any outgoing refetches to avoid overwriting our optimistic update
+      await queryClient.cancelQueries({ queryKey: ['purchases'] });
+
+      // Snapshot the previous value for rollback
+      const previousData = queryClient.getQueryData(['purchases', supplierFilter, dateFrom, dateTo, currentPage]);
+
+      // Optimistically update the cache
+      queryClient.setQueryData(['purchases', supplierFilter, dateFrom, dateTo, currentPage], (old: any) => {
+        if (!old) return old;
+
+        // Deep clone and update the specific item
+        const updated = JSON.parse(JSON.stringify(old));
+        const results = updated.data?.results || updated.results || [];
+
+        for (const purchase of results) {
+          if (purchase.items) {
+            for (const item of purchase.items) {
+              if (item.id === itemId) {
+                item.printed = printed;
+                item.printed_at = printed ? new Date().toISOString() : null;
+                break;
+              }
+            }
+          }
+        }
+
+        return updated;
+      });
+
+      // Return context with previous data for rollback
+      return { previousData };
+    },
+    // On error, rollback to previous data
+    onError: (error: any, _variables, context: any) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(['purchases', supplierFilter, dateFrom, dateTo, currentPage], context.previousData);
+      }
+      alert(error?.response?.data?.error || 'Failed to update printed status. Please try again.');
+    },
+    // On success, don't invalidate - keep the optimistic update
+    onSettled: () => {
+      // Mark as stale but don't refetch to preserve optimistic update
+      queryClient.invalidateQueries({
+        queryKey: ['purchases', supplierFilter, dateFrom, dateTo, currentPage],
+        refetchType: 'none'
+      });
+    },
+  });
+
+
   // Compute suppliers array (must be before hooks that use it)
   const suppliers = (() => {
     if (!suppliersData) return [];
@@ -1301,6 +1358,7 @@ export default function Purchases() {
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Unit Price</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Total</th>
                                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">Labels</th>
+                                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">Printed</th>
                                   </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-200">
@@ -1400,6 +1458,23 @@ export default function Purchases() {
                                           ) : (
                                             <span className="text-xs text-gray-400">N/A</span>
                                           )}
+                                        </td>
+                                        <td className="px-3 py-2 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={item.printed || false}
+                                            onChange={(e) => {
+                                              const newPrintedStatus = e.target.checked;
+                                              if (item.id) {
+                                                updatePrintedMutation.mutate({
+                                                  itemId: item.id,
+                                                  printed: newPrintedStatus,
+                                                });
+                                              }
+                                            }}
+                                            className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                                            title={item.printed_at ? `Printed at: ${formatDate(item.printed_at)}` : 'Mark as printed'}
+                                          />
                                         </td>
                                       </tr>
                                     );

@@ -37,7 +37,7 @@ export default function POS() {
   const [showScanner, setShowScanner] = useState(false);
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed'>('cash');
+  const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed'>('pending');
   const [cashAmount, setCashAmount] = useState<string>('');
   const [upiAmount, setUpiAmount] = useState<string>('');
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
@@ -204,17 +204,10 @@ export default function POS() {
   // - Retail/RetailAdmin group: Only retail and repair shop types (backend already filters, but we filter here too for consistency)
   // - Others: All stores (backend already filters)
   const filteredStores = (() => {
-    // Filter to show only retail and wholesale stores, explicitly excluding repair
+    // For Repair Shop page, ONLY show repair stores for ALL allowed users
     const validStores = stores.filter((s: any) =>
-      s.is_active &&
-      (s.shop_type === 'retail' || s.shop_type === 'wholesale')
+      s.is_active && s.shop_type === 'repair'
     );
-
-    if (isRetailGroup && !isAdmin) {
-      // Retail/RetailAdmin group users see only retail stores
-      return validStores.filter((s: any) => s.shop_type === 'retail');
-    }
-    // Admin and others see all valid stores (Retail + Wholesale)
     return validStores;
   })();
 
@@ -1304,7 +1297,7 @@ export default function POS() {
         if (defaultStore && username) {
           try {
             const cartData: any = { store: defaultStore.id };
-            setInvoiceType('cash');
+            setInvoiceType('pending');
             const data = await posApi.carts.create(cartData);
             const newCartId = data.data.id;
             if (username && data.data) {
@@ -1413,7 +1406,7 @@ export default function POS() {
           setCartId(null);
           setActiveTabId(null);
           setSelectedCustomer(null);
-          setInvoiceType('cash');
+          setInvoiceType('pending');
           setCashAmount('');
           setUpiAmount('');
           setBarcodeInput('');
@@ -1426,7 +1419,7 @@ export default function POS() {
         setCartId(null);
         setActiveTabId(null);
         setSelectedCustomer(null);
-        setInvoiceType('cash');
+        setInvoiceType('pending');
         setBarcodeInput('');
         // Create new cart automatically after checkout
         if (defaultStore) {
@@ -1878,7 +1871,7 @@ export default function POS() {
             setCartId(null);
             setActiveTabId(null);
             setSelectedCustomer(null);
-            setInvoiceType('cash');
+            setInvoiceType('pending');
             setBarcodeInput('');
             // Create new cart automatically after checkout if no other tabs
             if (defaultStore) {
@@ -2312,7 +2305,7 @@ export default function POS() {
       {/* Header with Store Selector (Admin), New Sale and Delete Cart buttons */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 flex-1 w-full sm:w-auto">
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Point of Sale</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Repair Shop</h1>
           {/* Store Selector for Admin and Retail group users - Improved UI */}
           {(isAdmin || isRetailGroup) && filteredStores.length > 0 && (
             <div className="w-full sm:w-auto">
@@ -2348,7 +2341,7 @@ export default function POS() {
                       setInvoiceType('pending');
                     } else if (selectedStore && selectedStore.shop_type !== 'repair' && invoiceType === 'pending') {
                       // If switching from repair to non-repair shop, reset to 'cash' if currently 'pending'
-                      setInvoiceType('cash');
+                      setInvoiceType('pending');
                     }
 
                     // Clear current cart when switching stores (cart is tied to a specific store)

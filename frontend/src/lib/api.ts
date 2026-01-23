@@ -329,6 +329,7 @@ export const purchasingApi = {
       create: (purchaseId: number, data: any) => api.post(`/purchases/${purchaseId}/items/`, data),
       update: (purchaseId: number, data: any) => api.put(`/purchases/${purchaseId}/items/`, data),
       delete: (purchaseId: number, itemId: number) => api.delete(`/purchases/${purchaseId}/items/?item_id=${itemId}`),
+      updatePrinted: (itemId: number, printed: boolean) => api.patch(`/purchases/items/${itemId}/update-printed/`, { printed }),
     },
   },
   vendorPurchases: {

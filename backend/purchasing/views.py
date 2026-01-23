@@ -352,6 +352,35 @@ def purchase_items(request, pk):
         return Response({'error': 'item_id required'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def purchase_item_update_printed(request, item_id):
+    """Update the printed status of a purchase item"""
+    from django.utils import timezone
+    
+    item = get_object_or_404(PurchaseItem, pk=item_id)
+    
+    printed = request.data.get('printed', None)
+    
+    if printed is None:
+        return Response({'error': 'printed field is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Update printed status (using is_printed field name)
+    item.is_printed = printed
+    
+    # Update printed_at timestamp
+    if printed:
+        item.printed_at = timezone.now()
+    else:
+        item.printed_at = None
+    
+    item.save()
+    
+    # Return updated item
+    serializer = PurchaseItemSerializer(item)
+    return Response(serializer.data)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])  # Public endpoint for vendors
 def vendor_purchases(request):

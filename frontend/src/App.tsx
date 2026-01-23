@@ -9,6 +9,7 @@ import Dashboard from './pages/dashboard/Dashboard';
 import Products from './pages/products/Products';
 import ProductDetail from './pages/products/ProductDetail';
 import POS from './pages/pos/POS';
+import POSRepair from './pages/pos/POSRepair';
 import Customers from './pages/customers/Customers';
 import PersonalCustomers from './pages/customers/PersonalCustomers';
 import Purchases from './pages/purchases/Purchases';
@@ -95,50 +96,51 @@ function App() {
         <ToastProvider>
           <BrowserRouter>
             <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-            {/* Public vendor routes (no auth required) */}
-            <Route path="/vendor-purchases" element={<VendorPurchases />} />
-            <Route path="/vendor-purchases/:id" element={<VendorPurchaseDetail />} />
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <Layout />
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<POS />} />
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="products" element={<Products />} />
-              <Route path="products/:id" element={<ProductDetail />} />
-              <Route path="pos" element={<POS />} />
-              <Route path="customers" element={<Customers />} />
-              <Route path="personal-customers" element={<PersonalCustomers />} />
-              <Route path="purchases" element={<Purchases />} />
-              <Route path="purchases/:id" element={<PurchaseDetail />} />
-              <Route path="pricing" element={<Pricing />} />
-              <Route path="invoices" element={<Invoices />} />
-              <Route path="invoices/:id" element={<InvoiceDetail />} />
-              <Route path="credit-notes" element={<CreditNotes />} />
-              <Route path="history" element={<History />} />
-              <Route path="reports" element={<Reports />} />
-              <Route path="replacement" element={<Replacement />} />
-              <Route path="replacement/replace-product" element={<ReplaceProduct />} />
-              <Route path="replacement/return-to-stock" element={<ReturnToStock />} />
-              <Route path="replacement/credit-note" element={<CreditNoteReplacement />} />
-              <Route path="repairs" element={<Repairs />} />
-              <Route path="ledger" element={<Ledger />} />
-              <Route path="ledger/:customerId" element={<LedgerDetail />} />
-              <Route path="personal-ledger" element={<PersonalLedger />} />
-              <Route path="personal-ledger/:customerId" element={<PersonalLedgerDetail />} />
-              <Route path="internal-ledger" element={<InternalLedger />} />
-              <Route path="internal-ledger/:customerId" element={<InternalLedgerDetail />} />
-              <Route path="stores" element={<Stores />} />
-              <Route path="search" element={<Search />} />
-              <Route path="vendors" element={<Vendors />} />
-              <Route path="defective-move-outs" element={<DefectiveMoveOuts />} />
-            </Route>
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              {/* Public vendor routes (no auth required) */}
+              <Route path="/vendor-purchases" element={<VendorPurchases />} />
+              <Route path="/vendor-purchases/:id" element={<VendorPurchaseDetail />} />
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <Layout />
+                  </ProtectedRoute>
+                }
+              >
+                <Route index element={<POS />} />
+                <Route path="dashboard" element={<Dashboard />} />
+                <Route path="products" element={<Products />} />
+                <Route path="products/:id" element={<ProductDetail />} />
+                <Route path="pos" element={<POS />} />
+                <Route path="pos-repair" element={<POSRepair />} />
+                <Route path="customers" element={<Customers />} />
+                <Route path="personal-customers" element={<PersonalCustomers />} />
+                <Route path="purchases" element={<Purchases />} />
+                <Route path="purchases/:id" element={<PurchaseDetail />} />
+                <Route path="pricing" element={<Pricing />} />
+                <Route path="invoices" element={<Invoices />} />
+                <Route path="invoices/:id" element={<InvoiceDetail />} />
+                <Route path="credit-notes" element={<CreditNotes />} />
+                <Route path="history" element={<History />} />
+                <Route path="reports" element={<Reports />} />
+                <Route path="replacement" element={<Replacement />} />
+                <Route path="replacement/replace-product" element={<ReplaceProduct />} />
+                <Route path="replacement/return-to-stock" element={<ReturnToStock />} />
+                <Route path="replacement/credit-note" element={<CreditNoteReplacement />} />
+                <Route path="repairs" element={<Repairs />} />
+                <Route path="ledger" element={<Ledger />} />
+                <Route path="ledger/:customerId" element={<LedgerDetail />} />
+                <Route path="personal-ledger" element={<PersonalLedger />} />
+                <Route path="personal-ledger/:customerId" element={<PersonalLedgerDetail />} />
+                <Route path="internal-ledger" element={<InternalLedger />} />
+                <Route path="internal-ledger/:customerId" element={<InternalLedgerDetail />} />
+                <Route path="stores" element={<Stores />} />
+                <Route path="search" element={<Search />} />
+                <Route path="vendors" element={<Vendors />} />
+                <Route path="defective-move-outs" element={<DefectiveMoveOuts />} />
+              </Route>
             </Routes>
           </BrowserRouter>
         </ToastProvider>
