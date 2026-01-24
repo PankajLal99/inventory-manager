@@ -11,14 +11,11 @@
     "build": "tsc -b && vite build",
     "start": "node server.js",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "sandbox": "NODE_OPTIONS='--require ./scripts/fix-env.js' ampx sandbox",
-    "configure": "NODE_OPTIONS='--require ./scripts/fix-env.js' ampx configure profile"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.17",
     "@tanstack/react-query": "^5.90.11",
-    "aws-amplify": "^6.15.10",
     "axios": "^1.13.2",
     "date-fns": "^4.1.0",
     "express": "^4.18.2",
@@ -32,16 +29,13 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@aws-amplify/backend": "^1.2.1",
-    "@aws-amplify/backend-cli": "^1.2.2",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
-    "aws-cdk-lib": "^2.234.1",
-    "constructs": "^10.4.5",
+    "baseline-browser-mapping": "^2.9.17",
     "esbuild": "^0.27.2",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

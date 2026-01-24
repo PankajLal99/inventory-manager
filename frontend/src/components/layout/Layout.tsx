@@ -6,6 +6,7 @@ import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import PrintSettingsModal from '../PrintSettings';
+import ShortcutsHelpModal from '../ShortcutsHelpModal';
 import {
   LayoutDashboard,
   Package,
@@ -32,6 +33,7 @@ import {
   ExternalLink,
   Wrench,
   Receipt,
+  Keyboard,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -52,6 +54,7 @@ export default function Layout() {
   const [isSearching, setIsSearching] = useState(false);
   const [_searchSelectedIndex, _setSearchSelectedIndex] = useState(-1);
   const [printSettingsOpen, setPrintSettingsOpen] = useState(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -240,7 +243,7 @@ export default function Layout() {
       title: 'Core Operations',
       items: [
         { path: '/', icon: ShoppingCart, label: 'POS', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/pos-repair', icon: Wrench, label: 'Repair Shop', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair','Retail', 'Wholesale'] },
+        { path: '/pos-repair', icon: Wrench, label: 'Repair Shop', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
         { path: '/search', icon: Search, label: 'Search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
         { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', showFor: ['Admin', 'RetailAdmin'] },
       ],
@@ -252,7 +255,7 @@ export default function Layout() {
         { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/customers', icon: Users, label: 'Customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/replacement', icon: RefreshCw, label: 'Replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin','WholesaleAdmin', 'Repair','Retail', 'Wholesale'] },
+        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
       ],
     },
     {
@@ -521,6 +524,16 @@ export default function Layout() {
                       Print Settings
                     </button>
                     <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setShortcutsHelpOpen(true);
+                      }}
+                      className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      <Keyboard className="h-4 w-4 mr-3 text-gray-400" />
+                      Keyboard Shortcuts
+                    </button>
+                    <button
                       onClick={handleLogout}
                       className="w-full flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
                     >
@@ -544,6 +557,12 @@ export default function Layout() {
       <PrintSettingsModal
         isOpen={printSettingsOpen}
         onClose={() => setPrintSettingsOpen(false)}
+      />
+
+      {/* Shortcuts Help Modal */}
+      <ShortcutsHelpModal
+        isOpen={shortcutsHelpOpen}
+        onClose={() => setShortcutsHelpOpen(false)}
       />
 
       {/* QR Code Scanner Modal */}

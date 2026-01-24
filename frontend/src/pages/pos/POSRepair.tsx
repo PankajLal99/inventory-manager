@@ -24,6 +24,8 @@ import type { Toast } from '../../components/ui/Toast';
 import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign } from 'lucide-react';
 import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
+import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
+import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -61,6 +63,7 @@ export default function POS() {
   const [repairBookingAmount, setRepairBookingAmount] = useState('');
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   // Barcode Queue Types and State
   interface QueueItem {
     id: string;
@@ -2270,6 +2273,53 @@ export default function POS() {
     return Object.keys(priceErrors).length > 0;
   };
 
+  // Keyboard Shortcuts Handler
+  const handleToggleInvoiceType = useCallback(() => {
+    // Cyclic toggle: cash -> upi -> mixed -> pending -> cash
+    setInvoiceType(prev => {
+      if (prev === 'cash') return 'upi';
+      if (prev === 'upi') return 'mixed';
+      if (prev === 'mixed') return 'pending';
+      return 'cash';
+    });
+  }, []);
+
+  usePosKeyboardShortcuts({
+    onShowHelp: () => setShowShortcutsHelp(curr => !curr),
+    onFocusSearch: () => {
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
+        barcodeInputRef.current.select();
+      }
+    },
+    onNewSale: handleNewSale,
+    onTogglePaymentMode: handleToggleInvoiceType,
+    onCheckout: handleCheckoutAndPrintThermal, // F9: Thermal Print checkout
+    onCompleteSale: handleCheckout, // F8: Simple checkout
+    onDeleteCart: handleDeleteCurrentCart,
+    onCancel: () => {
+      // Clear search if focused
+      if (document.activeElement === barcodeInputRef.current) {
+        setBarcodeInput('');
+        return;
+      }
+      // Close modals if open
+      if (showScanner) setShowScanner(false);
+      if (showCreateCustomerModal) setShowCreateCustomerModal(false);
+      if (showProductForm) setShowProductForm(false);
+      if (showRepairModal) setShowRepairModal(false);
+      if (showCustomProductModal) setShowCustomProductModal(false);
+      if (showShortcutsHelp) setShowShortcutsHelp(false);
+    },
+    onToggleStrictBarcode: () => {
+      setStrictBarcodeMode(prev => {
+        showToast(`Strict Barcode Mode: ${!prev ? 'ON' : 'OFF'}`, 'info');
+        return !prev;
+      });
+    },
+    isEnabled: !showRepairModal && !showProductForm && !showCreateCustomerModal
+  });
+
   // Show loading while creating cart or if no store
   if (!defaultStore) {
     return (
@@ -4106,7 +4156,7 @@ export default function POS() {
                         : undefined
                 }
               >
-                {checkoutMutation.isPending ? 'Processing...' : 'Complete Order'}
+                {checkoutMutation.isPending ? 'Processing...' : 'Complete Order (F8)'}
               </Button>
               <Button
                 className="w-full shadow-md hover:shadow-lg transition-shadow"
@@ -4130,7 +4180,7 @@ export default function POS() {
                         : undefined
                 }
               >
-                {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal'}
+                {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
               </Button>
             </div>
           </div>
@@ -4326,6 +4376,10 @@ export default function POS() {
           }}
         />
       )}
+      <ShortcutsHelpModal
+        isOpen={showShortcutsHelp}
+        onClose={() => setShowShortcutsHelp(false)}
+      />
     </div>
   );
 }
