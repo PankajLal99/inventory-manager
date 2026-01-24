@@ -513,19 +513,17 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
         </div>
 
         {/* Low Stock Threshold - Mobile: Full Width, Desktop: Half Width */}
-        {!productId && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              label="Low Stock Threshold"
-              type="number"
-              min="0"
-              value={formData.low_stock_threshold}
-              onChange={(e) => setFormData({ ...formData, low_stock_threshold: e.target.value })}
-              placeholder="0"
-              className="w-full"
-            />
-          </div>
-        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Input
+            label="Low Stock Threshold"
+            type="number"
+            min="0"
+            value={formData.low_stock_threshold}
+            onChange={(e) => setFormData({ ...formData, low_stock_threshold: e.target.value })}
+            placeholder="0"
+            className="w-full"
+          />
+        </div>
 
         {/* Checkboxes - Stacked */}
         <div className="space-y-3 pt-2">
