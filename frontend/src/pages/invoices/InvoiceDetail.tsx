@@ -12,11 +12,11 @@ import ErrorState from '../../components/ui/ErrorState';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
-import { 
-  FileText, 
-  ArrowLeft, 
-  CheckCircle, 
-  XCircle, 
+import {
+  FileText,
+  ArrowLeft,
+  CheckCircle,
+  XCircle,
   Clock,
   User,
   Store,
@@ -37,7 +37,10 @@ import {
 export default function InvoiceDetail() {
   const user = auth.getUser();
   const userGroups = user?.groups || [];
-  const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
+  const isRestrictedUser = (userGroups.includes('Retail') || userGroups.includes('Wholesale')) &&
+    !userGroups.includes('Admin') &&
+    !userGroups.includes('RetailAdmin') &&
+    !userGroups.includes('WholesaleAdmin');
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const invoiceId = parseInt(id || '0');
@@ -227,7 +230,7 @@ export default function InvoiceDetail() {
     queryFn: async () => {
       if (!trimmedBarcodeInput || trimmedBarcodeInput.length < 3) return null;
       if (!looksLikeBarcode(trimmedBarcodeInput)) return null;
-      
+
       try {
         const response = await productsApi.byBarcode(trimmedBarcodeInput, true);
         if (response.data) {
@@ -251,14 +254,14 @@ export default function InvoiceDetail() {
       const response = await productsApi.list(params);
       return response.data;
     },
-    enabled: debouncedBarcodeInput.trim().length > 0 
+    enabled: debouncedBarcodeInput.trim().length > 0
       && !(looksLikeBarcode(debouncedBarcodeInput.trim()) && barcodeCheck?.product && !barcodeCheck?.isUnavailable),
     retry: false,
   });
 
 
   const deleteInvoiceMutation = useMutation({
-    mutationFn: ({ force, restoreStock }: { force: boolean; restoreStock: boolean }) => 
+    mutationFn: ({ force, restoreStock }: { force: boolean; restoreStock: boolean }) =>
       posApi.invoices.delete(invoiceId, force, restoreStock),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
@@ -379,9 +382,9 @@ export default function InvoiceDetail() {
   const numberToWords = (num: number): string => {
     const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
     const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-    
+
     if (num === 0) return 'Zero Rupees Only';
-    
+
     const convertHundreds = (n: number): string => {
       if (n === 0) return '';
       let result = '';
@@ -398,53 +401,53 @@ export default function InvoiceDetail() {
       }
       return result.trim();
     };
-    
+
     const convert = (n: number): string => {
       if (n === 0) return '';
-      
+
       // Crore
       if (n >= 10000000) {
         const crores = Math.floor(n / 10000000);
         const remainder = n % 10000000;
         return convertHundreds(crores) + 'Crore ' + convert(remainder);
       }
-      
+
       // Lakh
       if (n >= 100000) {
         const lakhs = Math.floor(n / 100000);
         const remainder = n % 100000;
         return convertHundreds(lakhs) + 'Lakh ' + convert(remainder);
       }
-      
+
       // Thousand
       if (n >= 1000) {
         const thousands = Math.floor(n / 1000);
         const remainder = n % 1000;
         return convertHundreds(thousands) + 'Thousand ' + convert(remainder);
       }
-      
+
       // Hundreds, Tens, Ones
       return convertHundreds(n);
     };
-    
+
     const integerPart = Math.floor(num);
     const decimalPart = Math.round((num % 1) * 100);
-    
+
     let result = convert(integerPart).trim();
-    
+
     if (result) {
       result += ' Rupees';
     } else {
       result = 'Zero Rupees';
     }
-    
+
     if (decimalPart > 0) {
       const paiseWords = convert(decimalPart).trim();
       if (paiseWords) {
         result += ' and ' + paiseWords + ' Paise';
       }
     }
-    
+
     return result + ' Only';
   };
 
@@ -473,7 +476,7 @@ export default function InvoiceDetail() {
 
     items.forEach((item: any) => {
       const productId = item.product || item.product_id || 0;
-      
+
       if (grouped.has(productId)) {
         const group = grouped.get(productId)!;
         group.items.push(item);
@@ -495,28 +498,28 @@ export default function InvoiceDetail() {
   // Check if all items have prices entered
   const areAllPricesEntered = (): boolean => {
     if (!inv?.items || inv.items.length === 0) return false;
-    
+
     // Filter out items with quantity 0
     const activeItems = inv.items.filter((item: any) => {
       const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
       return parseFloat(qty) > 0;
     });
-    
+
     if (activeItems.length === 0) return false;
-    
+
     // Group items to get parent prices (same logic as calculateCheckoutTotal)
     const groupedItems = groupItemsByProduct(activeItems);
-    
+
     for (let groupIndex = 0; groupIndex < groupedItems.length; groupIndex++) {
       const group = groupedItems[groupIndex];
       const groupKey = `group_${group.productId}_${groupIndex}`;
       const parentPrice = parentGroupPrices[groupKey];
-      
+
       // Check if parent price is set
       if (!parentPrice || parseFloat(parentPrice.toString()) <= 0) {
         return false;
       }
-      
+
       // Check each item in the group (individual item prices override parent price)
       for (const item of group.items) {
         const itemPrice = checkoutPrices[item.id];
@@ -527,26 +530,26 @@ export default function InvoiceDetail() {
         }
       }
     }
-    
+
     return true;
   };
 
   // Helper function to calculate invoice total from checkout prices
   const calculateCheckoutTotal = (): number => {
     if (!inv?.items || !Array.isArray(inv.items)) return 0;
-    
+
     // Filter out items with quantity 0
     const activeItems = inv.items.filter((item: any) => {
       const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
       return parseFloat(qty) > 0;
     });
-    
+
     if (activeItems.length === 0) return 0;
-    
+
     // Group items to get parent prices
     const groupedItems = groupItemsByProduct(activeItems);
     const groupPriceMap: Record<number, string> = {}; // Map item.id to parent group price
-    
+
     groupedItems.forEach((group, groupIndex) => {
       const groupKey = `group_${group.productId}_${groupIndex}`;
       const parentPrice = parentGroupPrices[groupKey];
@@ -554,7 +557,7 @@ export default function InvoiceDetail() {
         groupPriceMap[item.id] = parentPrice;
       });
     });
-    
+
     return activeItems.reduce((sum: number, item: any) => {
       const quantity = checkoutQuantities[item.id] ?? item.quantity.toString();
       // Use checkoutPrices first, then fall back to parentGroupPrices, then original price
@@ -565,7 +568,7 @@ export default function InvoiceDetail() {
       if (!price || price === '' || price === '0') {
         price = (item.manual_unit_price || item.unit_price || '0').toString();
       }
-      
+
       const qty = parseFloat(quantity) || 0;
       const prc = parseFloat(price) || 0;
       return sum + (qty * prc);
@@ -577,28 +580,28 @@ export default function InvoiceDetail() {
     if (!price || price.trim() === '' || parseFloat(price) <= 0) {
       return null; // No validation needed for empty or zero prices
     }
-    
+
     const salePrice = parseFloat(price);
     if (isNaN(salePrice)) {
       return null;
     }
-    
+
     // Get selling_price first, then fall back to purchase_price
-    const sellingPrice = item.product_selling_price && item.product_selling_price > 0 
-      ? parseFloat(item.product_selling_price) 
+    const sellingPrice = item.product_selling_price && item.product_selling_price > 0
+      ? parseFloat(item.product_selling_price)
       : null;
     const purchasePrice = parseFloat(item.product_purchase_price || '0');
-    
+
     // Use selling_price if available and > 0, otherwise use purchase_price
     const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
     const canGoBelow = item.product_can_go_below_purchase_price || false;
-    
+
     // Validate price threshold if product doesn't allow going below purchase/selling price
     if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
       const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
       return `Price cannot be less than ${priceType} (₹${minPrice.toFixed(2)})`;
     }
-    
+
     return null;
   };
 
@@ -607,7 +610,7 @@ export default function InvoiceDetail() {
     const initialQuantities: Record<number, string> = {};
     const initialPrices: Record<number, string> = {};
     const initialParentPrices: Record<string, string> = {};
-    
+
     // Group items to initialize parent prices
     if (inv?.items && Array.isArray(inv.items)) {
       const groupedItems = groupItemsByProduct(inv.items);
@@ -618,7 +621,7 @@ export default function InvoiceDetail() {
         initialParentPrices[groupKey] = basePrice;
       });
     }
-    
+
     inv?.items?.forEach((item: any) => {
       initialQuantities[item.id] = item.quantity.toString();
       initialPrices[item.id] = (item.manual_unit_price || item.unit_price || '0').toString();
@@ -634,11 +637,11 @@ export default function InvoiceDetail() {
   const handleCheckoutSubmit = async () => {
     // Refetch invoice to ensure we have the latest data (in case items were deleted)
     await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
-    
+
     // Get fresh invoice data
     const freshInvoice = queryClient.getQueryData(['invoice', invoiceId]) as any;
     const freshInv = freshInvoice?.data;
-    
+
     if (!freshInv?.items || freshInv.items.length === 0) {
       alert('Invoice has no items');
       return;
@@ -658,11 +661,11 @@ export default function InvoiceDetail() {
     // Use freshInv instead of inv to ensure we have the latest data
     const items = freshInv.items
       .map((item: any): any => {
-        const quantity = checkoutQuantities[item.id] 
+        const quantity = checkoutQuantities[item.id]
           ? parseInt(checkoutQuantities[item.id]) || 0
           : parseInt(item.quantity) || 0;
-        const price = checkoutPrices[item.id] 
-          ? parseFloat(checkoutPrices[item.id]) 
+        const price = checkoutPrices[item.id]
+          ? parseFloat(checkoutPrices[item.id])
           : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
 
         return {
@@ -696,22 +699,22 @@ export default function InvoiceDetail() {
     // Use freshInv instead of inv to ensure we have the latest data
     const priceValidationErrors: string[] = [];
     freshInv.items.forEach((item: any) => {
-      const salePrice = checkoutPrices[item.id] 
-        ? parseFloat(checkoutPrices[item.id]) 
+      const salePrice = checkoutPrices[item.id]
+        ? parseFloat(checkoutPrices[item.id])
         : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
-      
+
       // Only validate if price is set and greater than 0
       if (salePrice > 0) {
         // Get selling_price first, then fall back to purchase_price
-        const sellingPrice = item.product_selling_price && item.product_selling_price > 0 
-          ? parseFloat(item.product_selling_price) 
+        const sellingPrice = item.product_selling_price && item.product_selling_price > 0
+          ? parseFloat(item.product_selling_price)
           : null;
         const purchasePrice = parseFloat(item.product_purchase_price || '0');
-        
+
         // Use selling_price if available and > 0, otherwise use purchase_price
         const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
         const canGoBelow = item.product_can_go_below_purchase_price || false;
-        
+
         // Validate price threshold if product doesn't allow going below purchase/selling price
         if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
           const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
@@ -734,12 +737,12 @@ export default function InvoiceDetail() {
       }, 0);
       const cash = parseFloat(checkoutCashAmount) || 0;
       const upi = parseFloat(checkoutUpiAmount) || 0;
-      
+
       if (!checkoutCashAmount || !checkoutUpiAmount || cash <= 0 || upi <= 0) {
         alert('Please enter both cash and UPI amounts for split payment');
         return;
       }
-      
+
       if (Math.abs((cash + upi) - total) > 0.01) { // Allow small floating point differences
         alert(`Split payment amounts (₹${(cash + upi).toFixed(2)}) do not match invoice total (₹${total.toFixed(2)})`);
         return;
@@ -750,7 +753,7 @@ export default function InvoiceDetail() {
       invoice_type: checkoutInvoiceType,
       items: items,
     };
-    
+
     // Add split payment amounts for mixed type
     if (checkoutInvoiceType === 'mixed') {
       checkoutData.cash_amount = parseFloat(checkoutCashAmount);
@@ -776,9 +779,9 @@ export default function InvoiceDetail() {
 
   const handleBarcodeScan = async (barcode: string) => {
     if (!barcode || !barcode.trim()) return;
-    
+
     const trimmedBarcode = barcode.trim();
-    
+
     // Check if invoice is in the correct state to add items
     if (inv?.status !== 'draft' || inv?.invoice_type !== 'pending') {
       alert('Items can only be added to draft pending invoices. Please ensure the invoice is in draft status with pending type.');
@@ -788,7 +791,7 @@ export default function InvoiceDetail() {
     // Try to find product by barcode (use barcode_only=true like POS.tsx)
     let product = null;
     let matchedBarcode: string | null = null;
-    
+
     try {
       const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true);
       if (barcodeResponse.data) {
@@ -817,7 +820,7 @@ export default function InvoiceDetail() {
         } else if (Array.isArray(searchData)) {
           products = searchData;
         }
-        
+
         product = products.find((p: any) => p.sku?.toLowerCase() === trimmedBarcode.toLowerCase());
         if (!product && products.length > 0) {
           product = products[0];
@@ -827,7 +830,7 @@ export default function InvoiceDetail() {
         return;
       }
     }
-    
+
     if (!product || !product.id) {
       alert('Product not found');
       return;
@@ -841,7 +844,7 @@ export default function InvoiceDetail() {
     const taxAmount = 0;
     // Calculate line_total: quantity * price - discount_amount + tax_amount (same as checkout)
     const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-    
+
     const itemData: any = {
       product: product.id,
       quantity: quantity,
@@ -850,11 +853,11 @@ export default function InvoiceDetail() {
       tax_amount: taxAmount,
       line_total: lineTotal, // Required field - calculate it like checkout does
     };
-    
+
     // Don't pass barcode - backend will auto-assign based on product
     // The backend expects barcode to be an ID (integer), not a string value
     // It will auto-assign a barcode if quantity is 1 and barcode is not provided
-    
+
     addItemMutation.mutate(itemData);
     setBarcodeInput('');
     setProductSearchSelectedIndex(-1);
@@ -877,29 +880,29 @@ export default function InvoiceDetail() {
   // Shared function to generate invoice HTML for both print and download
   const generateInvoiceHTML = () => {
     // Calculate total PCS
-    const totalPcs = inv.items && Array.isArray(inv.items) 
+    const totalPcs = inv.items && Array.isArray(inv.items)
       ? inv.items.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0)
       : 0;
-    
+
     // Get total amount
     const totalAmount = parseFloat(inv.total || '0');
     const amountInWords = numberToWords(totalAmount);
-    
+
     // Format date
     const invoiceDate = formatDateForInvoice(inv.created_at);
-    
+
     // Get customer PAN/IT (not available in model, will show empty)
     const customerPanIt = ''; // Customer model doesn't have PAN/IT field
-    
+
     // Get reference number (using invoice_number as ref)
     const refNo = inv.invoice_number || `#${inv.id}`;
-    
+
     // Company details - using store info or default
     const companyName = 'Manish Traders';
     const companyAddress = 'Shop Number124-A Ground Floor\nChaitaniya Market Ghoda Nikkas Bhopal';
     const companyPhone1 = ''; // Can be populated from store.phone if needed
     const companyPhone2 = '';
-    
+
     return `
       <!DOCTYPE html>
       <html>
@@ -1043,74 +1046,74 @@ export default function InvoiceDetail() {
             </thead>
             <tbody>
               ${(() => {
-                // Format numbers without currency symbol
-                const formatNumber = (n: number, decimals: number = 2) => {
-                  return n.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-                };
-                
-                if (!inv.items || !Array.isArray(inv.items) || inv.items.length === 0) {
-                  return '<tr><td colspan="5">No items</td></tr>';
-                }
-                
-                // Group items by product name AND brand (to show separate rows for same product with different brands)
-                const groupedItems: Record<string, {
-                  name: string;
-                  brand: string;
-                  skus: string[];
-                  totalQuantity: number;
-                  totalAmount: number;
-                  items: any[];
-                }> = {};
-                
-                inv.items.forEach((item: any) => {
-                  const name = item.product_name || '-';
-                  const brand = item.product_brand_name || item.brand_name || '';
-                  // Create unique key combining name and brand
-                  const groupKey = brand ? `${name}::${brand}` : name;
-                  
-                  if (!groupedItems[groupKey]) {
-                    groupedItems[groupKey] = {
-                      name,
-                      brand,
-                      skus: [],
-                      totalQuantity: 0,
-                      totalAmount: 0,
-                      items: []
-                    };
-                  }
-                  
-                  // Add SKU/barcode to the list if available
-                  const sku = item.barcode_value || item.product_sku || '';
-                  if (sku && !groupedItems[groupKey].skus.includes(sku)) {
-                    groupedItems[groupKey].skus.push(sku);
-                  }
-                  
-                  // Sum quantities and amounts
-                  const quantity = parseInt(item.quantity || '0') || 0;
-                  const amount = parseFloat(item.line_total || '0');
-                  groupedItems[groupKey].totalQuantity += quantity;
-                  groupedItems[groupKey].totalAmount += amount;
-                  groupedItems[groupKey].items.push(item);
-                });
-                
-                // Render grouped items
-                return Object.values(groupedItems).map((group) => {
-                  // Calculate average unit price from total amount and quantity
-                  const avgUnitPrice = group.totalQuantity > 0 
-                    ? group.totalAmount / group.totalQuantity 
-                    : 0;
-                  
-                  // Build product name with brand
-                  const productDisplay = group.brand 
-                    ? `${group.name} (${group.brand})`
-                    : group.name;
-                  
-                  // Build SKU list HTML
-                  const skuList = group.skus.length > 0 
-                    ? '<div style="font-size: 11px; color: #666; margin-top: 2px;">SKUs: ' + group.skus.join(', ') + '</div>'
-                    : '';
-                  
-                  return `
+        // Format numbers without currency symbol
+        const formatNumber = (n: number, decimals: number = 2) => {
+          return n.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        };
+
+        if (!inv.items || !Array.isArray(inv.items) || inv.items.length === 0) {
+          return '<tr><td colspan="5">No items</td></tr>';
+        }
+
+        // Group items by product name AND brand (to show separate rows for same product with different brands)
+        const groupedItems: Record<string, {
+          name: string;
+          brand: string;
+          skus: string[];
+          totalQuantity: number;
+          totalAmount: number;
+          items: any[];
+        }> = {};
+
+        inv.items.forEach((item: any) => {
+          const name = item.product_name || '-';
+          const brand = item.product_brand_name || item.brand_name || '';
+          // Create unique key combining name and brand
+          const groupKey = brand ? `${name}::${brand}` : name;
+
+          if (!groupedItems[groupKey]) {
+            groupedItems[groupKey] = {
+              name,
+              brand,
+              skus: [],
+              totalQuantity: 0,
+              totalAmount: 0,
+              items: []
+            };
+          }
+
+          // Add SKU/barcode to the list if available
+          const sku = item.barcode_value || item.product_sku || '';
+          if (sku && !groupedItems[groupKey].skus.includes(sku)) {
+            groupedItems[groupKey].skus.push(sku);
+          }
+
+          // Sum quantities and amounts
+          const quantity = parseInt(item.quantity || '0') || 0;
+          const amount = parseFloat(item.line_total || '0');
+          groupedItems[groupKey].totalQuantity += quantity;
+          groupedItems[groupKey].totalAmount += amount;
+          groupedItems[groupKey].items.push(item);
+        });
+
+        // Render grouped items
+        return Object.values(groupedItems).map((group) => {
+          // Calculate average unit price from total amount and quantity
+          const avgUnitPrice = group.totalQuantity > 0
+            ? group.totalAmount / group.totalQuantity
+            : 0;
+
+          // Build product name with brand
+          const productDisplay = group.brand
+            ? `${group.name} (${group.brand})`
+            : group.name;
+
+          // Build SKU list HTML
+          const skuList = group.skus.length > 0
+            ? '<div style="font-size: 11px; color: #666; margin-top: 2px;">SKUs: ' + group.skus.join(', ') + '</div>'
+            : '';
+
+          return `
                     <tr>
                       <td>
                         ${productDisplay}
@@ -1122,8 +1125,8 @@ export default function InvoiceDetail() {
                       <td class="text-right">${formatNumber(group.totalAmount, 2)}</td>
                     </tr>
                   `;
-                }).join('');
-              })()}
+        }).join('');
+      })()}
               <!-- Total Row -->
               <tr class="total-row">
                 <td><strong>Total</strong></td>
@@ -1169,7 +1172,7 @@ export default function InvoiceDetail() {
     const invoiceHTML = generateInvoiceHTML();
     printWindow.document.write(invoiceHTML);
     printWindow.document.close();
-    
+
     // Wait for content to load, then trigger print
     printWindow.onload = () => {
       setTimeout(() => {
@@ -1186,7 +1189,7 @@ export default function InvoiceDetail() {
     const invoiceHTML = generateInvoiceHTML();
     printWindow.document.write(invoiceHTML);
     printWindow.document.close();
-    
+
     // Wait for content to load, then trigger print or save as PDF
     printWindow.onload = () => {
       setTimeout(() => {
@@ -1315,55 +1318,55 @@ export default function InvoiceDetail() {
             </thead>
             <tbody>
               ${invoice.items && Array.isArray(invoice.items) ? (() => {
-                // Group items by product name AND brand for thermal layout
-                const groupedItems: Record<string, {
-                  name: string;
-                  brand: string;
-                  totalQuantity: number;
-                  totalAmount: number;
-                  avgPrice: number;
-                  items: any[];
-                }> = {};
-                
-                invoice.items.forEach((item: any) => {
-                  const name = item.product_name || '-';
-                  const brand = item.product_brand_name || item.brand_name || '';
-                  const groupKey = brand ? `${name}::${brand}` : name;
-                  
-                  if (!groupedItems[groupKey]) {
-                    groupedItems[groupKey] = {
-                      name,
-                      brand,
-                      totalQuantity: 0,
-                      totalAmount: 0,
-                      avgPrice: 0,
-                      items: []
-                    };
-                  }
-                  
-                  const quantity = parseInt(item.quantity || '0') || 0;
-                  const amount = parseFloat(item.line_total || '0');
-                  groupedItems[groupKey].totalQuantity += quantity;
-                  groupedItems[groupKey].totalAmount += amount;
-                  groupedItems[groupKey].items.push(item);
-                });
-                
-                // Calculate average price for each group
-                Object.values(groupedItems).forEach(group => {
-                  group.avgPrice = group.totalQuantity > 0 
-                    ? group.totalAmount / group.totalQuantity 
-                    : 0;
-                });
-                
-                // Render grouped items
-                return Object.values(groupedItems).map((group) => {
-                  const productDisplay = group.brand 
-                    ? `${group.name} (${group.brand})`
-                    : group.name;
-                  // Truncate for thermal printer (max 20 chars)
-                  const displayText = productDisplay.substring(0, 20);
-                  
-                  return `
+        // Group items by product name AND brand for thermal layout
+        const groupedItems: Record<string, {
+          name: string;
+          brand: string;
+          totalQuantity: number;
+          totalAmount: number;
+          avgPrice: number;
+          items: any[];
+        }> = {};
+
+        invoice.items.forEach((item: any) => {
+          const name = item.product_name || '-';
+          const brand = item.product_brand_name || item.brand_name || '';
+          const groupKey = brand ? `${name}::${brand}` : name;
+
+          if (!groupedItems[groupKey]) {
+            groupedItems[groupKey] = {
+              name,
+              brand,
+              totalQuantity: 0,
+              totalAmount: 0,
+              avgPrice: 0,
+              items: []
+            };
+          }
+
+          const quantity = parseInt(item.quantity || '0') || 0;
+          const amount = parseFloat(item.line_total || '0');
+          groupedItems[groupKey].totalQuantity += quantity;
+          groupedItems[groupKey].totalAmount += amount;
+          groupedItems[groupKey].items.push(item);
+        });
+
+        // Calculate average price for each group
+        Object.values(groupedItems).forEach(group => {
+          group.avgPrice = group.totalQuantity > 0
+            ? group.totalAmount / group.totalQuantity
+            : 0;
+        });
+
+        // Render grouped items
+        return Object.values(groupedItems).map((group) => {
+          const productDisplay = group.brand
+            ? `${group.name} (${group.brand})`
+            : group.name;
+          // Truncate for thermal printer (max 20 chars)
+          const displayText = productDisplay.substring(0, 20);
+
+          return `
                     <tr>
                       <td>${displayText}</td>
                       <td class="text-right">${group.totalQuantity}</td>
@@ -1371,8 +1374,8 @@ export default function InvoiceDetail() {
                       <td class="text-right">${formatCurrency(group.totalAmount)}</td>
                 </tr>
                   `;
-                }).join('');
-              })() : '<tr><td colspan="4">No items</td></tr>'}
+        }).join('');
+      })() : '<tr><td colspan="4">No items</td></tr>'}
             </tbody>
           </table>
           <div class="summary">
@@ -1419,17 +1422,17 @@ export default function InvoiceDetail() {
 
   const handlePrintThermal = () => {
     if (!inv) return;
-    
+
     const thermalHTML = generateThermalInvoiceHTML(inv);
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       alert('Please allow popups to print invoice');
       return;
     }
-    
+
     printWindow.document.write(thermalHTML);
     printWindow.document.close();
-    
+
     // Wait for content to load, then trigger print
     printWindow.onload = () => {
       setTimeout(() => {
@@ -1456,7 +1459,7 @@ export default function InvoiceDetail() {
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
           {/* Top Section: Invoice Info */}
           <div className="p-4 sm:p-6 border-b border-gray-100">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               {/* Invoice Details */}
               <div className="flex items-center gap-3 flex-1 min-w-0">
                 <div className="flex-shrink-0 p-2.5 bg-blue-50 rounded-lg border border-blue-100">
@@ -1474,10 +1477,10 @@ export default function InvoiceDetail() {
 
               {/* Status Badge */}
               <div className="flex-shrink-0">
-            <Badge variant={statusInfo.color} className="w-full sm:w-auto justify-center sm:justify-start">
+                <Badge variant={statusInfo.color} className="w-full sm:w-auto justify-center sm:justify-start">
                   <StatusIcon className="h-3.5 w-3.5 mr-1.5" />
-                {statusInfo.label}
-            </Badge>
+                  {statusInfo.label}
+                </Badge>
               </div>
             </div>
           </div>
@@ -1486,26 +1489,26 @@ export default function InvoiceDetail() {
           <div className="p-4 sm:p-6 bg-gray-50">
             <div className="flex flex-col sm:flex-row gap-3 sm:justify-end sm:items-center">
               {/* Primary Action */}
-                {isPending && (
-                  <Button 
-                    variant="primary" 
-                    onClick={handleCheckout} 
+              {isPending && (
+                <Button
+                  variant="primary"
+                  onClick={handleCheckout}
                   className="w-full sm:w-auto sm:min-w-[160px]"
-                    disabled={checkoutMutation.isPending}
-                  >
-                    <ShoppingCart className="h-4 w-4 mr-2" />
-                    {checkoutMutation.isPending ? 'Processing...' : 'Checkout'}
-                  </Button>
-                )}
+                  disabled={checkoutMutation.isPending}
+                >
+                  <ShoppingCart className="h-4 w-4 mr-2" />
+                  {checkoutMutation.isPending ? 'Processing...' : 'Checkout'}
+                </Button>
+              )}
 
               {/* Secondary Actions */}
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
                 {/* Edit */}
                 {isEditable && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => setShowEditModal(true)} 
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowEditModal(true)}
                     className="w-full sm:w-auto"
                   >
                     <Edit className="h-4 w-4 mr-2" />
@@ -1515,46 +1518,46 @@ export default function InvoiceDetail() {
 
                 {/* Print & Download */}
                 <div className="flex gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={handlePrint}
                     className="flex-1 sm:flex-none"
                   >
                     <Printer className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Print</span>
-              </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
+                    <span className="hidden sm:inline">Print</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={handlePrintThermal}
                     className="flex-1 sm:flex-none"
                   >
                     <Printer className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Thermal</span>
-              </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
+                    <span className="hidden sm:inline">Thermal</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={handleDownload}
                     className="flex-1 sm:flex-none"
                   >
                     <Download className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Download</span>
-              </Button>
+                    <span className="hidden sm:inline">Download</span>
+                  </Button>
                 </div>
 
                 {/* Delete */}
-                {!isRetailUser && (
-                  <Button 
-                    variant="danger" 
-                    size="sm" 
-                    onClick={handleDelete} 
+                {!isRestrictedUser && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleDelete}
                     className="w-full sm:w-auto"
                     disabled={deleteInvoiceMutation.isPending}
                   >
                     <Trash2 className="h-4 w-4 mr-2" />
-                      {deleteInvoiceMutation.isPending ? 'Deleting...' : 'Delete'}
+                    {deleteInvoiceMutation.isPending ? 'Deleting...' : 'Delete'}
                   </Button>
                 )}
               </div>
@@ -1574,16 +1577,18 @@ export default function InvoiceDetail() {
               <div className="flex-1 min-w-0">
                 <dt className="text-sm font-medium text-gray-500 mb-1 flex items-center gap-2">
                   Store
-                  <button
-                    onClick={() => {
-                      setSelectedStoreId(inv.store || null);
-                      setEditingStore(true);
-                    }}
-                    className="p-1 rounded hover:bg-gray-100 transition-colors"
-                    title="Edit store"
-                  >
-                    <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-gray-600" />
-                  </button>
+                  {!isRestrictedUser && (
+                    <button
+                      onClick={() => {
+                        setSelectedStoreId(inv.store || null);
+                        setEditingStore(true);
+                      }}
+                      className="p-1 rounded hover:bg-gray-100 transition-colors"
+                      title="Edit store"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-gray-600" />
+                    </button>
+                  )}
                 </dt>
                 {editingStore ? (
                   <div className="flex items-center gap-2">
@@ -1643,16 +1648,18 @@ export default function InvoiceDetail() {
               <div className="flex-1 min-w-0">
                 <dt className="text-sm font-medium text-gray-500 mb-1 flex items-center gap-2">
                   Invoice Type
-                  <button
-                    onClick={() => {
-                      setSelectedInvoiceType(inv.invoice_type || 'cash');
-                      setEditingInvoiceType(true);
-                    }}
-                    className="p-1 rounded hover:bg-gray-100 transition-colors"
-                    title="Edit invoice type"
-                  >
-                    <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-gray-600" />
-                  </button>
+                  {!isRestrictedUser && (
+                    <button
+                      onClick={() => {
+                        setSelectedInvoiceType(inv.invoice_type || 'cash');
+                        setEditingInvoiceType(true);
+                      }}
+                      className="p-1 rounded hover:bg-gray-100 transition-colors"
+                      title="Edit invoice type"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-gray-600" />
+                    </button>
+                  )}
                 </dt>
                 {editingInvoiceType ? (
                   <div className="flex items-center gap-2">
@@ -1731,26 +1738,26 @@ export default function InvoiceDetail() {
             ) : (
               // For other invoices, show actual totals
               <>
-            <div className="flex justify-between items-center py-2">
-              <span className="text-sm text-gray-600">Subtotal</span>
-              <span className="text-sm font-medium text-gray-900">{formatCurrency(inv.subtotal || '0')}</span>
-            </div>
-            {parseFloat(inv.discount_amount || '0') > 0 && (
-              <div className="flex justify-between items-center py-2">
-                <span className="text-sm text-gray-600">Discount</span>
-                <span className="text-sm font-medium text-red-600">-{formatCurrency(inv.discount_amount || '0')}</span>
-              </div>
-            )}
-            {parseFloat(inv.tax_amount || '0') > 0 && (
-              <div className="flex justify-between items-center py-2">
-                <span className="text-sm text-gray-600">Tax</span>
-                <span className="text-sm font-medium text-gray-900">{formatCurrency(inv.tax_amount || '0')}</span>
-              </div>
-            )}
-            <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
-              <span className="text-base font-semibold text-gray-900">Total</span>
-              <span className="text-lg font-bold text-gray-900">{formatCurrency(inv.total || '0')}</span>
-            </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-sm text-gray-600">Subtotal</span>
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(inv.subtotal || '0')}</span>
+                </div>
+                {parseFloat(inv.discount_amount || '0') > 0 && (
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-sm text-gray-600">Discount</span>
+                    <span className="text-sm font-medium text-red-600">-{formatCurrency(inv.discount_amount || '0')}</span>
+                  </div>
+                )}
+                {parseFloat(inv.tax_amount || '0') > 0 && (
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-sm text-gray-600">Tax</span>
+                    <span className="text-sm font-medium text-gray-900">{formatCurrency(inv.tax_amount || '0')}</span>
+                  </div>
+                )}
+                <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
+                  <span className="text-base font-semibold text-gray-900">Total</span>
+                  <span className="text-lg font-bold text-gray-900">{formatCurrency(inv.total || '0')}</span>
+                </div>
               </>
             )}
             {parseFloat(inv.paid_amount || '0') > 0 && (
@@ -1794,11 +1801,11 @@ export default function InvoiceDetail() {
           <div className="hidden md:block">
             {(() => {
               const groupedItems = groupItemsByProduct(inv.items);
-              
+
               if (isPending) {
-              // For pending invoices, show only Product, SKU, and Quantity
+                // For pending invoices, show only Product, SKU, and Quantity
                 return (
-              <Table headers={['Product', 'SKU', 'Quantity']}>
+                  <Table headers={['Product', 'SKU', 'Quantity']}>
                     {groupedItems.map((group, groupIndex) => {
                       const groupKey = `invoice_group_${group.productId}_${groupIndex}`;
                       const isExpanded = expandedInvoiceItems[groupKey] || false;
@@ -1807,14 +1814,14 @@ export default function InvoiceDetail() {
                         barcode: item.barcode_value || item.product_sku || 'N/A',
                         item: item
                       }));
-                      
+
                       return (
                         <>
                           <TableRow key={groupKey}>
-                    <TableCell>
+                            <TableCell>
                               <span className="font-medium text-gray-900">{group.productName}</span>
-                    </TableCell>
-                    <TableCell>
+                            </TableCell>
+                            <TableCell>
                               <button
                                 onClick={() => setExpandedInvoiceItems({ ...expandedInvoiceItems, [groupKey]: !isExpanded })}
                                 className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-mono"
@@ -1822,8 +1829,8 @@ export default function InvoiceDetail() {
                                 <span>{barcodes.length} Barcode{barcodes.length > 1 ? 's' : ''}</span>
                                 {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </button>
-                    </TableCell>
-                    <TableCell>
+                            </TableCell>
+                            <TableCell>
                               <span className="text-gray-600 font-semibold">{totalQuantity}</span>
                             </TableCell>
                           </TableRow>
@@ -1837,18 +1844,18 @@ export default function InvoiceDetail() {
                               </TableCell>
                               <TableCell>
                                 <span className="text-xs text-gray-600 font-semibold">{barcodeItem.item.quantity}</span>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                              </TableCell>
+                            </TableRow>
+                          ))}
                         </>
                       );
                     })}
-              </Table>
+                  </Table>
                 );
               } else {
-              // For other invoices, show full details with prices
+                // For other invoices, show full details with prices
                 return (
-            <Table headers={['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total']}>
+                  <Table headers={['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total']}>
                     {groupedItems.map((group, groupIndex) => {
                       const groupKey = `invoice_group_${group.productId}_${groupIndex}`;
                       const isExpanded = expandedInvoiceItems[groupKey] || false;
@@ -1861,14 +1868,14 @@ export default function InvoiceDetail() {
                         barcode: item.barcode_value || item.product_sku || 'N/A',
                         item: item
                       }));
-                      
+
                       return (
                         <>
                           <TableRow key={groupKey}>
-                  <TableCell>
+                            <TableCell>
                               <span className="font-medium text-gray-900">{group.productName}</span>
-                  </TableCell>
-                  <TableCell>
+                            </TableCell>
+                            <TableCell>
                               <button
                                 onClick={() => setExpandedInvoiceItems({ ...expandedInvoiceItems, [groupKey]: !isExpanded })}
                                 className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-mono"
@@ -1876,11 +1883,11 @@ export default function InvoiceDetail() {
                                 <span>{barcodes.length} Barcode{barcodes.length > 1 ? 's' : ''}</span>
                                 {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </button>
-                  </TableCell>
-                  <TableCell>
+                            </TableCell>
+                            <TableCell>
                               <span className="text-gray-600 font-semibold">{totalQuantity}</span>
-                  </TableCell>
-                  <TableCell align="right">
+                            </TableCell>
+                            <TableCell align="right">
                               <span className="font-medium text-gray-900">{formatCurrency(avgUnitPrice)}</span>
                             </TableCell>
                             <TableCell align="right">
@@ -1908,30 +1915,30 @@ export default function InvoiceDetail() {
                                 </TableCell>
                                 <TableCell align="right">
                                   {item.manual_unit_price && parseFloat(item.unit_price || '0') > 0 && parseFloat(item.unit_price || '0') !== parseFloat(item.manual_unit_price || '0') ? (
-                      <div className="flex flex-col items-end">
-                        <span className="line-through text-gray-400 text-xs">{formatCurrency(item.unit_price || '0')}</span>
+                                    <div className="flex flex-col items-end">
+                                      <span className="line-through text-gray-400 text-xs">{formatCurrency(item.unit_price || '0')}</span>
                                       <span className="text-xs font-medium text-gray-900">{formatCurrency(item.manual_unit_price)}</span>
-                      </div>
-                    ) : (
+                                    </div>
+                                  ) : (
                                     <span className="text-xs font-medium text-gray-900">{formatCurrency(item.manual_unit_price || item.unit_price || '0')}</span>
-                    )}
-                  </TableCell>
-                  <TableCell align="right">
+                                  )}
+                                </TableCell>
+                                <TableCell align="right">
                                   <span className="text-xs text-gray-600">{formatCurrency(item.discount_amount || '0')}</span>
-                  </TableCell>
-                  <TableCell align="right">
+                                </TableCell>
+                                <TableCell align="right">
                                   <span className="text-xs text-gray-600">{formatCurrency(item.tax_amount || '0')}</span>
-                  </TableCell>
-                  <TableCell align="right">
+                                </TableCell>
+                                <TableCell align="right">
                                   <span className="text-xs font-semibold text-gray-900">{formatCurrency(item.line_total || '0')}</span>
-                  </TableCell>
-                </TableRow>
+                                </TableCell>
+                              </TableRow>
                             );
                           })}
                         </>
                       );
                     })}
-            </Table>
+                  </Table>
                 );
               }
             })()}
@@ -1952,13 +1959,13 @@ export default function InvoiceDetail() {
                   barcode: item.barcode_value || item.product_sku || 'N/A',
                   item: item
                 }));
-                
+
                 return (
                   <div key={groupKey} className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow">
                     {/* Parent Card */}
-                <div className="p-4">
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1 min-w-0 pr-3">
+                    <div className="p-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1 min-w-0 pr-3">
                           <h4 className="font-semibold text-gray-900 text-base mb-1">{group.productName}</h4>
                           <button
                             onClick={() => setExpandedInvoiceItems({ ...expandedInvoiceItems, [groupKey]: !isExpanded })}
@@ -1969,19 +1976,19 @@ export default function InvoiceDetail() {
                           </button>
                           <div className="text-sm text-gray-500 mt-1">
                             <span>Quantity: <span className="font-semibold text-gray-900">{totalQuantity}</span></span>
-                      </div>
-                    </div>
-                    {!isPending && (
-                    <div className="text-right flex-shrink-0">
+                          </div>
+                        </div>
+                        {!isPending && (
+                          <div className="text-right flex-shrink-0">
                             <div className="text-lg font-bold text-gray-900">{formatCurrency(totalLineTotal)}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">Total</div>
-                    </div>
-                    )}
-                  </div>
-                  {!isPending && (
-                    <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-100 mt-3">
-                    <div>
-                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Unit Price</div>
+                            <div className="text-xs text-gray-500 mt-0.5">Total</div>
+                          </div>
+                        )}
+                      </div>
+                      {!isPending && (
+                        <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-100 mt-3">
+                          <div>
+                            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Unit Price</div>
                             <div className="font-semibold text-gray-900">{formatCurrency(avgUnitPrice)}</div>
                           </div>
                           <div>
@@ -1995,7 +2002,7 @@ export default function InvoiceDetail() {
                         </div>
                       )}
                     </div>
-                    
+
                     {/* Expanded Barcode Section */}
                     {isExpanded && (
                       <div className="px-4 pb-4 border-t border-gray-200 bg-gray-50">
@@ -2013,24 +2020,24 @@ export default function InvoiceDetail() {
                                     <div>
                                       <div className="text-gray-500 mb-0.5">Price</div>
                                       {item.manual_unit_price && parseFloat(item.unit_price || '0') > 0 && parseFloat(item.unit_price || '0') !== parseFloat(item.manual_unit_price || '0') ? (
-                        <div className="space-y-0.5">
+                                        <div className="space-y-0.5">
                                           <div className="line-through text-gray-400">{formatCurrency(item.unit_price || '0')}</div>
-                          <div className="font-semibold text-gray-900">{formatCurrency(item.manual_unit_price)}</div>
-                        </div>
-                      ) : (
+                                          <div className="font-semibold text-gray-900">{formatCurrency(item.manual_unit_price)}</div>
+                                        </div>
+                                      ) : (
                                         <div className="font-semibold text-gray-900">{formatCurrency(item.manual_unit_price || item.unit_price || '0')}</div>
-                      )}
-                    </div>
-                    <div>
+                                      )}
+                                    </div>
+                                    <div>
                                       <div className="text-gray-500 mb-0.5">Total</div>
                                       <div className="font-semibold text-gray-900">{formatCurrency(item.line_total || '0')}</div>
-                    </div>
-                  </div>
-                  )}
-                </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                             );
                           })}
-              </div>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -2133,10 +2140,10 @@ export default function InvoiceDetail() {
             <span className="text-xs text-gray-500 hidden sm:inline">This is how the invoice will appear when printed</span>
           </div>
           <div className="bg-gray-200 p-4 sm:p-8 flex justify-center overflow-auto" style={{ maxHeight: '900px' }}>
-            <div 
+            <div
               className="bg-white shadow-2xl mx-auto"
-              style={{ 
-                width: '210mm', 
+              style={{
+                width: '210mm',
                 minHeight: '297mm',
                 maxWidth: '100%',
                 boxShadow: '0 0 20px rgba(0,0,0,0.3)'
@@ -2332,7 +2339,7 @@ export default function InvoiceDetail() {
                               const taxAmount = 0;
                               // Calculate line_total: quantity * price - discount_amount + tax_amount
                               const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-                              
+
                               const itemData: any = {
                                 product: product.id,
                                 quantity: quantity,
@@ -2412,7 +2419,7 @@ export default function InvoiceDetail() {
                                     const taxAmount = 0;
                                     // Calculate line_total: quantity * price - discount_amount + tax_amount
                                     const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-                                    
+
                                     const itemData: any = {
                                       product: product.id,
                                       quantity: quantity,
@@ -2426,9 +2433,8 @@ export default function InvoiceDetail() {
                                     setProductSearchSelectedIndex(-1);
                                     setIsSearchTyped(false);
                                   }}
-                                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${
-                                    isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''
-                                  }`}
+                                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''
+                                    }`}
                                 >
                                   <div className="font-medium text-gray-900">{product.name}</div>
                                   {product.sku && (
@@ -2502,32 +2508,32 @@ export default function InvoiceDetail() {
                               const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
                               return sum + parseFloat(qty || '0');
                             }, 0);
-                            
+
                             // Create a unique key for the group
                             const groupKey = `group_${group.productId}_${groupIndex}`;
                             const isExpanded = expandedGroups[groupKey] || false;
-                            
+
                             // Get parent price from separate state (independent of individual item prices)
                             const firstItem = group.items[0];
                             const parentPrice = parentGroupPrices[groupKey] ?? (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
-                            
+
                             // Calculate line total using parent price
                             const lineTotal = totalQuantity * parseFloat(parentPrice);
-                            
+
                             // Get all unique barcodes for this product
                             const barcodes = group.items.map(item => ({
                               barcode: item.barcode_value || item.product_sku || 'N/A',
                               item: item
                             }));
-                          
-                          return (
+
+                            return (
                               <Fragment key={groupKey}>
                                 {/* Parent Row */}
                                 <tr className="hover:bg-gray-50 transition-colors">
-                              <td className="px-4 py-4">
+                                  <td className="px-4 py-4">
                                     <div className="font-medium text-gray-900">{group.productName}</div>
-                              </td>
-                              <td className="px-4 py-4">
+                                  </td>
+                                  <td className="px-4 py-4">
                                     <button
                                       onClick={() => setExpandedGroups({ ...expandedGroups, [groupKey]: !isExpanded })}
                                       className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 font-mono"
@@ -2535,26 +2541,26 @@ export default function InvoiceDetail() {
                                       <span>{barcodes.length} Barcode{barcodes.length > 1 ? 's' : ''}</span>
                                       {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                                     </button>
-                              </td>
-                              <td className="px-4 py-4 text-right">
-                                <span className="text-sm text-gray-900">
-                                  ₹{(() => {
-                                    const sp = parseFloat(firstItem.product_selling_price || '0');
-                                    const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                    return (sp > 0 ? sp : pp).toFixed(2);
-                                  })()}
-                                </span>
-                              </td>
-                              <td className="px-4 py-4">
+                                  </td>
+                                  <td className="px-4 py-4 text-right">
+                                    <span className="text-sm text-gray-900">
+                                      ₹{(() => {
+                                        const sp = parseFloat(firstItem.product_selling_price || '0');
+                                        const pp = parseFloat(firstItem.product_purchase_price || '0');
+                                        return (sp > 0 ? sp : pp).toFixed(2);
+                                      })()}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-4">
                                     {group.isTrackedInventory ? (
-                                  <div className="flex items-center justify-center">
+                                      <div className="flex items-center justify-center">
                                         <span className="text-gray-600 font-semibold">{totalQuantity}</span>
-                                    <span className="ml-2 text-xs text-gray-500">(Fixed)</span>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-center gap-1">
-                                    <button
-                                      onClick={() => {
+                                        <span className="ml-2 text-xs text-gray-500">(Fixed)</span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center justify-center gap-1">
+                                        <button
+                                          onClick={() => {
                                             const newQty = Math.max(0, totalQuantity - 1);
                                             // Distribute quantity change proportionally across items
                                             const newQuantities = { ...checkoutQuantities };
@@ -2564,18 +2570,18 @@ export default function InvoiceDetail() {
                                               newQuantities[item.id] = Math.max(0, Math.floor(newQty * proportion)).toString();
                                             });
                                             setCheckoutQuantities(newQuantities);
-                                      }}
-                                      className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 transition-colors"
+                                          }}
+                                          className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 transition-colors"
                                           disabled={totalQuantity <= 0}
-                                    >
-                                      <Minus className="h-4 w-4" />
-                                    </button>
-                                    <Input
-                                      type="number"
-                                      step="1"
-                                      min="0"
+                                        >
+                                          <Minus className="h-4 w-4" />
+                                        </button>
+                                        <Input
+                                          type="number"
+                                          step="1"
+                                          min="0"
                                           value={totalQuantity}
-                                      onChange={(e) => {
+                                          onChange={(e) => {
                                             const newQty = parseFloat(e.target.value) || 0;
                                             // Distribute quantity proportionally across items
                                             const newQuantities = { ...checkoutQuantities };
@@ -2585,11 +2591,11 @@ export default function InvoiceDetail() {
                                               newQuantities[item.id] = Math.max(0, Math.floor(newQty * proportion)).toString();
                                             });
                                             setCheckoutQuantities(newQuantities);
-                                      }}
-                                      className="w-20 text-center font-semibold"
-                                    />
-                                    <button
-                                      onClick={() => {
+                                          }}
+                                          className="w-20 text-center font-semibold"
+                                        />
+                                        <button
+                                          onClick={() => {
                                             const newQty = totalQuantity + 1;
                                             // Distribute quantity change proportionally across items
                                             const newQuantities = { ...checkoutQuantities };
@@ -2599,54 +2605,54 @@ export default function InvoiceDetail() {
                                               newQuantities[item.id] = Math.max(0, Math.floor(newQty * proportion)).toString();
                                             });
                                             setCheckoutQuantities(newQuantities);
-                                      }}
-                                      className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 transition-colors"
-                                    >
-                                      <Plus className="h-4 w-4" />
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                              <td className="px-4 py-4">
-                                <div className="flex items-center justify-end gap-1">
-                                  <span className="text-sm text-gray-500">₹</span>
-                                  <Input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    placeholder="0.00"
+                                          }}
+                                          className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 transition-colors"
+                                        >
+                                          <Plus className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <span className="text-sm text-gray-500">₹</span>
+                                      <Input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        placeholder="0.00"
                                         value={parentPrice}
-                                    onFocus={(e) => {
-                                      // Clear the input when focused
-                                      setParentGroupPrices({
-                                        ...parentGroupPrices,
-                                        [groupKey]: '',
-                                      });
-                                      e.target.select();
-                                    }}
-                                    onBlur={(e) => {
-                                      // Restore original value if empty
-                                      const newPrice = e.target.value;
-                                      if (!newPrice || newPrice.trim() === '') {
-                                        const firstItem = group.items[0];
-                                        const originalPrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
-                                        setParentGroupPrices({
-                                          ...parentGroupPrices,
-                                          [groupKey]: originalPrice,
-                                        });
-                                      }
-                                    }}
-                                    onChange={(e) => {
+                                        onFocus={(e) => {
+                                          // Clear the input when focused
+                                          setParentGroupPrices({
+                                            ...parentGroupPrices,
+                                            [groupKey]: '',
+                                          });
+                                          e.target.select();
+                                        }}
+                                        onBlur={(e) => {
+                                          // Restore original value if empty
+                                          const newPrice = e.target.value;
+                                          if (!newPrice || newPrice.trim() === '') {
+                                            const firstItem = group.items[0];
+                                            const originalPrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
+                                            setParentGroupPrices({
+                                              ...parentGroupPrices,
+                                              [groupKey]: originalPrice,
+                                            });
+                                          }
+                                        }}
+                                        onChange={(e) => {
                                           // Update parent price state
                                           const newPrice = e.target.value;
                                           setParentGroupPrices({
                                             ...parentGroupPrices,
                                             [groupKey]: newPrice,
                                           });
-                                          
-                                        // Validate price threshold for parent price (use first item for validation)
-                                        const firstItem = group.items[0];
-                                        const error = validatePriceThreshold(newPrice, firstItem);
+
+                                          // Validate price threshold for parent price (use first item for validation)
+                                          const firstItem = group.items[0];
+                                          const error = validatePriceThreshold(newPrice, firstItem);
                                           if (error) {
                                             setCheckoutPriceErrors({
                                               ...checkoutPriceErrors,
@@ -2657,25 +2663,25 @@ export default function InvoiceDetail() {
                                             delete newErrors[groupKey];
                                             setCheckoutPriceErrors(newErrors);
                                           }
-                                          
+
                                           // Apply price to all items in group (auto-fill) unless they have been explicitly overridden
                                           const newPrices = { ...checkoutPrices };
                                           const oldParentPrice = parentPrice; // Store old parent price before update
                                           group.items.forEach((item) => {
                                             const currentItemPrice = checkoutPrices[item.id];
                                             const originalItemPrice = (item.manual_unit_price || item.unit_price || '0').toString();
-                                            
+
                                             // Update item price if:
                                             // 1. It doesn't have a price set in checkoutPrices, OR
                                             // 2. It matches the old parent price, OR
                                             // 3. It matches the original item price (meaning it hasn't been manually overridden)
-                                            const shouldUpdate = !currentItemPrice || 
-                                                                 currentItemPrice === oldParentPrice || 
-                                                                 currentItemPrice === originalItemPrice;
-                                            
+                                            const shouldUpdate = !currentItemPrice ||
+                                              currentItemPrice === oldParentPrice ||
+                                              currentItemPrice === originalItemPrice;
+
                                             if (shouldUpdate) {
                                               newPrices[item.id] = newPrice;
-                                              
+
                                               // Validate individual item price
                                               const itemError = validatePriceThreshold(newPrice, item);
                                               if (itemError) {
@@ -2694,40 +2700,40 @@ export default function InvoiceDetail() {
                                             // Otherwise, keep the manually overridden price
                                           });
                                           setCheckoutPrices(newPrices);
-                                    }}
-                                    className={`w-28 text-right font-medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
-                                  />
-                                </div>
-                                {checkoutPriceErrors[groupKey] && (
-                                  <div className="text-xs text-red-600 mt-1 text-right pr-1">{checkoutPriceErrors[groupKey]}</div>
-                                )}
-                              </td>
-                              <td className="px-4 py-4">
-                                <div className="text-right">
-                                  <div className="font-semibold text-gray-900">
-                                    ₹{lineTotal.toFixed(2)}
-                                  </div>
+                                        }}
+                                        className={`w-28 text-right font-medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                      />
+                                    </div>
+                                    {checkoutPriceErrors[groupKey] && (
+                                      <div className="text-xs text-red-600 mt-1 text-right pr-1">{checkoutPriceErrors[groupKey]}</div>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <div className="text-right">
+                                      <div className="font-semibold text-gray-900">
+                                        ₹{lineTotal.toFixed(2)}
+                                      </div>
                                     </div>
                                   </td>
-                              <td className="px-4 py-4">
-                                <div className="flex items-center justify-center">
-                                  <button
-                                    onClick={() => {
-                                      // Remove all items in this group by calling delete API for each item
-                                      if (window.confirm(`Remove all items of "${group.productName}" from the invoice?`)) {
-                                        group.items.forEach((item) => {
-                                          deleteItemMutation.mutate(item.id);
-                                        });
-                                      }
-                                    }}
-                                    disabled={deleteItemMutation.isPending}
-                                    className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50"
-                                    title="Remove Product"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </button>
-                                </div>
-                              </td>
+                                  <td className="px-4 py-4">
+                                    <div className="flex items-center justify-center">
+                                      <button
+                                        onClick={() => {
+                                          // Remove all items in this group by calling delete API for each item
+                                          if (window.confirm(`Remove all items of "${group.productName}" from the invoice?`)) {
+                                            group.items.forEach((item) => {
+                                              deleteItemMutation.mutate(item.id);
+                                            });
+                                          }
+                                        }}
+                                        disabled={deleteItemMutation.isPending}
+                                        className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50"
+                                        title="Remove Product"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </td>
                                 </tr>
                                 {/* Expanded Barcode Rows */}
                                 {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
@@ -2735,7 +2741,7 @@ export default function InvoiceDetail() {
                                   const itemQty = checkoutQuantities[item.id] ?? item.quantity.toString();
                                   const itemPrice = checkoutPrices[item.id] ?? parentPrice;
                                   const itemLineTotal = parseFloat(itemQty) * parseFloat(itemPrice);
-                                  
+
                                   return (
                                     <tr key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-gray-50 hover:bg-gray-100 transition-colors">
                                       <td className="px-4 py-3 pl-12">
@@ -2790,7 +2796,7 @@ export default function InvoiceDetail() {
                                                 ...checkoutPrices,
                                                 [item.id]: newPrice,
                                               });
-                                              
+
                                               // Validate price threshold for individual item
                                               const error = validatePriceThreshold(newPrice, item);
                                               if (error) {
@@ -2816,11 +2822,11 @@ export default function InvoiceDetail() {
                                       <td className="px-4 py-3">
                                         <div className="text-right text-xs font-semibold text-gray-700">
                                           ₹{itemLineTotal.toFixed(2)}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </Fragment>
                             );
                           });
@@ -2844,27 +2850,27 @@ export default function InvoiceDetail() {
                           const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
                           return sum + parseFloat(qty || '0');
                         }, 0);
-                        
+
                         // Create a unique key for the group
                         const groupKey = `group_${group.productId}_${groupIndex}`;
                         const isExpanded = expandedGroups[groupKey] || false;
-                        
+
                         // Get parent price from separate state (independent of individual item prices)
                         const firstItem = group.items[0];
                         const parentPrice = parentGroupPrices[groupKey] ?? (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
                         const lineTotal = totalQuantity * parseFloat(parentPrice);
-                        
+
                         // Get all unique barcodes for this product
                         const barcodes = group.items.map(item => ({
                           barcode: item.barcode_value || item.product_sku || 'N/A',
                           item: item
                         }));
-                      
-                      return (
+
+                        return (
                           <div key={groupKey} className="bg-white">
                             {/* Parent Card */}
                             <div className="p-4">
-                          <div className="mb-3">
+                              <div className="mb-3">
                                 <div className="flex justify-between items-start">
                                   <div>
                                     <h5 className="font-semibold text-gray-900 mb-1">{group.productName}</h5>
@@ -2887,21 +2893,21 @@ export default function InvoiceDetail() {
                                     </span>
                                   </div>
                                 </div>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 gap-3">
-                            {/* Quantity */}
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-1.5">Quantity</label>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                {/* Quantity */}
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1.5">Quantity</label>
                                   {group.isTrackedInventory ? (
-                                <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2">
                                       <span className="text-gray-900 font-semibold">{totalQuantity}</span>
-                                  <span className="text-xs text-gray-500">(Fixed)</span>
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={() => {
+                                      <span className="text-xs text-gray-500">(Fixed)</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => {
                                           const newQty = Math.max(0, totalQuantity - 1);
                                           const newQuantities = { ...checkoutQuantities };
                                           group.items.forEach((item) => {
@@ -2910,18 +2916,18 @@ export default function InvoiceDetail() {
                                             newQuantities[item.id] = Math.max(0, Math.floor(newQty * proportion)).toString();
                                           });
                                           setCheckoutQuantities(newQuantities);
-                                    }}
-                                    className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+                                        }}
+                                        className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 disabled:opacity-50"
                                         disabled={totalQuantity <= 0}
-                                  >
-                                    <Minus className="h-4 w-4" />
-                                  </button>
-                                  <Input
-                                    type="number"
-                                    step="1"
-                                    min="0"
+                                      >
+                                        <Minus className="h-4 w-4" />
+                                      </button>
+                                      <Input
+                                        type="number"
+                                        step="1"
+                                        min="0"
                                         value={totalQuantity}
-                                    onChange={(e) => {
+                                        onChange={(e) => {
                                           // Only allow positive integers
                                           const val = e.target.value;
                                           if (val === '' || /^\d+$/.test(val)) {
@@ -2945,11 +2951,11 @@ export default function InvoiceDetail() {
                                             newQuantities[item.id] = Math.max(0, Math.floor(val * proportion)).toString();
                                           });
                                           setCheckoutQuantities(newQuantities);
-                                    }}
-                                    className="w-20 text-center font-semibold"
-                                  />
-                                  <button
-                                    onClick={() => {
+                                        }}
+                                        className="w-20 text-center font-semibold"
+                                      />
+                                      <button
+                                        onClick={() => {
                                           const newQty = totalQuantity + 1;
                                           const newQuantities = { ...checkoutQuantities };
                                           group.items.forEach((item) => {
@@ -2958,54 +2964,54 @@ export default function InvoiceDetail() {
                                             newQuantities[item.id] = Math.max(0, Math.floor(newQty * proportion)).toString();
                                           });
                                           setCheckoutQuantities(newQuantities);
-                                    }}
-                                    className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 disabled:opacity-50"
-                                  >
-                                    <Plus className="h-4 w-4" />
-                                  </button>
+                                        }}
+                                        className="p-1.5 rounded-md text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+                                      >
+                                        <Plus className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                            
-                            {/* Price */}
-                            <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-1.5">Unit Price</label>
-                              <div className="flex items-center gap-1">
-                                <span className="text-sm text-gray-500">₹</span>
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  placeholder="0.00"
+
+                                {/* Price */}
+                                <div>
+                                  <label className="block text-xs font-medium text-gray-700 mb-1.5">Unit Price</label>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-sm text-gray-500">₹</span>
+                                    <Input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      placeholder="0.00"
                                       value={parentPrice}
-                                  onFocus={(e) => {
-                                    // Clear the input when focused
-                                    setParentGroupPrices({
-                                      ...parentGroupPrices,
-                                      [groupKey]: '',
-                                    });
-                                    e.target.select();
-                                  }}
-                                  onBlur={(e) => {
-                                    // Restore original value if empty
-                                    const newPrice = e.target.value;
-                                    if (!newPrice || newPrice.trim() === '') {
-                                      const firstItem = group.items[0];
-                                      const originalPrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
-                                      setParentGroupPrices({
-                                        ...parentGroupPrices,
-                                        [groupKey]: originalPrice,
-                                      });
-                                    }
-                                  }}
-                                  onChange={(e) => {
+                                      onFocus={(e) => {
+                                        // Clear the input when focused
+                                        setParentGroupPrices({
+                                          ...parentGroupPrices,
+                                          [groupKey]: '',
+                                        });
+                                        e.target.select();
+                                      }}
+                                      onBlur={(e) => {
+                                        // Restore original value if empty
+                                        const newPrice = e.target.value;
+                                        if (!newPrice || newPrice.trim() === '') {
+                                          const firstItem = group.items[0];
+                                          const originalPrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
+                                          setParentGroupPrices({
+                                            ...parentGroupPrices,
+                                            [groupKey]: originalPrice,
+                                          });
+                                        }
+                                      }}
+                                      onChange={(e) => {
                                         // Update parent price state
                                         const newPrice = e.target.value;
                                         setParentGroupPrices({
                                           ...parentGroupPrices,
                                           [groupKey]: newPrice,
                                         });
-                                        
+
                                         // Validate price threshold for parent price (use first item for validation)
                                         const firstItem = group.items[0];
                                         const error = validatePriceThreshold(newPrice, firstItem);
@@ -3019,25 +3025,25 @@ export default function InvoiceDetail() {
                                           delete newErrors[groupKey];
                                           setCheckoutPriceErrors(newErrors);
                                         }
-                                        
+
                                         // Apply price to all items in group (auto-fill) unless they have been explicitly overridden
                                         const newPrices = { ...checkoutPrices };
                                         const oldParentPrice = parentPrice; // Store old parent price before update
                                         group.items.forEach((item) => {
                                           const currentItemPrice = checkoutPrices[item.id];
                                           const originalItemPrice = (item.manual_unit_price || item.unit_price || '0').toString();
-                                          
+
                                           // Update item price if:
                                           // 1. It doesn't have a price set in checkoutPrices, OR
                                           // 2. It matches the old parent price, OR
                                           // 3. It matches the original item price (meaning it hasn't been manually overridden)
-                                          const shouldUpdate = !currentItemPrice || 
-                                                               currentItemPrice === oldParentPrice || 
-                                                               currentItemPrice === originalItemPrice;
-                                          
+                                          const shouldUpdate = !currentItemPrice ||
+                                            currentItemPrice === oldParentPrice ||
+                                            currentItemPrice === originalItemPrice;
+
                                           if (shouldUpdate) {
                                             newPrices[item.id] = newPrice;
-                                            
+
                                             // Validate individual item price
                                             const itemError = validatePriceThreshold(newPrice, item);
                                             if (itemError) {
@@ -3056,25 +3062,25 @@ export default function InvoiceDetail() {
                                           // Otherwise, keep the manually overridden price
                                         });
                                         setCheckoutPrices(newPrices);
-                                  }}
-                                  className={`flex-1 text-right font-medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
-                                />
+                                      }}
+                                      className={`flex-1 text-right font-medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                    />
+                                  </div>
+                                  {checkoutPriceErrors[groupKey] && (
+                                    <div className="text-xs text-red-600 mt-1">{checkoutPriceErrors[groupKey]}</div>
+                                  )}
+                                </div>
                               </div>
-                              {checkoutPriceErrors[groupKey] && (
-                                <div className="text-xs text-red-600 mt-1">{checkoutPriceErrors[groupKey]}</div>
+
+                              {/* Line Total */}
+                              {parseFloat(parentPrice) > 0 && (
+                                <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between items-center">
+                                  <span className="text-sm font-medium text-gray-700">Line Total:</span>
+                                  <span className="text-lg font-bold text-gray-900">₹{lineTotal.toFixed(2)}</span>
+                                </div>
                               )}
                             </div>
-                          </div>
-                          
-                          {/* Line Total */}
-                              {parseFloat(parentPrice) > 0 && (
-                            <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between items-center">
-                              <span className="text-sm font-medium text-gray-700">Line Total:</span>
-                              <span className="text-lg font-bold text-gray-900">₹{lineTotal.toFixed(2)}</span>
-                            </div>
-                          )}
-                            </div>
-                            
+
                             {/* Expanded Barcode Section */}
                             {isExpanded && (
                               <div className="px-4 pb-4 border-t border-gray-200 bg-gray-50">
@@ -3084,7 +3090,7 @@ export default function InvoiceDetail() {
                                     const itemQty = checkoutQuantities[item.id] ?? item.quantity.toString();
                                     const itemPrice = checkoutPrices[item.id] ?? parentPrice;
                                     const itemLineTotal = parseFloat(itemQty) * parseFloat(itemPrice);
-                                    
+
                                     return (
                                       <div key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-white rounded-md p-3 border border-gray-200">
                                         <div className="flex items-center justify-between mb-2">
@@ -3126,7 +3132,7 @@ export default function InvoiceDetail() {
                                                   ...checkoutPrices,
                                                   [item.id]: newPrice,
                                                 });
-                                                
+
                                                 // Validate price threshold for individual item
                                                 const error = validatePriceThreshold(newPrice, item);
                                                 if (error) {
@@ -3152,9 +3158,9 @@ export default function InvoiceDetail() {
                                         {checkoutPriceErrors[`item_${item.id}`] && (
                                           <div className="text-xs text-red-600 mt-1">{checkoutPriceErrors[`item_${item.id}`]}</div>
                                         )}
-                        </div>
-                      );
-                    })}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
                             )}
@@ -3197,7 +3203,7 @@ export default function InvoiceDetail() {
                 const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
                 return parseFloat(qty) > 0;
               }) || [];
-              
+
               if (activeItems.length > 0) {
                 const subtotal = calculateCheckoutTotal();
                 return (
@@ -3221,8 +3227,8 @@ export default function InvoiceDetail() {
 
             {/* Actions */}
             <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t border-gray-200">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => {
                   setShowCheckoutModal(false);
                   setCheckoutQuantities({});
@@ -3233,7 +3239,7 @@ export default function InvoiceDetail() {
               >
                 Cancel
               </Button>
-              <Button 
+              <Button
                 onClick={() => {
                   if (!inv?.items || inv.items.length === 0) {
                     alert('Invoice has no items');
@@ -3253,11 +3259,11 @@ export default function InvoiceDetail() {
                   // Filter out items with quantity 0 (they will be deleted by backend)
                   const items = inv.items
                     .map((item: any): any => {
-                      const quantity = checkoutQuantities[item.id] 
+                      const quantity = checkoutQuantities[item.id]
                         ? parseInt(checkoutQuantities[item.id]) || 0
                         : parseInt(item.quantity) || 0;
-                      const price = checkoutPrices[item.id] 
-                        ? parseFloat(checkoutPrices[item.id]) 
+                      const price = checkoutPrices[item.id]
+                        ? parseFloat(checkoutPrices[item.id])
                         : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
 
                       return {
@@ -3291,7 +3297,7 @@ export default function InvoiceDetail() {
               >
                 {markCreditMutation.isPending ? 'Moving to Ledger...' : 'Move to Ledger'}
               </Button>
-              <Button 
+              <Button
                 onClick={handleCheckoutSubmit}
                 disabled={checkoutMutation.isPending || markCreditMutation.isPending || !inv?.items || inv.items.length === 0}
                 className="w-full sm:w-auto"
@@ -3438,7 +3444,7 @@ export default function InvoiceDetail() {
           <p className="text-gray-700">
             Are you sure you want to delete invoice <strong>{inv.invoice_number || `#${inv.id}`}</strong>?
           </p>
-          
+
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
             <p className="text-sm font-medium text-yellow-800 mb-3">
               Choose what to do with the items:

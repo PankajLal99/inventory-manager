@@ -198,6 +198,7 @@ export default function POS() {
 
   // Check if user is in Wholesale or WholesaleAdmin group (invoice type should be 'pending' only)
   const isWholesaleGroup = user?.groups && (user.groups.includes('Wholesale') || user.groups.includes('WholesaleAdmin'));
+  const isWholesaleAdmin = user?.groups && user.groups.includes('WholesaleAdmin');
 
   // Filter stores based on user group
   // - Admin: All stores
@@ -214,6 +215,10 @@ export default function POS() {
       // Retail/RetailAdmin group users see only retail stores
       return validStores.filter((s: any) => s.shop_type === 'retail');
     }
+    if (isWholesaleAdmin && !isAdmin) {
+      // WholesaleAdmin group users see only wholesale stores
+      return validStores.filter((s: any) => s.shop_type === 'wholesale');
+    }
     // Admin and others see all valid stores (Retail + Wholesale)
     return validStores;
   })();
@@ -223,26 +228,26 @@ export default function POS() {
   // - For others: Auto-select first active store (filtered by backend)
   // Memoize to prevent unnecessary recalculations and reduce re-renders
   const defaultStore = useMemo(() => {
-    if ((isAdmin || isRetailGroup) && selectedStoreId) {
-      // Admin/Retail has selected a store
+    if ((isAdmin || isRetailGroup || isWholesaleAdmin) && selectedStoreId) {
+      // Admin/Retail/WholesaleAdmin has selected a store
       return filteredStores.find((s: any) => s.id === selectedStoreId) ||
         filteredStores.find((s: any) => s.is_active) ||
         filteredStores[0];
     }
-    // Auto-select first active store (for non-admin/retail, backend already filtered)
+    // Auto-select first active store (for non-admin/retail/wholesale-admin, backend already filtered)
     return filteredStores.find((s: any) => s.is_active) || filteredStores[0];
-  }, [isAdmin, isRetailGroup, selectedStoreId, filteredStores]);
+  }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
 
-  // Update selectedStoreId when stores load and Admin/Retail hasn't selected one yet
+  // Update selectedStoreId when stores load and Admin/Retail/WholesaleAdmin hasn't selected one yet
   useEffect(() => {
-    if ((isAdmin || isRetailGroup) && !selectedStoreId && filteredStores.length > 0) {
+    if ((isAdmin || isRetailGroup || isWholesaleAdmin) && !selectedStoreId && filteredStores.length > 0) {
       const firstActiveStore = filteredStores.find((s: any) => s.is_active) || filteredStores[0];
       if (firstActiveStore) {
         lastStoreIdRef.current = firstActiveStore.id;
         setSelectedStoreId(firstActiveStore.id);
       }
     }
-  }, [isAdmin, isRetailGroup, selectedStoreId, filteredStores]);
+  }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
 
 
   // Track if this is the initial mount to avoid clearing carts on first load
@@ -683,12 +688,12 @@ export default function POS() {
     initUser();
   }, []);
 
-  // Auto-set invoice type to 'pending' for Wholesale and WholesaleAdmin users
+  // Auto-set invoice type to 'pending' for Wholesale users (excluding Admins)
   useEffect(() => {
-    if (isWholesaleGroup && invoiceType !== 'pending') {
+    if (isWholesaleGroup && !isWholesaleAdmin && invoiceType !== 'pending') {
       setInvoiceType('pending');
     }
-  }, [isWholesaleGroup, invoiceType]);
+  }, [isWholesaleGroup, isWholesaleAdmin, invoiceType]);
 
 
   // Helper function to convert backend invoice type to frontend invoice type
@@ -716,8 +721,8 @@ export default function POS() {
       const currentActiveTabId = preserveActiveTabId !== undefined ? preserveActiveTabId : activeTabId;
 
       // Determine the current store ID to filter carts by
-      // Use selectedStoreId if available (for Admin/Retail users), otherwise use defaultStore
-      const currentStoreId = (isAdmin || isRetailGroup) && selectedStoreId ? selectedStoreId : defaultStore.id;
+      // Use selectedStoreId if available (for Admin/Retail/WholesaleAdmin users), otherwise use defaultStore
+      const currentStoreId = (isAdmin || isRetailGroup || isWholesaleAdmin) && selectedStoreId ? selectedStoreId : defaultStore.id;
 
       // Fetch all active carts from backend
       const backendResponse = await posApi.carts.getAllActive();
