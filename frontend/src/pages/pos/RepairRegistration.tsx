@@ -12,7 +12,7 @@ import {
     User,
     Phone,
     Package,
-    DollarSign,
+    IndianRupee,
     Wrench,
     Search,
     Plus,
@@ -500,7 +500,7 @@ export default function RepairRegistration() {
                     <div className="space-y-2">
                         <label className="text-xs font-black text-gray-400 uppercase tracking-widest pl-1">Booking Amount</label>
                         <div className="relative group">
-                            <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 h-6 w-6 text-gray-300" />
+                            <IndianRupee className="absolute left-4 top-1/2 -translate-y-1/2 h-6 w-6 text-gray-300" />
                             <Input
                                 type="number"
                                 placeholder="0.00"
