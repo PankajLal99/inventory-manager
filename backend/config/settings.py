@@ -125,7 +125,7 @@ else:
             'NAME': os.getenv('DB_NAME', 'postgres'),
             'USER': os.getenv('DB_USER', 'postgres'),
             'PASSWORD': os.getenv('DB_PASSWORD', ''),
-            'HOST': os.getenv('DB_HOST', 'mtims.cinbnrzrjurt.ap-south-1.rds.amazonaws.com'),
+            'HOST': os.getenv('DB_HOST', 'its.cinbnrzrjurt.ap-south-1.rds.amazonaws.com'),
             'PORT': os.getenv('DB_PORT', '5432'),
             'OPTIONS': {
                 # Try without SSL first, or set to 'require' if SSL is required
