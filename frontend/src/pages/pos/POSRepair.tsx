@@ -506,7 +506,40 @@ export default function POS() {
     },
     enabled: customerSearch.trim().length > 0,
     retry: false,
+    // Sort results to prioritize 'REPAIR' group
+    select: (data) => {
+      if (!data) return data;
+      const customers = Array.isArray(data.results) ? data.results : (Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []));
+
+      const sorted = [...customers].sort((a: any, b: any) => {
+        const aIsRepair = a.customer_group_name === 'REPAIR';
+        const bIsRepair = b.customer_group_name === 'REPAIR';
+        if (aIsRepair === bIsRepair) return 0;
+        return aIsRepair ? -1 : 1;
+      });
+
+      // Maintain original structure if it was paginated
+      if (data.results) return { ...data, results: sorted };
+      if (data.data) return { ...data, data: sorted };
+      return sorted;
+    }
   });
+
+  // Fetch customer groups to find 'REPAIR' group
+  const { data: customerGroups } = useQuery({
+    queryKey: ['customer-groups'],
+    queryFn: async () => {
+      const response = await customersApi.groups.list();
+      return response.data;
+    },
+    retry: false,
+  });
+
+  const repairGroup = useMemo(() => {
+    if (!customerGroups) return null;
+    const groups = Array.isArray(customerGroups) ? customerGroups : (customerGroups.results || []);
+    return groups.find((g: any) => g.name === 'REPAIR');
+  }, [customerGroups]);
 
   // ------- QUEUE PROCESSING LOGIC -------
 
@@ -1368,7 +1401,13 @@ export default function POS() {
   }, [username, cartId, cart?.data?.items, defaultStore, queryClient, syncCartsWithBackend, loadCartsFromStorage, removeCartTab, cartTabs.length]);
 
   const createCustomerMutation = useMutation({
-    mutationFn: (data: { name: string; phone?: string }) => customersApi.create(data),
+    mutationFn: (data: { name: string; phone?: string; customer_group?: number }) => {
+      const payload = { ...data };
+      if (repairGroup) {
+        payload.customer_group = repairGroup.id;
+      }
+      return customersApi.create(payload);
+    },
     onSuccess: (data) => {
       const newCustomer = data.data;
       setSelectedCustomer(newCustomer);

@@ -103,7 +103,7 @@ def generate_sas_token(blob_name: str, expiry_hours: int = 8760) -> Optional[str
         return None
 
 
-def construct_blob_url(barcode_id: int) -> Optional[str]:
+def construct_blob_url(barcode_id: int, **kwargs) -> Optional[str]:
     """
     Construct the blob URL for a barcode label before Azure uploads it.
     This matches the pattern used in Azure Function: {folder}barcode-{barcode_id}.png
@@ -121,7 +121,9 @@ def construct_blob_url(barcode_id: int) -> Optional[str]:
         return None
     
     # Construct blob name (matches Azure Function pattern)
-    filename = f"barcode-{barcode_id}.png"
+    # Default prefix is 'barcode-', but can be overridden (e.g., 'barcode-repair-')
+    prefix = kwargs.get('prefix', 'barcode')
+    filename = f"{prefix}-{barcode_id}.png"
     blob_name = f"{AZURE_BLOB_FOLDER}{filename}"
     
     # URL encode the blob name, but keep forward slashes (they're path separators in Azure)
@@ -318,7 +320,10 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
     
     for item in barcodes_data:
         barcode_id = item['barcode_id']
-        blob_url = construct_blob_url(barcode_id)
+        barcode_type = item.get('barcode_type', 'product')
+        prefix = 'barcode-repair' if barcode_type == 'repair' else 'barcode'
+        
+        blob_url = construct_blob_url(barcode_id, prefix=prefix)
         blob_urls[barcode_id] = blob_url
         
         # Format purchase_date to dd-mm-yyyy if present

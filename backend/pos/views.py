@@ -220,14 +220,22 @@ def generate_repair_label(request, pk):
         from backend.catalog.azure_label_service import queue_bulk_label_generation_via_azure, construct_blob_url
         
         # Prepare data in the same format as products
+        # Logic: User requested amount in barcode_value.
+        # We pack tracking ID and Work Desc into product_name.
+        
+        amount_value = str(repair.booking_amount) if repair.booking_amount else "0.00"
+        display_name = f"Rs.{amount_value} | {repair.description[:30]}"
+
         repair_data = [{
-            'product_name': label_name,
-            'barcode_value': repair_barcode.split('-')[-1],
-            'short_code': None,  # Repairs don't have short codes
-            'barcode_id': repair.id,  # Use repair.id as identifier (Azure will create repair-{id}.png)
-            'vendor_name': customer_name[:20] if customer_name else None,
+            'product_name': display_name[:50],  # Tracking ID + Work Desc
+            'barcode_value': repair_barcode.split('-')[-1],       # AMOUNT AS BARCODE
+            'short_code': None,                  # Only one of barcode_value or short_code
+            'barcode_id': repair.id,
+            'vendor_name': f"{customer_name[:20]} | {repair.model_name}" if customer_name else repair.model_name,
             'purchase_date': created_date,
-            'serial_number': contact_no[:10] if contact_no else None
+            'serial_number': contact_no[:10] if contact_no else None,
+            'font_size_text':'15',
+            'barcode_type':'repair'
         }]
         
         # Queue via Azure Function (returns blob URLs immediately)
@@ -258,35 +266,10 @@ def generate_repair_label(request, pk):
     except Exception as azure_error:
         # Fallback to local generation (same as products)
         logger.info(f"Falling back to local label generation for repair {repair.id}: {str(azure_error)}")
-        try:
-            label_image = generate_label_image(
-                product_name=label_name,
-                barcode_value=repair_barcode,
-                sku=repair_barcode,
-                vendor_name=customer_name[:20] if customer_name else None,
-                purchase_date=created_date,
-                serial_number=contact_no[:10] if contact_no else None
-            )
-            
-            # Save label image to repair model (base64 data URL)
-            repair.label_image = label_image
-            repair.save(update_fields=['label_image', 'updated_at'])
-            
-            return Response({
-                'success': True,
-                'label': {
-                    'barcode': repair_barcode,
-                    'image': label_image,  # Base64 data URL
-                    'invoice_number': invoice_number,
-                    'repair_id': repair.id
-                }
-            })
-        except Exception as e:
-            logger.error(f"Failed to generate repair label locally: {str(e)}")
-            return Response(
-                {'error': 'Failed to generate label', 'message': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        return Response(
+            {'error': 'Failed to generate label', 'message': str(azure_error)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 def reduce_stock_for_cart_item(product, variant_id, store, quantity_to_reduce):
@@ -1921,7 +1904,15 @@ def cart_checkout(request, pk):
     """Checkout a cart - create invoice with invoice_type and update stock"""
     cart = get_object_or_404(Cart, pk=pk)
     
-    if not cart.items.exists():
+    # Determine if it's a repair shop first to allow empty carts for bookings
+    is_repair_shop = False
+    if cart.store:
+        cart.store.refresh_from_db()
+        shop_type = cart.store.shop_type.lower() if cart.store.shop_type else None
+        is_repair_shop = (shop_type == 'repair')
+    
+    # Empty cart check - allow empty carts ONLY for repair shops (bookings)
+    if not cart.items.exists() and not is_repair_shop:
         return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
     
     # Get invoice_type from request or use cart's invoice_type
@@ -1962,24 +1953,12 @@ def cart_checkout(request, pk):
                 'items_without_price': items_without_price
             }, status=status.HTTP_400_BAD_REQUEST)
     
-    # Check if store is a repair shop - validate repair fields BEFORE creating invoice
-    # Use lowercase 'repair' as per model
-    # Refresh store from database to ensure we have the latest shop_type
-    if cart.store:
-        cart.store.refresh_from_db()
-        # Normalize shop_type to lowercase for comparison (handle case variations)
-        shop_type = cart.store.shop_type.lower() if cart.store.shop_type else None
-    else:
-        shop_type = None
-    
-    is_repair_shop = shop_type == 'repair'
-    
     # Debug logging to help diagnose issues
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"Checkout: cart_id={cart.id}, store_id={cart.store.id if cart.store else None}, "
                 f"store_name={cart.store.name if cart.store else None}, "
-                f"shop_type={shop_type}, "
+                f"shop_type={cart.store.shop_type if cart.store else None}, "
                 f"is_repair_shop={is_repair_shop}, invoice_type={invoice_type}")
     
     # For repair shops, validate repair fields regardless of invoice_type
@@ -1987,6 +1966,7 @@ def cart_checkout(request, pk):
     # Also check if repair data is being sent (frontend might have switched stores)
     repair_contact_no = request.data.get('repair_contact_no', '').strip()
     repair_model_name = request.data.get('repair_model_name', '').strip()
+    repair_description = request.data.get('repair_description', '').strip()
     repair_booking_amount = request.data.get('repair_booking_amount', None)
     
     # Only treat as repair shop if:
@@ -2076,6 +2056,7 @@ def cart_checkout(request, pk):
                 invoice=invoice,
                 contact_no=repair_contact_no,
                 model_name=repair_model_name,
+                description=repair_description,
                 booking_amount=booking_amount_decimal,
                 status='received',
                 barcode=repair_barcode
@@ -4022,6 +4003,7 @@ def replacement_replace(request):
     store_id = request.data.get('store_id')
     new_unit_price = request.data.get('new_unit_price')  # Optional: new price for replacement product
     manual_unit_price = request.data.get('manual_unit_price')  # Optional: manual override price
+    return_tag = request.data.get('return_tag', 'unknown')  # Optional: tag for returned item (returned, defective, unknown)
     
     if not invoice_item_id or not new_product_id:
         return Response({'error': 'Invoice item ID and new product ID are required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -4218,7 +4200,7 @@ def replacement_replace(request):
     # Return old barcode back to inventory (mark as 'unknown' and add to stock)
     if old_barcode:
         old_tag = old_barcode.tag
-        old_barcode.tag = 'unknown'
+        old_barcode.tag = return_tag
         old_barcode.save()
         
         # Audit log: Old barcode tag changed (sold -> unknown)
@@ -4231,7 +4213,7 @@ def replacement_replace(request):
             object_reference=invoice.invoice_number,
             barcode=old_barcode.barcode,
             changes={
-                'tag': {'old': old_tag, 'new': 'unknown'},
+                'tag': {'old': old_tag, 'new': return_tag},
                 'barcode': old_barcode.barcode,
                 'product_id': old_product.id,
                 'product_name': old_product.name,
@@ -4331,6 +4313,7 @@ def replacement_return(request):
     invoice_item_id = request.data.get('invoice_item_id')
     store_id = request.data.get('store_id')
     return_quantity = request.data.get('quantity', None)  # Optional: return partial quantity
+    return_tag = request.data.get('return_tag', 'unknown')  # Optional: tag for returned item (returned, defective, unknown)
     
     if not invoice_item_id:
         return Response({'error': 'Invoice item ID is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -4483,9 +4466,9 @@ def replacement_return(request):
     
     invoice.save()
     
-    # Return barcode back to inventory (mark as 'unknown')
+    # Return barcode back to inventory (use provided return_tag)
     if barcode_obj:
-        barcode_obj.tag = 'unknown'
+        barcode_obj.tag = return_tag
         barcode_obj.save()
     
     # Add product back to inventory (if track_inventory is enabled)
@@ -4515,6 +4498,7 @@ def replacement_return(request):
         object_reference=invoice.invoice_number,
         barcode=barcode_obj.barcode if barcode_obj else None,
         changes={
+            'tag': return_tag,
             'invoice_id': invoice.id,
             'invoice_number': invoice.invoice_number,
             'product_id': product.id,
@@ -5291,13 +5275,13 @@ def replacement_credit_note(request, invoice_id):
                     'remaining_quantity': str(remaining_quantity)
                 })
             
-            # Return barcode back to inventory (mark as 'unknown' and add to stock)
+            # Return barcode back to inventory (use provided status or default unknown)
             if barcode_obj:
                 old_tag = barcode_obj.tag
-                barcode_obj.tag = 'unknown'
+                barcode_obj.tag = item_data.get('status', 'unknown')
                 barcode_obj.save()
                 
-                # Audit log: Barcode tag changed (sold -> unknown)
+                # Audit log: Barcode tag changed (sold -> updated status)
                 create_audit_log(
                     request=request,
                     action='barcode_tag_change',
@@ -5307,7 +5291,7 @@ def replacement_credit_note(request, invoice_id):
                     object_reference=invoice.invoice_number,
                     barcode=barcode_obj.barcode,
                     changes={
-                        'tag': {'old': old_tag, 'new': 'unknown'},
+                        'tag': {'old': old_tag, 'new': barcode_obj.tag},
                         'barcode': barcode_obj.barcode,
                         'product_id': product.id,
                         'product_name': product.name,
@@ -5315,7 +5299,7 @@ def replacement_credit_note(request, invoice_id):
                         'invoice_number': invoice.invoice_number,
                         'invoice_item_id': invoice_item.id if total_replaced < original_quantity else 'deleted',
                         'quantity': str(quantity),
-                        'reason': 'Credit note replacement - marked as unknown',
+                        'reason': f'Credit note replacement - marked as {barcode_obj.tag}',
                     }
                 )
             

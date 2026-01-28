@@ -6,9 +6,9 @@ import type { Toast } from '../../components/ui/Toast';
 import RepairStatusModal from './RepairStatusModal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
-import { 
-  Wrench, 
-  Search, 
+import {
+  Wrench,
+  Search,
   Filter,
   Eye,
   Phone,
@@ -44,6 +44,8 @@ interface RepairInvoice {
   store_name?: string;
   customer: number | null;
   customer_name: string | null;
+  customer_group_name?: string;
+  invoice_type: string;
   created_at: string;
   total: string;
   status?: 'draft' | 'paid' | 'partial' | 'credit' | 'void';
@@ -296,6 +298,9 @@ export default function Repairs() {
     );
   });
 
+  const repairGroupInvoices = filteredRepairs.filter(inv => inv.customer_group_name === 'REPAIR');
+  const otherGroupInvoices = filteredRepairs.filter(inv => inv.customer_group_name !== 'REPAIR');
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-IN', {
@@ -543,7 +548,7 @@ export default function Repairs() {
                     <div>
                       <span className="text-gray-600 block text-xs">Booking Amount</span>
                       <span className="font-medium">
-                        {selectedInvoice.repair.booking_amount 
+                        {selectedInvoice.repair.booking_amount
                           ? `₹${parseFloat(selectedInvoice.repair.booking_amount).toFixed(2)}`
                           : 'N/A'}
                       </span>
@@ -593,6 +598,26 @@ export default function Repairs() {
         </div>
       </Card>
 
+      {/* Color Legend */}
+      <div className="flex flex-wrap gap-4 px-2 py-1">
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-blue-100 border border-blue-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Cash Sale</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-emerald-100 border border-emerald-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">UPI Payment</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-amber-100 border border-amber-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Pending / Credit</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-purple-100 border border-purple-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Repair Service</span>
+        </div>
+      </div>
+
       {/* Repairs Table */}
       {filteredRepairs.length === 0 ? (
         <Card>
@@ -603,207 +628,234 @@ export default function Repairs() {
           />
         </Card>
       ) : (
-        <>
-          {/* Desktop Table View */}
-          <div className="hidden md:block">
-            <Table headers={[
-              { label: 'Invoice #', align: 'left' },
-              { label: 'Date', align: 'left' },
-              { label: 'Customer', align: 'left' },
-              { label: 'Contact', align: 'left' },
-              { label: 'Model', align: 'left' },
-              { label: 'Status', align: 'left' },
-              { label: 'Barcode', align: 'left' },
-              { label: '', align: 'right' },
-            ]}>
-              {filteredRepairs.map((invoice) => {
-                return (
-                  <TableRow
-                    key={invoice.id}
-                    className="cursor-pointer"
-                  >
-                    <TableCell>
-                      <span 
-                        className="font-mono font-semibold text-gray-900 cursor-pointer hover:text-blue-600"
-                        onClick={() => navigate(`/invoices/${invoice.id}`)}
+        <div className="space-y-8">
+          {[
+            { title: 'Repair Group Customers', items: repairGroupInvoices },
+            { title: 'Other Group Customers', items: otherGroupInvoices }
+          ].map((group, groupIdx) => group.items.length > 0 && (
+            <div key={groupIdx} className="space-y-4">
+              <div className="flex items-center gap-3 px-2">
+                <div className={`h-8 w-1.5 rounded-full ${groupIdx === 0 ? 'bg-blue-600' : 'bg-gray-400'}`}></div>
+                <h2 className="text-xl font-bold text-gray-900">{group.title}</h2>
+                <Badge variant="outline" className="ml-2 font-mono">
+                  {group.items.length}
+                </Badge>
+              </div>
+
+              {/* Desktop Table View */}
+              <div className="hidden md:block">
+                <Table headers={[
+                  { label: 'Invoice #', align: 'left' },
+                  { label: 'Date', align: 'left' },
+                  { label: 'Customer', align: 'left' },
+                  { label: 'Contact', align: 'left' },
+                  { label: 'Model', align: 'left' },
+                  { label: 'Status', align: 'left' },
+                  { label: 'Invoice Type', align: 'left' },
+                  { label: '', align: 'right' },
+                ]}>
+                  {group.items.map((invoice) => {
+                    const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
+                      invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
+                        invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
+                          invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/50' : '';
+
+                    return (
+                      <TableRow
+                        key={invoice.id}
+                        className={`cursor-pointer transition-colors ${statusColor} hover:opacity-80`}
                       >
-                        {invoice.invoice_number}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-gray-600">
-                        {formatDate(invoice.created_at)}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <User className="h-4 w-4 text-gray-400" />
-                        <span className="text-gray-900">
-                          {invoice.customer_name || 'Walk-in Customer'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Phone className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="text-gray-600 text-sm">
-                          {invoice.repair?.contact_no || 'N/A'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Package className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="text-gray-600 text-sm">
-                          {invoice.repair?.model_name || 'N/A'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {invoice.repair ? getStatusBadge(invoice.repair.status) : 'N/A'}
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs text-gray-600">
-                        {invoice.repair?.barcode || 'N/A'}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (invoice.repair) {
-                              handleOpenStatusModal(invoice);
-                            } else {
-                              showToast('This invoice does not have a repair record', 'error');
-                            }
-                          }}
-                          className="gap-1.5"
-                          disabled={!invoice.repair}
-                        >
-                          <Edit className="h-4 w-4 flex-shrink-0" />
-                          <span>Update Status</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handlePrintRepairLabel(invoice);
-                          }}
-                          className="gap-1.5"
-                          disabled={!invoice.repair || generateLabelMutation.isPending}
-                          title="Print Repair Barcode Label"
-                        >
-                          <Printer className="h-4 w-4 flex-shrink-0" />
-                          <span>Print Label</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/invoices/${invoice.id}`);
-                          }}
-                          className="gap-1.5"
-                        >
-                          <Eye className="h-4 w-4 flex-shrink-0" />
-                          <span>View</span>
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </Table>
-          </div>
-          {/* Mobile Card View */}
-          <div className="md:hidden space-y-3">
-            {filteredRepairs.map((invoice) => {
-              return (
-                <div
-                  key={invoice.id}
-                  onClick={() => navigate(`/invoices/${invoice.id}`)}
-                  className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                >
-                  <div className="p-4">
-                    <div className="mb-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Wrench className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                        <span className="font-mono font-semibold text-gray-900 text-base">
-                          {invoice.invoice_number}
-                        </span>
-                      </div>
-                      <div className="text-sm text-gray-600 mb-1">
-                        {formatDate(invoice.created_at)}
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                        <User className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="truncate">
-                          {invoice.customer_name || 'Walk-in Customer'}
-                        </span>
-                      </div>
-                      {invoice.repair && (
-                        <>
-                          <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
+                        <TableCell>
+                          <span
+                            className="font-mono font-semibold text-gray-900 cursor-pointer hover:text-blue-600"
+                            onClick={() => navigate(`/invoices/${invoice.id}`)}
+                          >
+                            {invoice.invoice_number.split('-').pop()}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-gray-600">
+                            {formatDate(invoice.created_at)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <User className="h-4 w-4 text-gray-400" />
+                            <span className="text-gray-900">
+                              {invoice.customer_name || 'Walk-in Customer'}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
                             <Phone className="h-3.5 w-3.5 text-gray-400" />
-                            <span>{invoice.repair.contact_no}</span>
+                            <span className="text-gray-600 text-sm">
+                              {invoice.repair?.contact_no || 'N/A'}
+                            </span>
                           </div>
-                          <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
                             <Package className="h-3.5 w-3.5 text-gray-400" />
-                            <span>{invoice.repair.model_name}</span>
+                            <span className="text-gray-600 text-sm">
+                              {invoice.repair?.model_name || 'N/A'}
+                            </span>
                           </div>
-                          <div className="mt-1 mb-1">
-                            {getStatusBadge(invoice.repair.status)}
+                        </TableCell>
+                        <TableCell>
+                          {invoice.repair ? getStatusBadge(invoice.repair.status) : 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="uppercase text-[10px] font-bold tracking-wider">
+                            {invoice.invoice_type}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (invoice.repair) {
+                                  handleOpenStatusModal(invoice);
+                                } else {
+                                  showToast('This invoice does not have a repair record', 'error');
+                                }
+                              }}
+                              className="gap-1.5"
+                              disabled={!invoice.repair}
+                            >
+                              <Edit className="h-4 w-4 flex-shrink-0" />
+                              <span>Update Status</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePrintRepairLabel(invoice);
+                              }}
+                              className="gap-1.5"
+                              disabled={!invoice.repair || generateLabelMutation.isPending}
+                              title="Print Repair Barcode Label"
+                            >
+                              <Printer className="h-4 w-4 flex-shrink-0" />
+                              <span>Print Label</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/invoices/${invoice.id}`);
+                              }}
+                              className="gap-1.5"
+                            >
+                              <Eye className="h-4 w-4 flex-shrink-0" />
+                              <span>View</span>
+                            </Button>
                           </div>
-                          <div className="text-xs text-gray-500 font-mono">
-                            Barcode: {invoice.repair.barcode}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </Table>
+              </div>
+
+              {/* Mobile Card View */}
+              <div className="md:hidden space-y-3">
+                {group.items.map((invoice) => {
+                  const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
+                    invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
+                      invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
+                        invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/70 border-purple-100' :
+                          'bg-gray-50/70 border-gray-100';
+
+                  return (
+                    <div
+                      key={invoice.id}
+                      onClick={() => navigate(`/invoices/${invoice.id}`)}
+                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor}`}
+                    >
+                      <div className="p-4">
+                        <div className="mb-3">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <Wrench className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                              <span className="font-mono font-semibold text-gray-900 text-base">
+                                {invoice.invoice_number.split('-').pop()}
+                              </span>
+                            </div>
+                            <Badge variant="outline" className="uppercase text-[9px] font-bold">
+                              {invoice.invoice_type}
+                            </Badge>
                           </div>
-                        </>
-                      )}
+                          <div className="text-sm text-gray-600 mb-1">
+                            {formatDate(invoice.created_at)}
+                          </div>
+                          <div className="flex items-center gap-2 text-sm text-gray-900 font-medium mb-1">
+                            <User className="h-3.5 w-3.5 text-gray-400" />
+                            <span className="truncate">
+                              {invoice.customer_name || 'Walk-in Customer'}
+                            </span>
+                          </div>
+                          {invoice.repair && (
+                            <>
+                              <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
+                                <Phone className="h-3.5 w-3.5 text-gray-400" />
+                                <span>{invoice.repair.contact_no}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
+                                <Package className="h-3.5 w-3.5 text-gray-400" />
+                                <span>{invoice.repair.model_name}</span>
+                              </div>
+                              <div className="mt-2">
+                                {getStatusBadge(invoice.repair.status)}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        <div className="pt-3 border-t border-black/5 mt-2 space-y-2">
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (invoice.repair) {
+                                handleOpenStatusModal(invoice);
+                              } else {
+                                showToast('This invoice does not have a repair record', 'error');
+                              }
+                            }}
+                            className="w-full gap-1.5"
+                            disabled={!invoice.repair}
+                          >
+                            <Edit className="h-4 w-4 flex-shrink-0" />
+                            <span>Update Status</span>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePrintRepairLabel(invoice);
+                            }}
+                            className="w-full gap-1.5"
+                            disabled={!invoice.repair || generateLabelMutation.isPending}
+                          >
+                            <Printer className="h-4 w-4 flex-shrink-0" />
+                            <span>Print Label</span>
+                          </Button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="pt-2 border-t mt-2 space-y-2">
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (invoice.repair) {
-                            handleOpenStatusModal(invoice);
-                          } else {
-                            showToast('This invoice does not have a repair record', 'error');
-                          }
-                        }}
-                        className="w-full gap-1.5"
-                        disabled={!invoice.repair}
-                        title={invoice.repair ? 'Update repair status' : 'No repair record available'}
-                      >
-                        <Edit className="h-4 w-4 flex-shrink-0" />
-                        <span>Update Status</span>
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handlePrintRepairLabel(invoice);
-                        }}
-                        className="w-full gap-1.5"
-                        disabled={!invoice.repair || generateLabelMutation.isPending}
-                        title="Print Repair Barcode Label"
-                      >
-                        <Printer className="h-4 w-4 flex-shrink-0" />
-                        <span>Print Label</span>
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Status Update Modal */}

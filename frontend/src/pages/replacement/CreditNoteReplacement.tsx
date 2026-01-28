@@ -40,6 +40,7 @@ export default function CreditNoteReplacement() {
   const navigate = useNavigate();
   const [searchValue, setSearchValue] = useState('');
   const [selectedItems, setSelectedItems] = useState<Record<number, number>>({}); // item_id -> quantity
+  const [itemTags, setItemTags] = useState<Record<number, 'returned' | 'defective' | 'unknown'>>({}); // item_id -> status
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [showScanner, setShowScanner] = useState(false);
@@ -82,7 +83,7 @@ export default function CreditNoteReplacement() {
       if (!searchValue.trim()) return null;
       try {
         const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(searchValue.trim()) && searchValue.trim().length >= 3;
-        
+
         const response = await posApi.replacement.findInvoiceByBarcode({
           barcode: isInvoiceNumber ? undefined : searchValue.trim(),
           sku: isInvoiceNumber ? undefined : searchValue.trim(),
@@ -93,11 +94,11 @@ export default function CreditNoteReplacement() {
           setSearchError(null);
           const initialSelected: Record<number, number> = {};
           const searchBarcode = searchValue.trim().toUpperCase();
-          
+
           response.data.invoice.items.forEach((item: InvoiceItem) => {
             const itemBarcode = item.barcode_value?.toUpperCase() || '';
             const itemSku = item.product_sku?.toUpperCase() || '';
-            
+
             if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
               initialSelected[item.id] = Math.min(1, item.available_quantity);
             } else {
@@ -105,6 +106,13 @@ export default function CreditNoteReplacement() {
             }
           });
           setSelectedItems(initialSelected);
+
+          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+          response.data.invoice.items.forEach((item: InvoiceItem) => {
+            initialTags[item.id] = 'unknown';
+          });
+          setItemTags(initialTags);
+
           return response.data;
         }
         return null;
@@ -121,7 +129,7 @@ export default function CreditNoteReplacement() {
 
   // Process credit note mutation
   const processCreditNoteMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; items_to_replace: Array<{ item_id: number; quantity: number }>; store_id?: number; notes?: string }) => {
+    mutationFn: async (data: { invoice_id: number; items_to_replace: Array<{ item_id: number; quantity: number; status: string }>; store_id?: number; notes?: string }) => {
       return await posApi.replacement.creditNote(data.invoice_id, {
         items_to_replace: data.items_to_replace,
         store_id: data.store_id,
@@ -156,12 +164,18 @@ export default function CreditNoteReplacement() {
     setShowInvoiceDropdown(false);
     setInvoice(selectedInvoice);
     setSearchError(null);
-    
+
     const initialSelected: Record<number, number> = {};
     selectedInvoice.items.forEach((item: InvoiceItem) => {
       initialSelected[item.id] = 0;
     });
     setSelectedItems(initialSelected);
+
+    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+    selectedInvoice.items.forEach((item: InvoiceItem) => {
+      initialTags[item.id] = 'unknown';
+    });
+    setItemTags(initialTags);
   };
 
   const handleBarcodeScan = (barcode: string) => {
@@ -183,6 +197,21 @@ export default function CreditNoteReplacement() {
         return { ...prev, [itemId]: 0 };
       }
     });
+
+    // Ensure tag is initialized if not already
+    setItemTags(prev => {
+      if (!prev[itemId]) {
+        return { ...prev, [itemId]: 'unknown' };
+      }
+      return prev;
+    });
+  };
+
+  const handleReturnTagChange = (itemId: number, tag: 'returned' | 'defective' | 'unknown') => {
+    setItemTags(prev => ({
+      ...prev,
+      [itemId]: tag,
+    }));
   };
 
   const handleQuantityChange = (itemId: number, value: string, maxQuantity: number) => {
@@ -199,12 +228,15 @@ export default function CreditNoteReplacement() {
   const handleProcessCreditNote = () => {
     if (!invoice) return;
 
-    const items_to_replace: Array<{ item_id: number; quantity: number }> = [];
-    Object.entries(selectedItems).forEach(([itemId, quantity]) => {
-      if (quantity > 0) {
+    const items_to_replace: Array<{ item_id: number; quantity: number; status: string }> = [];
+    Object.entries(selectedItems).forEach(([itemIdStr, quantity]) => {
+      const quantityNum = Number(quantity);
+      if (quantityNum > 0) {
+        const itemId = parseInt(itemIdStr);
         items_to_replace.push({
-          item_id: parseInt(itemId),
-          quantity: quantity,
+          item_id: itemId,
+          quantity: quantityNum,
+          status: itemTags[itemId] || 'unknown',
         });
       }
     });
@@ -230,6 +262,7 @@ export default function CreditNoteReplacement() {
     setSearchValue('');
     setInvoice(null);
     setSelectedItems({});
+    setItemTags({});
     setNotes('');
     setSearchError(null);
     if (searchInputRef.current) {
@@ -238,18 +271,19 @@ export default function CreditNoteReplacement() {
   };
 
   const hasSelectedItems = Object.values(selectedItems).some(qty => qty > 0);
-  const totalItemsToReturn = Object.values(selectedItems).reduce((sum, qty) => sum + qty, 0);
+  const totalItemsToReturn = Object.values(selectedItems).reduce((sum, qty) => sum + Number(qty), 0);
 
   // Calculate estimated credit amount
   const estimatedCreditAmount = invoice ? Object.entries(selectedItems).reduce((sum, [itemId, quantity]) => {
-    if (quantity > 0) {
+    const quantityNum = Number(quantity);
+    if (quantityNum > 0) {
       const item = invoice.items.find(i => i.id === parseInt(itemId));
       if (item) {
         const lineTotal = parseFloat(item.line_total) || 0;
         const itemQuantity = parseFloat(item.quantity) || 1;
         // Use line_total / quantity for accurate per-unit price (accounts for discounts/taxes)
         const pricePerUnit = itemQuantity > 0 ? lineTotal / itemQuantity : parseFloat(item.manual_unit_price || item.unit_price || '0');
-        return sum + (pricePerUnit * quantity);
+        return sum + (pricePerUnit * quantityNum);
       }
     }
     return sum;
@@ -268,7 +302,7 @@ export default function CreditNoteReplacement() {
         </Button>
         <h1 className="text-2xl font-bold text-gray-900">Credit Note Replacement</h1>
       </div>
-      
+
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <div className="flex items-start gap-2">
           <Receipt className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
@@ -424,9 +458,8 @@ export default function CreditNoteReplacement() {
                     return (
                       <div
                         key={item.id}
-                        className={`p-3 hover:bg-gray-50 transition-colors ${
-                          isSelected ? 'bg-blue-50' : ''
-                        }`}
+                        className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''
+                          }`}
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 flex items-start gap-3">
@@ -451,7 +484,41 @@ export default function CreditNoteReplacement() {
                             </div>
                           </div>
                           {isSelected && (
-                            <div className="flex flex-col items-end gap-2">
+                            <div className="flex flex-col items-end gap-3">
+                              {/* Return Condition (Traffic Signals) */}
+                              <div className="flex items-center gap-2 mb-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'returned')}
+                                  className={`w-5 h-5 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'returned'
+                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-green-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Returned (Good condition)"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'defective')}
+                                  className={`w-5 h-5 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'defective'
+                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-red-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Defective"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'unknown')}
+                                  className={`w-5 h-5 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'unknown'
+                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Unknown (Default)"
+                                />
+                                <span className="text-[10px] font-bold text-gray-500 capitalize min-w-[50px]">
+                                  {itemTags[item.id] || 'unknown'}
+                                </span>
+                              </div>
+
                               <div className="flex items-center gap-2">
                                 <Button
                                   variant="outline"
@@ -543,9 +610,9 @@ export default function CreditNoteReplacement() {
 
               {/* Actions */}
               <div className="flex gap-2 justify-end pt-2 border-t">
-                <Button 
-                  variant="outline" 
-                  onClick={handleReset} 
+                <Button
+                  variant="outline"
+                  onClick={handleReset}
                   disabled={processCreditNoteMutation.isPending}
                 >
                   Reset

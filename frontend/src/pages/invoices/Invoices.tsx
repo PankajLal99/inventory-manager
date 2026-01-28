@@ -334,6 +334,26 @@ export default function Invoices() {
         </div>
       </Card>
 
+      {/* Color Legend */}
+      <div className="flex flex-wrap gap-4 px-2 py-1">
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-blue-100 border border-blue-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Cash Sale</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-emerald-100 border border-emerald-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">UPI Payment</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-amber-100 border border-amber-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Pending / Credit</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-purple-100 border border-purple-200"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Repair Service</span>
+        </div>
+      </div>
+
       {/* Invoices Table */}
       {filteredInvoices.length === 0 ? (
         <Card>
@@ -361,7 +381,11 @@ export default function Invoices() {
                   <TableRow
                     key={invoice.id}
                     onClick={() => navigate(`/invoices/${invoice.id}`)}
-                    className="cursor-pointer"
+                    className={`cursor-pointer transition-colors hover:opacity-80 ${invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
+                      invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
+                        invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
+                          invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/50' : ''
+                      }`}
                   >
                     <TableCell>
                       <span className="font-mono font-semibold text-gray-900">
@@ -425,7 +449,12 @@ export default function Invoices() {
                 <div
                   key={invoice.id}
                   onClick={() => navigate(`/invoices/${invoice.id}`)}
-                  className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                  className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
+                    invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
+                      invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
+                        invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/70 border-purple-100' :
+                          'bg-white border-gray-200'
+                    }`}
                 >
                   <div className="p-4">
                     <div className="mb-3">

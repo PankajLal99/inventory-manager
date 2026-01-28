@@ -40,6 +40,7 @@ export default function ReturnToStock() {
   const navigate = useNavigate();
   const [searchValue, setSearchValue] = useState('');
   const [selectedItems, setSelectedItems] = useState<Record<number, number>>({}); // item_id -> quantity to return
+  const [itemTags, setItemTags] = useState<Record<number, 'returned' | 'defective' | 'unknown'>>({}); // item_id -> return status
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [showScanner, setShowScanner] = useState(false);
@@ -81,7 +82,7 @@ export default function ReturnToStock() {
       if (!searchValue.trim()) return null;
       try {
         const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(searchValue.trim()) && searchValue.trim().length >= 3;
-        
+
         const response = await posApi.replacement.findInvoiceByBarcode({
           barcode: isInvoiceNumber ? undefined : searchValue.trim(),
           sku: isInvoiceNumber ? undefined : searchValue.trim(),
@@ -92,11 +93,11 @@ export default function ReturnToStock() {
           setSearchError(null);
           const initialSelected: Record<number, number> = {};
           const searchBarcode = searchValue.trim().toUpperCase();
-          
+
           response.data.invoice.items.forEach((item: InvoiceItem) => {
             const itemBarcode = item.barcode_value?.toUpperCase() || '';
             const itemSku = item.product_sku?.toUpperCase() || '';
-            
+
             if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
               initialSelected[item.id] = Math.min(1, item.available_quantity);
             } else {
@@ -104,6 +105,13 @@ export default function ReturnToStock() {
             }
           });
           setSelectedItems(initialSelected);
+
+          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+          response.data.invoice.items.forEach((item: InvoiceItem) => {
+            initialTags[item.id] = 'unknown';
+          });
+          setItemTags(initialTags);
+
           return response.data;
         }
         return null;
@@ -120,7 +128,7 @@ export default function ReturnToStock() {
 
   // Process return mutation
   const processReturnMutation = useMutation({
-    mutationFn: async (data: { invoice_item_id: number; quantity: number; store_id?: number }) => {
+    mutationFn: async (data: { invoice_item_id: number; quantity: number; store_id?: number; return_tag?: string }) => {
       return await posApi.replacement.return(data);
     },
     onSuccess: () => {
@@ -146,12 +154,18 @@ export default function ReturnToStock() {
     setShowInvoiceDropdown(false);
     setInvoice(selectedInvoice);
     setSearchError(null);
-    
+
     const initialSelected: Record<number, number> = {};
     selectedInvoice.items.forEach((item: InvoiceItem) => {
       initialSelected[item.id] = 0;
     });
     setSelectedItems(initialSelected);
+
+    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+    selectedInvoice.items.forEach((item: InvoiceItem) => {
+      initialTags[item.id] = 'unknown';
+    });
+    setItemTags(initialTags);
   };
 
   const handleBarcodeScan = (barcode: string) => {
@@ -173,6 +187,21 @@ export default function ReturnToStock() {
         return { ...prev, [itemId]: 0 };
       }
     });
+
+    // Ensure tag is initialized
+    setItemTags(prev => {
+      if (!prev[itemId]) {
+        return { ...prev, [itemId]: 'unknown' };
+      }
+      return prev;
+    });
+  };
+
+  const handleReturnTagChange = (itemId: number, tag: 'returned' | 'defective' | 'unknown') => {
+    setItemTags(prev => ({
+      ...prev,
+      [itemId]: tag,
+    }));
   };
 
   const handleQuantityChange = (itemId: number, value: string, maxQuantity: number) => {
@@ -189,13 +218,16 @@ export default function ReturnToStock() {
   const handleProcessReturn = async () => {
     if (!invoice) return;
 
-    const itemsToReturn: Array<{ invoice_item_id: number; quantity: number; store_id?: number }> = [];
-    Object.entries(selectedItems).forEach(([itemId, quantity]) => {
-      if (quantity > 0) {
+    const itemsToReturn: Array<{ invoice_item_id: number; quantity: number; store_id?: number; return_tag: string }> = [];
+    Object.entries(selectedItems).forEach(([itemIdStr, quantity]) => {
+      const quantityNum = Number(quantity);
+      if (quantityNum > 0) {
+        const itemId = parseInt(itemIdStr);
         itemsToReturn.push({
-          invoice_item_id: parseInt(itemId),
-          quantity: quantity,
+          invoice_item_id: itemId,
+          quantity: quantityNum,
           store_id: invoice.store,
+          return_tag: itemTags[itemId] || 'unknown',
         });
       }
     });
@@ -231,6 +263,7 @@ export default function ReturnToStock() {
     setSearchValue('');
     setInvoice(null);
     setSelectedItems({});
+    setItemTags({});
     setSearchError(null);
     if (searchInputRef.current) {
       searchInputRef.current.focus();
@@ -238,18 +271,19 @@ export default function ReturnToStock() {
   };
 
   const hasSelectedItems = Object.values(selectedItems).some(qty => qty > 0);
-  const totalItemsToReturn = Object.values(selectedItems).reduce((sum, qty) => sum + qty, 0);
+  const totalItemsToReturn = Object.values(selectedItems).reduce((sum, qty) => sum + Number(qty), 0);
 
   // Calculate estimated refund amount
   const estimatedRefundAmount = invoice ? Object.entries(selectedItems).reduce((sum, [itemId, quantity]) => {
-    if (quantity > 0) {
+    const quantityNum = Number(quantity);
+    if (quantityNum > 0) {
       const item = invoice.items.find(i => i.id === parseInt(itemId));
       if (item) {
         const lineTotal = parseFloat(item.line_total) || 0;
         const itemQuantity = parseFloat(item.quantity) || 1;
         // Use line_total / quantity for accurate per-unit price (accounts for discounts/taxes)
         const pricePerUnit = itemQuantity > 0 ? lineTotal / itemQuantity : parseFloat(item.manual_unit_price || item.unit_price || '0');
-        return sum + (pricePerUnit * quantity);
+        return sum + (pricePerUnit * quantityNum);
       }
     }
     return sum;
@@ -268,7 +302,7 @@ export default function ReturnToStock() {
         </Button>
         <h1 className="text-2xl font-bold text-gray-900">Return to Stock</h1>
       </div>
-      
+
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <div className="flex items-start gap-2">
           <AlertTriangle className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
@@ -424,9 +458,8 @@ export default function ReturnToStock() {
                     return (
                       <div
                         key={item.id}
-                        className={`p-3 hover:bg-gray-50 transition-colors ${
-                          isSelected ? 'bg-blue-50' : ''
-                        }`}
+                        className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''
+                          }`}
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 flex items-start gap-3">
@@ -451,7 +484,41 @@ export default function ReturnToStock() {
                             </div>
                           </div>
                           {isSelected && (
-                            <div className="flex flex-col items-end gap-2">
+                            <div className="flex flex-col items-end gap-3">
+                              {/* Return Condition (Traffic Signals) */}
+                              <div className="flex items-center gap-2 mb-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'returned')}
+                                  className={`w-5 h-5 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'returned'
+                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-green-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Returned (Good condition)"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'defective')}
+                                  className={`w-5 h-5 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'defective'
+                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-red-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Defective"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'unknown')}
+                                  className={`w-5 h-5 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'unknown'
+                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Unknown (Default)"
+                                />
+                                <span className="text-[10px] font-bold text-gray-500 capitalize min-w-[50px]">
+                                  {itemTags[item.id] || 'unknown'}
+                                </span>
+                              </div>
+
                               <div className="flex items-center gap-2">
                                 <Button
                                   variant="outline"
@@ -537,9 +604,9 @@ export default function ReturnToStock() {
 
               {/* Actions */}
               <div className="flex gap-2 justify-end pt-2 border-t">
-                <Button 
-                  variant="outline" 
-                  onClick={handleReset} 
+                <Button
+                  variant="outline"
+                  onClick={handleReset}
                   disabled={processReturnMutation.isPending}
                 >
                   Reset

@@ -43,6 +43,7 @@ interface ReplacementItem {
   new_unit_price?: number | null;
   manual_unit_price?: number | null;
   scanned_barcode?: string | null; // Store the exact barcode that was scanned/searched
+  return_tag: 'returned' | 'defective' | 'unknown';
 }
 
 export default function ReplaceProduct() {
@@ -153,6 +154,7 @@ export default function ReplaceProduct() {
                 new_product_id: null,
                 new_product_name: '',
                 quantity: Math.min(1, item.available_quantity),
+                return_tag: 'unknown',
               };
             }
           });
@@ -216,7 +218,7 @@ export default function ReplaceProduct() {
 
   // Process replacement mutation
   const processReplacementMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string }> }) => {
+    mutationFn: async (data: { invoice_id: number; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> }) => {
       const results = [];
       for (const replacement of data.replacements) {
         console.log('Calling API with:', replacement);
@@ -227,6 +229,7 @@ export default function ReplaceProduct() {
           new_unit_price: replacement.new_unit_price,
           manual_unit_price: replacement.manual_unit_price,
           scanned_barcode: replacement.scanned_barcode, // Pass the scanned barcode!
+          return_tag: replacement.return_tag,
         });
         results.push(result.data);
       }
@@ -288,6 +291,7 @@ export default function ReplaceProduct() {
             new_product_id: null,
             new_product_name: '',
             quantity: 1,
+            return_tag: 'unknown',
           }
         };
       }
@@ -372,6 +376,16 @@ export default function ReplaceProduct() {
     }
   };
 
+  const handleReturnTagChange = (itemId: number, tag: 'returned' | 'defective' | 'unknown') => {
+    setReplacements(prev => ({
+      ...prev,
+      [itemId]: {
+        ...prev[itemId],
+        return_tag: tag,
+      }
+    }));
+  };
+
   const handleProductSearchChange = (itemId: number, value: string) => {
     setProductSearch(prev => ({ ...prev, [itemId]: value }));
     setShowProductDropdown(prev => ({ ...prev, [itemId]: value.trim().length > 0 }));
@@ -434,7 +448,7 @@ export default function ReplaceProduct() {
     console.log('=== handleProcessReplacement START ===');
     console.log('All replacements:', replacements);
 
-    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string }> = [];
+    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag: string }> = [];
 
     Object.values(replacements).forEach(replacement => {
       console.log('Processing replacement:', replacement);
@@ -444,6 +458,7 @@ export default function ReplaceProduct() {
           invoice_item_id: replacement.item_id,
           new_product_id: replacement.new_product_id,
           store_id: invoice.store,
+          return_tag: replacement.return_tag,
         };
 
         // Include the scanned barcode if available
@@ -745,7 +760,47 @@ export default function ReplaceProduct() {
                         </div>
 
                         {isSelected && (
-                          <div className="mt-3 ml-7 space-y-3">
+                          <div className="mt-3 ml-7 space-y-4">
+                            {/* Return Condition (Traffic Signals) */}
+                            <div className="flex items-center gap-3 py-2 border-y border-gray-100">
+                              <span className="text-sm font-medium text-gray-700">Return Condition:</span>
+                              <div className="flex items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'returned')}
+                                  className={`w-6 h-6 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'returned'
+                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-green-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Returned (Good condition)"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'defective')}
+                                  className={`w-6 h-6 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'defective'
+                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-red-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Defective"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReturnTagChange(item.id, 'unknown')}
+                                  className={`w-6 h-6 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'unknown'
+                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-yellow-200'
+                                    : 'border-transparent opacity-30 hover:opacity-60'
+                                    }`}
+                                  title="Unknown (Default)"
+                                />
+                              </div>
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${replacement.return_tag === 'returned' ? 'text-green-700 bg-green-50' :
+                                replacement.return_tag === 'defective' ? 'text-red-700 bg-red-50' :
+                                  'text-yellow-700 bg-yellow-50'
+                                }`}>
+                                {replacement.return_tag}
+                              </span>
+                            </div>
+
                             {/* Quantity Selection */}
                             <div className="flex items-center gap-2">
                               <span className="text-sm text-gray-700">Quantity:</span>

@@ -17,6 +17,7 @@ import {
   LogOut,
   ShoppingBag,
   Search,
+  Plus,
   Bell,
   User,
   ChevronDown,
@@ -243,7 +244,7 @@ export default function Layout() {
       title: 'Core Operations',
       items: [
         { path: '/', icon: ShoppingCart, label: 'POS', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/pos-repair', icon: Wrench, label: 'Repair Shop', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
+        { path: '/pos-repair-new', icon: Plus, label: 'New Repair', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
         { path: '/search', icon: Search, label: 'Search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
         { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', showFor: ['Admin', 'RetailAdmin'] },
       ],

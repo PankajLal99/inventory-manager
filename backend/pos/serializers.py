@@ -150,7 +150,7 @@ class RepairSerializer(serializers.ModelSerializer):
         model = Repair
         fields = [
             'id', 'invoice', 'invoice_number', 'customer_name', 'store_name',
-            'contact_no', 'model_name', 'booking_amount', 'status', 'barcode',
+            'contact_no', 'model_name', 'description', 'booking_amount', 'status', 'barcode',
             'created_at', 'updated_at', 'updated_by'
         ]
         read_only_fields = ['barcode', 'created_at', 'updated_at']
@@ -160,13 +160,14 @@ class InvoiceSerializer(serializers.ModelSerializer):
     items = InvoiceItemSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True)
+    customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
 
     class Meta:
         model = Invoice
         fields = [
-            'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'status',
+            'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name', 'status',
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'paid_amount', 'due_amount',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'items', 'payments'
         ]

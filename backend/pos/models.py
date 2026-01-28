@@ -140,6 +140,7 @@ class Repair(models.Model):
     invoice = models.OneToOneField(Invoice, on_delete=models.CASCADE, related_name='repair', unique=True)
     contact_no = models.CharField(max_length=20, help_text='Contact number for repair')
     model_name = models.CharField(max_length=200, help_text='Device model name given for repair')
+    description = models.TextField(help_text='Description of the repair issue')
     booking_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Booking amount for repair')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='received', help_text='Repair status')
     barcode = models.CharField(max_length=100, unique=True, db_index=True, help_text='Barcode for tracking repair')

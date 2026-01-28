@@ -103,9 +103,9 @@ def get_customer_phone_cache_key(phone: str) -> str:
     return f"{CUSTOMER_PHONE_KEY_PREFIX}{phone}"
 
 
-def get_customer_list_cache_key(search_query: str = '') -> str:
+def get_customer_list_cache_key(search_query: str = '', customer_group: str = '') -> str:
     """Get cache key for customer list"""
-    return f"{CUSTOMER_LIST_KEY_PREFIX}{search_query or 'all'}"
+    return f"{CUSTOMER_LIST_KEY_PREFIX}{search_query or 'all'}:{customer_group or 'any'}"
 
 
 def cache_customer_data(customer_obj, ttl: int = None):
