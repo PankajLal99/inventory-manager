@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { posApi } from '../../lib/api';
-import { 
-  FileText, 
-  Search, 
+import { formatNumber } from '../../lib/utils';
+import {
+  FileText,
+  Search,
   Eye,
   Receipt,
   User,
@@ -51,12 +52,6 @@ export default function CreditNotes() {
 
   const creditNotes: CreditNote[] = data || [];
 
-  const formatCurrency = (amount: string | number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(parseFloat(String(amount || '0')));
-  };
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -164,7 +159,7 @@ export default function CreditNotes() {
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <DollarSign className="h-4 w-4 text-green-500" />
-                      <span className="font-semibold text-green-700">{formatCurrency(creditNote.amount)}</span>
+                      <span className="font-semibold text-green-700">₹{formatNumber(creditNote.amount)}</span>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -206,7 +201,7 @@ export default function CreditNotes() {
             <div className="text-right">
               <p className="text-sm text-gray-600">Total Credit Amount</p>
               <p className="text-2xl font-bold text-green-700">
-                {formatCurrency(
+                ₹{formatNumber(
                   filteredCreditNotes.reduce(
                     (sum, cn) => sum + parseFloat(cn.amount || '0'),
                     0

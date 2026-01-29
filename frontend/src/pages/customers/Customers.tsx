@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { customersApi } from '../../lib/api';
+import { formatNumber } from '../../lib/utils';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -258,17 +259,17 @@ export default function Customers() {
         totalCustomers: 0,
       };
     }
-    
+
     const totalCreditBalance = filteredCustomers.reduce(
       (sum: number, customer: any) => sum + parseFloat(customer.credit_balance || 0),
       0
     );
-    
+
     const totalCreditLimit = filteredCustomers.reduce(
       (sum: number, customer: any) => sum + parseFloat(customer.credit_limit || 0),
       0
     );
-    
+
     return {
       totalCreditBalance,
       totalCreditLimit,
@@ -320,7 +321,7 @@ export default function Customers() {
             <div>
               <p className="text-sm text-gray-600">Total Credit Balance</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{totals.totalCreditBalance.toFixed(2)}
+                ₹{formatNumber(totals.totalCreditBalance)}
               </p>
               <p className="text-xs text-gray-500 mt-1">
                 Includes Regular & Personal Ledger
@@ -337,7 +338,7 @@ export default function Customers() {
             <div>
               <p className="text-sm text-gray-600">Total Credit Limit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{totals.totalCreditLimit.toFixed(2)}
+                ₹{formatNumber(totals.totalCreditLimit)}
               </p>
             </div>
             <div className="p-3 bg-green-100 rounded-lg">
@@ -445,7 +446,7 @@ export default function Customers() {
                   </TableCell>
                   <TableCell align="right">
                     <span className="font-medium text-gray-900">
-                      ₹{parseFloat(customer.credit_balance || 0).toFixed(2)}
+                      ₹{formatNumber(customer.credit_balance || 0)}
                     </span>
                   </TableCell>
                   <TableCell>
@@ -530,7 +531,7 @@ export default function Customers() {
                     )}
                     <div className="flex items-center justify-between pt-2 border-t border-gray-100">
                       <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Credit Balance</span>
-                      <span className="text-base font-bold text-gray-900">₹{parseFloat(customer.credit_balance || 0).toFixed(2)}</span>
+                      <span className="text-base font-bold text-gray-900">₹{formatNumber(customer.credit_balance || 0)}</span>
                     </div>
                   </div>
                 </div>

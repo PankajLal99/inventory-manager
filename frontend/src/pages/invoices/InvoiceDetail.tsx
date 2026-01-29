@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { formatNumber } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -198,9 +199,9 @@ export default function InvoiceDetail() {
       // Show detailed error including serializer errors
       if (error?.response?.data && typeof error.response.data === 'object') {
         const errorDetails = Object.entries(error.response.data)
-          .map(([key, value]: [string, any]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+          .map(([key, value]: [string, any]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value} `)
           .join('\n');
-        alert(`Failed to add item:\n\n${errorDetails}`);
+        alert(`Failed to add item: \n\n${errorDetails} `);
       } else {
         alert(errorMessage);
       }
@@ -313,7 +314,7 @@ export default function InvoiceDetail() {
       if (hasNewItems) {
         const groupedItems = groupItemsByProduct(inv.items);
         groupedItems.forEach((group, groupIndex) => {
-          const groupKey = `group_${group.productId}_${groupIndex}`;
+          const groupKey = `group_${group.productId}_${groupIndex} `;
           if (!(groupKey in parentGroupPrices)) {
             const firstItem = group.items[0];
             const basePrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
@@ -371,12 +372,6 @@ export default function InvoiceDetail() {
     });
   };
 
-  const formatCurrency = (amount: string | number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(parseFloat(String(amount || '0')));
-  };
 
   // Convert number to words (Indian numbering system)
   const numberToWords = (num: number): string => {
@@ -512,7 +507,7 @@ export default function InvoiceDetail() {
 
     for (let groupIndex = 0; groupIndex < groupedItems.length; groupIndex++) {
       const group = groupedItems[groupIndex];
-      const groupKey = `group_${group.productId}_${groupIndex}`;
+      const groupKey = `group_${group.productId}_${groupIndex} `;
       const parentPrice = parentGroupPrices[groupKey];
 
       // Check if parent price is set
@@ -551,7 +546,7 @@ export default function InvoiceDetail() {
     const groupPriceMap: Record<number, string> = {}; // Map item.id to parent group price
 
     groupedItems.forEach((group, groupIndex) => {
-      const groupKey = `group_${group.productId}_${groupIndex}`;
+      const groupKey = `group_${group.productId}_${groupIndex} `;
       const parentPrice = parentGroupPrices[groupKey];
       group.items.forEach((item: any) => {
         groupPriceMap[item.id] = parentPrice;
@@ -599,7 +594,7 @@ export default function InvoiceDetail() {
     // Validate price threshold if product doesn't allow going below purchase/selling price
     if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
       const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
-      return `Price cannot be less than ${priceType} (₹${minPrice.toFixed(2)})`;
+      return `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`;
     }
 
     return null;
@@ -615,7 +610,7 @@ export default function InvoiceDetail() {
     if (inv?.items && Array.isArray(inv.items)) {
       const groupedItems = groupItemsByProduct(inv.items);
       groupedItems.forEach((group, groupIndex) => {
-        const groupKey = `group_${group.productId}_${groupIndex}`;
+        const groupKey = `group_${group.productId}_${groupIndex} `;
         const firstItem = group.items[0];
         const basePrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
         initialParentPrices[groupKey] = basePrice;
@@ -651,7 +646,7 @@ export default function InvoiceDetail() {
     if (Object.keys(checkoutPriceErrors).length > 0) {
       const errorMessages = Object.values(checkoutPriceErrors).filter(Boolean);
       if (errorMessages.length > 0) {
-        alert(`Price validation failed:\n\n${errorMessages.join('\n')}`);
+        alert(`Price validation failed: \n\n${errorMessages.join('\n')} `);
         return;
       }
     }
@@ -689,7 +684,7 @@ export default function InvoiceDetail() {
     if (checkoutInvoiceType !== 'pending') {
       const itemsWithoutPrice = items.filter((item: any) => !item.manual_unit_price || item.manual_unit_price <= 0);
       if (itemsWithoutPrice.length > 0) {
-        alert(`Please enter prices for all items. ${itemsWithoutPrice.length} item(s) are missing prices.`);
+        alert(`Please enter prices for all items.${itemsWithoutPrice.length} item(s) are missing prices.`);
         return;
       }
     }
@@ -719,14 +714,14 @@ export default function InvoiceDetail() {
         if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
           const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
           priceValidationErrors.push(
-            `${item.product_name || 'Product'}: Sale price (₹${salePrice.toFixed(2)}) cannot be less than ${priceType} (₹${minPrice.toFixed(2)})`
+            `${item.product_name || 'Product'}: Sale price(₹${formatNumber(salePrice)}) cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
           );
         }
       }
     });
 
     if (priceValidationErrors.length > 0) {
-      alert(`Price validation failed:\n\n${priceValidationErrors.join('\n')}`);
+      alert(`Price validation failed: \n\n${priceValidationErrors.join('\n')} `);
       return;
     }
 
@@ -744,7 +739,7 @@ export default function InvoiceDetail() {
       }
 
       if (Math.abs((cash + upi) - total) > 0.01) { // Allow small floating point differences
-        alert(`Split payment amounts (₹${(cash + upi).toFixed(2)}) do not match invoice total (₹${total.toFixed(2)})`);
+        alert(`Split payment amounts(₹${formatNumber(cash + upi)}) do not match invoice total(₹${formatNumber(total)})`);
         return;
       }
     }
@@ -801,8 +796,8 @@ export default function InvoiceDetail() {
         // Check if barcode is available
         if (product.barcode_available === false) {
           const errorMsg = product.sold_invoice
-            ? `This item (SKU: ${matchedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
-            : `This item (SKU: ${matchedBarcode}) has already been sold and is not available in inventory.`;
+            ? `This item(SKU: ${matchedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
+            : `This item(SKU: ${matchedBarcode}) has already been sold and is not available in inventory.`;
           alert(errorMsg);
           return;
         }
@@ -895,7 +890,7 @@ export default function InvoiceDetail() {
     const customerPanIt = ''; // Customer model doesn't have PAN/IT field
 
     // Get reference number (using invoice_number as ref)
-    const refNo = inv.invoice_number || `#${inv.id}`;
+    const refNo = inv.invoice_number || `#${inv.id} `;
 
     // Company details - using store info or default
     const companyName = 'Manish Traders';
@@ -904,162 +899,158 @@ export default function InvoiceDetail() {
     const companyPhone2 = '';
 
     return `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Invoice ${inv.invoice_number || inv.id}</title>
-          <meta charset="UTF-8">
+  <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Invoice ${inv.invoice_number || inv.id}</title>
+        <meta charset="UTF-8">
           <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; padding: 40px; color: #000; line-height: 1.6; }
-            
+            * {margin: 0; padding: 0; box-sizing: border-box; }
+            body {font-family: Arial, sans-serif; padding: 10px; color: #000; line-height: 1.2; }
+
+            /* A4 Page Container */
+            .page-container {
+              display: flex;
+            flex-direction: column;
+            min-height: 277mm; /* A4 297mm - 20mm padding/margin */
+            padding: 10px;
+            }
+
+            .content-area {
+              flex: 1;
+            }
+
+            .footer-area {
+              margin-top: auto;
+            }
+
             /* Top section with Invoice No, Ref No, and Date */
-            .top-section { display: flex; justify-content: space-between; margin-bottom: 30px; }
+            .top-section {display: flex; justify-content: space-between; margin-bottom: 10px; }
             .top-left { }
-            .top-right { text-align: right; }
-            .top-left p, .top-right p { margin: 5px 0; font-size: 14px; }
-            
+            .top-right {text-align: right; }
+            .top-left p, .top-right p {margin: 2px 0; font-size: 13px; }
+
             /* Company header - centered */
-            .company-header { text-align: center; margin-bottom: 30px; }
-            .company-name { font-size: 20px; font-weight: bold; margin-bottom: 8px; }
-            .company-address { font-size: 14px; white-space: pre-line; margin-bottom: 5px; }
-            .company-phone { font-size: 14px; }
-            
+            .company-header {text-align: center; margin-bottom: 10px; }
+            .company-name {font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+            .company-address {font-size: 13px; white-space: pre-line; margin-bottom: 2px; }
+            .company-phone {font-size: 13px; }
+
             /* INVOICE title - bold and centered */
-            .invoice-title { text-align: center; font-size: 24px; font-weight: bold; margin: 20px 0; text-transform: uppercase; }
-            
+            .invoice-title {text-align: center; font-size: 20px; font-weight: bold; margin: 10px 0; text-transform: uppercase; }
+
             /* Party section */
-            .party-section { margin-bottom: 20px; }
-            .party-section p { margin: 5px 0; font-size: 14px; }
-            
+            .party-section {margin-bottom: 10px; }
+            .party-section p {margin: 2px 0; font-size: 13px; }
+
             /* Table */
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-            th { background: #f0f0f0; padding: 10px; text-align: left; border: 1px solid #000; font-weight: bold; font-size: 13px; }
-            td { padding: 8px 10px; border: 1px solid #000; font-size: 13px; }
-            .text-right { text-align: right; }
-            .text-center { text-align: center; }
-            
+            table {width: 100%; border-collapse: collapse; margin-bottom: 10px; table-layout: fixed; }
+            th {background: #f0f0f0; padding: 6px 8px; text-align: left; border: 1px solid #000; font-weight: bold; font-size: 12px; }
+            td {padding: 4px 8px; border-left: 1px solid #000; border-right: 1px solid #000; font-size: 12px; }
+            .text-right {text-align: right; }
+            .text-center {text-align: center; }
+
             /* Total row */
-            .total-row { font-weight: bold; }
-            
+            .total-row {font-weight: bold; }
+            .total-row td {border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 6px 8px; }
+
             /* Amount in words section */
-            .amount-words { margin-top: 20px; margin-bottom: 20px; }
-            .amount-words p { margin: 5px 0; font-size: 14px; }
-            
+            .amount-words {margin-top: 10px; margin-bottom: 10px; }
+            .amount-words p {margin: 2px 0; font-size: 13px; }
+
             /* Declaration section */
-            .declaration { margin-top: 30px; margin-bottom: 20px; }
-            .declaration p { margin: 5px 0; font-size: 13px; }
-            
+            .declaration {margin-top: 15px; margin-bottom: 10px; }
+            .declaration p {margin: 2px 0; font-size: 12px; }
+
             /* Authorised Signatory */
-            .signatory { margin-top: 50px; text-align: right; }
-            .signatory p { font-size: 14px; }
-            
+            .signatory {margin-top: 30px; text-align: right; }
+            .signatory p {font-size: 13px; }
+
             /* Footer */
-            .footer { margin-top: 30px; text-align: center; border-top: 1px solid #000; padding-top: 10px; }
-            .footer p { font-size: 12px; text-decoration: underline; }
-            
+            .footer {margin-top: 15px; text-align: center; border-top: 1px solid #000; padding-top: 5px; }
+            .footer p {font-size: 11px; text-decoration: underline; }
+
             /* Watermark */
             .watermark {
               position: fixed;
-              top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%) rotate(-45deg);
-              font-size: 120px;
-              font-weight: bold;
-              color: rgba(0, 0, 0, 0.08);
-              z-index: -1;
-              pointer-events: none;
-              white-space: nowrap;
-              text-transform: uppercase;
-              letter-spacing: 10px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-45deg);
+            font-size: 120px;
+            font-weight: bold;
+            color: rgba(0, 0, 0, 0.08);
+            z-index: -1;
+            pointer-events: none;
+            white-space: nowrap;
+            text-transform: uppercase;
+            letter-spacing: 10px;
             }
-            
+
             @media print {
-              body { padding: 20px; position: relative; }
-              .top-section { margin-bottom: 20px; }
-              .company-header { margin-bottom: 20px; }
-              .invoice-title { margin: 15px 0; }
-              table { margin-bottom: 15px; }
-              .amount-words { margin-top: 15px; margin-bottom: 15px; }
-              .declaration { margin-top: 20px; }
-              .signatory { margin-top: 40px; }
-              .footer { margin-top: 20px; }
-              .watermark {
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%) rotate(-45deg);
-                font-size: 120px;
-                font-weight: bold;
-                color: rgba(0, 0, 0, 0.08);
-                z-index: -1;
-                pointer-events: none;
-                white-space: nowrap;
-                text-transform: uppercase;
-                letter-spacing: 10px;
-              }
+              body {padding: 0; margin: 0; position: relative; }
+            .page-container {min-height: 297mm; padding: 20mm 15mm; }
+            .signatory {margin-top: 50px; }
             }
           </style>
-        </head>
-        <body>
-          <!-- Watermark -->
-          <div class="watermark">${(inv.invoice_type || 'sale').toUpperCase()}</div>
-          
-          <!-- Top Left: Invoice No and Ref No -->
-          <!-- Top Right: Date -->
-          <div class="top-section">
-            <div class="top-left">
-              <p><strong>Invoice No. :</strong> ${inv.invoice_number || `#${inv.id}`}</p>
-              <p><strong>Ref No. :</strong> ${refNo}</p>
-            </div>
-            <div class="top-right">
-              <p><strong>Date:</strong> ${invoiceDate}</p>
-            </div>
-          </div>
-          
-          <!-- Center Top: Company Details -->
-          <div class="company-header">
-            <div class="company-name">${companyName}</div>
-            <div class="company-address">${companyAddress}</div>
-            <div class="company-phone">${companyPhone1}${companyPhone1 && companyPhone2 ? ', ' : ''}${companyPhone2}</div>
-          </div>
-          
-          <!-- INVOICE Title - Bold -->
-          <div class="invoice-title">INVOICE</div>
-          
-          <!-- Party Section -->
-          <div class="party-section">
-            <p><strong>Party :</strong> ${inv.customer_name || 'Walk-in Customer'}</p>
-            <p><strong>PAN/IT no :</strong> ${customerPanIt || '-'}</p>
-          </div>
-          
-          <!-- Table -->
-          <table>
-            <thead>
-              <tr>
-                <th>Description of Good</th>
-                <th class="text-center">Quantity in PCS</th>
-                <th class="text-right">Rate</th>
-                <th class="text-center">Per (PCS)</th>
-                <th class="text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(() => {
-        // Format numbers without currency symbol
-        const formatNumber = (n: number, decimals: number = 2) => {
-          return n.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-        };
+      </head>
+      <body>
+        <div class="page-container">
+          <div class="content-area" style="display: flex; flex-direction: column; flex: 1;">
+            <!-- Watermark -->
+            <div class="watermark">${(inv.invoice_type || 'sale').toUpperCase()}</div>
 
+            <!-- Top Section: Wrapper to avoid flex issues -->
+            <div style="flex-shrink: 0;">
+              <!-- Top Left: Invoice No and Ref No -->
+              <!-- Top Right: Date -->
+              <div class="top-section">
+                <div class="top-left">
+                  <p><strong>Invoice No. :</strong> ${inv.invoice_number || `#${inv.id}`}</p>
+                  <p><strong>Ref No. :</strong> ${refNo}</p>
+                </div>
+                <div class="top-right">
+                  <p><strong>Date:</strong> ${invoiceDate}</p>
+                </div>
+              </div>
+
+              <!-- Center Top: Company Details -->
+              <div class="company-header">
+                <div class="company-name">${companyName}</div>
+                <div class="company-address">${companyAddress}</div>
+                <div class="company-phone">${companyPhone1}${companyPhone1 && companyPhone2 ? ', ' : ''}${companyPhone2}</div>
+              </div>
+
+              <!-- INVOICE Title - Bold -->
+              <div class="invoice-title">INVOICE</div>
+
+              <!-- Party Section -->
+              <div class="party-section">
+                <p><strong>Party :</strong> ${inv.customer_name || 'Walk-in Customer'}</p>
+                <p><strong>PAN/IT no :</strong> ${customerPanIt || '-'}</p>
+              </div>
+            </div>
+
+            <!-- Table -->
+            <table style="flex: 1; border-bottom: 1px solid #000;">
+              <thead>
+                <tr>
+                  <th style="width: 45%;">Description of Good</th>
+                  <th style="width: 15%;" class="text-center">Quantity in PCS</th>
+                  <th style="width: 15%;" class="text-right">Rate</th>
+                  <th style="width: 10%;" class="text-center">Per (PCS)</th>
+                  <th style="width: 15%;" class="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(() => {
         if (!inv.items || !Array.isArray(inv.items) || inv.items.length === 0) {
-          return '<tr><td colspan="5">No items</td></tr>';
+          return '<tr><td colspan="5" style="border-bottom: 1px solid #000;">No items</td></tr>';
         }
 
-        // Group items by product name AND brand (to show separate rows for same product with different brands)
+        // Group items by product name AND brand
         const groupedItems: Record<string, {
           name: string;
           brand: string;
-          skus: string[];
           totalQuantity: number;
           totalAmount: number;
           items: any[];
@@ -1075,17 +1066,10 @@ export default function InvoiceDetail() {
             groupedItems[groupKey] = {
               name,
               brand,
-              skus: [],
               totalQuantity: 0,
               totalAmount: 0,
               items: []
             };
-          }
-
-          // Add SKU/barcode to the list if available
-          const sku = item.barcode_value || item.product_sku || '';
-          if (sku && !groupedItems[groupKey].skus.includes(sku)) {
-            groupedItems[groupKey].skus.push(sku);
           }
 
           // Sum quantities and amounts
@@ -1097,7 +1081,7 @@ export default function InvoiceDetail() {
         });
 
         // Render grouped items
-        return Object.values(groupedItems).map((group) => {
+        let itemsHtml = Object.values(groupedItems).map((group) => {
           // Calculate average unit price from total amount and quantity
           const avgUnitPrice = group.totalQuantity > 0
             ? group.totalAmount / group.totalQuantity
@@ -1108,60 +1092,73 @@ export default function InvoiceDetail() {
             ? `${group.name} (${group.brand})`
             : group.name;
 
-          // Build SKU list HTML
-          const skuList = group.skus.length > 0
-            ? '<div style="font-size: 11px; color: #666; margin-top: 2px;">SKUs: ' + group.skus.join(', ') + '</div>'
-            : '';
-
           return `
-                    <tr>
-                      <td>
-                        ${productDisplay}
-                        ${skuList}
-                      </td>
-                      <td class="text-center">${formatNumber(group.totalQuantity, 3)}</td>
-                      <td class="text-right">${formatNumber(avgUnitPrice, 2)}</td>
-                      <td class="text-center">PCS</td>
-                      <td class="text-right">${formatNumber(group.totalAmount, 2)}</td>
-                    </tr>
-                  `;
+                        <tr style="border-bottom: 1px solid #eee;">
+                          <td style="border-bottom: 1px solid #eee;">${productDisplay}</td>
+                          <td class="text-center" style="border-bottom: 1px solid #eee;">${formatNumber(group.totalQuantity, 3)}</td>
+                          <td class="text-right" style="border-bottom: 1px solid #eee;">${formatNumber(avgUnitPrice, 2)}</td>
+                          <td class="text-center" style="border-bottom: 1px solid #eee;">PCS</td>
+                          <td class="text-right" style="border-bottom: 1px solid #eee;">${formatNumber(group.totalAmount, 2)}</td>
+                        </tr>
+                      `;
         }).join('');
-      })()}
-              <!-- Total Row -->
-              <tr class="total-row">
-                <td><strong>Total</strong></td>
-                <td class="text-center"><strong>${totalPcs.toFixed(3).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</strong></td>
-                <td></td>
-                <td></td>
-                <td class="text-right"><strong>${totalAmount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</strong></td>
+
+        // Add spacer row to fill space and join lines
+        // We use a high height or let flex handle it
+        itemsHtml += `
+              <tr style="height: 100%;">
+                <td style="border-bottom: none;"></td>
+                <td style="border-bottom: none;"></td>
+                <td style="border-bottom: none;"></td>
+                <td style="border-bottom: none;"></td>
+                <td style="border-bottom: none;"></td>
               </tr>
-            </tbody>
-          </table>
-          
-          <!-- Amount in Words -->
-          <div class="amount-words">
-            <p><strong>Amount Chargeable (in words)</strong> E & OE</p>
-            <p><strong>${amountInWords}</strong></p>
+            `;
+
+        return itemsHtml;
+      })()}
+                <!-- Total Row -->
+                <tr class="total-row">
+                  <td><strong>Total</strong></td>
+                  <td class="text-center"><strong>${formatNumber(totalPcs, 3)}</strong></td>
+                  <td></td>
+                  <td></td>
+                  <td class="text-right"><strong>${formatNumber(totalAmount, 2)}</strong></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          
-          <!-- Declaration -->
-          <div class="declaration">
-            <p><strong>Declaration | for ${companyName}</strong></p>
-            <p>We declare that this invoice shows the actual price of the good described and that all particulars are true and correct.</p>
+
+          <div class="footer-area">
+            <!-- Amount in Words -->
+            <div class="amount-words">
+              <p><strong>Amount Chargeable (in words)</strong> E & OE</p>
+              <p><strong>${amountInWords}</strong></p>
+            </div>
+
+            <!-- Declaration and Signatory section -->
+            <div style="display: flex; justify-content: space-between; padding-top: 4px;">
+              <div style="width: 60%;">
+                <p style="font-size: 12px; margin-bottom: 4px;"><strong>Declaration:</strong></p>
+                <p style="font-size: 11px; line-height: 1.4;">We declare that this invoice shows the actual price of the good described and that all particulars are true and correct.</p>
+              </div>
+              <div style="text-align: right; width: 40%;">
+                <p style="font-size: 13px;"><strong>for ${companyName}</strong></p>
+                <div style="margin-top: 45px;">
+                  <p style="font-size: 13px;"><strong>Authorised Signatory</strong></p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="footer">
+              <p>This is a Computer Generated Invoice</p>
+            </div>
           </div>
-          
-          <!-- Authorised Signatory -->
-          <div class="signatory">
-            <p><strong>Authorised Signatory</strong></p>
-          </div>
-          
-          <!-- Footer -->
-          <div class="footer">
-            <p>This is a Computer Generated Invoice</p>
-          </div>
-        </body>
-      </html>
-    `;
+        </div>
+      </body>
+    </html>
+`;
   };
 
   const handlePrint = () => {
@@ -1200,12 +1197,6 @@ export default function InvoiceDetail() {
   };
 
   const generateThermalInvoiceHTML = (invoice: any) => {
-    const formatCurrency = (amount: string | number) => {
-      return new Intl.NumberFormat('en-IN', {
-        style: 'currency',
-        currency: 'INR',
-      }).format(parseFloat(String(amount || '0')));
-    };
 
     const formatDate = (dateString: string) => {
       const date = new Date(dateString);
@@ -1219,105 +1210,105 @@ export default function InvoiceDetail() {
     };
 
     return `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Invoice ${invoice.invoice_number || invoice.id}</title>
-          <meta charset="UTF-8">
+  <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Invoice ${invoice.invoice_number || invoice.id}</title>
+        <meta charset="UTF-8">
           <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            @page { size: 4in auto; margin: 0.1in; }
-            body { 
-              font-family: 'Courier New', monospace; 
-              font-size: 10px;
-              width: 4in;
-              max-width: 4in;
-              padding: 5px;
-              color: #000;
+            * {margin: 0; padding: 0; box-sizing: border-box; }
+            @page {size: 4in auto; margin: 0.1in; }
+            body {
+              font-family: 'Courier New', monospace;
+            font-size: 10px;
+            width: 4in;
+            max-width: 4in;
+            padding: 5px;
+            color: #000;
             }
-            .header { 
-              text-align: center; 
-              margin-bottom: 8px; 
-              border-bottom: 1px dashed #000; 
-              padding-bottom: 5px; 
+            .header {
+              text-align: center;
+            margin-bottom: 8px;
+            border-bottom: 1px dashed #000;
+            padding-bottom: 5px; 
             }
-            .header h1 { font-size: 14px; margin-bottom: 3px; font-weight: bold; }
-            .header p { font-size: 9px; margin: 1px 0; }
-            .info { margin-bottom: 6px; font-size: 9px; }
-            .info-row { margin: 2px 0; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9px; }
-            th { padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
-            td { padding: 2px; border-bottom: 1px dotted #ccc; }
-            .text-right { text-align: right; }
-            .text-center { text-align: center; }
-            .summary { margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
-            .summary-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 9px; }
-            .summary-total { border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; font-weight: bold; font-size: 11px; }
-            .footer { margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: 8px; }
+            .header h1 {font-size: 14px; margin-bottom: 3px; font-weight: bold; }
+            .header p {font-size: 9px; margin: 1px 0; }
+            .info {margin-bottom: 6px; font-size: 9px; }
+            .info-row {margin: 2px 0; }
+            table {width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9px; }
+            th {padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
+            td {padding: 2px; border-bottom: 1px dotted #ccc; }
+            .text-right {text-align: right; }
+            .text-center {text-align: center; }
+            .summary {margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
+            .summary-row {display: flex; justify-content: space-between; padding: 2px 0; font-size: 9px; }
+            .summary-total {border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; font-weight: bold; font-size: 11px; }
+            .footer {margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: 8px; }
             /* Watermark - positioned relative to content area */
-            body { position: relative; }
+            body {position: relative; }
             .watermark {
               position: absolute;
-              top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%) rotate(-45deg);
-              font-size: 60px;
-              font-weight: bold;
-              color: rgba(0, 0, 0, 0.08);
-              z-index: -1;
-              pointer-events: none;
-              white-space: nowrap;
-              text-transform: uppercase;
-              letter-spacing: 5px;
-              width: 100%;
-              text-align: center;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-45deg);
+            font-size: 60px;
+            font-weight: bold;
+            color: rgba(0, 0, 0, 0.08);
+            z-index: -1;
+            pointer-events: none;
+            white-space: nowrap;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            width: 100%;
+            text-align: center;
             }
             @media print {
-              body { padding: 0; margin: 0; position: relative; }
-              .no-print { display: none; }
-              .watermark {
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%) rotate(-45deg);
-                font-size: 60px;
-                font-weight: bold;
-                color: rgba(0, 0, 0, 0.08);
-                z-index: -1;
-                pointer-events: none;
-                white-space: nowrap;
-                text-transform: uppercase;
-                letter-spacing: 5px;
-                width: 100%;
-                text-align: center;
+              body {padding: 0; margin: 0; position: relative; }
+            .no-print {display: none; }
+            .watermark {
+              position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-45deg);
+            font-size: 60px;
+            font-weight: bold;
+            color: rgba(0, 0, 0, 0.08);
+            z-index: -1;
+            pointer-events: none;
+            white-space: nowrap;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            width: 100%;
+            text-align: center;
               }
             }
           </style>
-        </head>
-        <body>
-          <!-- Watermark -->
-          <div class="watermark">${(invoice.invoice_type || 'sale').toUpperCase()}</div>
-          
-          <div class="header">
-            <h1>INVOICE</h1>
-            <p>${invoice.invoice_number || `#${invoice.id}`}</p>
-            <p>${formatDate(invoice.created_at)}</p>
-          </div>
-          <div class="info">
-            <div class="info-row"><strong>Store:</strong> ${invoice.store_name || '-'}</div>
-            <div class="info-row"><strong>Customer:</strong> ${invoice.customer_name || 'Walk-in Customer'}</div>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th class="text-right">Qty</th>
-                <th class="text-right">Price</th>
-                <th class="text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${invoice.items && Array.isArray(invoice.items) ? (() => {
+      </head>
+      <body>
+        <!-- Watermark -->
+        <div class="watermark">${(invoice.invoice_type || 'sale').toUpperCase()}</div>
+
+        <div class="header">
+          <h1>INVOICE</h1>
+          <p>${invoice.invoice_number || `#${invoice.id}`}</p>
+          <p>${formatDate(invoice.created_at)}</p>
+        </div>
+        <div class="info">
+          <div class="info-row"><strong>Store:</strong> ${invoice.store_name || '-'}</div>
+          <div class="info-row"><strong>Customer:</strong> ${invoice.customer_name || 'Walk-in Customer'}</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th class="text-right">Qty</th>
+              <th class="text-right">Price</th>
+              <th class="text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${invoice.items && Array.isArray(invoice.items) ? (() => {
         // Group items by product name AND brand for thermal layout
         const groupedItems: Record<string, {
           name: string;
@@ -1370,54 +1361,54 @@ export default function InvoiceDetail() {
                     <tr>
                       <td>${displayText}</td>
                       <td class="text-right">${group.totalQuantity}</td>
-                      <td class="text-right">${formatCurrency(group.avgPrice)}</td>
-                      <td class="text-right">${formatCurrency(group.totalAmount)}</td>
+                      <td class="text-right">₹${formatNumber(group.avgPrice)}</td>
+                      <td class="text-right">₹${formatNumber(group.totalAmount)}</td>
                 </tr>
                   `;
         }).join('');
       })() : '<tr><td colspan="4">No items</td></tr>'}
-            </tbody>
-          </table>
-          <div class="summary">
-            <div class="summary-row">
-              <span>Subtotal:</span>
-              <span>${formatCurrency(invoice.subtotal || '0')}</span>
-            </div>
-            ${parseFloat(invoice.discount_amount || '0') > 0 ? `
+          </tbody>
+        </table>
+        <div class="summary">
+          <div class="summary-row">
+            <span>Subtotal:</span>
+            <span>₹${formatNumber(invoice.subtotal || '0')}</span>
+          </div>
+          ${parseFloat(invoice.discount_amount || '0') > 0 ? `
             <div class="summary-row">
               <span>Discount:</span>
-              <span>-${formatCurrency(invoice.discount_amount || '0')}</span>
+              <span>-₹${formatNumber(invoice.discount_amount || '0')}</span>
             </div>
             ` : ''}
-            ${parseFloat(invoice.tax_amount || '0') > 0 ? `
+          ${parseFloat(invoice.tax_amount || '0') > 0 ? `
             <div class="summary-row">
               <span>Tax:</span>
-              <span>${formatCurrency(invoice.tax_amount || '0')}</span>
+              <span>₹${formatNumber(invoice.tax_amount || '0')}</span>
             </div>
             ` : ''}
-            <div class="summary-row summary-total">
-              <span>TOTAL:</span>
-              <span>${formatCurrency(invoice.total || '0')}</span>
-            </div>
-            ${parseFloat(invoice.paid_amount || '0') > 0 ? `
+          <div class="summary-row summary-total">
+            <span>TOTAL:</span>
+            <span>₹${formatNumber(invoice.total || '0')}</span>
+          </div>
+          ${parseFloat(invoice.paid_amount || '0') > 0 ? `
             <div class="summary-row">
               <span>Paid:</span>
-              <span>${formatCurrency(invoice.paid_amount || '0')}</span>
+              <span>₹${formatNumber(invoice.paid_amount || '0')}</span>
             </div>
             ` : ''}
-            ${parseFloat(invoice.due_amount || '0') > 0 ? `
+          ${parseFloat(invoice.due_amount || '0') > 0 ? `
             <div class="summary-row">
               <span>Due:</span>
-              <span>${formatCurrency(invoice.due_amount || '0')}</span>
+              <span>₹${formatNumber(invoice.due_amount || '0')}</span>
             </div>
             ` : ''}
-          </div>
-          <div class="footer">
-            <p>Thank you for your business!</p>
-          </div>
-        </body>
-      </html>
-    `;
+        </div>
+        <div class="footer">
+          <p>Thank you for your business!</p>
+        </div>
+      </body>
+    </html>
+`;
   };
 
   const handlePrintThermal = () => {
@@ -1467,7 +1458,7 @@ export default function InvoiceDetail() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
-                    {inv.invoice_number || `Invoice #${inv.id}`}
+                    {inv.invoice_number || `Invoice #${inv.id} `}
                   </h1>
                   <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
                     Created on {formatDate(inv.created_at)}
@@ -1728,11 +1719,11 @@ export default function InvoiceDetail() {
               <>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-gray-600">Subtotal</span>
-                  <span className="text-sm font-medium text-gray-900">{formatCurrency('0')}</span>
+                  <span className="text-sm font-medium text-gray-900">₹{formatNumber('0')}</span>
                 </div>
                 <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
                   <span className="text-base font-semibold text-gray-900">Total</span>
-                  <span className="text-lg font-bold text-gray-900">{formatCurrency('0')}</span>
+                  <span className="text-lg font-bold text-gray-900">₹{formatNumber('0')}</span>
                 </div>
               </>
             ) : (
@@ -1740,37 +1731,37 @@ export default function InvoiceDetail() {
               <>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-gray-600">Subtotal</span>
-                  <span className="text-sm font-medium text-gray-900">{formatCurrency(inv.subtotal || '0')}</span>
+                  <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.subtotal || '0')}</span>
                 </div>
                 {parseFloat(inv.discount_amount || '0') > 0 && (
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm text-gray-600">Discount</span>
-                    <span className="text-sm font-medium text-red-600">-{formatCurrency(inv.discount_amount || '0')}</span>
+                    <span className="text-sm font-medium text-red-600">-₹{formatNumber(inv.discount_amount || '0')}</span>
                   </div>
                 )}
                 {parseFloat(inv.tax_amount || '0') > 0 && (
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm text-gray-600">Tax</span>
-                    <span className="text-sm font-medium text-gray-900">{formatCurrency(inv.tax_amount || '0')}</span>
+                    <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.tax_amount || '0')}</span>
                   </div>
                 )}
                 <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
                   <span className="text-base font-semibold text-gray-900">Total</span>
-                  <span className="text-lg font-bold text-gray-900">{formatCurrency(inv.total || '0')}</span>
+                  <span className="text-lg font-bold text-gray-900">₹{formatNumber(inv.total || '0')}</span>
                 </div>
               </>
             )}
             {parseFloat(inv.paid_amount || '0') > 0 && (
               <div className="flex justify-between items-center py-2 bg-green-50 rounded-lg px-3">
                 <span className="text-sm font-medium text-green-700">Paid</span>
-                <span className="text-sm font-semibold text-green-700">{formatCurrency(inv.paid_amount || '0')}</span>
+                <span className="text-sm font-semibold text-green-700">₹{formatNumber(inv.paid_amount || '0')}</span>
               </div>
             )}
             {parseFloat(inv.due_amount || '0') > 0 && (
               <div className="space-y-2">
                 <div className="flex justify-between items-center py-2 bg-red-50 rounded-lg px-3">
                   <span className="text-sm font-medium text-red-700">Due</span>
-                  <span className="text-sm font-semibold text-red-700">{formatCurrency(inv.due_amount || '0')}</span>
+                  <span className="text-sm font-semibold text-red-700">₹{formatNumber(inv.due_amount || '0')}</span>
                 </div>
                 <Button
                   onClick={() => {
@@ -1807,7 +1798,7 @@ export default function InvoiceDetail() {
                 return (
                   <Table headers={['Product', 'SKU', 'Quantity']}>
                     {groupedItems.map((group, groupIndex) => {
-                      const groupKey = `invoice_group_${group.productId}_${groupIndex}`;
+                      const groupKey = `invoice_group_${group.productId}_${groupIndex} `;
                       const isExpanded = expandedInvoiceItems[groupKey] || false;
                       const totalQuantity = group.items.reduce((sum, item) => sum + (parseInt(item.quantity || '0') || 0), 0);
                       const barcodes = group.items.map(item => ({
@@ -1835,7 +1826,7 @@ export default function InvoiceDetail() {
                             </TableCell>
                           </TableRow>
                           {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => (
-                            <TableRow key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-gray-50">
+                            <TableRow key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50">
                               <TableCell className="pl-12">
                                 <span className="text-xs text-gray-500">↳ {group.productName}</span>
                               </TableCell>
@@ -1857,7 +1848,7 @@ export default function InvoiceDetail() {
                 return (
                   <Table headers={['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total']}>
                     {groupedItems.map((group, groupIndex) => {
-                      const groupKey = `invoice_group_${group.productId}_${groupIndex}`;
+                      const groupKey = `invoice_group_${group.productId}_${groupIndex} `;
                       const isExpanded = expandedInvoiceItems[groupKey] || false;
                       const totalQuantity = group.items.reduce((sum, item) => sum + (parseInt(item.quantity || '0') || 0), 0);
                       const totalLineTotal = group.items.reduce((sum, item) => sum + parseFloat(item.line_total || '0'), 0);
@@ -1888,22 +1879,22 @@ export default function InvoiceDetail() {
                               <span className="text-gray-600 font-semibold">{totalQuantity}</span>
                             </TableCell>
                             <TableCell align="right">
-                              <span className="font-medium text-gray-900">{formatCurrency(avgUnitPrice)}</span>
+                              <span className="font-medium text-gray-900">₹{formatNumber(avgUnitPrice)}</span>
                             </TableCell>
                             <TableCell align="right">
-                              <span className="text-gray-600">{formatCurrency(totalDiscount)}</span>
+                              <span className="text-gray-600">₹{formatNumber(totalDiscount)}</span>
                             </TableCell>
                             <TableCell align="right">
-                              <span className="text-gray-600">{formatCurrency(totalTax)}</span>
+                              <span className="text-gray-600">₹{formatNumber(totalTax)}</span>
                             </TableCell>
                             <TableCell align="right">
-                              <span className="font-semibold text-gray-900">{formatCurrency(totalLineTotal)}</span>
+                              <span className="font-semibold text-gray-900">₹{formatNumber(totalLineTotal)}</span>
                             </TableCell>
                           </TableRow>
                           {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
                             const item = barcodeItem.item;
                             return (
-                              <TableRow key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-gray-50">
+                              <TableRow key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50">
                                 <TableCell className="pl-12">
                                   <span className="text-xs text-gray-500">↳ {group.productName}</span>
                                 </TableCell>
@@ -1916,21 +1907,21 @@ export default function InvoiceDetail() {
                                 <TableCell align="right">
                                   {item.manual_unit_price && parseFloat(item.unit_price || '0') > 0 && parseFloat(item.unit_price || '0') !== parseFloat(item.manual_unit_price || '0') ? (
                                     <div className="flex flex-col items-end">
-                                      <span className="line-through text-gray-400 text-xs">{formatCurrency(item.unit_price || '0')}</span>
-                                      <span className="text-xs font-medium text-gray-900">{formatCurrency(item.manual_unit_price)}</span>
+                                      <span className="line-through text-gray-400 text-xs">₹{formatNumber(item.unit_price || '0')}</span>
+                                      <span className="text-xs font-medium text-gray-900">₹{formatNumber(item.manual_unit_price)}</span>
                                     </div>
                                   ) : (
-                                    <span className="text-xs font-medium text-gray-900">{formatCurrency(item.manual_unit_price || item.unit_price || '0')}</span>
+                                    <span className="text-xs font-medium text-gray-900">₹{formatNumber(item.manual_unit_price || item.unit_price || '0')}</span>
                                   )}
                                 </TableCell>
                                 <TableCell align="right">
-                                  <span className="text-xs text-gray-600">{formatCurrency(item.discount_amount || '0')}</span>
+                                  <span className="text-xs text-gray-600">₹{formatNumber(item.discount_amount || '0')}</span>
                                 </TableCell>
                                 <TableCell align="right">
-                                  <span className="text-xs text-gray-600">{formatCurrency(item.tax_amount || '0')}</span>
+                                  <span className="text-xs text-gray-600">₹{formatNumber(item.tax_amount || '0')}</span>
                                 </TableCell>
                                 <TableCell align="right">
-                                  <span className="text-xs font-semibold text-gray-900">{formatCurrency(item.line_total || '0')}</span>
+                                  <span className="text-xs font-semibold text-gray-900">₹{formatNumber(item.line_total || '0')}</span>
                                 </TableCell>
                               </TableRow>
                             );
@@ -1948,7 +1939,7 @@ export default function InvoiceDetail() {
             {(() => {
               const groupedItems = groupItemsByProduct(inv.items);
               return groupedItems.map((group, groupIndex) => {
-                const groupKey = `invoice_group_${group.productId}_${groupIndex}`;
+                const groupKey = `invoice_group_${group.productId}_${groupIndex} `;
                 const isExpanded = expandedInvoiceItems[groupKey] || false;
                 const totalQuantity = group.items.reduce((sum, item) => sum + parseFloat(item.quantity || '0'), 0);
                 const totalLineTotal = group.items.reduce((sum, item) => sum + parseFloat(item.line_total || '0'), 0);
@@ -1980,7 +1971,7 @@ export default function InvoiceDetail() {
                         </div>
                         {!isPending && (
                           <div className="text-right flex-shrink-0">
-                            <div className="text-lg font-bold text-gray-900">{formatCurrency(totalLineTotal)}</div>
+                            <div className="text-lg font-bold text-gray-900">₹{formatNumber(totalLineTotal)}</div>
                             <div className="text-xs text-gray-500 mt-0.5">Total</div>
                           </div>
                         )}
@@ -1989,15 +1980,15 @@ export default function InvoiceDetail() {
                         <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-100 mt-3">
                           <div>
                             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Unit Price</div>
-                            <div className="font-semibold text-gray-900">{formatCurrency(avgUnitPrice)}</div>
+                            <div className="font-semibold text-gray-900">₹{formatNumber(avgUnitPrice)}</div>
                           </div>
                           <div>
                             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Discount</div>
-                            <div className="font-medium text-gray-900">{formatCurrency(totalDiscount)}</div>
+                            <div className="font-medium text-gray-900">₹{formatNumber(totalDiscount)}</div>
                           </div>
                           <div>
                             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">Tax</div>
-                            <div className="font-medium text-gray-900">{formatCurrency(totalTax)}</div>
+                            <div className="font-medium text-gray-900">₹{formatNumber(totalTax)}</div>
                           </div>
                         </div>
                       )}
@@ -2010,7 +2001,7 @@ export default function InvoiceDetail() {
                           {barcodes.map((barcodeItem, barcodeIndex) => {
                             const item = barcodeItem.item;
                             return (
-                              <div key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-white rounded-md p-3 border border-gray-200">
+                              <div key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-white rounded-md p-3 border border-gray-200">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
                                   <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
@@ -2021,16 +2012,16 @@ export default function InvoiceDetail() {
                                       <div className="text-gray-500 mb-0.5">Price</div>
                                       {item.manual_unit_price && parseFloat(item.unit_price || '0') > 0 && parseFloat(item.unit_price || '0') !== parseFloat(item.manual_unit_price || '0') ? (
                                         <div className="space-y-0.5">
-                                          <div className="line-through text-gray-400">{formatCurrency(item.unit_price || '0')}</div>
-                                          <div className="font-semibold text-gray-900">{formatCurrency(item.manual_unit_price)}</div>
+                                          <div className="line-through text-gray-400 text-xs">₹{formatNumber(item.unit_price || '0')}</div>
+                                          <div className="font-semibold text-gray-900">₹{formatNumber(item.manual_unit_price)}</div>
                                         </div>
                                       ) : (
-                                        <div className="font-semibold text-gray-900">{formatCurrency(item.manual_unit_price || item.unit_price || '0')}</div>
+                                        <div className="font-semibold text-gray-900">₹{formatNumber(item.manual_unit_price || item.unit_price || '0')}</div>
                                       )}
                                     </div>
                                     <div>
                                       <div className="text-gray-500 mb-0.5">Total</div>
-                                      <div className="font-semibold text-gray-900">{formatCurrency(item.line_total || '0')}</div>
+                                      <div className="font-semibold text-gray-900">₹{formatNumber(item.line_total || '0')}</div>
                                     </div>
                                   </div>
                                 )}
@@ -2064,7 +2055,7 @@ export default function InvoiceDetail() {
                     <span className="capitalize font-medium text-gray-900">{payment.payment_method || '-'}</span>
                   </TableCell>
                   <TableCell align="right">
-                    <span className="font-semibold text-gray-900">{formatCurrency(payment.amount || '0')}</span>
+                    <span className="font-semibold text-gray-900">₹{formatNumber(payment.amount || '0')}</span>
                   </TableCell>
                   <TableCell>
                     <span className="text-gray-600">{payment.reference || '-'}</span>
@@ -2090,7 +2081,7 @@ export default function InvoiceDetail() {
                       <div className="text-sm text-gray-500">{formatDate(payment.created_at)}</div>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-lg font-bold text-green-600">{formatCurrency(payment.amount || '0')}</div>
+                      <div className="text-lg font-bold text-green-600">₹{formatNumber(payment.amount || '0')}</div>
                     </div>
                   </div>
                   {payment.reference && (
@@ -2254,7 +2245,7 @@ export default function InvoiceDetail() {
                             const total = calculateCheckoutTotal();
                             const cash = parseFloat(value) || 0;
                             const remaining = Math.max(0, total - cash);
-                            setCheckoutUpiAmount(remaining.toFixed(2));
+                            setCheckoutUpiAmount(formatNumber(remaining));
                           }
                         }}
                         className="w-full text-xs"
@@ -2276,7 +2267,7 @@ export default function InvoiceDetail() {
                             const total = calculateCheckoutTotal();
                             const upi = parseFloat(value) || 0;
                             const remaining = Math.max(0, total - upi);
-                            setCheckoutCashAmount(remaining.toFixed(2));
+                            setCheckoutCashAmount(formatNumber(remaining));
                           }
                         }}
                         className="w-full text-xs"
@@ -2286,10 +2277,10 @@ export default function InvoiceDetail() {
                   {inv?.items && checkoutCashAmount && checkoutUpiAmount && (
                     <div className="text-xs mt-2">
                       <span className="text-gray-600">Total: </span>
-                      <span className={`font-semibold ${(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount)).toFixed(2) === calculateCheckoutTotal().toFixed(2) ? 'text-green-600' : 'text-red-600'}`}>
-                        ₹{(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount)).toFixed(2)}
+                      <span className={`font - semibold ${formatNumber(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount)) === formatNumber(calculateCheckoutTotal()) ? 'text-green-600' : 'text-red-600'} `}>
+                        ₹{formatNumber(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount))}
                       </span>
-                      <span className="text-gray-600"> / Invoice Total: ₹{calculateCheckoutTotal().toFixed(2)}</span>
+                      <span className="text-gray-600"> / Invoice Total: ₹{formatNumber(calculateCheckoutTotal())}</span>
                     </div>
                   )}
                 </div>
@@ -2433,8 +2424,8 @@ export default function InvoiceDetail() {
                                     setProductSearchSelectedIndex(-1);
                                     setIsSearchTyped(false);
                                   }}
-                                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''
-                                    }`}
+                                  className={`w-full text-left px - 4 py - 3 hover: bg - gray - 50 transition - colors ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''
+                                    } `}
                                 >
                                   <div className="font-medium text-gray-900">{product.name}</div>
                                   {product.sku && (
@@ -2510,7 +2501,7 @@ export default function InvoiceDetail() {
                             }, 0);
 
                             // Create a unique key for the group
-                            const groupKey = `group_${group.productId}_${groupIndex}`;
+                            const groupKey = `group_${group.productId}_${groupIndex} `;
                             const isExpanded = expandedGroups[groupKey] || false;
 
                             // Get parent price from separate state (independent of individual item prices)
@@ -2547,7 +2538,7 @@ export default function InvoiceDetail() {
                                       ₹{(() => {
                                         const sp = parseFloat(firstItem.product_selling_price || '0');
                                         const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                        return (sp > 0 ? sp : pp).toFixed(2);
+                                        return formatNumber(sp > 0 ? sp : pp);
                                       })()}
                                     </span>
                                   </td>
@@ -2687,12 +2678,12 @@ export default function InvoiceDetail() {
                                               if (itemError) {
                                                 setCheckoutPriceErrors(prev => ({
                                                   ...prev,
-                                                  [`item_${item.id}`]: itemError,
+                                                  [`item_${item.id} `]: itemError,
                                                 }));
                                               } else {
                                                 setCheckoutPriceErrors(prev => {
                                                   const updated = { ...prev };
-                                                  delete updated[`item_${item.id}`];
+                                                  delete updated[`item_${item.id} `];
                                                   return updated;
                                                 });
                                               }
@@ -2701,7 +2692,7 @@ export default function InvoiceDetail() {
                                           });
                                           setCheckoutPrices(newPrices);
                                         }}
-                                        className={`w-28 text-right font-medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                        className={`w - 28 text-right font - medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
                                       />
                                     </div>
                                     {checkoutPriceErrors[groupKey] && (
@@ -2711,7 +2702,7 @@ export default function InvoiceDetail() {
                                   <td className="px-4 py-4">
                                     <div className="text-right">
                                       <div className="font-semibold text-gray-900">
-                                        ₹{lineTotal.toFixed(2)}
+                                        ₹{formatNumber(lineTotal)}
                                       </div>
                                     </div>
                                   </td>
@@ -2720,7 +2711,7 @@ export default function InvoiceDetail() {
                                       <button
                                         onClick={() => {
                                           // Remove all items in this group by calling delete API for each item
-                                          if (window.confirm(`Remove all items of "${group.productName}" from the invoice?`)) {
+                                          if (window.confirm(`Remove all items of "${group.productName}" from the invoice ? `)) {
                                             group.items.forEach((item) => {
                                               deleteItemMutation.mutate(item.id);
                                             });
@@ -2743,7 +2734,7 @@ export default function InvoiceDetail() {
                                   const itemLineTotal = parseFloat(itemQty) * parseFloat(itemPrice);
 
                                   return (
-                                    <tr key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-gray-50 hover:bg-gray-100 transition-colors">
+                                    <tr key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50 hover:bg-gray-100 transition-colors">
                                       <td className="px-4 py-3 pl-12">
                                         <div className="text-xs text-gray-500">↳ {group.productName}</div>
                                       </td>
@@ -2755,7 +2746,7 @@ export default function InvoiceDetail() {
                                           ₹{(() => {
                                             const sp = parseFloat(item.product_selling_price || '0');
                                             const pp = parseFloat(item.product_purchase_price || '0');
-                                            return (sp > 0 ? sp : pp).toFixed(2);
+                                            return formatNumber(sp > 0 ? sp : pp);
                                           })()}
                                         </span>
                                       </td>
@@ -2802,26 +2793,26 @@ export default function InvoiceDetail() {
                                               if (error) {
                                                 setCheckoutPriceErrors(prev => ({
                                                   ...prev,
-                                                  [`item_${item.id}`]: error,
+                                                  [`item_${item.id} `]: error,
                                                 }));
                                               } else {
                                                 setCheckoutPriceErrors(prev => {
                                                   const updated = { ...prev };
-                                                  delete updated[`item_${item.id}`];
+                                                  delete updated[`item_${item.id} `];
                                                   return updated;
                                                 });
                                               }
                                             }}
-                                            className={`w-24 text-right font-medium text-xs ${checkoutPriceErrors[`item_${item.id}`] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                            className={`w - 24 text-right font - medium text-xs ${checkoutPriceErrors[`item_${item.id}`] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
                                           />
                                         </div>
-                                        {checkoutPriceErrors[`item_${item.id}`] && (
-                                          <div className="text-xs text-red-600 mt-1 text-right pr-1">{checkoutPriceErrors[`item_${item.id}`]}</div>
+                                        {checkoutPriceErrors[`item_${item.id} `] && (
+                                          <div className="text-xs text-red-600 mt-1 text-right pr-1">{checkoutPriceErrors[`item_${item.id} `]}</div>
                                         )}
                                       </td>
                                       <td className="px-4 py-3">
                                         <div className="text-right text-xs font-semibold text-gray-700">
-                                          ₹{itemLineTotal.toFixed(2)}
+                                          ₹{formatNumber(itemLineTotal)}
                                         </div>
                                       </td>
                                     </tr>
@@ -2852,7 +2843,7 @@ export default function InvoiceDetail() {
                         }, 0);
 
                         // Create a unique key for the group
-                        const groupKey = `group_${group.productId}_${groupIndex}`;
+                        const groupKey = `group_${group.productId}_${groupIndex} `;
                         const isExpanded = expandedGroups[groupKey] || false;
 
                         // Get parent price from separate state (independent of individual item prices)
@@ -2888,7 +2879,7 @@ export default function InvoiceDetail() {
                                       ₹{(() => {
                                         const sp = parseFloat(firstItem.product_selling_price || '0');
                                         const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                        return (sp > 0 ? sp : pp).toFixed(2);
+                                        return formatNumber(sp > 0 ? sp : pp);
                                       })()}
                                     </span>
                                   </div>
@@ -2928,7 +2919,6 @@ export default function InvoiceDetail() {
                                         min="0"
                                         value={totalQuantity}
                                         onChange={(e) => {
-                                          // Only allow positive integers
                                           const val = e.target.value;
                                           if (val === '' || /^\d+$/.test(val)) {
                                             const newQty = parseInt(val) || 0;
@@ -2942,7 +2932,6 @@ export default function InvoiceDetail() {
                                           }
                                         }}
                                         onBlur={(e) => {
-                                          // Ensure value is a positive integer on blur
                                           const val = Math.max(0, parseInt(e.target.value) || 0);
                                           const newQuantities = { ...checkoutQuantities };
                                           group.items.forEach((item) => {
@@ -2985,7 +2974,6 @@ export default function InvoiceDetail() {
                                       placeholder="0.00"
                                       value={parentPrice}
                                       onFocus={(e) => {
-                                        // Clear the input when focused
                                         setParentGroupPrices({
                                           ...parentGroupPrices,
                                           [groupKey]: '',
@@ -2993,7 +2981,6 @@ export default function InvoiceDetail() {
                                         e.target.select();
                                       }}
                                       onBlur={(e) => {
-                                        // Restore original value if empty
                                         const newPrice = e.target.value;
                                         if (!newPrice || newPrice.trim() === '') {
                                           const firstItem = group.items[0];
@@ -3005,14 +2992,12 @@ export default function InvoiceDetail() {
                                         }
                                       }}
                                       onChange={(e) => {
-                                        // Update parent price state
                                         const newPrice = e.target.value;
                                         setParentGroupPrices({
                                           ...parentGroupPrices,
                                           [groupKey]: newPrice,
                                         });
 
-                                        // Validate price threshold for parent price (use first item for validation)
                                         const firstItem = group.items[0];
                                         const error = validatePriceThreshold(newPrice, firstItem);
                                         if (error) {
@@ -3026,17 +3011,12 @@ export default function InvoiceDetail() {
                                           setCheckoutPriceErrors(newErrors);
                                         }
 
-                                        // Apply price to all items in group (auto-fill) unless they have been explicitly overridden
                                         const newPrices = { ...checkoutPrices };
-                                        const oldParentPrice = parentPrice; // Store old parent price before update
+                                        const oldParentPrice = parentPrice;
                                         group.items.forEach((item) => {
                                           const currentItemPrice = checkoutPrices[item.id];
                                           const originalItemPrice = (item.manual_unit_price || item.unit_price || '0').toString();
 
-                                          // Update item price if:
-                                          // 1. It doesn't have a price set in checkoutPrices, OR
-                                          // 2. It matches the old parent price, OR
-                                          // 3. It matches the original item price (meaning it hasn't been manually overridden)
                                           const shouldUpdate = !currentItemPrice ||
                                             currentItemPrice === oldParentPrice ||
                                             currentItemPrice === originalItemPrice;
@@ -3044,26 +3024,24 @@ export default function InvoiceDetail() {
                                           if (shouldUpdate) {
                                             newPrices[item.id] = newPrice;
 
-                                            // Validate individual item price
                                             const itemError = validatePriceThreshold(newPrice, item);
                                             if (itemError) {
                                               setCheckoutPriceErrors(prev => ({
                                                 ...prev,
-                                                [`item_${item.id}`]: itemError,
+                                                [`item_${item.id} `]: itemError,
                                               }));
                                             } else {
                                               setCheckoutPriceErrors(prev => {
                                                 const updated = { ...prev };
-                                                delete updated[`item_${item.id}`];
+                                                delete updated[`item_${item.id} `];
                                                 return updated;
                                               });
                                             }
                                           }
-                                          // Otherwise, keep the manually overridden price
                                         });
                                         setCheckoutPrices(newPrices);
                                       }}
-                                      className={`flex-1 text-right font-medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                      className={`flex - 1 text-right font - medium ${checkoutPriceErrors[groupKey] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
                                     />
                                   </div>
                                   {checkoutPriceErrors[groupKey] && (
@@ -3076,7 +3054,7 @@ export default function InvoiceDetail() {
                               {parseFloat(parentPrice) > 0 && (
                                 <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between items-center">
                                   <span className="text-sm font-medium text-gray-700">Line Total:</span>
-                                  <span className="text-lg font-bold text-gray-900">₹{lineTotal.toFixed(2)}</span>
+                                  <span className="text-lg font-bold text-gray-900">₹{formatNumber(lineTotal)}</span>
                                 </div>
                               )}
                             </div>
@@ -3092,7 +3070,7 @@ export default function InvoiceDetail() {
                                     const itemLineTotal = parseFloat(itemQty) * parseFloat(itemPrice);
 
                                     return (
-                                      <div key={`${groupKey}_barcode_${barcodeIndex}`} className="bg-white rounded-md p-3 border border-gray-200">
+                                      <div key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-white rounded-md p-3 border border-gray-200">
                                         <div className="flex items-center justify-between mb-2">
                                           <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
                                           <div className="text-xs text-gray-500">Qty: {itemQty}</div>
@@ -3108,7 +3086,6 @@ export default function InvoiceDetail() {
                                               placeholder={parentPrice}
                                               value={itemPrice}
                                               onFocus={(e) => {
-                                                // Clear the input when focused
                                                 setCheckoutPrices({
                                                   ...checkoutPrices,
                                                   [item.id]: '',
@@ -3116,7 +3093,6 @@ export default function InvoiceDetail() {
                                                 e.target.select();
                                               }}
                                               onBlur={(e) => {
-                                                // Restore parent price if empty
                                                 const newPrice = e.target.value;
                                                 if (!newPrice || newPrice.trim() === '') {
                                                   setCheckoutPrices({
@@ -3127,36 +3103,34 @@ export default function InvoiceDetail() {
                                               }}
                                               onChange={(e) => {
                                                 const newPrice = e.target.value;
-                                                // Allow individual price override
                                                 setCheckoutPrices({
                                                   ...checkoutPrices,
                                                   [item.id]: newPrice,
                                                 });
 
-                                                // Validate price threshold for individual item
                                                 const error = validatePriceThreshold(newPrice, item);
                                                 if (error) {
                                                   setCheckoutPriceErrors(prev => ({
                                                     ...prev,
-                                                    [`item_${item.id}`]: error,
+                                                    [`item_${item.id} `]: error,
                                                   }));
                                                 } else {
                                                   setCheckoutPriceErrors(prev => {
                                                     const updated = { ...prev };
-                                                    delete updated[`item_${item.id}`];
+                                                    delete updated[`item_${item.id} `];
                                                     return updated;
                                                   });
                                                 }
                                               }}
-                                              className={`flex-1 text-right font-medium text-xs ${checkoutPriceErrors[`item_${item.id}`] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
+                                              className={`flex - 1 text-right font - medium text-xs ${checkoutPriceErrors[`item_${item.id}`] ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
                                             />
                                           </div>
                                           <div className="text-xs font-semibold text-gray-700">
-                                            ₹{itemLineTotal.toFixed(2)}
+                                            ₹{formatNumber(itemLineTotal)}
                                           </div>
                                         </div>
-                                        {checkoutPriceErrors[`item_${item.id}`] && (
-                                          <div className="text-xs text-red-600 mt-1">{checkoutPriceErrors[`item_${item.id}`]}</div>
+                                        {checkoutPriceErrors[`item_${item.id} `] && (
+                                          <div className="text-xs text-red-600 mt-1">{checkoutPriceErrors[`item_${item.id} `]}</div>
                                         )}
                                       </div>
                                     );
@@ -3169,7 +3143,7 @@ export default function InvoiceDetail() {
                               <button
                                 onClick={() => {
                                   // Remove all items in this group by calling delete API for each item
-                                  if (window.confirm(`Remove all items of "${group.productName}" from the invoice?`)) {
+                                  if (window.confirm(`Remove all items of "${group.productName}" from the invoice ? `)) {
                                     group.items.forEach((item) => {
                                       deleteItemMutation.mutate(item.id);
                                     });
@@ -3212,11 +3186,11 @@ export default function InvoiceDetail() {
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-600">Subtotal:</span>
-                        <span className="font-semibold text-gray-900">₹{subtotal.toFixed(2)}</span>
+                        <span className="font-semibold text-gray-900">₹{formatNumber(subtotal)}</span>
                       </div>
                       <div className="pt-2 border-t border-gray-200 flex justify-between">
                         <span className="text-base font-bold text-gray-900">Total:</span>
-                        <span className="text-xl font-bold text-blue-600">₹{subtotal.toFixed(2)}</span>
+                        <span className="text-xl font-bold text-blue-600">₹{formatNumber(subtotal)}</span>
                       </div>
                     </div>
                   </div>
@@ -3250,7 +3224,7 @@ export default function InvoiceDetail() {
                   if (Object.keys(checkoutPriceErrors).length > 0) {
                     const errorMessages = Object.values(checkoutPriceErrors).filter(Boolean);
                     if (errorMessages.length > 0) {
-                      alert(`Price validation failed:\n\n${errorMessages.join('\n')}`);
+                      alert(`Price validation failed: \n\n${errorMessages.join('\n')} `);
                       return;
                     }
                   }
@@ -3286,7 +3260,7 @@ export default function InvoiceDetail() {
                   // Validate that all items have prices
                   const itemsWithoutPrice = items.filter((item: any) => !item.manual_unit_price || item.manual_unit_price <= 0);
                   if (itemsWithoutPrice.length > 0) {
-                    alert(`Please enter prices for all items. ${itemsWithoutPrice.length} item(s) are missing prices.`);
+                    alert(`Please enter prices for all items.${itemsWithoutPrice.length} item(s) are missing prices.`);
                     return;
                   }
 
@@ -3355,11 +3329,11 @@ export default function InvoiceDetail() {
                   max={parseFloat(inv.due_amount || '0')}
                   value={paymentAmount}
                   onChange={(e) => setPaymentAmount(e.target.value)}
-                  placeholder={`Max: ${formatCurrency(inv.due_amount || '0')}`}
+                  placeholder={`Max: ₹${formatNumber(inv.due_amount || '0')} `}
                   className="w-full"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Due Amount: {formatCurrency(inv.due_amount || '0')}
+                  Due Amount: ₹{formatNumber(inv.due_amount || '0')}
                 </p>
               </div>
 
@@ -3412,7 +3386,7 @@ export default function InvoiceDetail() {
                       return;
                     }
                     if (amount > parseFloat(inv.due_amount || '0')) {
-                      alert(`Payment amount cannot exceed due amount of ${formatCurrency(inv.due_amount || '0')}`);
+                      alert(`Payment amount cannot exceed due amount of ₹${formatNumber(inv.due_amount || '0')} `);
                       return;
                     }
                     paymentMutation.mutate({
@@ -3442,7 +3416,7 @@ export default function InvoiceDetail() {
       >
         <div className="space-y-4">
           <p className="text-gray-700">
-            Are you sure you want to delete invoice <strong>{inv.invoice_number || `#${inv.id}`}</strong>?
+            Are you sure you want to delete invoice <strong>{inv.invoice_number || `#${inv.id} `}</strong>?
           </p>
 
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
@@ -3616,7 +3590,7 @@ export default function InvoiceDetail() {
                                       {item.manual_unit_price && (
                                         <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-md">
                                           <span className="text-xs text-green-700 font-medium">Price Set:</span>
-                                          <span className="text-sm font-semibold text-green-900">{formatCurrency(item.manual_unit_price)}</span>
+                                          <span className="text-sm font-semibold text-green-900">₹{formatNumber(item.manual_unit_price)}</span>
                                           <button
                                             onClick={() => {
                                               setShowPriceInput({ ...showPriceInput, [item.id]: true });
@@ -3632,7 +3606,7 @@ export default function InvoiceDetail() {
                                   ) : (
                                     <>
                                       <span className="text-sm text-gray-600">
-                                        {formatCurrency(item.manual_unit_price || item.unit_price || '0')} × {item.quantity} = {formatCurrency(item.line_total || '0')}
+                                        ₹{formatNumber(item.manual_unit_price || item.unit_price || '0')} × {item.quantity} = ₹{formatNumber(item.line_total || '0')}
                                       </span>
                                       <button
                                         onClick={() => {

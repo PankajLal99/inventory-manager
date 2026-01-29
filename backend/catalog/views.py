@@ -244,7 +244,7 @@ def product_list_create(request):
         # Optimize queryset with select_related and prefetch_related to avoid N+1 queries
         # Annotate with barcode count for performance (to avoid N+1 in serializer)
         queryset = Product.objects.select_related('brand', 'category').prefetch_related('barcodes').annotate(
-            annotated_barcode_count=Count('barcodes', filter=Q(barcodes__tag__in=['new', 'returned']) & ~Q(barcodes__purchase__status='draft'))
+            annotated_barcode_count=Count('barcodes', filter=~Q(barcodes__tag='sold'))
         ).all()
         
         # Use django-filter for filtering

@@ -330,33 +330,13 @@ export default function Products() {
   // No need to group - show Products directly with their barcodes
   const productsList = useMemo(() => {
     return productsWithStock.map((product: any) => {
-      // For non-tracked inventory products, use available_quantity from backend
-      // For tracked inventory products, count barcodes
-      const trackInventory = product.track_inventory !== false; // Default to true if not specified
-
-      let barcodeCount: number;
-      // For 'sold' filter, use sold_quantity if available
-      if (tagFilter === 'sold' && product.sold_quantity !== undefined && product.sold_quantity !== null) {
-        barcodeCount = typeof product.sold_quantity === 'number'
-          ? product.sold_quantity
-          : parseFloat(product.sold_quantity) || 0;
-      } else if (!trackInventory) {
-        // Non-tracked: use available_quantity which accounts for cart quantities
-        // Backend calculates: stock_quantity - total_cart_quantity
-        // Use the available_quantity that was preserved from backend (in productsWithStock)
-        const backendAvailableQty = product.available_quantity;
-        barcodeCount = (backendAvailableQty !== undefined && backendAvailableQty !== null)
-          ? Math.max(0, Math.floor(backendAvailableQty))
-          : (product.stock_quantity || 0); // Fallback to stock_quantity if available_quantity not provided
-      } else {
-        // Tracked: count available barcodes (excluding those in active carts)
-        const barcodes = product.barcodes || [];
-        barcodeCount = Array.isArray(barcodes) ? barcodes.length : 0;
-      }
+      // Use backend's available_quantity (which accounts for cart quantities and draft purchases)
+      // for the barcodeCount field. This is the source of truth for "Available" stock.
+      const barcodeCount = (product.available_quantity !== undefined && product.available_quantity !== null)
+        ? (typeof product.available_quantity === 'number' ? product.available_quantity : parseFloat(product.available_quantity) || 0)
+        : 0;
 
       // Stock is at product level
-      // const _stockQty = product.stock_quantity || 0;
-      // const _availableQty = product.available_quantity || 0;
       const lowStockThreshold = product.low_stock_threshold || 0;
 
       // Check stock status based on available quantity (barcodeCount)
@@ -366,7 +346,7 @@ export default function Products() {
 
       return {
         ...product,
-        barcodeCount, // Available quantity - reflects real-time availability (accounts for cart quantities for non-tracked products)
+        barcodeCount, // Available quantity - reflects real-time availability
         isLowStock,
         isOutOfStock,
       };

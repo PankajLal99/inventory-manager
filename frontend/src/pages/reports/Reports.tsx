@@ -3,8 +3,8 @@ import { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { reportsApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { 
-  BarChart3, 
+import {
+  BarChart3,
   TrendingUp,
   Package,
   Coins,
@@ -13,11 +13,12 @@ import {
   Store,
   ChevronDown,
 } from 'lucide-react';
+import { formatNumber } from '../../lib/utils';
 
 export default function Reports() {
   const [user, setUser] = useState(auth.getUser());
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
-  
+
   useEffect(() => {
     if (!user) {
       auth.loadUser().then((loadedUser) => {
@@ -25,10 +26,10 @@ export default function Reports() {
       });
     }
   }, [user]);
-  
+
   // Check if user can access reports
   const canAccessReports = user?.can_access_reports !== false;
-  
+
   if (user && !canAccessReports) {
     return <Navigate to="/" replace />;
   }
@@ -52,7 +53,7 @@ export default function Reports() {
   })();
 
   // Check if user is Admin (only Admin group gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || 
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
 
   // Determine the active store:
@@ -77,7 +78,7 @@ export default function Reports() {
 
   // Get current selected store for display
   const currentStore = stores.find((s: any) => s.id === selectedStoreId);
-  
+
   const [dateFrom, setDateFrom] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
@@ -94,8 +95,8 @@ export default function Reports() {
   const { data: salesData, isLoading: salesLoading } = useQuery({
     queryKey: ['sales-summary', dateFrom, dateTo, defaultStore?.id],
     queryFn: async () => {
-      const response = await reportsApi.salesSummary({ 
-        date_from: dateFrom, 
+      const response = await reportsApi.salesSummary({
+        date_from: dateFrom,
         date_to: dateTo,
         store: defaultStore?.id || undefined,
       });
@@ -119,7 +120,7 @@ export default function Reports() {
   const { data: inventoryData, isLoading: inventoryLoading } = useQuery({
     queryKey: ['inventory-summary', defaultStore?.id],
     queryFn: async () => {
-      const response = await reportsApi.inventorySummary({ 
+      const response = await reportsApi.inventorySummary({
         store: defaultStore?.id || undefined,
       });
       return response.data;
@@ -152,7 +153,7 @@ export default function Reports() {
   const { data: stockOrderingData, isLoading: stockOrderingLoading } = useQuery({
     queryKey: ['stock-ordering', defaultStore?.id],
     queryFn: async () => {
-      const response = await reportsApi.stockOrdering({ 
+      const response = await reportsApi.stockOrdering({
         store: defaultStore?.id || undefined,
       });
       return response.data;
@@ -166,7 +167,7 @@ export default function Reports() {
     setActiveDateFilter(filter);
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
-    
+
     switch (filter) {
       case 'today':
         setDateFrom(todayStr);
@@ -199,7 +200,7 @@ export default function Reports() {
         break;
       case 'financial_year':
         const currentMonth = today.getMonth();
-        const fyStart = currentMonth >= 3 
+        const fyStart = currentMonth >= 3
           ? new Date(today.getFullYear(), 3, 1) // April 1
           : new Date(today.getFullYear() - 1, 3, 1);
         setDateFrom(fyStart.toISOString().split('T')[0]);
@@ -211,12 +212,6 @@ export default function Reports() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(amount);
-  };
 
   const salesSummary = salesData?.summary || salesData || {};
   const topProducts = topProductsData?.products || topProductsData?.results || [];
@@ -297,61 +292,55 @@ export default function Reports() {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setDateFilter('today')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'today'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'today'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Today
           </button>
           <button
             onClick={() => setDateFilter('yesterday')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'yesterday'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'yesterday'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Yesterday
           </button>
           <button
             onClick={() => setDateFilter('last_week')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'last_week'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'last_week'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Last Week
           </button>
           <button
             onClick={() => setDateFilter('last_month')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'last_month'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'last_month'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Last Month
           </button>
           <button
             onClick={() => setDateFilter('last_year')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'last_year'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'last_year'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Last Year
           </button>
           <button
             onClick={() => setDateFilter('financial_year')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'financial_year'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'financial_year'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Financial Year
           </button>
@@ -360,16 +349,15 @@ export default function Reports() {
               setActiveDateFilter('custom');
               setDateFilter('custom');
             }}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-              activeDateFilter === 'custom'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${activeDateFilter === 'custom'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Custom Range
           </button>
         </div>
-        
+
         {/* Custom Date Range Inputs */}
         {activeDateFilter === 'custom' && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t">
@@ -417,7 +405,7 @@ export default function Reports() {
             <div>
               <p className="text-sm text-gray-600">Total Sales</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                {salesLoading ? '...' : formatCurrency(salesSummary.total_sales || 0)}
+                {salesLoading ? '...' : `₹${formatNumber(salesSummary.total_sales || 0)}`}
               </p>
             </div>
             <Coins className="h-8 w-8 text-green-600" />
@@ -450,7 +438,7 @@ export default function Reports() {
             <div>
               <p className="text-sm text-gray-600">Avg Order Value</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                {salesLoading ? '...' : formatCurrency(salesSummary.avg_order_value || 0)}
+                {salesLoading ? '...' : `₹${formatNumber(salesSummary.avg_order_value || 0)}`}
               </p>
             </div>
             <TrendingUp className="h-8 w-8 text-yellow-600" />
@@ -541,7 +529,7 @@ export default function Reports() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm font-medium text-gray-900">
-                        {formatCurrency(product.total_revenue || 0)}
+                        {`₹${formatNumber(product.total_revenue || 0)}`}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -566,7 +554,7 @@ export default function Reports() {
           <div>
             <div className="mb-4">
               <p className="text-2xl font-bold text-gray-900">
-                {formatCurrency(revenueReport.year_total || 0)}
+                {`₹${formatNumber(revenueReport.year_total || 0)}`}
               </p>
               <p className="text-sm text-gray-600">Total Revenue for {year}</p>
             </div>
@@ -591,7 +579,7 @@ export default function Reports() {
                         </td>
                         <td className="px-4 py-3">
                           <span className="text-sm font-medium text-gray-900">
-                            {formatCurrency(month.total_revenue || 0)}
+                            {`₹${formatNumber(month.total_revenue || 0)}`}
                           </span>
                         </td>
                         <td className="px-4 py-3">
@@ -599,7 +587,7 @@ export default function Reports() {
                         </td>
                         <td className="px-4 py-3">
                           <span className="text-sm text-gray-600">
-                            {formatCurrency(month.avg_order_value || 0)}
+                            {`₹${formatNumber(month.avg_order_value || 0)}`}
                           </span>
                         </td>
                       </tr>
@@ -644,7 +632,7 @@ export default function Reports() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm font-medium text-gray-900">
-                        {formatCurrency(customer.total_spent || 0)}
+                        {`₹${formatNumber(customer.total_spent || 0)}`}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -652,7 +640,7 @@ export default function Reports() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-sm text-gray-600">
-                        {formatCurrency(customer.avg_order_value || 0)}
+                        {`₹${formatNumber(customer.avg_order_value || 0)}`}
                       </span>
                     </td>
                   </tr>
@@ -676,7 +664,7 @@ export default function Reports() {
             {showStockReports ? 'Hide' : 'Show'} Reports
           </button>
         </div>
-        
+
         {showStockReports && (
           <div className="space-y-6">
             {/* Out of Stock */}
@@ -780,7 +768,7 @@ export default function Reports() {
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-600">{product.product__low_stock_threshold || 0}</td>
                           <td className="px-4 py-3 text-sm text-gray-600">
-                            ₹{parseFloat(product.product__cost_price || 0).toFixed(2)}
+                            ₹{formatNumber(product.product__cost_price || 0)}
                           </td>
                         </tr>
                       ))}

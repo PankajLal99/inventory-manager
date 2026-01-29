@@ -131,16 +131,16 @@ class ProductSerializer(serializers.ModelSerializer):
     sku = serializers.CharField(read_only=True)
     stock_quantity = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
+    stock_bifurcation = serializers.SerializerMethodField()
+
 
     def get_stock_quantity(self, obj):
         """Calculate total stock quantity from barcodes - SUPREME SOURCE OF TRUTH
         Total Stock = All Barcodes count of product (regardless of tag)
-        Excludes barcodes from draft purchases (not finalized yet)
+        Excludes sold barcodes
         """
-        # Count ALL barcodes, excluding those from draft purchases
-        barcode_count = obj.barcodes.exclude(
-            purchase__status='draft'
-        ).count()
+        # Count ALL barcodes, excluding sold
+        barcode_count = obj.barcodes.exclude(tag='sold').count()
         return float(barcode_count)
 
     def get_barcodes(self, obj):
@@ -161,8 +161,7 @@ class ProductSerializer(serializers.ModelSerializer):
             
             # Get the product's barcode (should be only one)
             # For non-tracked products, barcode always stays as 'new' - we don't mark it as 'sold'
-            # Exclude barcodes from draft purchases (not finalized yet)
-            product_barcode = obj.barcodes.exclude(purchase__status='draft').first()
+            product_barcode = obj.barcodes.first()
             
             # If barcode exists and total cart quantity is less than 1, return the barcode
             # Otherwise, return empty list (all quantity is in carts)
@@ -174,13 +173,35 @@ class ProductSerializer(serializers.ModelSerializer):
         # For tracked inventory products, filter by tag
         # Include 'new' and 'returned' tags (both are available for sale)
         # Exclude 'in-cart' tags automatically - they're already reserved
-        # Exclude barcodes from draft purchases (not finalized yet)
         barcodes = obj.barcodes.filter(
             tag__in=['new', 'returned']
-        ).exclude(
-            purchase__status='draft'
         )
         return BarcodeSerializer(barcodes, many=True).data
+
+    def get_stock_bifurcation(self, obj):
+        """Calculate stock breakdown by supplier
+        Format: "30 AMS, 20 P+"
+        Only includes barcodes that are NOT sold
+        """
+        # Group barcodes by supplier
+        supplier_counts = {}
+        # Use prefetched barcodes if possible, but filter out 'sold'
+        barcodes = obj.barcodes.exclude(tag='sold').select_related('purchase__supplier')
+        
+        for barcode in barcodes:
+            supplier_name = "Unknown"
+            if barcode.purchase and barcode.purchase.supplier:
+                # Use supplier code if available, otherwise name
+                supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+            
+            supplier_counts[supplier_name] = supplier_counts.get(supplier_name, 0) + 1
+            
+        if not supplier_counts:
+            return ""
+            
+        # Sort by count descending
+        sorted_counts = sorted(supplier_counts.items(), key=lambda x: x[1], reverse=True)
+        return ", ".join([f"{count} {name}" for name, count in sorted_counts])
 
     def get_available_quantity(self, obj):
         """Calculate available quantity - uses barcode count as SUPREME source of truth
@@ -191,11 +212,8 @@ class ProductSerializer(serializers.ModelSerializer):
         from backend.pos.models import CartItem
         
         # Available Stock = All barcodes with tag 'new' or 'returned'
-        # Exclude barcodes from draft purchases (not finalized yet)
         available_barcodes = obj.barcodes.filter(
             tag__in=['new', 'returned']
-        ).exclude(
-            purchase__status='draft'
         )
         
         # For tracked products, exclude barcodes that are in active carts
@@ -227,7 +245,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'brand', 'brand_id', 'brand_name',
             'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
             'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
-            'created_at', 'updated_at', 'stock_quantity', 'available_quantity'
+            'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'stock_bifurcation'
         ]
 
 
@@ -238,6 +256,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     stock_quantity = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
     sold_quantity = serializers.SerializerMethodField()
+    stock_bifurcation = serializers.SerializerMethodField()
     purchase_price = serializers.SerializerMethodField()
     selling_price = serializers.SerializerMethodField()
 
@@ -282,10 +301,6 @@ class ProductListSerializer(serializers.ModelSerializer):
 
         # Helper to check if barcode should be included
         def should_include_barcode(barcode_obj):
-            # Check draft status - strict exclusion
-            if barcode_obj.purchase and barcode_obj.purchase.status == 'draft':
-                return False
-                
             # Filter by tag if requested
             if tag_filter:
                 if barcode_obj.tag != tag_filter:
@@ -309,13 +324,9 @@ class ProductListSerializer(serializers.ModelSerializer):
         
         # Special handling for non-tracked inventory
         if not obj.track_inventory:
-             # Find first valid barcode that's not in a draft purchase
+             # Find first valid barcode
              # For non-tracked, we mainly need one barcode to show
-            valid_barcode = None
-            for b in all_barcodes:
-                if (not b.purchase or b.purchase.status != 'draft'):
-                    valid_barcode = b
-                    break
+            valid_barcode = all_barcodes[0] if all_barcodes else None
             
             if valid_barcode:
                 # Check if "all stock" is in carts 
@@ -350,10 +361,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             return float(obj.annotated_barcode_count)
             
         # Fallback for other views
-        # Count ALL barcodes, excluding those from draft purchases
-        barcode_count = obj.barcodes.exclude(
-            purchase__status='draft'
-        ).count()
+        # Count ALL barcodes, excluding sold
+        barcode_count = obj.barcodes.exclude(tag='sold').count()
         return float(barcode_count)
 
     def get_available_quantity(self, obj):
@@ -365,11 +374,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         from backend.pos.models import CartItem
         
         # Available Stock = All barcodes with tag 'new' or 'returned'
-        # Exclude barcodes from draft purchases (not finalized yet)
         available_barcodes = obj.barcodes.filter(
             tag__in=['new', 'returned']
-        ).exclude(
-            purchase__status='draft'
         )
         
         # For tracked products, exclude barcodes that are in active carts
@@ -383,8 +389,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                 reserved_count = 0
                 for barcode in obj.barcodes.all():
                     if barcode.tag in ['new', 'returned'] and barcode.barcode in active_cart_barcodes:
-                        if not (barcode.purchase and barcode.purchase.status == 'draft'):
-                            reserved_count += 1
+                        reserved_count += 1
                 
                 available_count = available_barcodes.count() - reserved_count
                 return float(max(0, available_count))
@@ -458,9 +463,40 @@ class ProductListSerializer(serializers.ModelSerializer):
             return float(selling_price) if selling_price else None
         return None
 
+    def get_stock_bifurcation(self, obj):
+        """Calculate stock breakdown by supplier
+        Format: "30 AMS, 20 P+"
+        Only includes barcodes that are NOT sold
+        """
+        # Performance check: if we already have the count from annotation and it's 0, return empty
+        if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
+            return ""
+
+        # Group barcodes by supplier
+        supplier_counts = {}
+        
+        # Use prefetched barcodes if available (fast path)
+        all_barcodes = obj.barcodes.all()
+        for barcode in all_barcodes:
+            # Only count barcodes that are NOT sold
+            if barcode.tag != 'sold':
+                supplier_name = "Unknown"
+                if barcode.purchase and barcode.purchase.supplier:
+                    # Use supplier code if available, otherwise name
+                    supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                
+                supplier_counts[supplier_name] = supplier_counts.get(supplier_name, 0) + 1
+            
+        if not supplier_counts:
+            return ""
+            
+        # Sort by count descending
+        sorted_counts = sorted(supplier_counts.items(), key=lambda x: x[1], reverse=True)
+        return ", ".join([f"{count} {name}" for name, count in sorted_counts])
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price']
+        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation']
 
 
 class DefectiveProductItemSerializer(serializers.ModelSerializer):

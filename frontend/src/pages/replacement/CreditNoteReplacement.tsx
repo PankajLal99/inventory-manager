@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi } from '../../lib/api';
+import { formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -479,7 +480,7 @@ export default function CreditNoteReplacement() {
                                 Sold: {item.quantity} | Available: {item.available_quantity}
                               </div>
                               <div className="text-sm text-gray-600 mt-1">
-                                Price: ₹{parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)} per unit
+                                Price: ₹{formatNumber(item.manual_unit_price || item.unit_price || 0)} per unit
                               </div>
                             </div>
                           </div>
@@ -565,7 +566,7 @@ export default function CreditNoteReplacement() {
                                   const itemQuantity = parseFloat(item.quantity) || 1;
                                   // Use line_total / quantity for accurate per-unit price (accounts for discounts/taxes)
                                   const pricePerUnit = itemQuantity > 0 ? lineTotal / itemQuantity : parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                  return (pricePerUnit * selectedQuantity).toFixed(2);
+                                  return formatNumber(pricePerUnit * selectedQuantity);
                                 })()}
                               </div>
                             </div>
@@ -602,7 +603,7 @@ export default function CreditNoteReplacement() {
                     <div>Total items selected: {Object.values(selectedItems).filter(qty => qty > 0).length}</div>
                     <div>Total quantity: {totalItemsToReturn}</div>
                     <div className="font-semibold mt-2">
-                      Estimated credit amount: ₹{estimatedCreditAmount.toFixed(2)}
+                      Estimated credit amount: ₹{formatNumber(estimatedCreditAmount)}
                     </div>
                   </div>
                 </div>

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi, productsApi } from '../../lib/api';
+import { formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -753,7 +754,7 @@ export default function ReplaceProduct() {
                                 Sold: {item.quantity} | Available: {item.available_quantity}
                               </div>
                               <div className="text-sm text-gray-600 mt-1">
-                                Current Price: ₹{parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)} per unit
+                                Current Price: ₹{formatNumber(item.manual_unit_price || item.unit_price || 0)} per unit
                               </div>
                             </div>
                           </div>
@@ -951,7 +952,7 @@ export default function ReplaceProduct() {
                                     <div className="grid grid-cols-2 gap-3 text-sm">
                                       <div>
                                         <span className="text-gray-600 block text-xs">Old Price (per unit)</span>
-                                        <span className="font-medium">₹{parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)}</span>
+                                        <span className="font-medium">₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}</span>
                                       </div>
                                       <div>
                                         <span className="text-gray-600 block text-xs">New Price (per unit)</span>
@@ -960,102 +961,60 @@ export default function ReplaceProduct() {
                                             type="number"
                                             step="0.01"
                                             min="0"
-                                            value={
-                                              replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                                ? replacement.manual_unit_price.toString()
-                                                : ''
-                                            }
-                                            onChange={(e) => {
-                                              const val = e.target.value;
-                                              // Allow empty string, numbers, or decimal points while typing
-                                              if (val === '' || val === null || /^[\d.]*$/.test(val)) {
-                                                handlePriceChange(item.id, val);
-                                              }
-                                            }}
-                                            onBlur={(e) => {
-                                              // If empty on blur, use default from product
-                                              const val = e.target.value.trim();
-                                              if (val === '' || val === null || val === '0') {
-                                                setReplacements(prev => ({
-                                                  ...prev,
-                                                  [item.id]: {
-                                                    ...prev[item.id],
-                                                    manual_unit_price: undefined,
-                                                  }
-                                                }));
-                                              }
-                                            }}
-                                            placeholder={replacement.new_unit_price
-                                              ? `Default: ₹${replacement.new_unit_price.toFixed(2)}`
-                                              : `Default: ₹${parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)}`}
-                                            className="w-full"
+                                            value={replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined ? replacement.manual_unit_price.toString() : ''}
+                                            onChange={(e) => handlePriceChange(item.id, e.target.value)}
+                                            placeholder={replacement.new_unit_price !== null && replacement.new_unit_price !== undefined
+                                              ? `Default: ₹${formatNumber(replacement.new_unit_price)}`
+                                              : `Default: ₹${formatNumber(item.manual_unit_price || item.unit_price || 0)}`}
+                                            className="w-full h-9"
                                           />
-                                          {replacement.manual_unit_price === null || replacement.manual_unit_price === undefined ? (
-                                            <span className="text-xs text-gray-500 mt-1 block">
-                                              Leave empty to use default price: ₹{replacement.new_unit_price?.toFixed(2) || parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)}
-                                            </span>
-                                          ) : (
-                                            <span className="text-xs text-gray-400 mt-1 block">
-                                              Custom price set (default was ₹{replacement.new_unit_price?.toFixed(2) || parseFloat(item.manual_unit_price || item.unit_price || '0').toFixed(2)})
-                                            </span>
-                                          )}
                                         </div>
+                                        {replacement.manual_unit_price === null || replacement.manual_unit_price === undefined ? (
+                                          <span className="text-[10px] text-gray-500 mt-1 block">
+                                            Default: ₹{formatNumber(replacement.new_unit_price || item.manual_unit_price || item.unit_price || 0)}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px] text-gray-400 mt-1 block">
+                                            Custom: ₹{formatNumber(replacement.manual_unit_price)}
+                                          </span>
+                                        )}
                                       </div>
                                     </div>
 
-                                    {/* Price Difference Calculation */}
-                                    {replacement.new_product_id && (
-                                      <div className="mt-2 p-2 bg-gray-50 rounded border">
-                                        <div className="flex justify-between items-center text-sm">
-                                          <span className="text-gray-600">Price Difference (Total):</span>
-                                          <span className={`font-semibold ${(() => {
-                                            const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                            const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                              ? replacement.manual_unit_price
-                                              : (replacement.new_unit_price || oldPrice);
-                                            const diff = (newPrice - oldPrice) * selectedQuantity;
-                                            return diff >= 0 ? 'text-green-600' : 'text-red-600';
-                                          })()
-                                            }`}>
-                                            {(() => {
-                                              const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                              const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                                ? replacement.manual_unit_price
-                                                : (replacement.new_unit_price || oldPrice);
-                                              const diff = (newPrice - oldPrice) * selectedQuantity;
-                                              return diff >= 0 ? `+₹${diff.toFixed(2)}` : `₹${diff.toFixed(2)}`;
-                                            })()}
-                                          </span>
-                                        </div>
-                                        <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-                                          {(() => {
-                                            const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                            const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                              ? replacement.manual_unit_price
-                                              : (replacement.new_unit_price || oldPrice);
-                                            const diff = newPrice - oldPrice;
-                                            const totalDiff = diff * selectedQuantity;
+                                    {/* Price Difference Indicator */}
+                                    <div className="mt-2 p-2 bg-gray-50 rounded border">
+                                      <div className="flex justify-between items-center text-xs">
+                                        <span className="text-gray-600 font-medium">Price Diff (Total):</span>
+                                        {(() => {
+                                          const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
+                                          const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+                                            ? replacement.manual_unit_price
+                                            : (replacement.new_unit_price || originalPrice);
+                                          const diff = currentPrice - originalPrice;
+                                          const totalDiff = diff * selectedQuantity;
 
-                                            return (
-                                              <>
-                                                <div>
-                                                  {diff > 0
-                                                    ? `Customer pays ₹${diff.toFixed(2)} more per unit`
-                                                    : diff < 0
-                                                      ? `Customer gets ₹${Math.abs(diff).toFixed(2)} refund per unit`
-                                                      : 'No price difference per unit'}
-                                                </div>
-                                                {selectedQuantity > 1 && (
-                                                  <div className="font-medium">
-                                                    Total: {totalDiff >= 0 ? `+₹${totalDiff.toFixed(2)}` : `₹${totalDiff.toFixed(2)}`} for {selectedQuantity} units
-                                                  </div>
-                                                )}
-                                              </>
-                                            );
-                                          })()}
-                                        </div>
+                                          return (
+                                            <span className={`font-bold ${totalDiff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                              {totalDiff >= 0 ? `+₹${formatNumber(totalDiff)}` : `₹${formatNumber(totalDiff)}`}
+                                            </span>
+                                          );
+                                        })()}
                                       </div>
-                                    )}
+                                      <div className="text-[10px] text-gray-500 mt-1">
+                                        {(() => {
+                                          const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
+                                          const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+                                            ? replacement.manual_unit_price
+                                            : (replacement.new_unit_price || originalPrice);
+                                          const diff = currentPrice - originalPrice;
+
+                                          if (diff === 0) return 'No price difference per unit';
+                                          return diff > 0
+                                            ? `Customer pays ₹${formatNumber(diff)} more per unit`
+                                            : `Customer gets ₹${formatNumber(Math.abs(diff))} refund per unit`;
+                                        })()}
+                                      </div>
+                                    </div>
                                   </div>
                                 </>
                               )}
@@ -1099,7 +1058,7 @@ export default function ReplaceProduct() {
                         });
                         return (
                           <div className={`font-semibold ${totalPriceDiff >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                            Total Adjustment: {totalPriceDiff >= 0 ? `+₹${totalPriceDiff.toFixed(2)}` : `₹${totalPriceDiff.toFixed(2)}`}
+                            Total Adjustment: {totalPriceDiff >= 0 ? `+₹${formatNumber(totalPriceDiff)}` : `₹${formatNumber(totalPriceDiff)}`}
                             {totalPriceDiff > 0 && <span className="text-xs font-normal text-gray-600 ml-2">(Customer pays more)</span>}
                             {totalPriceDiff < 0 && <span className="text-xs font-normal text-gray-600 ml-2">(Customer gets refund)</span>}
                             {totalPriceDiff === 0 && <span className="text-xs font-normal text-gray-600 ml-2">(No change)</span>}

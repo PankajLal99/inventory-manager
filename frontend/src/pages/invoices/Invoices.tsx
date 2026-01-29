@@ -14,6 +14,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { formatNumber } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -172,12 +173,6 @@ export default function Invoices() {
     });
   };
 
-  const formatCurrency = (amount: string) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(parseFloat(amount || '0'));
-  };
 
   const totalRevenue = filteredInvoices
     .filter(inv => inv.status === 'paid')
@@ -263,7 +258,7 @@ export default function Invoices() {
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Revenue</p>
                 <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {formatCurrency(totalRevenue.toString())}
+                  ₹{formatNumber(totalRevenue)}
                 </p>
               </div>
               <div className="p-3 bg-green-100 rounded-lg">
@@ -415,12 +410,12 @@ export default function Invoices() {
                     </TableCell>
                     <TableCell align="right">
                       <span className="font-semibold text-gray-900">
-                        {formatCurrency(invoice.total)}
+                        ₹{formatNumber(invoice.total)}
                       </span>
                     </TableCell>
                     <TableCell align="right">
                       <span className="text-green-600 font-medium">
-                        {formatCurrency(invoice.paid_amount)}
+                        ₹{formatNumber(invoice.paid_amount)}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -486,12 +481,12 @@ export default function Invoices() {
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
-                          <div className="text-base font-bold text-gray-900">{formatCurrency(invoice.total)}</div>
+                          <div className="text-base font-bold text-gray-900">₹{formatNumber(invoice.total)}</div>
                         </div>
                         {parseFloat(invoice.paid_amount || '0') > 0 && (
                           <div>
                             <div className="text-xs font-medium text-green-600 uppercase tracking-wide mb-1">Paid</div>
-                            <div className="text-sm font-semibold text-green-600">{formatCurrency(invoice.paid_amount)}</div>
+                            <div className="text-sm font-semibold text-green-600">₹{formatNumber(invoice.paid_amount)}</div>
                           </div>
                         )}
                       </div>

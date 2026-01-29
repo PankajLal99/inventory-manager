@@ -19,6 +19,7 @@ import {
   Barcode as BarcodeIcon,
   Camera,
 } from 'lucide-react';
+import { formatNumber } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -100,7 +101,7 @@ export default function Search() {
     try {
       // Use barcode_only=true to only search in Barcode table, not Product SKU
       const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true);
-      
+
       if (barcodeResponse.data && barcodeResponse.data.id) {
         // Product found - navigate to product page
         navigate(`/products/${barcodeResponse.data.id}`);
@@ -286,109 +287,113 @@ export default function Search() {
                   // Check if product has price (selling_price > 0 or purchase_price > 0)
                   const aHasPrice = (a.selling_price && a.selling_price > 0) || (a.purchase_price && a.purchase_price > 0);
                   const bHasPrice = (b.selling_price && b.selling_price > 0) || (b.purchase_price && b.purchase_price > 0);
-                  
+
                   // Products with prices come first
                   if (aHasPrice && !bHasPrice) return -1;
                   if (!aHasPrice && bHasPrice) return 1;
                   return 0; // Keep original order for items in the same group
                 });
-                
+
                 return (
                   <ResultSection
                     title="Products"
                     icon={Package}
                     items={sortedProducts}
-                onItemClick={(item) => {
-                  // Navigate to product detail page (same as barcode scan)
-                  navigate(`/products/${item.id}`);
-                }}
-                getItemLabel={(item) => item.name}
-                getItemSubLabel={(item) => {
-                  const parts = [];
-                  // Show Brand
-                  if (item.brand_name) parts.push(`Brand: ${item.brand_name}`);
-                  // Show Category
-                  if (item.category_name) parts.push(`Category: ${item.category_name}`);
-                  // Show Available Qty
-                  if (item.available_quantity !== undefined && item.available_quantity !== null) {
-                    parts.push(`Available Qty: ${parseFloat(item.available_quantity).toFixed(0)}`);
-                  }
-                  // Show SKU last
-                  if (item.sku) parts.push(`SKU: ${item.sku}`);
-                  return parts.length > 0 ? parts.join(' | ') : 'No details available';
-                }}
-                getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
-                customRender={(item, idx) => {
-                  // Get price (selling_price if available, otherwise purchase_price)
-                  const price = item.selling_price && item.selling_price > 0 
-                    ? item.selling_price 
-                    : (item.purchase_price || null);
-                  const priceDisplay = price ? `₹${parseFloat(price).toFixed(2)}` : 'N/A';
-                  
-                  // Get quantity
-                  const quantity = item.available_quantity !== undefined && item.available_quantity !== null
-                    ? parseFloat(item.available_quantity).toFixed(0)
-                    : null;
-                  
-                  // Build other details (excluding quantity since it's shown separately)
-                  const details = [];
-                  if (item.brand_name) details.push(`Brand: ${item.brand_name}`);
-                  if (item.category_name) details.push(`Category: ${item.category_name}`);
-                  if (item.sku) details.push(`SKU: ${item.sku}`);
-                  
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => navigate(`/products/${item.id}`)}
-                      className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-2">
-                            <h3 className="font-medium text-gray-900 group-hover:text-blue-600">
-                              {item.name}
-                            </h3>
-                            {item.is_active ? (
-                              <Badge variant="outline" className="text-xs">
-                                Active
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-xs">
-                                Inactive
-                              </Badge>
-                            )}
+                    onItemClick={(item) => {
+                      // Navigate to product detail page (same as barcode scan)
+                      navigate(`/products/${item.id}`);
+                    }}
+                    getItemLabel={(item) => item.name}
+                    getItemSubLabel={(item) => {
+                      const parts = [];
+                      // Show Brand
+                      if (item.brand_name) parts.push(`Brand: ${item.brand_name}`);
+                      // Show Category
+                      if (item.category_name) parts.push(`Category: ${item.category_name}`);
+                      // Show Available Qty
+                      if (item.available_quantity !== undefined && item.available_quantity !== null) {
+                        parts.push(`Available Qty: ${parseFloat(item.available_quantity).toFixed(0)}`);
+                      }
+                      // Show SKU removed as per user request
+                      return parts.length > 0 ? parts.join(' | ') : 'No details available';
+                    }}
+                    getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
+                    customRender={(item, idx) => {
+                      // Get price (selling_price if available, otherwise purchase_price)
+                      const price = item.selling_price && item.selling_price > 0
+                        ? item.selling_price
+                        : (item.purchase_price || null);
+                      const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
+
+                      // Get quantity
+                      const quantity = item.available_quantity !== undefined && item.available_quantity !== null
+                        ? parseFloat(item.available_quantity).toFixed(0)
+                        : null;
+
+                      // Build other details (excluding quantity since it's shown separately)
+                      const details = [];
+                      if (item.brand_name) details.push(`Brand: ${item.brand_name}`);
+                      if (item.category_name) details.push(`Category: ${item.category_name}`);
+                      // SKU removed as per user request
+
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => navigate(`/products/${item.id}`)}
+                          className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-2">
+                                <h3 className="font-medium text-gray-900 group-hover:text-blue-600">
+                                  {item.name}
+                                </h3>
+                                {item.is_active ? (
+                                  <Badge variant="outline" className="text-xs">
+                                    Active
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs">
+                                    Inactive
+                                  </Badge>
+                                )}
+                              </div>
+                              {details.length > 0 && (
+                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-600">
+                                  {details.map((detail, detailIdx) => (
+                                    <span key={detailIdx}>{detail}</span>
+                                  ))}
+                                </div>
+                              )}
+                              {item.stock_bifurcation && (
+                                <div className="text-sm font-medium text-blue-600 mt-1">
+                                  Stock Breakdown: ({item.stock_bifurcation})
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                              {price && (
+                                <div className="text-right">
+                                  <div className="text-2xl font-bold text-green-600 group-hover:text-green-700">
+                                    {priceDisplay}
+                                  </div>
+                                </div>
+                              )}
+                              {quantity !== null && (
+                                <div className="text-right">
+                                  <div className="text-sm text-gray-500 mb-0.5">Qty</div>
+                                  <div className="text-xl font-semibold text-blue-600 group-hover:text-blue-700">
+                                    {item.stock_quantity || 0}
+                                  </div>
+                                </div>
+                              )}
+                              <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
+                            </div>
                           </div>
-                          {details.length > 0 && (
-                            <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-600">
-                              {details.map((detail, detailIdx) => (
-                                <span key={detailIdx}>{detail}</span>
-                              ))}
-                            </div>
-                          )}
                         </div>
-                        <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                          {price && (
-                            <div className="text-right">
-                              <div className="text-2xl font-bold text-green-600 group-hover:text-green-700">
-                                {priceDisplay}
-                              </div>
-                            </div>
-                          )}
-                          {quantity !== null && (
-                            <div className="text-right">
-                              <div className="text-sm text-gray-500 mb-0.5">Qty</div>
-                              <div className="text-xl font-semibold text-blue-600 group-hover:text-blue-700">
-                                {quantity}
-                              </div>
-                            </div>
-                          )}
-                          <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }}
-              />
+                      );
+                    }}
+                  />
                 );
               })()}
 
@@ -419,7 +424,7 @@ export default function Search() {
                 const soldBarcodes = (data.barcodes || []).filter(
                   (item) => item.tag && item.tag !== 'new' && item.tag !== 'returned'
                 );
-                
+
                 return (
                   <ResultSection
                     title="Sold Barcodes"

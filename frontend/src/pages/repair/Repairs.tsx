@@ -25,6 +25,7 @@ import {
   Printer,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { formatNumber } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -549,7 +550,7 @@ export default function Repairs() {
                       <span className="text-gray-600 block text-xs">Booking Amount</span>
                       <span className="font-medium">
                         {selectedInvoice.repair.booking_amount
-                          ? `₹${parseFloat(selectedInvoice.repair.booking_amount).toFixed(2)}`
+                          ? `₹${formatNumber(selectedInvoice.repair.booking_amount)}`
                           : 'N/A'}
                       </span>
                     </div>

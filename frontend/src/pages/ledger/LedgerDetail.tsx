@@ -3,13 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useEffect } from 'react';
 import { customersApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import Modal from '../../components/ui/Modal';
 import { toast } from '../../lib/toast';
-import { 
-  ArrowLeft, FileText, FileSpreadsheet, FileText as FileTextIcon, 
+import {
+  ArrowLeft, FileText, FileSpreadsheet, FileText as FileTextIcon,
   Printer, Filter, X, Calendar, Search, Plus, Minus
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -20,7 +21,7 @@ import { format } from 'date-fns';
 export default function LedgerDetail() {
   const { customerId } = useParams<{ customerId: string }>();
   const navigate = useNavigate();
-  
+
   const [filters, setFilters] = useState({
     dateFrom: '',
     dateTo: '',
@@ -30,10 +31,10 @@ export default function LedgerDetail() {
   const [showFilters, setShowFilters] = useState(false);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
-  const [entryData, setEntryData] = useState({ 
-    amount: '', 
-    description: '', 
-    date: new Date().toISOString().split('T')[0] 
+  const [entryData, setEntryData] = useState({
+    amount: '',
+    description: '',
+    date: new Date().toISOString().split('T')[0]
   });
   const queryClient = useQueryClient();
 
@@ -79,7 +80,7 @@ export default function LedgerDetail() {
   })();
 
   // Check if user is Admin (only Admin group gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || 
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
 
   // Determine the active store:
@@ -147,7 +148,7 @@ export default function LedgerDetail() {
       toast('Please enter a valid amount', 'error');
       return;
     }
-    
+
     const submitData: any = {
       customer: customer.id,
       entry_type: entryType,
@@ -160,20 +161,20 @@ export default function LedgerDetail() {
     if (defaultStore?.id) {
       submitData.store = defaultStore.id;
     }
-    
+
     createEntryMutation.mutate(submitData);
   };
 
   const filteredEntries = useMemo(() => {
     let entries = [...allEntries];
-    
+
     if (filters.dateFrom) {
-      entries = entries.filter(entry => 
+      entries = entries.filter(entry =>
         new Date(entry.created_at) >= new Date(filters.dateFrom)
       );
     }
     if (filters.dateTo) {
-      entries = entries.filter(entry => 
+      entries = entries.filter(entry =>
         new Date(entry.created_at) <= new Date(filters.dateTo + 'T23:59:59')
       );
     }
@@ -187,7 +188,7 @@ export default function LedgerDetail() {
         entry.invoice_number?.toLowerCase().includes(searchLower)
       );
     }
-    
+
     return entries;
   }, [allEntries, filters]);
 
@@ -196,34 +197,34 @@ export default function LedgerDetail() {
       'Date': new Date(entry.created_at).toLocaleDateString(),
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
-      'Debit': entry.entry_type === 'debit' ? parseFloat(entry.amount || 0).toFixed(2) : '-',
-      'Credit': entry.entry_type === 'credit' ? parseFloat(entry.amount || 0).toFixed(2) : '-',
-      'Balance': parseFloat(entry.running_balance || 0).toFixed(2),
+      'Debit': entry.entry_type === 'debit' ? formatNumber(entry.amount || 0) : '-',
+      'Credit': entry.entry_type === 'credit' ? formatNumber(entry.amount || 0) : '-',
+      'Balance': formatNumber(entry.running_balance || 0),
       'Invoice': entry.invoice_number || '-',
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Ledger Statement');
-    
+
     const fileName = `ledger_${customer?.name || 'customer'}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
   const handleExportPDF = () => {
     const doc = new jsPDF();
-    
+
     // Add title
     doc.setFontSize(18);
     doc.text(`${customer?.name || 'Customer'} Ledger Statement`, 14, 20);
-    
+
     // Add customer info
     doc.setFontSize(10);
     doc.text(`Customer: ${customer?.name || 'N/A'}`, 14, 30);
     if (customer?.phone) {
       doc.text(`Phone: ${customer.phone}`, 14, 36);
     }
-    
+
     // Add date range if filtered
     if (filters.dateFrom || filters.dateTo) {
       doc.text(
@@ -232,23 +233,23 @@ export default function LedgerDetail() {
         42
       );
     }
-    
+
     // Add final balance
     doc.setFontSize(12);
     doc.text(
-      `Current Balance: ₹${parseFloat(finalBalance).toFixed(2)}`,
+      `Current Balance: ₹${formatNumber(finalBalance)}`,
       14,
       50
     );
-    
+
     // Prepare table data
     const tableData = filteredEntries.map((entry: any) => [
       new Date(entry.created_at).toLocaleDateString(),
       entry.entry_type.toUpperCase(),
       entry.description || '-',
-      entry.entry_type === 'debit' ? `₹${parseFloat(entry.amount || 0).toFixed(2)}` : '-',
-      entry.entry_type === 'credit' ? `₹${parseFloat(entry.amount || 0).toFixed(2)}` : '-',
-      `₹${parseFloat(entry.running_balance || 0).toFixed(2)}`,
+      entry.entry_type === 'debit' ? `₹${formatNumber(entry.amount || 0)}` : '-',
+      entry.entry_type === 'credit' ? `₹${formatNumber(entry.amount || 0)}` : '-',
+      `₹${formatNumber(entry.running_balance || 0)}`,
       entry.invoice_number || '-',
     ]);
 
@@ -296,12 +297,12 @@ export default function LedgerDetail() {
           <h1>${customer?.name || 'Customer'} Ledger Statement</h1>
           <div class="info">
             ${customer?.phone ? `<p><strong>Phone:</strong> ${customer.phone}</p>` : ''}
-            ${filters.dateFrom || filters.dateTo ? 
-              `<p><strong>Date Range:</strong> ${filters.dateFrom || 'Start'} to ${filters.dateTo || 'End'}</p>` : ''}
+            ${filters.dateFrom || filters.dateTo ?
+        `<p><strong>Date Range:</strong> ${filters.dateFrom || 'Start'} to ${filters.dateTo || 'End'}</p>` : ''}
             <p><strong>Total Entries:</strong> ${filteredEntries.length}</p>
           </div>
           <div class="balance ${parseFloat(finalBalance) >= 0 ? 'positive' : 'negative'}">
-            Current Balance: ₹${parseFloat(finalBalance).toFixed(2)}
+            Current Balance: ₹${formatNumber(finalBalance)}
           </div>
           <table>
             <thead>
@@ -321,9 +322,9 @@ export default function LedgerDetail() {
                   <td>${new Date(entry.created_at).toLocaleDateString()}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
-                  <td class="debit">${entry.entry_type === 'debit' ? `₹${parseFloat(entry.amount || 0).toFixed(2)}` : '-'}</td>
-                  <td class="credit">${entry.entry_type === 'credit' ? `₹${parseFloat(entry.amount || 0).toFixed(2)}` : '-'}</td>
-                  <td>₹${parseFloat(entry.running_balance || 0).toFixed(2)}</td>
+                  <td class="debit">${entry.entry_type === 'debit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}</td>
+                  <td class="credit">${entry.entry_type === 'credit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}</td>
+                  <td>₹${formatNumber(entry.running_balance || 0)}</td>
                   <td>${entry.invoice_number || '-'}</td>
                 </tr>
               `).join('')}
@@ -377,10 +378,9 @@ export default function LedgerDetail() {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-gray-600">Current Balance</p>
-            <p className={`text-3xl font-bold mt-1 ${
-              parseFloat(finalBalance) >= 0 ? 'text-green-600' : 'text-red-600'
-            }`}>
-              ₹{parseFloat(finalBalance).toFixed(2)}
+            <p className={`text-3xl font-bold mt-1 ${parseFloat(finalBalance) >= 0 ? 'text-green-600' : 'text-red-600'
+              }`}>
+              ₹{formatNumber(finalBalance)}
             </p>
           </div>
           <div className="flex gap-2">
@@ -537,23 +537,22 @@ export default function LedgerDetail() {
                       })}
                     </td>
                     <td className="py-3 px-4">
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                        entry.entry_type === 'credit'
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${entry.entry_type === 'credit'
                           ? 'bg-green-100 text-green-800'
                           : 'bg-red-100 text-red-800'
-                      }`}>
+                        }`}>
                         {entry.entry_type.toUpperCase()}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-gray-700">{entry.description || '-'}</td>
                     <td className="py-3 px-4 text-right text-red-600 font-medium">
-                      {entry.entry_type === 'debit' ? `₹${parseFloat(entry.amount || 0).toFixed(2)}` : '-'}
+                      {entry.entry_type === 'debit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}
                     </td>
                     <td className="py-3 px-4 text-right text-green-600 font-medium">
-                      {entry.entry_type === 'credit' ? `₹${parseFloat(entry.amount || 0).toFixed(2)}` : '-'}
+                      {entry.entry_type === 'credit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}
                     </td>
                     <td className="py-3 px-4 text-right font-semibold text-gray-900">
-                      ₹{parseFloat(entry.running_balance || 0).toFixed(2)}
+                      ₹{formatNumber(entry.running_balance || 0)}
                     </td>
                     <td className="py-3 px-4">
                       {entry.invoice_number ? (

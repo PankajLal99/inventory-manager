@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
+import { formatNumber } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -725,12 +726,6 @@ export default function Purchases() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(amount);
-  };
 
   const formatDate = (dateString: string) => {
     if (!dateString) return '-';
@@ -1294,7 +1289,7 @@ export default function Purchases() {
                       </TableCell>
                       <TableCell align="right">
                         <span className="font-semibold text-gray-900">
-                          {formatCurrency(purchase.total || 0)}
+                          ₹{formatNumber(purchase.total || 0)}
                         </span>
                       </TableCell>
                       <TableCell align="center">
@@ -1388,10 +1383,10 @@ export default function Purchases() {
                                           <span className="text-sm text-gray-900">{item.quantity || 0}</span>
                                         </td>
                                         <td className="px-3 py-2 text-right">
-                                          <span className="text-sm text-gray-900">{formatCurrency(item.unit_price || 0)}</span>
+                                          <span className="text-sm text-gray-900">₹{formatNumber(item.unit_price || 0)}</span>
                                         </td>
                                         <td className="px-3 py-2 text-right">
-                                          <span className="text-sm font-semibold text-gray-900">{formatCurrency(item.line_total || 0)}</span>
+                                          <span className="text-sm font-semibold text-gray-900">₹{formatNumber(item.line_total || 0)}</span>
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           {trackInventory ? (
@@ -1574,7 +1569,7 @@ export default function Purchases() {
                           {purchase.items?.length || 0} items
                         </span>
                         <span className="text-base font-bold text-gray-900">
-                          {formatCurrency(purchase.total || 0)}
+                          ₹{formatNumber(purchase.total || 0)}
                         </span>
                       </div>
                     </div>
@@ -1614,11 +1609,11 @@ export default function Purchases() {
                                 </div>
                                 <div>
                                   <div className="text-gray-500 mb-0.5">Price</div>
-                                  <div className="font-semibold text-gray-900">{formatCurrency(item.unit_price || 0)}</div>
+                                  <div className="font-semibold text-gray-900">₹{formatNumber(item.unit_price || 0)}</div>
                                 </div>
                                 <div>
                                   <div className="text-gray-500 mb-0.5">Total</div>
-                                  <div className="font-semibold text-gray-900">{formatCurrency(item.line_total || 0)}</div>
+                                  <div className="font-semibold text-gray-900">₹{formatNumber(item.line_total || 0)}</div>
                                 </div>
                               </div>
                               {trackInventory && (
@@ -1999,7 +1994,7 @@ export default function Purchases() {
                               </td>
                               <td className="px-3 py-2 text-right">
                                 <span className="text-sm font-medium text-gray-900">
-                                  {formatCurrency(item.line_total || 0)}
+                                  ₹{formatNumber(item.line_total || 0)}
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-center">
@@ -2021,7 +2016,7 @@ export default function Purchases() {
                             Total:
                           </td>
                           <td colSpan={2} className="px-3 py-2 text-right text-sm font-bold text-gray-900">
-                            {formatCurrency(calculateTotal())}
+                            ₹{formatNumber(calculateTotal())}
                           </td>
                         </tr>
                       </tfoot>
@@ -2093,7 +2088,7 @@ export default function Purchases() {
                             <div>
                               <label className="block text-xs font-medium text-gray-700 mb-1">Total</label>
                               <div className="px-3 py-2 bg-gray-50 rounded-lg text-sm font-medium text-gray-900 text-right">
-                                {formatCurrency(item.line_total || 0)}
+                                ₹{formatNumber(item.line_total || 0)}
                               </div>
                             </div>
                           </div>
@@ -2141,7 +2136,7 @@ export default function Purchases() {
                     <div className="bg-gray-50 border border-gray-300 rounded-lg p-4">
                       <div className="flex justify-between items-center">
                         <span className="text-sm font-medium text-gray-700">Total:</span>
-                        <span className="text-lg font-bold text-gray-900">{formatCurrency(calculateTotal())}</span>
+                        <span className="text-lg font-bold text-gray-900">₹{formatNumber(calculateTotal())}</span>
                       </div>
                     </div>
                   </div>

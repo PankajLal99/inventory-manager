@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { formatNumber } from '../../lib/utils';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi } from '../../lib/api';
@@ -7,8 +8,8 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
-import { 
-  Plus, Minus, FileText, Users, TrendingUp, TrendingDown, 
+import {
+  Plus, Minus, FileText, Users, TrendingUp, TrendingDown,
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search,
   Clock, UserPlus, ChevronDown, ChevronRight
@@ -33,7 +34,7 @@ export default function InternalLedger() {
     email: '',
     address: '',
   });
-  
+
   // Filters
   const [filters, setFilters] = useState({
     dateFrom: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
@@ -45,7 +46,7 @@ export default function InternalLedger() {
   const [showFilters, setShowFilters] = useState(false);
   const [sortConfig, _setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [expandedCustomers, setExpandedCustomers] = useState<Set<number>>(new Set());
-  
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -101,7 +102,7 @@ export default function InternalLedger() {
       if (filters.entryType) params.entry_type = filters.entryType;
       if (filters.customer) params.customer = filters.customer;
       if (filters.search) params.search = filters.search;
-      
+
       const response = await customersApi.internalLedger.entries.list(params);
       return response.data;
     },
@@ -157,7 +158,7 @@ export default function InternalLedger() {
       toast('Please enter a valid amount', 'error');
       return;
     }
-    
+
     createEntryMutation.mutate({
       customer: selectedCustomer.id,
       entry_type: entryType,
@@ -198,12 +199,12 @@ export default function InternalLedger() {
 
   const filteredEntries = useMemo(() => {
     let sorted = [...entries];
-    
+
     if (sortConfig) {
       sorted.sort((a, b) => {
         let aValue: any;
         let bValue: any;
-        
+
         switch (sortConfig.key) {
           case 'date':
             aValue = new Date(a.created_at).getTime();
@@ -224,13 +225,13 @@ export default function InternalLedger() {
           default:
             return 0;
         }
-        
+
         if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
         if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
       });
     }
-    
+
     return sorted;
   }, [entries, sortConfig]);
 
@@ -263,7 +264,7 @@ export default function InternalLedger() {
         month: 'short',
         day: 'numeric'
       });
-      
+
       if (hasMeaningfulTime(dateString)) {
         const timeStr = date.toLocaleTimeString('en-IN', {
           hour: '2-digit',
@@ -272,7 +273,7 @@ export default function InternalLedger() {
         });
         return { date: dateStr, time: timeStr };
       }
-      
+
       return { date: dateStr, time: '' };
     } catch {
       return { date: '', time: '' };
@@ -294,12 +295,12 @@ export default function InternalLedger() {
   // Group entries by customer
   const groupedByCustomer = useMemo(() => {
     const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number } } = {};
-    
+
     filteredEntries.forEach((entry: any) => {
       // Use customer ID or 'anonymous' for null/undefined customers
       const customerId = entry.customer ? `customer-${entry.customer}` : 'anonymous';
       const customerName = entry.customer_name || 'Anonymous';
-      
+
       if (!grouped[customerId]) {
         grouped[customerId] = {
           customer: {
@@ -312,7 +313,7 @@ export default function InternalLedger() {
           netAmount: 0,
         };
       }
-      
+
       grouped[customerId].entries.push(entry);
       if (entry.entry_type === 'credit') {
         grouped[customerId].totalCredit += parseFloat(entry.amount || 0);
@@ -320,12 +321,12 @@ export default function InternalLedger() {
         grouped[customerId].totalDebit += parseFloat(entry.amount || 0);
       }
     });
-    
+
     // Calculate net amount for each customer
     Object.keys(grouped).forEach(key => {
       grouped[key].netAmount = grouped[key].totalCredit - grouped[key].totalDebit;
     });
-    
+
     return grouped;
   }, [filteredEntries]);
 
@@ -348,24 +349,24 @@ export default function InternalLedger() {
       'Customer': entry.customer_name || 'Anonymous',
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
-      'Amount': parseFloat(entry.amount || 0).toFixed(2),
+      'Amount': formatNumber(entry.amount || 0),
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Ledger Entries');
-    
+
     const fileName = `internal_ledger_entries_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
   const handleExportPDF = () => {
     const doc = new jsPDF();
-    
+
     // Add title
     doc.setFontSize(18);
     doc.text('Internal Ledger Entries Report', 14, 20);
-    
+
     // Add date range if filtered
     doc.setFontSize(10);
     doc.text(
@@ -373,14 +374,14 @@ export default function InternalLedger() {
       14,
       30
     );
-    
+
     // Prepare table data
     const tableData = filteredEntries.map((entry: any) => [
       new Date(entry.created_at).toLocaleDateString(),
       entry.customer_name || 'Anonymous',
       entry.entry_type.toUpperCase(),
       entry.description || '-',
-      `₹${parseFloat(entry.amount || 0).toFixed(2)}`,
+      `₹${formatNumber(entry.amount || 0)}`,
     ]);
 
     (doc as any).autoTable({
@@ -444,7 +445,7 @@ export default function InternalLedger() {
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
                   <td class="${entry.entry_type === 'credit' ? 'credit' : 'debit'}">
-                    ${entry.entry_type === 'credit' ? '+' : '-'}₹${parseFloat(entry.amount || 0).toFixed(2)}
+                    ${entry.entry_type === 'credit' ? '+' : '-'}₹${formatNumber(entry.amount || 0)}
                   </td>
                 </tr>
               `).join('')}
@@ -479,29 +480,29 @@ export default function InternalLedger() {
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
           <div className="flex gap-2">
-          <Button
-            onClick={() => setShowCustomerListModal(true)}
-            variant="outline"
-            className="border-blue-300 text-blue-600 hover:bg-blue-50"
-          >
-            <Users className="h-4 w-4 mr-2" />
-            Customers
-          </Button>
-          <Button
-            onClick={() => handleCreateEntry('credit')}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Credit (+)
-          </Button>
-          <Button
-            onClick={() => handleCreateEntry('debit')}
-            variant="outline"
-            className="border-red-300 text-red-600 hover:bg-red-50"
-          >
-            <Minus className="h-4 w-4 mr-2" />
-            Debit (-)
-          </Button>
+            <Button
+              onClick={() => setShowCustomerListModal(true)}
+              variant="outline"
+              className="border-blue-300 text-blue-600 hover:bg-blue-50"
+            >
+              <Users className="h-4 w-4 mr-2" />
+              Customers
+            </Button>
+            <Button
+              onClick={() => handleCreateEntry('credit')}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Credit (+)
+            </Button>
+            <Button
+              onClick={() => handleCreateEntry('debit')}
+              variant="outline"
+              className="border-red-300 text-red-600 hover:bg-red-50"
+            >
+              <Minus className="h-4 w-4 mr-2" />
+              Debit (-)
+            </Button>
           </div>
         </div>
       </div>
@@ -513,7 +514,7 @@ export default function InternalLedger() {
             <div>
               <p className="text-sm text-gray-600">Total Credit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{parseFloat(ledgerSummary?.total_credit || '0').toFixed(2)}
+                ₹{formatNumber(ledgerSummary?.total_credit || '0')}
               </p>
             </div>
             <TrendingUp className="h-12 w-12 text-green-600" />
@@ -525,7 +526,7 @@ export default function InternalLedger() {
             <div>
               <p className="text-sm text-gray-600">Total Debit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{parseFloat(ledgerSummary?.total_debit || '0').toFixed(2)}
+                ₹{formatNumber(ledgerSummary?.total_debit || '0')}
               </p>
             </div>
             <TrendingDown className="h-12 w-12 text-red-600" />
@@ -683,166 +684,160 @@ export default function InternalLedger() {
                 <div className="inline-block min-w-full align-middle">
                   <div className="overflow-hidden">
                     <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gradient-to-r from-gray-50 to-gray-100 sticky top-0 z-10">
-                      <tr>
-                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Shop Boy
-                        </th>
-                        <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Entries
-                        </th>
-                        <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
-                          Net Amount
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {Object.values(groupedByCustomer).map((group: any) => {
-                        const isExpanded = group.customer.id !== null && expandedCustomers.has(group.customer.id);
-                        const canExpand = group.customer.id !== null;
-                        return (
-                          <>
-                            {/* Customer Group Row */}
-                            <tr 
-                              key={`customer-${group.customer.id || 'anonymous'}`}
-                              className="bg-blue-50 hover:bg-blue-100 transition-colors"
-                              style={{ cursor: canExpand ? 'pointer' : 'default' }}
-                              onClick={() => canExpand && toggleCustomerExpansion(group.customer.id)}
-                            >
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <div className="flex items-center gap-2">
-                                  {canExpand ? (
-                                    isExpanded ? (
-                                      <ChevronDown className="h-4 w-4 text-gray-600" />
-                                    ) : (
-                                      <ChevronRight className="h-4 w-4 text-gray-600" />
-                                    )
-                                  ) : (
-                                    <div className="w-4 h-4" />
-                                  )}
-                                  <Users className="h-4 w-4 text-blue-600" />
-                                  {canExpand ? (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        navigate(`/internal-ledger/${group.customer.id}`);
-                                      }}
-                                      className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
-                                    >
-                                      {group.customer.name}
-                                    </button>
-                                  ) : (
-                                    <span className="text-sm font-semibold text-gray-700">
-                                      {group.customer.name}
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <span className="text-sm text-gray-600">
-                                  {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
-                                </span>
-                              </td>
-                              <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${
-                                group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
-                              }`}>
-                                <span className={`inline-flex items-center px-3 py-1.5 rounded ${
-                                  group.netAmount >= 0 
-                                    ? 'bg-green-50 border border-green-200' 
-                                    : 'bg-red-50 border border-red-200'
-                                }`}>
-                                  {group.netAmount >= 0 ? '+' : ''}₹{group.netAmount.toFixed(2)}
-                                </span>
-                              </td>
-                            </tr>
-                            {/* Expanded Entries */}
-                            {isExpanded && group.entries.map((entry: any) => (
-                              <tr 
-                                key={entry.id} 
-                                className="bg-gray-50/30 hover:bg-gray-100 transition-colors"
+                      <thead className="bg-gradient-to-r from-gray-50 to-gray-100 sticky top-0 z-10">
+                        <tr>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Shop Boy
+                          </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Entries
+                          </th>
+                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Net Amount
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {Object.values(groupedByCustomer).map((group: any) => {
+                          const isExpanded = group.customer.id !== null && expandedCustomers.has(group.customer.id);
+                          const canExpand = group.customer.id !== null;
+                          return (
+                            <>
+                              {/* Customer Group Row */}
+                              <tr
+                                key={`customer-${group.customer.id || 'anonymous'}`}
+                                className="bg-blue-50 hover:bg-blue-100 transition-colors"
+                                style={{ cursor: canExpand ? 'pointer' : 'default' }}
+                                onClick={() => canExpand && toggleCustomerExpansion(group.customer.id)}
                               >
-                                <td className="px-6 py-3 whitespace-nowrap pl-12">
-                                  <div className="flex flex-col">
-                                    {(() => {
-                                      const { date, time } = formatDateTime(entry.created_at);
-                                      return (
-                                        <>
-                                          <span className="text-sm font-medium text-gray-900">
-                                            {date}
-                                          </span>
-                                          {time && (
-                                            <span className="text-xs text-gray-500">
-                                              {time}
-                                            </span>
-                                          )}
-                                        </>
-                                      );
-                                    })()}
-                                  </div>
-                                </td>
-                                <td className="px-6 py-3 whitespace-nowrap">
+                                <td className="px-6 py-4 whitespace-nowrap">
                                   <div className="flex items-center gap-2">
-                                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${
-                                      entry.entry_type === 'credit'
-                                        ? 'bg-green-100 text-green-800 border border-green-200'
-                                        : 'bg-red-100 text-red-800 border border-red-200'
-                                    }`}>
-                                      {entry.entry_type === 'credit' ? (
-                                        <TrendingUp className="h-3 w-3 mr-1" />
+                                    {canExpand ? (
+                                      isExpanded ? (
+                                        <ChevronDown className="h-4 w-4 text-gray-600" />
                                       ) : (
-                                        <TrendingDown className="h-3 w-3 mr-1" />
-                                      )}
-                                      {entry.entry_type.toUpperCase()}
-                                    </span>
-                                    <span className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
-                                      {entry.description || <span className="text-gray-400 italic">No description</span>}
-                                    </span>
+                                        <ChevronRight className="h-4 w-4 text-gray-600" />
+                                      )
+                                    ) : (
+                                      <div className="w-4 h-4" />
+                                    )}
+                                    <Users className="h-4 w-4 text-blue-600" />
+                                    {canExpand ? (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          navigate(`/internal-ledger/${group.customer.id}`);
+                                        }}
+                                        className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                                      >
+                                        {group.customer.name}
+                                      </button>
+                                    ) : (
+                                      <span className="text-sm font-semibold text-gray-700">
+                                        {group.customer.name}
+                                      </span>
+                                    )}
                                   </div>
                                 </td>
-                                <td className={`px-6 py-3 whitespace-nowrap text-right text-sm font-bold ${
-                                  entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                                }`}>
-                                  <span className={`inline-flex items-center px-2 py-1 rounded ${
-                                    entry.entry_type === 'credit' 
-                                      ? 'bg-green-50 border border-green-200' 
-                                      : 'bg-red-50 border border-red-200'
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <span className="text-sm text-gray-600">
+                                    {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
+                                  </span>
+                                </td>
+                                <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
                                   }`}>
-                                    {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                                  <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0
+                                    ? 'bg-green-50 border border-green-200'
+                                    : 'bg-red-50 border border-red-200'
+                                    }`}>
+                                    {group.netAmount >= 0 ? '+' : ''}₹{formatNumber(group.netAmount)}
                                   </span>
                                 </td>
                               </tr>
-                            ))}
-                          </>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot className="bg-gray-50 border-t-2 border-gray-300">
-                      <tr>
-                        <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
-                          Totals:
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right">
-                          <div className="space-y-1">
-                            <div className="text-sm">
-                              <span className="text-gray-600">Credit: </span>
-                              <span className="font-bold text-green-700">+₹{totalCredit.toFixed(2)}</span>
+                              {/* Expanded Entries */}
+                              {isExpanded && group.entries.map((entry: any) => (
+                                <tr
+                                  key={entry.id}
+                                  className="bg-gray-50/30 hover:bg-gray-100 transition-colors"
+                                >
+                                  <td className="px-6 py-3 whitespace-nowrap pl-12">
+                                    <div className="flex flex-col">
+                                      {(() => {
+                                        const { date, time } = formatDateTime(entry.created_at);
+                                        return (
+                                          <>
+                                            <span className="text-sm font-medium text-gray-900">
+                                              {date}
+                                            </span>
+                                            {time && (
+                                              <span className="text-xs text-gray-500">
+                                                {time}
+                                              </span>
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
+                                        ? 'bg-green-100 text-green-800 border border-green-200'
+                                        : 'bg-red-100 text-red-800 border border-red-200'
+                                        }`}>
+                                        {entry.entry_type === 'credit' ? (
+                                          <TrendingUp className="h-3 w-3 mr-1" />
+                                        ) : (
+                                          <TrendingDown className="h-3 w-3 mr-1" />
+                                        )}
+                                        {entry.entry_type.toUpperCase()}
+                                      </span>
+                                      <span className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
+                                        {entry.description || <span className="text-gray-400 italic">No description</span>}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className={`px-6 py-3 whitespace-nowrap text-right text-sm font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
+                                    }`}>
+                                    <span className={`inline-flex items-center px-2 py-1 rounded ${entry.entry_type === 'credit'
+                                      ? 'bg-green-50 border border-green-200'
+                                      : 'bg-red-50 border border-red-200'
+                                      }`}>
+                                      {entry.entry_type === 'credit' ? '+' : '-'}₹{formatNumber(entry.amount || 0)}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot className="bg-gray-50 border-t-2 border-gray-300">
+                        <tr>
+                          <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
+                            Totals:
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right">
+                            <div className="space-y-1">
+                              <div className="text-sm">
+                                <span className="text-gray-600">Credit: </span>
+                                <span className="font-bold text-green-700">+₹{formatNumber(totalCredit)}</span>
+                              </div>
+                              <div className="text-sm">
+                                <span className="text-gray-600">Debit: </span>
+                                <span className="font-bold text-red-700">-₹{formatNumber(totalDebit)}</span>
+                              </div>
+                              <div className="text-sm pt-1 border-t border-gray-300">
+                                <span className="text-gray-700">Net: </span>
+                                <span className={`font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
+                                  }`}>
+                                  {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatNumber(totalCredit - totalDebit)}
+                                </span>
+                              </div>
                             </div>
-                            <div className="text-sm">
-                              <span className="text-gray-600">Debit: </span>
-                              <span className="font-bold text-red-700">-₹{totalDebit.toFixed(2)}</span>
-                            </div>
-                            <div className="text-sm pt-1 border-t border-gray-300">
-                              <span className="text-gray-700">Net: </span>
-                              <span className={`font-bold ${
-                                (totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
-                              }`}>
-                                {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    </tfoot>
+                          </td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 </div>
@@ -857,11 +852,11 @@ export default function InternalLedger() {
                 <div className="flex items-center gap-4">
                   <div>
                     <span className="text-gray-500">Total Credit: </span>
-                    <span className="font-semibold text-green-700">₹{totalCredit.toFixed(2)}</span>
+                    <span className="font-semibold text-green-700">₹{formatNumber(totalCredit)}</span>
                   </div>
                   <div>
                     <span className="text-gray-500">Total Debit: </span>
-                    <span className="font-semibold text-red-700">₹{totalDebit.toFixed(2)}</span>
+                    <span className="font-semibold text-red-700">₹{formatNumber(totalDebit)}</span>
                   </div>
                 </div>
               </div>
@@ -913,20 +908,18 @@ export default function InternalLedger() {
                             </p>
                           </div>
                         </div>
-                        <div className={`text-lg font-bold ${
-                          group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
-                        }`}>
-                          <span className={`inline-flex items-center px-3 py-1.5 rounded ${
-                            group.netAmount >= 0 
-                              ? 'bg-green-50 border border-green-200' 
-                              : 'bg-red-50 border border-red-200'
+                        <div className={`text-lg font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
                           }`}>
-                            {group.netAmount >= 0 ? '+' : ''}₹{group.netAmount.toFixed(2)}
+                          <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0
+                            ? 'bg-green-50 border border-green-200'
+                            : 'bg-red-50 border border-red-200'
+                            }`}>
+                            {group.netAmount >= 0 ? '+' : ''}₹{formatNumber(group.netAmount)}
                           </span>
                         </div>
                       </div>
                     </div>
-                    
+
                     {/* Expanded Entries */}
                     {isExpanded && group.entries.map((entry: any) => (
                       <div
@@ -954,11 +947,10 @@ export default function InternalLedger() {
                               })()}
                             </div>
                           </div>
-                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${
-                            entry.entry_type === 'credit'
-                              ? 'bg-green-100 text-green-800 border border-green-200'
-                              : 'bg-red-100 text-red-800 border border-red-200'
-                          }`}>
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
+                            ? 'bg-green-100 text-green-800 border border-green-200'
+                            : 'bg-red-100 text-red-800 border border-red-200'
+                            }`}>
                             {entry.entry_type === 'credit' ? (
                               <TrendingUp className="h-3 w-3 mr-1" />
                             ) : (
@@ -975,15 +967,13 @@ export default function InternalLedger() {
                           </div>
                         )}
                         <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-                          <div className={`text-base font-bold ${
-                            entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                          }`}>
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded ${
-                              entry.entry_type === 'credit' 
-                                ? 'bg-green-50 border border-green-200' 
-                                : 'bg-red-50 border border-red-200'
+                          <div className={`text-base font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
                             }`}>
-                              {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                            <span className={`inline-flex items-center px-2.5 py-1 rounded ${entry.entry_type === 'credit'
+                              ? 'bg-green-50 border border-green-200'
+                              : 'bg-red-50 border border-red-200'
+                              }`}>
+                              {entry.entry_type === 'credit' ? '+' : '-'}₹{formatNumber(entry.amount || 0)}
                             </span>
                           </div>
                         </div>
@@ -998,18 +988,17 @@ export default function InternalLedger() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Total Credit:</span>
-                    <span className="font-semibold text-green-700">₹{totalCredit.toFixed(2)}</span>
+                    <span className="font-semibold text-green-700">₹{formatNumber(totalCredit)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Total Debit:</span>
-                    <span className="font-semibold text-red-700">₹{totalDebit.toFixed(2)}</span>
+                    <span className="font-semibold text-red-700">₹{formatNumber(totalDebit)}</span>
                   </div>
                   <div className="pt-2 border-t border-gray-300 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Net:</span>
-                    <span className={`text-sm font-bold ${
-                      (totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
-                    }`}>
-                      {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                    <span className={`text-sm font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
+                      }`}>
+                      {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatNumber(totalCredit - totalDebit)}
                     </span>
                   </div>
                 </div>
@@ -1088,16 +1077,16 @@ export default function InternalLedger() {
                           ))}
                         </>
                       )}
-                      
+
                       {/* Create New Shop Boy Option */}
                       <button
                         type="button"
                         onClick={() => {
-                          setNewCustomerData({ 
-                            name: customerSearch.trim(), 
-                            phone: '', 
-                            email: '', 
-                            address: '' 
+                          setNewCustomerData({
+                            name: customerSearch.trim(),
+                            phone: '',
+                            email: '',
+                            address: ''
                           });
                           setShowCreateCustomerModal(true);
                           setCustomerSearch('');
@@ -1115,11 +1104,11 @@ export default function InternalLedger() {
                     <button
                       type="button"
                       onClick={() => {
-                        setNewCustomerData({ 
-                          name: customerSearch.trim(), 
-                          phone: '', 
-                          email: '', 
-                          address: '' 
+                        setNewCustomerData({
+                          name: customerSearch.trim(),
+                          phone: '',
+                          email: '',
+                          address: ''
                         });
                         setShowCreateCustomerModal(true);
                         setCustomerSearch('');
@@ -1306,7 +1295,7 @@ export default function InternalLedger() {
                             </div>
                             <div className="text-right flex-shrink-0 ml-4">
                               <div className="text-sm font-semibold text-gray-700">
-                                ₹{parseFloat(customer.credit_balance || 0).toFixed(2)}
+                                ₹{formatNumber(customer.credit_balance || 0)}
                               </div>
                               <div className="text-xs text-gray-500">Balance</div>
                             </div>

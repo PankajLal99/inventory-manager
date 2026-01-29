@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
+import { formatNumber } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -11,9 +12,9 @@ import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import PageHeader from '../../components/ui/PageHeader';
-import { 
-  FileText, 
-  ArrowLeft, 
+import {
+  FileText,
+  ArrowLeft,
   User,
   Calendar,
   ShoppingBag,
@@ -84,7 +85,7 @@ export default function PurchaseDetail() {
             .then((response) => {
               if (response.data) {
                 const allGenerated = response.data.all_generated || false;
-                
+
                 if (allGenerated) {
                   // Labels already exist, just update status
                   setLabelStatuses(prev => ({
@@ -103,7 +104,7 @@ export default function PurchaseDetail() {
                       generating: true
                     }
                   }));
-                  
+
                   // Generate labels in background, filtered by this purchase
                   const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
                   productsApi.generateLabels(productId, purchaseId)
@@ -111,7 +112,7 @@ export default function PurchaseDetail() {
                       // Check the response directly - if total_labels > 0, labels were generated
                       const totalLabels = response.data?.total_labels || 0;
                       const allGenerated = totalLabels > 0;
-                      
+
                       setLabelStatuses(prev => ({
                         ...prev,
                         [productId]: {
@@ -119,7 +120,7 @@ export default function PurchaseDetail() {
                           generating: false
                         }
                       }));
-                      
+
                       // Optionally verify with status check for extra confirmation
                       productsApi.labelsStatus(productId, purchaseId)
                         .then((statusResponse) => {
@@ -145,7 +146,7 @@ export default function PurchaseDetail() {
                           generating: false
                         }
                       }));
-                      console.log(`Auto-generation of labels for product ${productId} failed:`, error);
+                      console.log(`Auto - generation of labels for product ${productId} failed: `, error);
                     });
                 }
               }
@@ -159,7 +160,7 @@ export default function PurchaseDetail() {
                   generating: false
                 }
               }));
-              console.log(`Label status check for product ${productId} failed:`, error);
+              console.log(`Label status check for product ${productId} failed: `, error);
             });
         }
       });
@@ -181,280 +182,280 @@ export default function PurchaseDetail() {
     const printWindow = window.open('', '_blank');
     if (printWindow) {
       printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Print Labels - ${imageUrls.length} label(s)</title>
-            <style>
-              * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
+  <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Print Labels - ${imageUrls.length} label(s)</title>
+        <style>
+          * {
+            margin: 0;
+          padding: 0;
+          box-sizing: border-box;
               }
-              body {
-                padding: 20px;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                gap: 3mm;
-                background: #f5f5f5;
+          body {
+            padding: 20px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 3mm;
+          background: #f5f5f5;
               }
-              .label-container {
-                background: white;
-                padding: 10px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                width: 50mm;
-                height: 25mm;
-                margin: 1.5mm;
-                border: 1px dashed #ccc;
-                box-sizing: border-box;
+          .label-container {
+            background: white;
+          padding: 10px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          width: 50mm;
+          height: 25mm;
+          margin: 1.5mm;
+          border: 1px dashed #ccc;
+          box-sizing: border-box;
               }
-              img {
-                display: block;
-                width: auto;
-                height: auto;
-                max-width: 100%;
-                max-height: 100vh;
-                object-fit: contain;
+          img {
+            display: block;
+          width: auto;
+          height: auto;
+          max-width: 100%;
+          max-height: 100vh;
+          object-fit: contain;
               }
-              @media print {
-                @page {
-                  size: 50mm 25mm;
-                  margin: 1.5mm 0 0 0;
+          @media print {
+            @page {
+            size: 50mm 25mm;
+          margin: 1.5mm 0 0 0;
                 }
-                * {
-                  margin: 0;
-                  padding: 0;
-                  box-sizing: border-box;
+          * {
+            margin: 0;
+          padding: 0;
+          box-sizing: border-box;
                 }
-                html {
-                  margin: 0;
-                  padding: 0;
-                  width: 50mm;
-                  height: 23.5mm;
+          html {
+            margin: 0;
+          padding: 0;
+          width: 50mm;
+          height: 23.5mm;
                 }
-                body {
-                  margin: 0;
-                  padding: 0;
-                  background: white;
-                  width: 50mm;
-                  height: 23.5mm;
-                  display: flex;
-                  flex-direction: column;
-                  justify-content: center;
-                  align-items: center;
+          body {
+            margin: 0;
+          padding: 0;
+          background: white;
+          width: 50mm;
+          height: 23.5mm;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
                 }
-                body.single-label {
-                  display: flex !important;
-                  justify-content: center !important;
-                  align-items: center !important;
+          body.single-label {
+            display: flex !important;
+          justify-content: center !important;
+          align-items: center !important;
                 }
-                .label-container {
-                  box-shadow: none;
-                  border: none !important;
-                  padding: 2mm 1mm 2mm 1mm;
-                  margin: 0;
-                  width: 50mm !important;
-                  height: 23.5mm !important;
-                  max-width: 50mm !important;
-                  max-height: 23.5mm !important;
-                  min-width: 50mm !important;
-                  min-height: 23.5mm !important;
-                  display: flex !important;
-                  justify-content: center !important;
-                  align-items: center !important;
-                  overflow: hidden;
-                  page-break-inside: avoid;
-                  break-inside: avoid;
-                  box-sizing: border-box;
+          .label-container {
+            box-shadow: none;
+          border: none !important;
+          padding: 2mm 1mm 2mm 1mm;
+          margin: 0;
+          width: 50mm !important;
+          height: 23.5mm !important;
+          max-width: 50mm !important;
+          max-height: 23.5mm !important;
+          min-width: 50mm !important;
+          min-height: 23.5mm !important;
+          display: flex !important;
+          justify-content: center !important;
+          align-items: center !important;
+          overflow: hidden;
+          page-break-inside: avoid;
+          break-inside: avoid;
+          box-sizing: border-box;
                 }
-                .label-container:not(:last-child) {
-                  page-break-after: always;
+          .label-container:not(:last-child) {
+            page-break-after: always;
                 }
-                .label-container:last-child {
-                  page-break-after: auto;
+          .label-container:last-child {
+            page-break-after: auto;
                 }
-                img {
-                  max-width: 48mm !important;
-                  max-height: 19.5mm !important;
-                  width: auto !important;
-                  height: auto !important;
-                  object-fit: contain !important;
-                  object-position: center !important;
-                  display: block !important;
-                  margin: 0 !important;
-                  padding: 0 !important;
-                  image-rendering: -webkit-optimize-contrast;
-                  image-rendering: crisp-edges;
-                  image-rendering: pixelated;
+          img {
+            max - width: 48mm !important;
+          max-height: 19.5mm !important;
+          width: auto !important;
+          height: auto !important;
+          object-fit: contain !important;
+          object-position: center !important;
+          display: block !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          image-rendering: -webkit-optimize-contrast;
+          image-rendering: crisp-edges;
+          image-rendering: pixelated;
                 }
               }
-            </style>
-          </head>
-          <body>
-            ${imageUrls.map((url: string, index: number) => `
+        </style>
+      </head>
+      <body>
+        ${imageUrls.map((url: string, index: number) => `
               <div class="label-container">
                 <img src="${url}" alt="Barcode Label ${index + 1}" onerror="console.error('Failed to load image ${index + 1}');" />
               </div>
             `).join('')}
-            <script>
-              (function() {
+        <script>
+          (function() {
                 var images = document.querySelectorAll('img');
-                var loadedCount = 0;
-                var totalImages = images.length;
-                var hasPrinted = false;
-                
-                function tryPrint() {
+          var loadedCount = 0;
+          var totalImages = images.length;
+          var hasPrinted = false;
+
+          function tryPrint() {
                   if (loadedCount === totalImages && !hasPrinted) {
-                    hasPrinted = true;
-                    
-                    // Handle single vs multiple labels differently
-                    if (totalImages === 1) {
-                      // Single label: center it on one page
-                      document.documentElement.style.width = '50mm';
-                      document.documentElement.style.height = '23.5mm';
-                      document.documentElement.style.margin = '0';
-                      document.documentElement.style.padding = '0';
-                      document.documentElement.style.overflow = 'hidden';
-                      document.body.classList.add('single-label');
-                      document.body.style.width = '50mm';
-                      document.body.style.height = '23.5mm';
-                      document.body.style.margin = '0';
-                      document.body.style.padding = '0';
-                      document.body.style.overflow = 'hidden';
-                      document.body.style.display = 'flex';
-                      document.body.style.flexDirection = 'column';
-                      document.body.style.justifyContent = 'center';
-                      document.body.style.alignItems = 'center';
+            hasPrinted = true;
+
+          // Handle single vs multiple labels differently
+          if (totalImages === 1) {
+            // Single label: center it on one page
+            document.documentElement.style.width = '50mm';
+          document.documentElement.style.height = '23.5mm';
+          document.documentElement.style.margin = '0';
+          document.documentElement.style.padding = '0';
+          document.documentElement.style.overflow = 'hidden';
+          document.body.classList.add('single-label');
+          document.body.style.width = '50mm';
+          document.body.style.height = '23.5mm';
+          document.body.style.margin = '0';
+          document.body.style.padding = '0';
+          document.body.style.overflow = 'hidden';
+          document.body.style.display = 'flex';
+          document.body.style.flexDirection = 'column';
+          document.body.style.justifyContent = 'center';
+          document.body.style.alignItems = 'center';
                     } else {
-                      // Multiple labels: let them flow naturally with page breaks
-                      document.body.classList.remove('single-label');
-                      document.body.style.display = 'block';
-                      document.body.style.margin = '0';
-                      document.body.style.padding = '0';
+            // Multiple labels: let them flow naturally with page breaks
+            document.body.classList.remove('single-label');
+          document.body.style.display = 'block';
+          document.body.style.margin = '0';
+          document.body.style.padding = '0';
                     }
-                    
-                    // Ensure all containers and images are properly sized
-                    var containers = document.querySelectorAll('.label-container');
-                    containers.forEach(function(container, index) {
-                      container.style.width = '50mm';
-                      container.style.height = '23.5mm';
-                      container.style.maxWidth = '50mm';
-                      container.style.maxHeight = '23.5mm';
-                      container.style.minWidth = '50mm';
-                      container.style.minHeight = '23.5mm';
-                      container.style.margin = '0';
-                      container.style.padding = '2mm 1mm 2mm 1mm';
-                      container.style.boxSizing = 'border-box';
-                      container.style.border = 'none';
-                      container.style.display = 'flex';
-                      container.style.justifyContent = 'center';
-                      container.style.alignItems = 'center';
-                      // Only add page break if not the last container
-                      if (index < containers.length - 1) {
-                        container.style.pageBreakAfter = 'always';
+
+          // Ensure all containers and images are properly sized
+          var containers = document.querySelectorAll('.label-container');
+          containers.forEach(function(container, index) {
+            container.style.width = '50mm';
+          container.style.height = '23.5mm';
+          container.style.maxWidth = '50mm';
+          container.style.maxHeight = '23.5mm';
+          container.style.minWidth = '50mm';
+          container.style.minHeight = '23.5mm';
+          container.style.margin = '0';
+          container.style.padding = '2mm 1mm 2mm 1mm';
+          container.style.boxSizing = 'border-box';
+          container.style.border = 'none';
+          container.style.display = 'flex';
+          container.style.justifyContent = 'center';
+          container.style.alignItems = 'center';
+          // Only add page break if not the last container
+          if (index < containers.length - 1) {
+            container.style.pageBreakAfter = 'always';
                       } else {
-                        container.style.pageBreakAfter = 'auto';
+            container.style.pageBreakAfter = 'auto';
                       }
                     });
-                    
-                    images.forEach(function(img) {
+
+          images.forEach(function(img) {
                       // Preserve aspect ratio to prevent barcode line distortion
                       // Only calculate if image has loaded dimensions
                       if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                         var naturalWidth = img.naturalWidth;
-                        var naturalHeight = img.naturalHeight;
-                        var aspectRatio = naturalWidth / naturalHeight;
-                        
-                        // Calculate dimensions that fit within 48mm x 19.5mm while maintaining aspect ratio
-                        // (25mm page height - 1.5mm top margin - 2mm top padding - 2mm bottom padding = 19.5mm)
-                        var maxWidth = 48; // mm
-                        var maxHeight = 19.5; // mm
-                        var calculatedWidth = maxWidth;
-                        var calculatedHeight = maxWidth / aspectRatio;
-                        
+          var naturalHeight = img.naturalHeight;
+          var aspectRatio = naturalWidth / naturalHeight;
+
+          // Calculate dimensions that fit within 48mm x 19.5mm while maintaining aspect ratio
+          // (25mm page height - 1.5mm top margin - 2mm top padding - 2mm bottom padding = 19.5mm)
+          var maxWidth = 48; // mm
+          var maxHeight = 19.5; // mm
+          var calculatedWidth = maxWidth;
+          var calculatedHeight = maxWidth / aspectRatio;
+
                         // If height exceeds max, scale down based on height
                         if (calculatedHeight > maxHeight) {
-                          calculatedHeight = maxHeight;
-                          calculatedWidth = maxHeight * aspectRatio;
+            calculatedHeight = maxHeight;
+          calculatedWidth = maxHeight * aspectRatio;
                         }
-                        
-                        img.style.maxWidth = calculatedWidth + 'mm';
-                        img.style.maxHeight = calculatedHeight + 'mm';
+
+          img.style.maxWidth = calculatedWidth + 'mm';
+          img.style.maxHeight = calculatedHeight + 'mm';
                       } else {
-                        // Fallback if dimensions not available
-                        img.style.maxWidth = '48mm';
-                        img.style.maxHeight = '19.5mm';
+            // Fallback if dimensions not available
+            img.style.maxWidth = '48mm';
+          img.style.maxHeight = '19.5mm';
                       }
-                      
-                      img.style.width = 'auto';
-                      img.style.height = 'auto';
-                      img.style.objectFit = 'contain';
-                      img.style.objectPosition = 'center';
-                      img.style.display = 'block';
-                      img.style.margin = '0';
-                      img.style.padding = '0';
-                      // Prevent image scaling that distorts barcode lines
-                      img.style.imageRendering = 'auto';
-                      img.style.imageRendering = '-webkit-optimize-contrast';
+
+          img.style.width = 'auto';
+          img.style.height = 'auto';
+          img.style.objectFit = 'contain';
+          img.style.objectPosition = 'center';
+          img.style.display = 'block';
+          img.style.margin = '0';
+          img.style.padding = '0';
+          // Prevent image scaling that distorts barcode lines
+          img.style.imageRendering = 'auto';
+          img.style.imageRendering = '-webkit-optimize-contrast';
                     });
-                    
-                    // Wait for rendering
-                    setTimeout(function() {
-                      window.print();
+
+          // Wait for rendering
+          setTimeout(function() {
+            window.print();
                     }, 500);
                   }
                 }
-                
-                if (totalImages === 0) {
-                  alert('No images found to print.');
-                  return;
+
+          if (totalImages === 0) {
+            alert('No images found to print.');
+          return;
                 }
-                
-                // Wait for all images to load
-                images.forEach(function(img, index) {
-                  img.style.display = 'block';
-                  img.style.visibility = 'visible';
-                  
-                  if (img.complete && img.naturalHeight !== 0 && img.naturalWidth !== 0) {
-                    loadedCount++;
-                    tryPrint();
+
+          // Wait for all images to load
+          images.forEach(function(img, index) {
+            img.style.display = 'block';
+          img.style.visibility = 'visible';
+
+          if (img.complete && img.naturalHeight !== 0 && img.naturalWidth !== 0) {
+            loadedCount++;
+          tryPrint();
                   } else {
-                    img.onload = function() {
-                      if (this.naturalWidth > 0 && this.naturalHeight > 0) {
-                        loadedCount++;
-                        tryPrint();
-                      }
-                    };
-                    img.onerror = function() {
-                      console.error('Failed to load image ' + (index + 1));
-                      loadedCount++;
-                      tryPrint();
+            img.onload = function () {
+              if (this.naturalWidth > 0 && this.naturalHeight > 0) {
+                loadedCount++;
+                tryPrint();
+              }
+            };
+          img.onerror = function() {
+            console.error('Failed to load image ' + (index + 1));
+          loadedCount++;
+          tryPrint();
                     };
                   }
                 });
-                
-                // Fallback timeout
-                setTimeout(function() {
+
+          // Fallback timeout
+          setTimeout(function() {
                   if (!hasPrinted) {
-                    hasPrinted = true;
-                    window.print();
+            hasPrinted = true;
+          window.print();
                   }
                 }, 5000);
               })();
-            </script>
-          </body>
-        </html>
-      `);
+        </script>
+      </body>
+    </html>
+`);
       printWindow.document.close();
     }
   };
 
   const generateLabelsMutation = useMutation({
-    mutationFn: ({ productId, purchaseId }: { productId: number; purchaseId?: number }) => 
+    mutationFn: ({ productId, purchaseId }: { productId: number; purchaseId?: number }) =>
       productsApi.generateLabels(productId, purchaseId),
     onSuccess: (data, { productId }) => {
       setLabelStatuses(prev => ({
@@ -470,9 +471,9 @@ export default function PurchaseDetail() {
       const alreadyExisted = data.data?.already_existed || (total - newlyGenerated);
       if (newlyGenerated > 0) {
         if (alreadyExisted > 0) {
-          alert(`Successfully generated ${newlyGenerated} new label(s). ${alreadyExisted} label(s) were already generated. Total: ${total} label(s).`);
+          alert(`Successfully generated ${newlyGenerated} new label(s).${alreadyExisted} label(s) were already generated.Total: ${total} label(s).`);
         } else {
-          alert(`Successfully generated ${newlyGenerated} new label(s). Total: ${total} label(s).`);
+          alert(`Successfully generated ${newlyGenerated} new label(s).Total: ${total} label(s).`);
         }
       } else {
         alert(`All ${total} label(s) were already generated.`);
@@ -566,12 +567,6 @@ export default function PurchaseDetail() {
     }
   };
 
-  const formatCurrency = (amount: number | string) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-    }).format(parseFloat(String(amount || '0')));
-  };
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -596,7 +591,7 @@ export default function PurchaseDetail() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Purchase Items');
-    
+
     const fileName = `purchase_${purchase.purchase_number || purchase.id}_${new Date().toISOString().split('T')[0]}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
@@ -605,27 +600,27 @@ export default function PurchaseDetail() {
     if (!purchase) return;
 
     const doc = new jsPDF();
-    
+
     // Add title
     doc.setFontSize(18);
     doc.text('Purchase Order', 14, 20);
-    
+
     // Purchase details
     doc.setFontSize(10);
-    doc.text(`Purchase #: ${purchase.purchase_number || `PUR-${purchase.id}`}`, 14, 35);
-    doc.text(`Date: ${formatDate(purchase.purchase_date)}`, 14, 42);
-    doc.text(`Supplier: ${purchase.supplier_name || '-'}`, 14, 49);
+    doc.text(`Purchase #: ${purchase.purchase_number || `PUR-${purchase.id}`} `, 14, 35);
+    doc.text(`Date: ${formatDate(purchase.purchase_date)} `, 14, 42);
+    doc.text(`Supplier: ${purchase.supplier_name || '-'} `, 14, 49);
     if (purchase.bill_number) {
-      doc.text(`Bill #: ${purchase.bill_number}`, 14, 56);
+      doc.text(`Bill #: ${purchase.bill_number} `, 14, 56);
     }
-    
+
     // Prepare table data
     const tableData = (purchase.items || []).map((item: any) => [
       item.product_name || '-',
       item.product_sku || '-',
       item.quantity.toString(),
-      `₹${parseFloat(item.unit_price || 0).toFixed(2)}`,
-      `₹${parseFloat(item.line_total || 0).toFixed(2)}`,
+      `₹${formatNumber(item.unit_price || 0)} `,
+      `₹${formatNumber(item.line_total || 0)} `,
     ]);
 
     (doc as any).autoTable({
@@ -639,7 +634,7 @@ export default function PurchaseDetail() {
     // Add total
     const finalY = (doc as any).lastAutoTable.finalY || (purchase.bill_number ? 63 : 56);
     doc.setFontSize(12);
-    doc.text(`Total: ${formatCurrency(purchase.total || 0)}`, 14, finalY + 10);
+    doc.text(`Total: ₹${formatNumber(purchase.total || 0)}`, 14, finalY + 10);
 
     const fileName = `purchase_${purchase.purchase_number || purchase.id}_${new Date().toISOString().split('T')[0]}.pdf`;
     doc.save(fileName);
@@ -652,61 +647,61 @@ export default function PurchaseDetail() {
     if (!printWindow) return;
 
     const printContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Purchase Order ${purchase.purchase_number || purchase.id}</title>
-          <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            h1 { color: #1f2937; margin-bottom: 10px; }
-            .info { color: #6b7280; margin-bottom: 20px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th { background-color: #3b82f6; color: white; padding: 12px; text-align: left; }
-            td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
-            tr:hover { background-color: #f9fafb; }
-            .total { font-weight: bold; font-size: 18px; margin-top: 20px; }
-            @media print {
-              body { margin: 0; }
-              .no-print { display: none; }
+  < !DOCTYPE html >
+    <html>
+      <head>
+        <title>Purchase Order ${purchase.purchase_number || purchase.id}</title>
+        <style>
+          body {font-family: Arial, sans-serif; margin: 20px; }
+          h1 {color: #1f2937; margin-bottom: 10px; }
+          .info {color: #6b7280; margin-bottom: 20px; }
+          table {width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th {background-color: #3b82f6; color: white; padding: 12px; text-align: left; }
+          td {padding: 10px; border-bottom: 1px solid #e5e7eb; }
+          tr:hover {background-color: #f9fafb; }
+          .total {font-weight: bold; font-size: 18px; margin-top: 20px; }
+          @media print {
+            body {margin: 0; }
+          .no-print {display: none; }
             }
-          </style>
-        </head>
-        <body>
-          <h1>Purchase Order</h1>
-          <div class="info">
-            <p><strong>Purchase #:</strong> ${purchase.purchase_number || `PUR-${purchase.id}`}</p>
-            <p><strong>Date:</strong> ${formatDate(purchase.purchase_date)}</p>
-            <p><strong>Supplier:</strong> ${purchase.supplier_name || '-'}</p>
-            ${purchase.bill_number ? `<p><strong>Bill #:</strong> ${purchase.bill_number}</p>` : ''}
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>SKU</th>
-                <th>Quantity</th>
-                <th>Unit Price</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(purchase.items || []).map((item: any) => `
+        </style>
+      </head>
+      <body>
+        <h1>Purchase Order</h1>
+        <div class="info">
+          <p><strong>Purchase #:</strong> ${purchase.purchase_number || `PUR-${purchase.id}`}</p>
+          <p><strong>Date:</strong> ${formatDate(purchase.purchase_date)}</p>
+          <p><strong>Supplier:</strong> ${purchase.supplier_name || '-'}</p>
+          ${purchase.bill_number ? `<p><strong>Bill #:</strong> ${purchase.bill_number}</p>` : ''}
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>SKU</th>
+              <th>Quantity</th>
+              <th>Unit Price</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(purchase.items || []).map((item: any) => `
                 <tr>
                   <td>${item.product_name || '-'}</td>
                   <td>${item.product_sku || '-'}</td>
                   <td>${item.quantity}</td>
-                  <td>${formatCurrency(item.unit_price || 0)}</td>
-                  <td>${formatCurrency(item.line_total || 0)}</td>
+                  <td>₹{formatNumber(item.unit_price || 0)}</td>
+                  <td>₹{formatNumber(item.line_total || 0)}</td>
                 </tr>
               `).join('')}
-            </tbody>
-          </table>
-          <div class="total">
-            <p>Total: ${formatCurrency(purchase.total || 0)}</p>
-          </div>
-        </body>
-      </html>
-    `;
+          </tbody>
+        </table>
+        <div class="total">
+          <p>Total: ₹{formatNumber(purchase.total || 0)}</p>
+        </div>
+      </body>
+    </html>
+`;
 
     printWindow.document.write(printContent);
     printWindow.document.close();
@@ -740,7 +735,7 @@ export default function PurchaseDetail() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`Purchase ${purchase.purchase_number || `PUR-${purchase.id}`}`}
+        title={`Purchase ${purchase.purchase_number || `PUR-${purchase.id}`} `}
         subtitle="View purchase order details"
         icon={ShoppingBag}
         action={(
@@ -807,7 +802,7 @@ export default function PurchaseDetail() {
               <div>
                 <label className="text-sm font-medium text-gray-500">Purchase Number</label>
                 <p className="text-lg font-semibold text-gray-900 mt-1">
-                  {purchase.purchase_number || `PUR-${purchase.id}`}
+                  {purchase.purchase_number || `PUR - ${purchase.id} `}
                 </p>
               </div>
               <div>
@@ -828,7 +823,7 @@ export default function PurchaseDetail() {
               <div>
                 <label className="text-sm font-medium text-gray-500">Total Amount</label>
                 <p className="text-2xl font-bold text-blue-600 mt-1">
-                  {formatCurrency(purchase.total || 0)}
+                  ₹{formatNumber(purchase.total || 0)}
                 </p>
               </div>
             </div>
@@ -868,7 +863,7 @@ export default function PurchaseDetail() {
                     const productId = item.product;
                     const trackInventory = item.product_track_inventory;
                     const labelStatus = labelStatuses[productId] || { all_generated: false, generating: false };
-                    
+
                     return (
                       <TableRow key={item.id || index}>
                         <TableCell>
@@ -888,12 +883,12 @@ export default function PurchaseDetail() {
                         </TableCell>
                         <TableCell align="right">
                           <span className="text-gray-900">
-                            {formatCurrency(item.unit_price || 0)}
+                            ₹{formatNumber(item.unit_price || 0)}
                           </span>
                         </TableCell>
                         <TableCell align="right">
                           <span className="font-semibold text-gray-900">
-                            {formatCurrency(item.line_total || 0)}
+                            ₹{formatNumber(item.line_total || 0)}
                           </span>
                         </TableCell>
                         <TableCell align="center">
@@ -942,9 +937,9 @@ export default function PurchaseDetail() {
                                     className="flex items-center gap-1.5 text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300"
                                     title="Generate Labels"
                                   >
-                                      <Printer className="h-3.5 w-3.5" />
-                                      <span className="hidden sm:inline">Generate Labels</span>
-                                    </Button>
+                                    <Printer className="h-3.5 w-3.5" />
+                                    <span className="hidden sm:inline">Generate Labels</span>
+                                  </Button>
                                 );
                               })()}
                             </div>
@@ -960,7 +955,7 @@ export default function PurchaseDetail() {
                       Total:
                     </TableCell>
                     <TableCell align="right" className="font-bold text-xl text-blue-600">
-                      {formatCurrency(purchase.total || 0)}
+                      ₹{formatNumber(purchase.total || 0)}
                     </TableCell>
                   </TableRow>
                 </Table>
@@ -1044,7 +1039,7 @@ export default function PurchaseDetail() {
               <div className="flex justify-between items-center pt-3 border-t border-gray-200">
                 <span className="text-base font-bold text-gray-900">Total</span>
                 <span className="text-2xl font-bold text-blue-600">
-                  {formatCurrency(purchase.total || 0)}
+                  ₹{formatNumber(purchase.total || 0)}
                 </span>
               </div>
             </div>
@@ -1137,7 +1132,7 @@ export default function PurchaseDetail() {
                           </td>
                           <td className="px-4 py-3 text-right">
                             <span className="text-sm font-semibold text-gray-900">
-                              {formatCurrency(total)}
+                              ₹{formatNumber(total)}
                             </span>
                           </td>
                         </tr>
@@ -1150,7 +1145,7 @@ export default function PurchaseDetail() {
                         Total:
                       </td>
                       <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">
-                        {formatCurrency(
+                        ₹{formatNumber(
                           purchase.items.reduce((sum: number, item: any) => {
                             const adjusted = finalizeItems[item.id] || {
                               quantity: item.quantity.toString(),

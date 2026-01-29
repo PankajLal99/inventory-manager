@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { formatNumber } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -335,7 +336,7 @@ export default function Ledger() {
       'Group': entry.customer_group_name || '-',
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
-      'Amount': parseFloat(entry.amount || 0).toFixed(2),
+      'Amount': formatNumber(parseFloat(entry.amount || 0)),
       'Invoice': entry.invoice_number || '-',
     }));
 
@@ -369,7 +370,7 @@ export default function Ledger() {
       entry.customer_group_name || '-',
       entry.entry_type.toUpperCase(),
       entry.description || '-',
-      `₹${parseFloat(entry.amount || 0).toFixed(2)}`,
+      `₹${formatNumber(entry.amount || 0)}`,
       entry.invoice_number || '-',
     ]);
 
@@ -437,7 +438,7 @@ export default function Ledger() {
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
                   <td class="${entry.entry_type === 'credit' ? 'credit' : 'debit'}">
-                    ${entry.entry_type === 'credit' ? '+' : '-'}₹${parseFloat(entry.amount || 0).toFixed(2)}
+                    ${entry.entry_type === 'credit' ? '+' : '-'}₹${formatNumber(entry.amount || 0)}
                   </td>
                   <td>${entry.invoice_number || '-'}</td>
                 </tr>
@@ -554,7 +555,7 @@ export default function Ledger() {
             <div>
               <p className="text-sm text-gray-600">Total Credit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{parseFloat(ledgerSummary?.total_credit || '0').toFixed(2)}
+                ₹{formatNumber(ledgerSummary?.total_credit || '0')}
               </p>
             </div>
             <TrendingUp className="h-12 w-12 text-green-600" />
@@ -566,7 +567,7 @@ export default function Ledger() {
             <div>
               <p className="text-sm text-gray-600">Total Debit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{parseFloat(ledgerSummary?.total_debit || '0').toFixed(2)}
+                ₹{formatNumber(ledgerSummary?.total_debit || '0')}
               </p>
             </div>
             <TrendingDown className="h-12 w-12 text-red-600" />
@@ -868,7 +869,7 @@ export default function Ledger() {
                                   ? 'bg-green-50 border border-green-200'
                                   : 'bg-red-50 border border-red-200'
                                   }`}>
-                                  {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                                  {entry.entry_type === 'credit' ? '+' : '-'}₹{formatNumber(entry.amount || 0)}
                                 </span>
                               </div>
                             </td>
@@ -898,17 +899,17 @@ export default function Ledger() {
                             <div className="space-y-1">
                               <div className="text-sm">
                                 <span className="text-gray-600">Credit: </span>
-                                <span className="font-bold text-green-700">+₹{totalCredit.toFixed(2)}</span>
+                                <span className="font-bold text-green-700">+₹{formatNumber(totalCredit)}</span>
                               </div>
                               <div className="text-sm">
                                 <span className="text-gray-600">Debit: </span>
-                                <span className="font-bold text-red-700">-₹{totalDebit.toFixed(2)}</span>
+                                <span className="font-bold text-red-700">-₹{formatNumber(totalDebit)}</span>
                               </div>
                               <div className="text-sm pt-1 border-t border-gray-300">
                                 <span className="text-gray-700">Net: </span>
                                 <span className={`font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
                                   }`}>
-                                  {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                                  {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatNumber(totalCredit - totalDebit)}
                                 </span>
                               </div>
                             </div>
@@ -930,11 +931,11 @@ export default function Ledger() {
                 <div className="flex items-center gap-4">
                   <div>
                     <span className="text-gray-500">Total Credit: </span>
-                    <span className="font-semibold text-green-700">₹{totalCredit.toFixed(2)}</span>
+                    <span className="font-semibold text-green-700">₹{formatNumber(totalCredit)}</span>
                   </div>
                   <div>
                     <span className="text-gray-500">Total Debit: </span>
-                    <span className="font-semibold text-red-700">₹{totalDebit.toFixed(2)}</span>
+                    <span className="font-semibold text-red-700">₹{formatNumber(totalDebit)}</span>
                   </div>
                 </div>
               </div>
@@ -1014,7 +1015,7 @@ export default function Ledger() {
                         ? 'bg-green-50 border border-green-200'
                         : 'bg-red-50 border border-red-200'
                         }`}>
-                        {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                        {entry.entry_type === 'credit' ? '+' : '-'}₹{formatNumber(entry.amount || 0)}
                       </span>
                     </div>
                     {entry.invoice_number && (
@@ -1036,17 +1037,17 @@ export default function Ledger() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Total Credit:</span>
-                    <span className="font-semibold text-green-700">₹{totalCredit.toFixed(2)}</span>
+                    <span className="font-semibold text-green-700">₹{formatNumber(totalCredit)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Total Debit:</span>
-                    <span className="font-semibold text-red-700">₹{totalDebit.toFixed(2)}</span>
+                    <span className="font-semibold text-red-700">₹{formatNumber(totalDebit)}</span>
                   </div>
                   <div className="pt-2 border-t border-gray-300 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Net:</span>
                     <span className={`text-sm font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
                       }`}>
-                      {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                      {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatNumber(totalCredit - totalDebit)}
                     </span>
                   </div>
                 </div>

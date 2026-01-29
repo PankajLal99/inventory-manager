@@ -294,7 +294,7 @@ def audit_log_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def global_search(request):
     """Global search across all entities"""
-    query = request.query_params.get('q', '').strip()
+    query = request.query_params.get('q', '').strip().upper()
     
     if not query:
         return Response({
@@ -333,7 +333,10 @@ def global_search(request):
     
     # Search Products using django-filter
     from backend.catalog.filters import ProductFilter
-    products_queryset = Product.objects.all().prefetch_related('barcodes', 'barcodes__purchase_item')
+    products_queryset = Product.objects.all().prefetch_related(
+        'barcodes', 
+        'barcodes__purchase__supplier'
+    )
     products_filter = ProductFilter({'search': query}, queryset=products_queryset)
     products = products_filter.qs[:20]
     results['products'] = ProductListSerializer(products, many=True, context={'request': request}).data

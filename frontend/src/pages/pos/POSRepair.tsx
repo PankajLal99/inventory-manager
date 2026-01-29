@@ -26,6 +26,7 @@ import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
+import { formatNumber } from '../../lib/utils';
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -1212,7 +1213,7 @@ export default function POS() {
           const purchasePrice = errorData.purchase_price ? parseFloat(errorData.purchase_price || '0') : 0;
           setPriceErrors({
             ...priceErrors,
-            [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${purchasePrice.toFixed(2)})`
+            [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${formatNumber(purchasePrice)})`
           });
           // Keep editing state so user can see the error and fix it
           // Don't clear editingManualPrice - let user see what they entered
@@ -2854,7 +2855,7 @@ export default function POS() {
                               const total = calculateTotal();
                               const cash = parseFloat(value) || 0;
                               const remaining = Math.max(0, total - cash);
-                              setUpiAmount(remaining.toFixed(2));
+                              setUpiAmount(formatNumber(remaining));
                             }
                           }}
                           className="w-full text-xs"
@@ -2876,7 +2877,7 @@ export default function POS() {
                               const total = calculateTotal();
                               const upi = parseFloat(value) || 0;
                               const remaining = Math.max(0, total - upi);
-                              setCashAmount(remaining.toFixed(2));
+                              setCashAmount(formatNumber(remaining));
                             }
                           }}
                           className="w-full text-xs"
@@ -2891,10 +2892,10 @@ export default function POS() {
                         {cashAmount && upiAmount && (
                           <div>
                             <span className="text-gray-600">Total: </span>
-                            <span className={`font-semibold ${(parseFloat(cashAmount) + parseFloat(upiAmount)).toFixed(2) === calculateTotal().toFixed(2) ? 'text-green-600' : 'text-red-600'}`}>
-                              ₹{(parseFloat(cashAmount) + parseFloat(upiAmount)).toFixed(2)}
+                            <span className={`font-semibold ${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount)) === formatNumber(calculateTotal()) ? 'text-green-600' : 'text-red-600'}`}>
+                              ₹{formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount))}
                             </span>
-                            <span className="text-gray-600"> / Invoice Total: ₹{calculateTotal().toFixed(2)}</span>
+                            <span className="text-gray-600"> / Invoice Total: ₹{formatNumber(calculateTotal())}</span>
                           </div>
                         )}
                       </div>
@@ -3796,7 +3797,7 @@ export default function POS() {
                                   <Minus className="h-3.5 w-3.5" />
                                 </button>
                                 <div className="min-w-[2.5rem] px-2 py-1 text-center text-xs font-semibold text-gray-900 bg-white border-x border-gray-300">
-                                  {item.quantity}
+                                  {formatNumber(item.quantity, 3)}
                                 </div>
                                 <button
                                   onClick={(e) => handleUpdateQuantity(item, 1, e)}
@@ -3810,7 +3811,7 @@ export default function POS() {
                               </div>
                             ) : (
                               <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300">
-                                <span className="text-xs font-semibold text-gray-700">Qty: {item.quantity}</span>
+                                <span className="text-xs font-semibold text-gray-700">Qty: {formatNumber(item.quantity, 3)}</span>
                               </div>
                             )}
                             {/* Display selling price or purchase price */}
@@ -3826,7 +3827,7 @@ export default function POS() {
                               if (displayPrice !== null) {
                                 return (
                                   <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={sellingPrice !== null ? "Selling Price" : "Purchase Price"}>
-                                    <span className="text-xs font-medium text-blue-700">₹{displayPrice.toFixed(2)}</span>
+                                    <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPrice)}</span>
                                   </div>
                                 );
                               }
@@ -3850,7 +3851,7 @@ export default function POS() {
                                 step="0.01"
                                 min="0"
                                 placeholder="0.00"
-                                value={editingManualPrice[item.id] ?? (item.manual_unit_price?.toString() || (item.unit_price && parseFloat(item.unit_price) > 0 ? item.unit_price.toString() : '') || '')}
+                                value={editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null ? parseFloat(item.manual_unit_price.toString()).toString() : (item.unit_price && parseFloat(item.unit_price) > 0 ? parseFloat(item.unit_price).toString() : '') || '')}
                                 onChange={(e) => {
                                   // Mark that user is typing in price input
                                   isTypingInPriceInput.current = true;
@@ -3880,7 +3881,7 @@ export default function POS() {
                                           const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
                                           setPriceErrors({
                                             ...priceErrors,
-                                            [item.id]: `Price cannot be less than ${priceType} (₹${minPrice.toFixed(2)})`
+                                            [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
                                           });
                                         } else if (minPrice === 0) {
                                           // Purchase price not available - clear error but backend will validate
@@ -3951,7 +3952,7 @@ export default function POS() {
                                             const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
                                             setPriceErrors({
                                               ...priceErrors,
-                                              [item.id]: `Price cannot be less than ${priceType} (₹${minPrice.toFixed(2)})`
+                                              [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
                                             });
                                             // Don't save if validation fails - clear editing state to revert to saved value
                                             const newEditingPrices = { ...editingManualPrice };
@@ -4017,7 +4018,7 @@ export default function POS() {
                             {invoiceType !== 'pending' || effectivePrice > 0 ? (
                               <div className="px-2 py-1.5 bg-blue-50 border border-blue-200 rounded-md">
                                 <span className="text-xs font-bold text-blue-700">
-                                  ₹{lineTotal.toFixed(2)}
+                                  ₹{formatNumber(lineTotal)}
                                 </span>
                               </div>
                             ) : (
@@ -4147,11 +4148,11 @@ export default function POS() {
                   )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{calculateTotal().toFixed(2)}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(calculateTotal())}</span>
                   </div>
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">₹{calculateTotal().toFixed(2)}</span>
+                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
                   </div>
                 </>
               ) : (
@@ -4159,7 +4160,7 @@ export default function POS() {
                 <>
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{calculateTotal().toFixed(2)}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(calculateTotal())}</span>
                   </div>
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Tax</span>

@@ -2,10 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { reportsApi } from '../../lib/api';
+import { formatNumber } from '../../lib/utils';
 import { auth } from '../../lib/auth';
-import { 
+import {
   Package, FileText, ShoppingBag, Calendar,
-  DollarSign, CreditCard, Wallet, TrendingUp, TrendingDown, Wrench, Store, Clock, 
+  DollarSign, CreditCard, Wallet, TrendingUp, TrendingDown, Wrench, Store, Clock,
   BarChart3, Box, RefreshCw, ArrowUp, ArrowDown
 } from 'lucide-react';
 import Button from '../../components/ui/Button';
@@ -16,7 +17,7 @@ export default function Dashboard() {
   const [user, setUser] = useState(auth.getUser());
   const [dateFrom, setDateFrom] = useState(new Date().toISOString().split('T')[0]);
   const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
-  
+
   useEffect(() => {
     if (!user) {
       auth.loadUser().then((loadedUser) => {
@@ -24,10 +25,10 @@ export default function Dashboard() {
       });
     }
   }, [user]);
-  
+
   // Check if user can access dashboard
   const canAccessDashboard = user?.can_access_dashboard !== false;
-  
+
   if (user && !canAccessDashboard) {
     return <Navigate to="/" replace />;
   }
@@ -36,9 +37,9 @@ export default function Dashboard() {
   const { data: kpisData, isLoading: kpisLoading } = useQuery({
     queryKey: ['dashboard-kpis', dateFrom, dateTo],
     queryFn: async () => {
-      const response = await reportsApi.dashboardKpis({ 
-        date_from: dateFrom, 
-        date_to: dateTo 
+      const response = await reportsApi.dashboardKpis({
+        date_from: dateFrom,
+        date_to: dateTo
       });
       return response.data;
     },
@@ -46,22 +47,15 @@ export default function Dashboard() {
   });
 
 
-  const formatCurrency = (amount: string | number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0,
-    }).format(parseFloat(String(amount || '0')));
-  };
 
   // Calculate custom month period (10th to 10th)
   const getCustomMonthPeriod = () => {
     const now = new Date();
     const currentDay = now.getDate();
-    
+
     let startDate: Date;
     let endDate: Date;
-    
+
     if (currentDay < 10) {
       // Before 10th: use previous month's 10th to current month's 10th
       startDate = new Date(now.getFullYear(), now.getMonth() - 1, 10);
@@ -71,14 +65,14 @@ export default function Dashboard() {
       startDate = new Date(now.getFullYear(), now.getMonth(), 10);
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 10);
     }
-    
+
     const formatMonthDay = (date: Date) => {
       return date.toLocaleDateString('en-IN', {
         day: 'numeric',
         month: 'short',
       });
     };
-    
+
     return `${formatMonthDay(startDate)} - ${formatMonthDay(endDate)}`;
   };
 
@@ -96,16 +90,16 @@ export default function Dashboard() {
   const inhandChange = getChange(kpis.total_inhand || 0, comparisons.total_inhand || 0);
   const profitChange = getChange(kpis.overall_profit || 0, comparisons.overall_profit || 0);
 
-  const KpiCard = ({ 
-    title, 
-    value, 
-    icon: Icon, 
-    bgColor, 
-    iconColor, 
+  const KpiCard = ({
+    title,
+    value,
+    icon: Icon,
+    bgColor,
+    iconColor,
     borderColor,
     change,
     yesterdayValue,
-    formatValue = formatCurrency,
+    formatValue = (val: number | string) => `₹${formatNumber(val, 0)}`,
     suffix = ''
   }: {
     title: string;
@@ -121,7 +115,7 @@ export default function Dashboard() {
   }) => {
     const displayValue = typeof value === 'number' ? formatValue(value) : value;
     const isPositive = change !== undefined && change >= 0;
-    
+
     return (
       <div className={`${bgColor} rounded-xl shadow-sm border ${borderColor} p-4 sm:p-5 transition-transform hover:shadow-md`}>
         <div className="flex items-start justify-between mb-2">
@@ -131,7 +125,7 @@ export default function Dashboard() {
           {change !== undefined && (
             <div className={`flex items-center gap-1 text-xs font-semibold ${isPositive ? 'text-green-600' : 'text-red-600'}`}>
               {isPositive ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
-              {Math.abs(change).toFixed(1)}%
+              {Math.abs(change) < 0.1 ? '0' : formatNumber(Math.abs(change), 1)}%
             </div>
           )}
         </div>
