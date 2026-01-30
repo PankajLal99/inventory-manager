@@ -511,9 +511,9 @@ export default function Purchases() {
         product_sku: item.product_sku,
         variant_name: item.variant_name || null,
         variant_sku: item.variant_sku || null,
-        quantity: item.quantity.toString(),
-        unit_price: item.unit_price.toString(),
-        selling_price: item.selling_price ? item.selling_price.toString() : '',
+        quantity: formatNumber(item.quantity, 3, false),
+        unit_price: formatNumber(item.unit_price, 2, false),
+        selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
         line_total: item.line_total,
         sold_count: item.sold_count || 0, // Include sold count from backend for validation
       }));

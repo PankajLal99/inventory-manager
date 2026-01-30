@@ -78,6 +78,7 @@ class CartItem(models.Model):
 
     class Meta:
         db_table = 'cart_items'
+        ordering = ['id']
         indexes = [
             models.Index(fields=['cart', 'product'], name='idx_cartitem_cart_product'),
         ]

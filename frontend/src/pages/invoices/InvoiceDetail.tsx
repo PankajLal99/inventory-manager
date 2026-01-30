@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, Fragment, useMemo } from 'react';
-import { posApi, productsApi, catalogApi } from '../../lib/api';
+import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { formatNumber } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
@@ -82,6 +82,54 @@ export default function InvoiceDetail() {
     retry: false,
   });
 
+  const inv = invoice?.data;
+
+  // Fetch customer details for balance calculation
+  const { data: customerData } = useQuery({
+    queryKey: ['customer', inv?.customer],
+    queryFn: () => (inv?.customer ? customersApi.get(inv.customer) : Promise.resolve(null)),
+    enabled: !!inv?.customer,
+    retry: false,
+  });
+
+  const customer = customerData?.data || customerData;
+
+  const { prevBalance, totalOutstanding } = useMemo(() => {
+    if (!inv || !customer) return { prevBalance: 0, totalOutstanding: 0 };
+
+    const invoiceTotal = parseFloat(inv.total || '0');
+    // Negative credit_balance means customer owes money (debit)
+    // We treat debt as a positive number for display purposes
+    const currentOutstanding = -parseFloat(customer.credit_balance || '0');
+
+    // Determine if this invoice is already reflected in the customer balance
+    // 1. Credit invoices and all Pending invoices (including drafts) create a LedgerEntry immediately
+    // 2. Paid invoices (Cash/UPI) create a Credit entry immediately
+    const isReflected = (inv.status !== 'void') && (inv.status !== 'draft' || inv.invoice_type === 'pending');
+
+    let total = currentOutstanding;
+    let pb = 0;
+
+    if (isReflected) {
+      total = currentOutstanding;
+      // If it's a sale (credit status or pending type), it increased the debt
+      if (inv.status === 'credit' || inv.invoice_type === 'pending') {
+        pb = total - invoiceTotal;
+      } else if (inv.status === 'paid') {
+        // If it's a paid invoice, it decreased the debt (Credit entry)
+        pb = total + invoiceTotal;
+      } else {
+        pb = total;
+      }
+    } else {
+      // Not reflected (Draft non-pending or Void non-pending?)
+      pb = currentOutstanding;
+      total = pb; // No change to outstanding if not reflected
+    }
+
+    return { prevBalance: pb, totalOutstanding: total };
+  }, [inv, customer]);
+
   // Fetch stores list
   const { data: storesData } = useQuery({
     queryKey: ['stores'],
@@ -127,6 +175,9 @@ export default function InvoiceDetail() {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
       queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+      if (invoice?.data?.customer) {
+        queryClient.invalidateQueries({ queryKey: ['customer', invoice.data.customer] });
+      }
       setShowCheckoutModal(false);
       setCheckoutQuantities({});
       setCheckoutPrices({});
@@ -174,6 +225,9 @@ export default function InvoiceDetail() {
       setPaymentAmount('');
       setPaymentReference('');
       setPaymentNotes('');
+      if (invoice?.data?.customer) {
+        queryClient.invalidateQueries({ queryKey: ['customer', invoice.data.customer] });
+      }
       setPaymentMethod('cash');
       alert('Payment recorded successfully!');
     },
@@ -346,8 +400,6 @@ export default function InvoiceDetail() {
     );
   }
 
-  const inv = invoice.data;
-
   const statusConfig: Record<string, { label: string; color: 'success' | 'warning' | 'danger' | 'info' | 'default'; icon: any }> = {
     draft: { label: 'Draft', color: 'default', icon: Clock },
     paid: { label: 'Paid', color: 'success', icon: CheckCircle },
@@ -360,6 +412,12 @@ export default function InvoiceDetail() {
 
   const StatusIcon = statusConfig[inv.status]?.icon || FileText;
   const statusInfo = statusConfig[inv.status] || statusConfig.draft;
+
+  const formatBalance = (val: number) => {
+    const absVal = Math.abs(val);
+    const formatted = formatNumber(absVal, 2);
+    return val < 0 ? `${formatted} (Credit)` : `₹${formatted}`;
+  };
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -1117,6 +1175,14 @@ export default function InvoiceDetail() {
 
         return itemsHtml;
       })()}
+                <!-- Transport Charge Row -->
+                <tr>
+                  <td>Transport Charge</td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td class="text-right">${formatNumber(0, 2)}</td>
+                </tr>
                 <!-- Total Row -->
                 <tr class="total-row">
                   <td><strong>Total</strong></td>
@@ -1125,6 +1191,22 @@ export default function InvoiceDetail() {
                   <td></td>
                   <td class="text-right"><strong>${formatNumber(totalAmount, 2)}</strong></td>
                 </tr>
+                ${inv.customer ? `
+                <tr style="border-top: 1px dashed #000;">
+                  <td style="padding-top: 8px;">Previous Balance</td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td class="text-right" style="padding-top: 8px;">${prevBalance < 0 ? formatNumber(Math.abs(prevBalance), 2) + ' (Cr)' : formatNumber(prevBalance, 2)}</td>
+                </tr>
+                <tr class="total-row">
+                  <td><strong>Total Outstanding</strong></td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td class="text-right"><strong>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding), 2) + ' (Cr)' : formatNumber(totalOutstanding, 2)}</strong></td>
+                </tr>
+                ` : ''}
               </tbody>
             </table>
           </div>
@@ -1386,10 +1468,24 @@ export default function InvoiceDetail() {
               <span>₹${formatNumber(invoice.tax_amount || '0')}</span>
             </div>
             ` : ''}
+          <div class="summary-row">
+            <span>Transport Charge:</span>
+            <span>₹${formatNumber(0)}</span>
+          </div>
           <div class="summary-row summary-total">
             <span>TOTAL:</span>
             <span>₹${formatNumber(invoice.total || '0')}</span>
           </div>
+          ${invoice.customer ? `
+          <div class="summary-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px dotted #ccc;">
+            <span>Previous Balance:</span>
+            <span>${prevBalance < 0 ? formatNumber(Math.abs(prevBalance)) + ' (Cr)' : '₹' + formatNumber(prevBalance)}</span>
+          </div>
+          <div class="summary-row summary-total" style="border-top: 1px dashed #000;">
+            <span>TOTAL OUTSTANDING:</span>
+            <span>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding)) + ' (Cr)' : '₹' + formatNumber(totalOutstanding)}</span>
+          </div>
+          ` : ''}
           ${parseFloat(invoice.paid_amount || '0') > 0 ? `
             <div class="summary-row">
               <span>Paid:</span>
@@ -1721,10 +1817,26 @@ export default function InvoiceDetail() {
                   <span className="text-sm text-gray-600">Subtotal</span>
                   <span className="text-sm font-medium text-gray-900">₹{formatNumber('0')}</span>
                 </div>
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-sm text-gray-600">Transport Charge</span>
+                  <span className="text-sm font-medium text-gray-900">₹{formatNumber(0)}</span>
+                </div>
                 <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
                   <span className="text-base font-semibold text-gray-900">Total</span>
                   <span className="text-lg font-bold text-gray-900">₹{formatNumber('0')}</span>
                 </div>
+                {inv.customer && (
+                  <>
+                    <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
+                      <span className="text-sm text-gray-600">Previous Balance</span>
+                      <span className={`text-sm font-medium ${prevBalance < 0 ? "text-green-600" : "text-gray-900"}`}>{formatBalance(prevBalance)}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-t border-double border-gray-900 mt-2 pt-2">
+                      <span className="text-sm font-bold text-gray-900">Total Outstanding</span>
+                      <span className={`text-base font-bold ${totalOutstanding < 0 ? "text-green-600" : "text-blue-600"}`}>{formatBalance(totalOutstanding)}</span>
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               // For other invoices, show actual totals
@@ -1745,10 +1857,26 @@ export default function InvoiceDetail() {
                     <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.tax_amount || '0')}</span>
                   </div>
                 )}
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-sm text-gray-600">Transport Charge</span>
+                  <span className="text-sm font-medium text-gray-900">₹{formatNumber(0)}</span>
+                </div>
                 <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
                   <span className="text-base font-semibold text-gray-900">Total</span>
                   <span className="text-lg font-bold text-gray-900">₹{formatNumber(inv.total || '0')}</span>
                 </div>
+                {inv.customer && (
+                  <>
+                    <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
+                      <span className="text-sm text-gray-600">Previous Balance</span>
+                      <span className={`text-sm font-medium ${prevBalance < 0 ? "text-green-600" : "text-gray-900"}`}>{formatBalance(prevBalance)}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-t border-double border-gray-900 mt-2 pt-2">
+                      <span className="text-sm font-bold text-gray-900">Total Outstanding</span>
+                      <span className={`text-base font-bold ${totalOutstanding < 0 ? "text-green-600" : "text-blue-600"}`}>{formatBalance(totalOutstanding)}</span>
+                    </div>
+                  </>
+                )}
               </>
             )}
             {parseFloat(inv.paid_amount || '0') > 0 && (

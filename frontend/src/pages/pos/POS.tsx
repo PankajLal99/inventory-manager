@@ -1084,12 +1084,15 @@ export default function POS() {
           setBarcodeMessage('');
           // Only refocus if user is not editing a price or typing in price input
           if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
-            // Check if any price input is currently focused
+            // Check if any focusable element is currently focused
             const activeElement = document.activeElement;
-            const isPriceInputFocused = activeElement && activeElement.tagName === 'INPUT' &&
-              (activeElement as HTMLInputElement).type === 'number';
+            const isAnyInputFocused = activeElement && (
+              activeElement.tagName === 'INPUT' ||
+              activeElement.tagName === 'TEXTAREA' ||
+              (activeElement as HTMLElement).isContentEditable
+            );
 
-            if (!isPriceInputFocused) {
+            if (!isAnyInputFocused) {
               barcodeInputRef.current.focus();
             }
           }
@@ -1104,12 +1107,15 @@ export default function POS() {
           setBarcodeMessage('');
           // Only refocus if user is not editing a price or typing in price input
           if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
-            // Check if any price input is currently focused
+            // Check if any focusable element is currently focused
             const activeElement = document.activeElement;
-            const isPriceInputFocused = activeElement && activeElement.tagName === 'INPUT' &&
-              (activeElement as HTMLInputElement).type === 'number';
+            const isAnyInputFocused = activeElement && (
+              activeElement.tagName === 'INPUT' ||
+              activeElement.tagName === 'TEXTAREA' ||
+              (activeElement as HTMLElement).isContentEditable
+            );
 
-            if (!isPriceInputFocused) {
+            if (!isAnyInputFocused) {
               barcodeInputRef.current.focus();
             }
           }
@@ -1127,12 +1133,15 @@ export default function POS() {
         setBarcodeMessage('');
         // Only refocus if user is not editing a price or typing in price input
         if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
-          // Check if any price input is currently focused
+          // Check if any focusable element is currently focused
           const activeElement = document.activeElement;
-          const isPriceInputFocused = activeElement && activeElement.tagName === 'INPUT' &&
-            (activeElement as HTMLInputElement).type === 'number';
+          const isAnyInputFocused = activeElement && (
+            activeElement.tagName === 'INPUT' ||
+            activeElement.tagName === 'TEXTAREA' ||
+            (activeElement as HTMLElement).isContentEditable
+          );
 
-          if (!isPriceInputFocused) {
+          if (!isAnyInputFocused) {
             barcodeInputRef.current.focus();
           }
         }

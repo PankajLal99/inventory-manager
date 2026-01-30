@@ -2322,36 +2322,21 @@ def cart_checkout(request, pk):
     invoice.save()
     
     # Create ledger entry if customer exists
-    if invoice.customer:
+    if invoice.customer and invoice_type == 'pending':
         from backend.parties.models import LedgerEntry
-        if invoice_type == 'pending':
-            # Pending invoice: Customer owes us (DEBIT entry)
-            entry = LedgerEntry.objects.create(
-                customer=invoice.customer,
-                invoice=invoice,
-                entry_type='debit',
-                amount=invoice.total,
-                description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
-                created_by=request.user,
-                created_at=invoice.created_at or timezone.now()
-            )
-            # Update customer credit_balance
-            invoice.customer.credit_balance -= entry.amount
-            invoice.customer.save()
-        else:  # cash, upi, or mixed (all are paid)
-            # Paid invoice: Customer paid us (CREDIT entry - money received)
-            entry = LedgerEntry.objects.create(
-                customer=invoice.customer,
-                invoice=invoice,
-                entry_type='credit',
-                amount=invoice.total,
-                description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
-                created_by=request.user,
-                created_at=invoice.created_at or timezone.now()
-            )
-            # Update customer credit_balance
-            invoice.customer.credit_balance += entry.amount
-            invoice.customer.save()
+        # Pending invoice: Customer owes us (DEBIT entry)
+        entry = LedgerEntry.objects.create(
+            customer=invoice.customer,
+            invoice=invoice,
+            entry_type='debit',
+            amount=invoice.total,
+            description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
+            created_by=request.user,
+            created_at=invoice.created_at or timezone.now()
+        )
+        # Update customer credit_balance (debit means customer owes more)
+        invoice.customer.credit_balance -= entry.amount
+        invoice.customer.save()
     
     # Update cart status
     cart.status = 'completed'
@@ -3086,40 +3071,48 @@ def invoice_checkout(request, pk):
     # Update ledger entry if customer exists
     if invoice.customer:
         from backend.parties.models import LedgerEntry
-        # Find the original debit entry for this pending invoice
-        original_entry = LedgerEntry.objects.filter(
+        from django.db.models import Sum
+        
+        # 1. Calculate net effect of existing entries for this invoice to reverse it
+        existing_entries = LedgerEntry.objects.filter(invoice=invoice)
+        net_reversal = Decimal('0.00')
+        for e in existing_entries:
+            if e.entry_type == 'debit':
+                net_reversal += e.amount # Re-add what was subtracted
+            else:
+                net_reversal -= e.amount # Subtract what was added
+        
+        # 2. Delete existing entries and update balance partially
+        existing_entries.delete()
+        invoice.customer.credit_balance += net_reversal
+        
+        # 3. Create fresh entries based on the new state
+        # DEBIT entry (Purchase) - A 'pending' invoice that is being settled or updated
+        # always counts as a credit purchase trail.
+        entry_debit = LedgerEntry.objects.create(
+            customer=invoice.customer,
             invoice=invoice,
-            entry_type='debit'
-        ).first()
+            entry_type='debit',
+            amount=invoice.total,
+            description=f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Purchase)',
+            created_by=request.user,
+            created_at=invoice.created_at or timezone.now()
+        )
+        invoice.customer.credit_balance -= entry_debit.amount
         
-        if original_entry:
-            # Reverse the debit entry (credit it back)
-            reverse_entry = LedgerEntry.objects.create(
-                customer=invoice.customer,
-                invoice=invoice,
-                entry_type='credit',
-                amount=original_entry.amount,
-                description=f'Reversed pending entry for Invoice {invoice.invoice_number}',
-                created_by=request.user,
-                created_at=timezone.now()
-            )
-            invoice.customer.credit_balance += reverse_entry.amount
-        
-        # Create new ledger entry based on invoice type
+        # IF it's now paid, create a CREDIT entry (Payment)
         if new_invoice_type in ['cash', 'upi', 'mixed']:
-            # Paid invoice: Customer paid us (CREDIT entry - money received)
-            entry = LedgerEntry.objects.create(
+            entry_credit = LedgerEntry.objects.create(
                 customer=invoice.customer,
                 invoice=invoice,
                 entry_type='credit',
                 amount=invoice.total,
-                description=f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (checked out from pending)',
+                description=f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Settlement)',
                 created_by=request.user,
-                created_at=invoice.created_at or timezone.now()
+                created_at=timezone.now()
             )
-            invoice.customer.credit_balance += entry.amount
-        # For pending invoices, keep the original debit entry (already reversed above)
-        
+            invoice.customer.credit_balance += entry_credit.amount
+            
         invoice.customer.save()
     
     serializer = InvoiceSerializer(invoice)
@@ -3259,13 +3252,15 @@ def invoice_mark_credit(request, pk):
             # Get all existing ledger entries for this invoice
             existing_entries = LedgerEntry.objects.filter(invoice=invoice)
             
-            # Calculate net balance from existing entries to reverse
+            # Calculate net balance to reverse from existing entries
+            # If we had a Debit of 1000 (which subtracted 1000 from balance), we should ADD 1000 to reverse it.
+            # If we had a Credit of 1000 (which added 1000 to balance), we should SUBTRACT 1000 to reverse it.
             net_balance_to_reverse = Decimal('0.00')
             for entry in existing_entries:
                 if entry.entry_type == 'debit':
-                    net_balance_to_reverse -= entry.amount
-                else:  # credit
                     net_balance_to_reverse += entry.amount
+                else:  # credit
+                    net_balance_to_reverse -= entry.amount
             
             # Delete all existing entries for this invoice
             # We'll create a single clean DEBIT entry for the credit invoice

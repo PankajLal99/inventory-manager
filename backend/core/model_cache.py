@@ -177,6 +177,25 @@ def invalidate_customer_cache(customer_obj):
         cache.delete(phone_key)
     
     # Invalidate customer lists
+    # Since we can't easily iterate all search queries, we use delete_pattern if using django-redis
+    # or rely on TTL for individual lists. However, we can try to delete common ones or 
+    # use the underlying connection to delete by pattern.
+    try:
+        from django_redis import get_redis_connection
+        con = get_redis_connection("default")
+        # Redis key will have the prefix from settings
+        pattern = f"*{CUSTOMER_LIST_KEY_PREFIX}*"
+        keys = con.keys(pattern)
+        if keys:
+            con.delete(*keys)
+            logger.debug(f"Deleted {len(keys)} customer list cache keys by pattern")
+    except (ImportError, Exception) as e:
+        # Fallback for non-redis or if redis fails
+        logger.warning(f"Could not invalidate customer list by pattern: {e}")
+        # At least invalidate the 'all' lists
+        cache.delete(get_customer_list_cache_key('', ''))
+        cache.delete(get_customer_list_cache_key('', 'any'))
+    
     logger.debug(f"Invalidated cache for customer: {customer_obj.name} (ID: {customer_obj.id})")
 
 
