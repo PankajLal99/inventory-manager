@@ -32,7 +32,12 @@ export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
   const [cartTabs, setCartTabs] = useState<CartTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
-  const [cartId, setCartId] = useState<number | null>(null);
+  const [cartId, setCartId] = useState<number | null>(() => {
+    // Check URL parameters first
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('cartId');
+    return id ? parseInt(id) : null;
+  });
   const [barcodeInput, setBarcodeInput] = useState('');
   const [debouncedBarcodeInput, setDebouncedBarcodeInput] = useState('');
   const [barcodeStatus, setBarcodeStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -66,6 +71,11 @@ export default function POS() {
   const [customProductName, setCustomProductName] = useState('');
   const [customProductBrand, setCustomProductBrand] = useState('');
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  // Parse query parameters
+  const searchParams = new URLSearchParams(window.location.search);
+  const editInvoiceIdParam = searchParams.get('editInvoiceId');
+  const editInvoiceId = editInvoiceIdParam ? parseInt(editInvoiceIdParam) : null;
+
   const [invoiceDate, setInvoiceDate] = useState<string>(() => {
     const now = new Date();
     // Use local time for initial state - YYYY-MM-DDTHH:mm
@@ -173,12 +183,19 @@ export default function POS() {
     const userCarts = loadUserCarts(currentUsername);
     if (userCarts) {
       setCartTabs(userCarts.tabs);
-      if (userCarts.activeTabId) {
+
+      // If we have a cartId from URL (edit mode), use that instead of stored active tab
+      // But we should ensure this cart is in the tabs list or added to it
+      if (cartId) {
+        setActiveTabId(cartId);
+        // We'll trust that the edit logic elsewhere handles creating/fetching this cart
+        // and adding it to tabs if needed via the cart query side effect
+      } else if (userCarts.activeTabId) {
         setActiveTabId(userCarts.activeTabId);
         setCartId(userCarts.activeTabId);
       }
     }
-  }, [getCurrentUsername]);
+  }, [getCurrentUsername, cartId]);
 
   // Fetch stores
   const { data: storesResponse } = useQuery({
@@ -1931,6 +1948,29 @@ export default function POS() {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to checkout invoice';
       alert(errorMsg);
     },
+  });
+
+  const updateInvoiceFromCartMutation = useMutation({
+    mutationFn: () => {
+      if (!editInvoiceId || !cartId) throw new Error('Missing invoice or cart ID');
+      return posApi.invoices.updateFromCart(editInvoiceId, cartId);
+    },
+    onSuccess: (response) => {
+      showToast('Invoice updated successfully!', 'success');
+      // Redirect back to invoice detail
+      window.location.href = `/invoices/${editInvoiceId}`;
+    },
+    onError: (error: any) => {
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to update invoice';
+      showToast(errorMsg, 'error');
+    }
+  });
+
+  const deleteCartMutation = useMutation({
+    mutationFn: (id: number) => posApi.carts.delete(id),
+    onError: (error: any) => {
+      console.error('Failed to delete cart:', error);
+    }
   });
 
   const handleCheckoutAndPrintThermal = () => {
@@ -4214,53 +4254,88 @@ export default function POS() {
             </div>
 
             <div className="space-y-3">
-              <Button
-                className="w-full mb-2 shadow-md hover:shadow-lg transition-shadow"
-                size="lg"
-                onClick={handleCheckout}
-                disabled={
-                  checkoutMutation.isPending ||
-                  !cart?.data?.items ||
-                  cart.data.items.length === 0 ||
-                  (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
-                  (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
-                }
-                title={
-                  invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
-                    ? 'Please enter both cash and UPI amounts'
-                    : invoiceType !== 'pending' && !allItemsHavePrices()
-                      ? 'Please enter prices for all items'
-                      : hasPriceErrors()
-                        ? 'Please fix price validation errors'
-                        : undefined
-                }
-              >
-                {checkoutMutation.isPending ? 'Processing...' : 'Complete Order (F8)'}
-              </Button>
-              <Button
-                className="w-full shadow-md hover:shadow-lg transition-shadow"
-                size="lg"
-                variant="outline"
-                onClick={handleCheckoutAndPrintThermal}
-                disabled={
-                  checkoutAndPrintThermalMutation.isPending ||
-                  !cart?.data?.items ||
-                  cart.data.items.length === 0 ||
-                  (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
-                  (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
-                }
-                title={
-                  invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
-                    ? 'Please enter both cash and UPI amounts'
-                    : invoiceType !== 'pending' && !allItemsHavePrices()
-                      ? 'Please enter prices for all items'
-                      : hasPriceErrors()
-                        ? 'Please fix price validation errors'
-                        : undefined
-                }
-              >
-                {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
-              </Button>
+
+              {editInvoiceId ? (
+                <div className="flex gap-2 w-full mt-4">
+                  <Button
+                    variant="outline"
+                    className="flex-1 py-6 text-lg"
+                    onClick={() => {
+                      if (window.confirm('Discard changes and return to invoice?')) {
+                        if (cartId) {
+                          deleteCartMutation.mutate(cartId, {
+                            onSettled: () => {
+                              window.location.href = `/invoices/${editInvoiceId}`;
+                            }
+                          });
+                        } else {
+                          window.location.href = `/invoices/${editInvoiceId}`;
+                        }
+                      }
+                    }}
+                  >
+                    Cancel Edit
+                  </Button>
+                  <Button
+                    variant="primary"
+                    className="flex-[2] py-6 text-lg font-bold"
+                    onClick={() => updateInvoiceFromCartMutation.mutate()}
+                    disabled={updateInvoiceFromCartMutation.isPending}
+                  >
+                    {updateInvoiceFromCartMutation.isPending ? 'Updating...' : 'Update Invoice'}
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3 mt-4">
+                  <Button
+                    className="w-full shadow-md hover:shadow-lg transition-shadow mb-2"
+                    size="lg"
+                    onClick={handleCheckout}
+                    disabled={
+                      checkoutMutation.isPending ||
+                      !cart?.data?.items ||
+                      cart.data.items.length === 0 ||
+                      (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
+                      (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
+                    }
+                    title={
+                      invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
+                        ? 'Please enter both cash and UPI amounts'
+                        : invoiceType !== 'pending' && !allItemsHavePrices()
+                          ? 'Please enter prices for all items'
+                          : hasPriceErrors()
+                            ? 'Please fix price validation errors'
+                            : undefined
+                    }
+                  >
+                    {checkoutMutation.isPending ? 'Processing...' : 'Complete Order (F8)'}
+                  </Button>
+                  <Button
+                    className="w-full shadow-md hover:shadow-lg transition-shadow"
+                    size="lg"
+                    variant="outline"
+                    onClick={handleCheckoutAndPrintThermal}
+                    disabled={
+                      checkoutAndPrintThermalMutation.isPending ||
+                      !cart?.data?.items ||
+                      cart.data.items.length === 0 ||
+                      (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
+                      (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
+                    }
+                    title={
+                      invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
+                        ? 'Please enter both cash and UPI amounts'
+                        : invoiceType !== 'pending' && !allItemsHavePrices()
+                          ? 'Please enter prices for all items'
+                          : hasPriceErrors()
+                            ? 'Please fix price validation errors'
+                            : undefined
+                    }
+                  >
+                    {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -4465,32 +4540,34 @@ export default function POS() {
       </Modal>
 
       {/* Product Edit Modal */}
-      {showProductForm && (
-        <ProductForm
-          productId={editingProductId}
-          onClose={() => {
-            setShowProductForm(false);
-            setEditingProductId(undefined);
-          }}
-          onProductCreated={(_product) => {
-            // When product is created or updated, invalidate cart query to refresh product data
-            // The cart serializer reads product attributes directly from the database, so refreshing
-            // the cart will ensure cart items use the latest product data
-            if (cartId) {
-              queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
-            }
-            // Also invalidate products query
-            queryClient.invalidateQueries({ queryKey: ['products'] });
-            setShowProductForm(false);
-            setEditingProductId(undefined);
-          }}
-        />
-      )}
+      {
+        showProductForm && (
+          <ProductForm
+            productId={editingProductId}
+            onClose={() => {
+              setShowProductForm(false);
+              setEditingProductId(undefined);
+            }}
+            onProductCreated={(_product) => {
+              // When product is created or updated, invalidate cart query to refresh product data
+              // The cart serializer reads product attributes directly from the database, so refreshing
+              // the cart will ensure cart items use the latest product data
+              if (cartId) {
+                queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+              }
+              // Also invalidate products query
+              queryClient.invalidateQueries({ queryKey: ['products'] });
+              setShowProductForm(false);
+              setEditingProductId(undefined);
+            }}
+          />
+        )
+      }
       <ShortcutsHelpModal
         isOpen={showShortcutsHelp}
         onClose={() => setShowShortcutsHelp(false)}
       />
-    </div>
+    </div >
   );
 }
 

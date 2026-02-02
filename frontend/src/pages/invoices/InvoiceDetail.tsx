@@ -345,6 +345,19 @@ export default function InvoiceDetail() {
     },
   });
 
+  const editInvoiceMutation = useMutation({
+    mutationFn: () => posApi.invoices.edit(invoiceId),
+    onSuccess: (response) => {
+      // Get cart ID from response
+      const cartId = response.data.cart_id;
+      // Redirect to POS with cart ID and edit mode flag
+      navigate(`/pos?cartId=${cartId}&editInvoiceId=${invoiceId}`);
+    },
+    onError: (error: any) => {
+      alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to start editing invoice');
+    },
+  });
+
   // When invoice items change and checkout modal is open, initialize new items
   useEffect(() => {
     const inv = invoice?.data;
@@ -1600,6 +1613,24 @@ export default function InvoiceDetail() {
                   >
                     <Edit className="h-4 w-4 mr-2" />
                     Edit
+                  </Button>
+                )}
+
+                {/* Edit Finalized Invoice */}
+                {!isEditable && inv.status !== 'void' && !isRestrictedUser && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (window.confirm('Are you sure you want to edit this invoice? This will load the invoice items into the POS cart for modification.')) {
+                        editInvoiceMutation.mutate();
+                      }
+                    }}
+                    disabled={editInvoiceMutation.isPending}
+                    className="w-full sm:w-auto"
+                  >
+                    <Edit className="h-4 w-4 mr-2" />
+                    Edit Invoice
                   </Button>
                 )}
 

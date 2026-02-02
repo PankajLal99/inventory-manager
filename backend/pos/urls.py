@@ -11,7 +11,8 @@ from .views import (
     replacement_replace, replacement_return, replacement_defective,
     find_invoice_by_barcode, process_replacement, search_invoices_by_number,
     replacement_credit_note,
-    repair_invoices_list, find_repair_invoice_by_barcode, update_repair_status, generate_repair_label
+    repair_invoices_list, find_repair_invoice_by_barcode, update_repair_status, generate_repair_label,
+    edit_invoice, update_invoice_from_cart
 )
 
 urlpatterns = [
@@ -41,6 +42,8 @@ urlpatterns = [
     path('pos/invoices/<int:pk>/mark-credit/', invoice_mark_credit, name='invoice-mark-credit'),
     path('pos/invoices/<int:pk>/return/', invoice_return, name='invoice-return'),
     path('pos/invoices/<int:pk>/exchange/', invoice_exchange, name='invoice-exchange'),
+    path('pos/invoices/<int:pk>/edit/', edit_invoice, name='invoice-edit'),
+    path('pos/invoices/<int:pk>/update/', update_invoice_from_cart, name='invoice-update'),
     
     # Return endpoints
     path('returns/', return_list_create, name='return-list-create'),

@@ -428,6 +428,44 @@ def cart_list_create(request):
                 status='active'
             ).order_by('-updated_at')
             
+            # Clean up stale carts (carts with items that have barcodes already sold)
+            # Skip EDIT- carts as they are temporary and intentionally contain sold items
+            carts_to_delete = []
+            for cart in active_carts:
+                # Skip edit carts (they start with EDIT-)
+                if cart.cart_number.startswith('EDIT-'):
+                    continue
+                
+                # Check if any cart items have barcodes that are marked as 'sold'
+                is_stale = False
+                for item in cart.items.all():
+                    if item.scanned_barcodes:
+                        for barcode_str in item.scanned_barcodes:
+                            try:
+                                barcode_obj = Barcode.objects.get(barcode=barcode_str)
+                                # If barcode is sold, this cart is stale
+                                if barcode_obj.tag == 'sold':
+                                    is_stale = True
+                                    logger.info(f"Stale cart detected: {cart.cart_number} contains sold barcode {barcode_str}")
+                                    break
+                            except Barcode.DoesNotExist:
+                                pass
+                    if is_stale:
+                        break
+                
+                if is_stale:
+                    carts_to_delete.append(cart.id)
+            
+            # Delete stale carts
+            if carts_to_delete:
+                Cart.objects.filter(id__in=carts_to_delete).delete()
+                logger.info(f"Deleted {len(carts_to_delete)} stale cart(s)")
+                # Re-fetch active carts after cleanup
+                active_carts = Cart.objects.filter(
+                    created_by=request.user,
+                    status='active'
+                ).order_by('-updated_at')
+            
             # If 'single' parameter is true, return only the most recent one (backward compatibility)
             if request.query_params.get('single') == 'true':
                 active_cart = active_carts.first()
@@ -5519,3 +5557,283 @@ def replacement_credit_note(request, invoice_id):
         'replaced_items': replaced_items,
         'total_credit_amount': str(total_credit_amount)
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def edit_invoice(request, pk):
+    """
+    Load an invoice into a cart for editing.
+    1. Validates invoice status (must be finalized/paid/partial/credit, not void).
+    2. Creates a new active Cart for the edit session.
+    3. Copies all InvoiceItems to CartItems.
+    4. Handles Barcodes: Temporarily marks them as 'in-cart' or allows them to be bypassed.
+    """
+    invoice = get_object_or_404(Invoice, pk=pk)
+    
+    if invoice.status == 'void':
+        return Response({'error': 'Cannot edit a voided invoice.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    # Check if there's already an active cart for this user/store
+    # For simplicity, we'll create a NEW temporary cart specifically for this edit
+    # The frontend should likely clear any existing cart or prompt the user before calling this.
+    
+    import uuid
+    with transaction.atomic():
+        # Create a new cart
+        cart_number = f"EDIT-{str(uuid.uuid4())[:12]}"
+        cart = Cart.objects.create(
+            store=invoice.store,
+            cart_number=cart_number,
+            created_by=request.user,
+            customer=invoice.customer,
+            invoice_type=invoice.invoice_type,
+            status='active'
+        )
+        
+        # Copy items
+        for item in invoice.items.all():
+            # For tracked items, we need to handle the barcode
+            scanned_barcodes = []
+            if item.barcode:
+                # The barcode is currently 'sold'. We need to allow it to be added to the cart.
+                # Ideally, we don't change the barcode status yet (it remains 'sold' until we save).
+                # But the frontend validation might fail if we try to "re-add" it.
+                # However, since we are creating CartItems directly in the backend, we bypass frontend validation!
+                scanned_barcodes.append(item.barcode.barcode)
+                
+            CartItem.objects.create(
+                cart=cart,
+                product=item.product,
+                variant=item.variant,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                manual_unit_price=item.manual_unit_price,
+                discount_amount=item.discount_amount,
+                tax_amount=item.tax_amount,
+                scanned_barcodes=scanned_barcodes,
+                # Store the original invoice item ID to help with diffing later? 
+                # Not strictly necessary if we diff by product/barcode, but good for traceability.
+                # For now, simplistic approach.
+            )
+            
+        return Response({
+            'cart_id': cart.id,
+            'message': 'Invoice loaded successfully.'
+        })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_invoice_from_cart(request, pk):
+    """
+    Update an existing invoice based on the contents of a Cart.
+    Performs diffing to handle Inventory adjustments.
+    """
+    invoice = get_object_or_404(Invoice, pk=pk)
+    cart_id = request.data.get('cart_id')
+    cart = get_object_or_404(Cart, pk=cart_id)
+    
+    # DEBUG: Print request payload
+    print(f"\n{'='*80}")
+    print(f"UPDATE INVOICE FROM CART - Invoice #{invoice.invoice_number} (ID: {pk})")
+    print(f"{'='*80}")
+    print(f"Request Data: {request.data}")
+    print(f"Cart ID: {cart_id}")
+    print(f"Cart Number: {cart.cart_number}")
+    print(f"Cart Items Count: {cart.items.count()}")
+    print(f"\nCart Items Details:")
+    for idx, item in enumerate(cart.items.all(), 1):
+        print(f"  Item {idx}:")
+        print(f"    Product: {item.product.name}")
+        print(f"    Quantity: {item.quantity}")
+        print(f"    Unit Price: {item.unit_price}")
+        print(f"    Manual Price: {item.manual_unit_price}")
+        print(f"    Discount: {item.discount_amount}")
+        print(f"    Tax: {item.tax_amount}")
+        print(f"    Barcodes: {item.scanned_barcodes}")
+    print(f"{'='*80}\n")
+    
+    if invoice.status == 'void':
+         return Response({'error': 'Cannot update a voided invoice.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        # 1. Update Invoice Basic Details
+        invoice.customer = cart.customer
+        # We don't update store - invoice stays in original store
+        # invoice.invoice_type = cart.invoice_type # Should we allow type change? Maybe.
+        
+        # 2. Process Items (Diffing)
+        
+        # Existing Invoice Items (Map by ID or Barcode?)
+        # Strategy:
+        # A. Mark all existing InvoiceItems as "potential_delete"
+        # B. Iterate CartItems:
+        #    - If match found (same product/barcode): Update quantity/price, clean barcode status checks. Unmark "potential_delete".
+        #    - If no match (new item): Create InvoiceItem, Deduct Inventory, Mark Barcode Sold.
+        # C. Delete remaining "potential_delete" items: Return Inventory, Mark Barcode Avail.
+        
+        # Let's map existing items by (Product ID, Barcode ID or None)
+        existing_items_map = {} # Key: (product_id, barcode_id), Value: InvoiceItem
+        for inv_item in invoice.items.all():
+             key = (inv_item.product_id, inv_item.barcode_id)
+             existing_items_map[key] = inv_item
+             
+        # Track which keys from existing_map were "touched" (updated)
+        touched_keys = set()
+        
+        # New totals
+        total_subtotal = Decimal('0.00')
+        total_tax = Decimal('0.00')
+        total_discount = Decimal('0.00')
+        
+        # Collect all active barcode IDs in the cart to prevent "New" status overwrite
+        active_barcode_ids = set()
+        for cart_item in cart.items.all():
+            if cart_item.scanned_barcodes:
+                 for code in cart_item.scanned_barcodes:
+                     try:
+                         active_barcode_ids.add(Barcode.objects.get(barcode=code).id)
+                     except Barcode.DoesNotExist:
+                         pass
+
+        for cart_item in cart.items.all():
+            # Identify Barcode (if any)
+            barcode_id = None
+            barcode_obj = None
+            if cart_item.scanned_barcodes:
+                try:
+                    barcode_obj = Barcode.objects.get(barcode=cart_item.scanned_barcodes[0])
+                    barcode_id = barcode_obj.id
+                except Barcode.DoesNotExist:
+                    pass
+            
+            key = (cart_item.product_id, barcode_id)
+            
+            if key in existing_items_map:
+                # UPDATE EXISTING
+                inv_item = existing_items_map[key]
+                
+                # Check for quantity change (Only for non-tracked items really)
+                qt_diff = cart_item.quantity - inv_item.quantity
+                
+                inv_item.quantity = cart_item.quantity
+                inv_item.unit_price = cart_item.unit_price
+                inv_item.manual_unit_price = cart_item.manual_unit_price
+                inv_item.discount_amount = cart_item.discount_amount
+                inv_item.tax_amount = cart_item.tax_amount
+                
+                # Calculate effective price once (matches cart_checkout pattern)
+                effective_price = inv_item.manual_unit_price or inv_item.unit_price or Decimal('0.00')
+                
+                # Recalculate line total using effective price
+                amount_before_tax = (inv_item.quantity * effective_price) - inv_item.discount_amount
+                inv_item.line_total = amount_before_tax + inv_item.tax_amount
+                
+                inv_item.save()
+                touched_keys.add(key)
+                
+                # Add to totals
+                total_subtotal += (inv_item.quantity * effective_price)
+                total_tax += inv_item.tax_amount
+                total_discount += inv_item.discount_amount
+                
+            else:
+                # NEW ITEM
+                # 1. Deduct Inventory / Mark Sold
+                if barcode_obj:
+                    # Mark sold regardless of previous state (unless it's already sold to US?)
+                    # If this is a re-add, this sets it to 'sold'.
+                    barcode_obj.tag = 'sold'
+                    barcode_obj.save()
+                    
+                # 2. Create InvoiceItem
+                # Calculate effective price (matches cart_checkout pattern)
+                effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0.00')
+                amount_before_tax = (cart_item.quantity * effective_price) - cart_item.discount_amount
+                line_total = amount_before_tax + cart_item.tax_amount
+                
+                InvoiceItem.objects.create(
+                    invoice=invoice,
+                    product=cart_item.product,
+                    variant=cart_item.variant,
+                    barcode=barcode_obj,
+                    quantity=cart_item.quantity,
+                    unit_price=cart_item.unit_price,
+                    manual_unit_price=cart_item.manual_unit_price,
+                    discount_amount=cart_item.discount_amount,
+                    tax_amount=cart_item.tax_amount,
+                    line_total=line_total
+                )
+                
+                total_subtotal += (cart_item.quantity * effective_price)
+                total_tax += cart_item.tax_amount
+                total_discount += cart_item.discount_amount
+                
+        # 3. Handle Removed Items
+        for key, inv_item in existing_items_map.items():
+            if key not in touched_keys:
+                # ITEM REMOVED
+                # 1. Return Inventory
+                if inv_item.barcode:
+                    # CRITICAL: Only mark as 'new' if this barcode is NOT present in the active cart!
+                    # This prevents race conditions where a re-added item (treated as New) gets its status 
+                    # overwritten by the "Removal" of its old self.
+                    if inv_item.barcode.id not in active_barcode_ids:
+                        inv_item.barcode.tag = 'new'
+                        inv_item.barcode.save()
+                    else:
+                        # It is still in the cart (just maybe under a diff key/item). 
+                        # Ensure it is marked sold (redundant safety)
+                        inv_item.barcode.tag = 'sold' 
+                        inv_item.barcode.save()
+
+                inv_item.delete()
+                
+        # 4. Update Invoice Totals
+        invoice.subtotal = total_subtotal
+        invoice.tax_amount = total_tax
+        invoice.discount_amount = total_discount
+        invoice.total = total_subtotal + total_tax - total_discount
+        
+        # 5. Update Status / Due Amount
+        # Paid amount remains same (unless we process refund/extra payment separately, which we don't here)
+        invoice.due_amount = invoice.total - invoice.paid_amount
+        if invoice.due_amount <= 0:
+            invoice.status = 'paid'
+            if invoice.due_amount < 0:
+                 invoice.status = 'credit' # Overpaid?
+        elif invoice.paid_amount > 0:
+            invoice.status = 'partial'
+        else:
+            invoice.status = 'pending' # Or matches invoice_type logic
+        
+        # DEBUG: Print calculated totals
+        print(f"\n{'='*80}")
+        print(f"CALCULATED TOTALS:")
+        print(f"{'='*80}")
+        print(f"Subtotal: {total_subtotal}")
+        print(f"Tax: {total_tax}")
+        print(f"Discount: {total_discount}")
+        print(f"Total: {invoice.total}")
+        print(f"Paid Amount: {invoice.paid_amount}")
+        print(f"Due Amount: {invoice.due_amount}")
+        print(f"Status: {invoice.status}")
+        print(f"{'='*80}\n")
+            
+        invoice.save()
+        
+        # Audit Log
+        create_audit_log(
+            request=request,
+            action='update',
+            model_name='Invoice',
+            object_id=str(invoice.id),
+            object_name=invoice.invoice_number,
+            changes={'total': str(invoice.total), 'action': 'edited_via_cart'}
+        )
+        
+        # Cleanup Cart
+        cart.delete()
+        
+        return Response({'message': 'Invoice updated successfully.', 'id': invoice.id})
+
