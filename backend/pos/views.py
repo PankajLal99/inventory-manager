@@ -1,4 +1,4 @@
-from rest_framework import status
+from rest_framework import status, exceptions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -12,6 +12,8 @@ from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, R
 from backend.catalog.models import Barcode, Product, ProductVariant
 from backend.inventory.models import Stock
 from backend.core.utils import create_audit_log
+import logging
+logger = logging.getLogger(__name__)
 from .serializers import (
     POSSessionSerializer, CartSerializer, CartItemSerializer, InvoiceSerializer,
     InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, RepairSerializer
@@ -1900,17 +1902,34 @@ def cart_unhold(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def cart_checkout(request, pk):
     """Checkout a cart - create invoice with invoice_type and update stock"""
-    cart = get_object_or_404(Cart, pk=pk)
-    
+    # Use select_for_update to lock the cart record and prevent concurrent checkouts
+    cart = Cart.objects.select_for_update().get(pk=pk)
+        
+    # Check if cart is already completed to prevent duplicate invoices
+    if cart.status == 'completed':
+        logger.warning(f"DUPLICATE CHECKOUT BLOCKED: cart_id={cart.id} by user={request.user.username}")
+        create_audit_log(
+            user=request.user,
+            action='cart_checkout',
+            model_name='Cart',
+            object_id=cart.id,
+            object_reference=cart.cart_number,
+            object_name="Blocked Duplicate Checkout",
+            changes={'reason': 'Cart already completed'}
+        )
+        return Response({'error': 'Cart already checked out', 'message': 'This cart has already been processed.'}, status=status.HTTP_400_BAD_REQUEST)
+
     # Determine if it's a repair shop first to allow empty carts for bookings
     is_repair_shop = False
     if cart.store:
+        # Refresh from DB is redundant with select_for_update() but kept for safety if store changed
         cart.store.refresh_from_db()
         shop_type = cart.store.shop_type.lower() if cart.store.shop_type else None
         is_repair_shop = (shop_type == 'repair')
-    
+        
     # Empty cart check - allow empty carts ONLY for repair shops (bookings)
     if not cart.items.exists() and not is_repair_shop:
         return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1954,8 +1973,6 @@ def cart_checkout(request, pk):
             }, status=status.HTTP_400_BAD_REQUEST)
     
     # Debug logging to help diagnose issues
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"Checkout: cart_id={cart.id}, store_id={cart.store.id if cart.store else None}, "
                 f"store_name={cart.store.name if cart.store else None}, "
                 f"shop_type={cart.store.shop_type if cart.store else None}, "
@@ -2018,49 +2035,44 @@ def cart_checkout(request, pk):
         repair_model_name = ''
         repair_booking_amount = None
     
-    # Generate invoice number
+    # Create invoice number
     invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
     while Invoice.objects.filter(invoice_number=invoice_number).exists():
         invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
     
-    # Create invoice within transaction to ensure atomicity
-    with transaction.atomic():
-        invoice = Invoice.objects.create(
-            invoice_number=invoice_number,
-            cart=cart,
-            store=cart.store,
-            customer_id=customer_id,
-            invoice_type=invoice_type,
-            status='draft',
-            created_by=request.user
-        )
+    # Create invoice (already inside atomic transaction)
+    invoice = Invoice.objects.create(
+        invoice_number=invoice_number,
+        cart=cart,
+        store=cart.store,
+        customer_id=customer_id,
+        invoice_type=invoice_type,
+        status='draft',
+        created_by=request.user
+    )
+    
+    # Create Repair record if it's a repair shop (regardless of invoice_type)
+    if is_repair_shop:
+        # Parse booking amount (already validated above)
+        booking_amount_decimal = None
+        if repair_booking_amount:
+            booking_amount_decimal = Decimal(str(repair_booking_amount))
         
-        # Create Repair record if it's a repair shop (regardless of invoice_type)
-        # Only create if store is actually a repair shop (don't create for retail stores even if repair data is sent)
-        if is_repair_shop:
-            # Get repair-specific fields (already validated above)
-            # These are already extracted earlier in the function
-            
-            # Parse booking amount (already validated above)
-            booking_amount_decimal = None
-            if repair_booking_amount:
-                booking_amount_decimal = Decimal(str(repair_booking_amount))
-            
-            # Generate repair barcode
+        # Generate repair barcode
+        repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        while Repair.objects.filter(barcode=repair_barcode).exists():
             repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-            while Repair.objects.filter(barcode=repair_barcode).exists():
-                repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-            
-            # Create Repair record (within same transaction as invoice)
-            Repair.objects.create(
-                invoice=invoice,
-                contact_no=repair_contact_no,
-                model_name=repair_model_name,
-                description=repair_description,
-                booking_amount=booking_amount_decimal,
-                status='received',
-                barcode=repair_barcode
-            )
+        
+        # Create Repair record
+        Repair.objects.create(
+            invoice=invoice,
+            contact_no=repair_contact_no,
+            model_name=repair_model_name,
+            description=repair_description,
+            booking_amount=booking_amount_decimal,
+            status='received',
+            barcode=repair_barcode
+        )
     
     # Calculate totals
     subtotal = Decimal('0.00')
@@ -2142,69 +2154,47 @@ def cart_checkout(request, pk):
         # IMPORTANT: Use the exact barcodes from scanned_barcodes - these are the ones the user scanned
         barcodes_to_assign = []
         if cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
-            # Use all the scanned barcodes from the list - these are the exact barcodes the user scanned
-            # This ensures we use the exact barcode that was scanned, not a random one
             for scanned_barcode_value in cart_item.scanned_barcodes:
                 try:
                     barcode_obj = Barcode.objects.get(barcode=scanned_barcode_value)
-                    # IMPORTANT: Use the exact barcode that was scanned
-                    # Only block if tag is 'sold' and it's currently assigned to an active invoice
-                    # 'returned' barcodes can be sold again even if they were in a previous invoice
-                    if barcode_obj.tag == 'sold':
-                        sold_item = InvoiceItem.objects.filter(
-                            barcode=barcode_obj
-                        ).exclude(
-                            invoice__status='void'
-                        ).first()
-                        if sold_item:
-                            # Skip this barcode - it's already sold and in an active invoice
-                            continue
-                    # Allow 'new', 'returned', and 'in-cart' tags - use the exact barcode that was scanned
-                    # 'in-cart' tags are expected during checkout (barcodes already in cart)
-                    # Don't check for previous invoice assignments for 'returned' tags - they can be resold
+                    # Allow 'new', 'returned', and 'in-cart' tags
                     if barcode_obj.tag in ['new', 'returned', 'in-cart']:
                         barcodes_to_assign.append(barcode_obj)
+                    elif barcode_obj.tag == 'sold':
+                        # If it's already sold, check if it's assigned to THIS invoice (rare but possible during retry)
+                        # or another VOIDED invoice. If not, it's unavailable.
+                        sold_item = InvoiceItem.objects.filter(barcode=barcode_obj).exclude(invoice__status='void').first()
+                        if not sold_item:
+                            barcodes_to_assign.append(barcode_obj)
                 except Barcode.DoesNotExist:
-                    # Barcode not found - this shouldn't happen if it was scanned correctly
                     pass
         
-        # Only find additional barcodes if we don't have enough from scanned_barcodes
-        # This should rarely happen since scanned_barcodes should contain all needed barcodes
+        # If we don't have enough barcodes for the requested quantity, auto-assign more
         quantity_needed = int(cart_item.quantity)
         if len(barcodes_to_assign) < quantity_needed:
-            # Get all barcodes already assigned in this checkout
+            needed_count = quantity_needed - len(barcodes_to_assign)
             assigned_barcode_ids = [b.id for b in barcodes_to_assign]
             
-            # Find available barcodes - allow 'new', 'returned', and 'in-cart' tags
-            # 'in-cart' tags are expected during checkout (barcodes already in cart)
-            barcode_query = Barcode.objects.filter(
+            # Find additional available barcodes
+            extra_barcodes = Barcode.objects.filter(
                 product=cart_item.product,
                 variant=cart_item.variant,
-                tag__in=['new', 'returned', 'in-cart']  # Allow new, returned, and in-cart barcodes
+                tag__in=['new', 'returned']
             ).exclude(
                 id__in=assigned_barcode_ids
-            )
-            
-            # Exclude barcodes already sold
-            sold_barcode_ids = InvoiceItem.objects.filter(
-                barcode__in=barcode_query.values_list('id', flat=True)
             ).exclude(
-                invoice__status='void'
-            ).values_list('barcode_id', flat=True)
+                # Ensure they haven't been sold in other invoices
+                id__in=InvoiceItem.objects.exclude(invoice__status='void').values_list('barcode_id', flat=True)
+            )[:needed_count]
             
-            barcode_query = barcode_query.exclude(id__in=sold_barcode_ids)
-            
-            # Get next available barcode
-            next_barcode = barcode_query.first()
-            if next_barcode:
-                barcodes_to_assign.append(next_barcode)
-            else:
-                # No more available barcodes
-                break
+            barcodes_to_assign.extend(list(extra_barcodes))
         
-        if len(barcodes_to_assign) == 0:
-            # No barcodes available
-            continue
+        # FINAL CHECK: If we still don't have enough barcodes, FAIL the checkout
+        if len(barcodes_to_assign) < quantity_needed:
+            raise exceptions.ValidationError({
+                'error': f'Insufficient stock for {cart_item.product.name}',
+                'message': f'Only {len(barcodes_to_assign)} out of {quantity_needed} items are available in stock. Please reduce the quantity or update inventory.'
+            })
         
         # For tracked products, create one invoice item per barcode (each with quantity 1)
         for i, barcode_obj in enumerate(barcodes_to_assign):
@@ -2282,10 +2272,9 @@ def cart_checkout(request, pk):
     elif invoice_type == 'mixed':
         # Validate split payments match total
         if cash_amount + upi_amount != invoice.total:
-            invoice.delete()  # Clean up invoice if validation fails
-            return Response({
+            raise exceptions.ValidationError({
                 'error': f'Split payment amounts (₹{cash_amount + upi_amount}) do not match invoice total (₹{invoice.total})'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            })
         
         invoice.status = 'paid'
         invoice.paid_amount = invoice.total
@@ -2815,12 +2804,27 @@ def invoice_void(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def invoice_checkout(request, pk):
     """Checkout a pending invoice - convert to sale/credit/pending invoice and update stock"""
-    invoice = get_object_or_404(Invoice, pk=pk)
-    
+    # Lock the invoice record
+    invoice = Invoice.objects.select_for_update().get(pk=pk)
+        
     # Only allow checkout for pending draft invoices
     if invoice.invoice_type != 'pending' or invoice.status != 'draft':
+        # If already paid, return success but explain it was already done
+        if invoice.status == 'paid':
+             logger.warning(f"DUPLICATE INVOICE PAYMENT BLOCKED: invoice_id={invoice.id} by user={request.user.username}")
+             create_audit_log(
+                 user=request.user,
+                 action='invoice_checkout',
+                 model_name='Invoice',
+                 object_id=invoice.id,
+                 object_reference=invoice.invoice_number,
+                 object_name="Blocked Duplicate Payment",
+                 changes={'reason': 'Invoice already paid'}
+             )
+             return Response({'message': 'Invoice already checked out'}, status=status.HTTP_200_OK)
         return Response(
             {'error': 'Only draft pending invoices can be checked out'},
             status=status.HTTP_400_BAD_REQUEST

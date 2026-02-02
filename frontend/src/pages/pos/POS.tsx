@@ -1642,6 +1642,11 @@ export default function POS() {
   };
 
   const handleCheckout = () => {
+    // Prevent multiple submissions if already processing
+    if (checkoutMutation.isPending || checkoutAndPrintThermalMutation.isPending) {
+      return;
+    }
+
     if (!cart?.data?.items || cart.data.items.length === 0) {
       alert('Cart is empty');
       return;
@@ -1909,6 +1914,11 @@ export default function POS() {
   });
 
   const handleCheckoutAndPrintThermal = () => {
+    // Prevent multiple submissions if already processing
+    if (checkoutMutation.isPending || checkoutAndPrintThermalMutation.isPending) {
+      return;
+    }
+
     if (!cart?.data?.items || cart.data.items.length === 0) {
       alert('Cart is empty');
       return;
