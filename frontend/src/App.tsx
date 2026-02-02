@@ -25,6 +25,7 @@ import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
 import CreditNotes from './pages/credit-notes/CreditNotes';
+import CreditNoteDetail from './pages/credit-notes/CreditNoteDetail';
 import Repairs from './pages/repair/Repairs';
 import Ledger from './pages/ledger/Ledger';
 import LedgerDetail from './pages/ledger/LedgerDetail';
@@ -125,6 +126,7 @@ function App() {
                 <Route path="invoices" element={<Invoices />} />
                 <Route path="invoices/:id" element={<InvoiceDetail />} />
                 <Route path="credit-notes" element={<CreditNotes />} />
+                <Route path="credit-notes/:id" element={<CreditNoteDetail />} />
                 <Route path="history" element={<History />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="replacement" element={<Replacement />} />

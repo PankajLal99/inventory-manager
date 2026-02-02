@@ -48,6 +48,7 @@ export default function CreditNoteReplacement() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showInvoiceDropdown, setShowInvoiceDropdown] = useState(false);
   const [notes, setNotes] = useState('');
+  const [visibleItemIds, setVisibleItemIds] = useState<Set<number>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -77,7 +78,37 @@ export default function CreditNoteReplacement() {
     retry: false,
   });
 
-  // Find invoice by barcode/SKU or invoice number
+  // Helper to load a new invoice
+  const loadInvoice = (newInvoice: Invoice, searchBarcode?: string) => {
+    setInvoice(newInvoice);
+    setSearchError(null);
+    setSearchValue('');
+
+    const initialSelected: Record<number, number> = {};
+    const initialVisibleItemIds = new Set<number>();
+    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+
+    const normalizedSearchBarcode = searchBarcode?.toUpperCase();
+
+    newInvoice.items.forEach((item: InvoiceItem) => {
+      const itemBarcode = item.barcode_value?.toUpperCase() || '';
+      const itemSku = item.product_sku?.toUpperCase() || '';
+
+      if (normalizedSearchBarcode && (itemBarcode === normalizedSearchBarcode || itemSku === normalizedSearchBarcode)) {
+        initialVisibleItemIds.add(item.id);
+        initialSelected[item.id] = Math.min(1, item.available_quantity);
+      } else {
+        initialSelected[item.id] = 0;
+      }
+      initialTags[item.id] = 'unknown';
+    });
+
+    setSelectedItems(initialSelected);
+    setItemTags(initialTags);
+    setVisibleItemIds(initialVisibleItemIds);
+  };
+
+  // Find invoice query
   const findInvoiceQuery = useQuery({
     queryKey: ['find-invoice', searchValue],
     queryFn: async () => {
@@ -90,30 +121,9 @@ export default function CreditNoteReplacement() {
           sku: isInvoiceNumber ? undefined : searchValue.trim(),
           invoice_number: isInvoiceNumber ? searchValue.trim() : undefined,
         });
+
         if (response.data?.invoice) {
-          setInvoice(response.data.invoice);
-          setSearchError(null);
-          const initialSelected: Record<number, number> = {};
-          const searchBarcode = searchValue.trim().toUpperCase();
-
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            const itemBarcode = item.barcode_value?.toUpperCase() || '';
-            const itemSku = item.product_sku?.toUpperCase() || '';
-
-            if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
-              initialSelected[item.id] = Math.min(1, item.available_quantity);
-            } else {
-              initialSelected[item.id] = 0;
-            }
-          });
-          setSelectedItems(initialSelected);
-
-          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            initialTags[item.id] = 'unknown';
-          });
-          setItemTags(initialTags);
-
+          loadInvoice(response.data.invoice, searchValue.trim());
           return response.data;
         }
         return null;
@@ -121,6 +131,7 @@ export default function CreditNoteReplacement() {
         const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to find invoice';
         setSearchError(errorMsg);
         setInvoice(null);
+        setVisibleItemIds(new Set());
         return null;
       }
     },
@@ -151,32 +162,83 @@ export default function CreditNoteReplacement() {
     },
   });
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!searchValue.trim()) {
       setSearchError('Please enter a barcode, SKU, or invoice number');
       return;
     }
     setShowInvoiceDropdown(false);
+
+    const searchBarcode = searchValue.trim().toUpperCase();
+
+    // If an invoice is already loaded, check if we're adding to it or switching
+    if (invoice) {
+      // 1. Check if the barcode belongs to an item in the current invoice
+      const matchingItems = invoice.items.filter(item =>
+        item.barcode_value?.toUpperCase() === searchBarcode ||
+        item.product_sku?.toUpperCase() === searchBarcode
+      );
+
+      if (matchingItems.length > 0) {
+        setVisibleItemIds(prev => {
+          const next = new Set(prev);
+          matchingItems.forEach(item => next.add(item.id));
+          return next;
+        });
+
+        // Auto-select matching items if not already
+        setSelectedItems(prev => {
+          const next = { ...prev };
+          matchingItems.forEach(item => {
+            if (!next[item.id] || next[item.id] === 0) {
+              next[item.id] = Math.min(1, item.available_quantity);
+            }
+          });
+          return next;
+        });
+
+        setSearchValue('');
+        showToast('Item added to return list', 'success');
+        return;
+      }
+
+      // 2. Barcode not in current invoice, see if it belongs to a different invoice
+      try {
+        const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(searchValue.trim()) && searchValue.trim().length >= 3;
+        const response = await posApi.replacement.findInvoiceByBarcode({
+          barcode: isInvoiceNumber ? undefined : searchValue.trim(),
+          sku: isInvoiceNumber ? undefined : searchValue.trim(),
+          invoice_number: isInvoiceNumber ? searchValue.trim() : undefined,
+        });
+
+        if (response.data?.invoice) {
+          const newInvoice = response.data.invoice;
+
+          if (newInvoice.id === invoice.id) {
+            loadInvoice(newInvoice, searchValue.trim());
+          } else {
+            // DIFFERENT INVOICE - WARN USER
+            if (window.confirm(`Scanning this barcode will switch to invoice ${newInvoice.invoice_number} and clear current selections. Proceed?`)) {
+              loadInvoice(newInvoice, searchValue.trim());
+            }
+          }
+          return;
+        }
+      } catch (error: any) {
+        // Fall through
+      }
+    }
+
     findInvoiceQuery.refetch();
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
-    setSearchValue(selectedInvoice.invoice_number);
-    setShowInvoiceDropdown(false);
-    setInvoice(selectedInvoice);
-    setSearchError(null);
-
-    const initialSelected: Record<number, number> = {};
-    selectedInvoice.items.forEach((item: InvoiceItem) => {
-      initialSelected[item.id] = 0;
-    });
-    setSelectedItems(initialSelected);
-
-    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    selectedInvoice.items.forEach((item: InvoiceItem) => {
-      initialTags[item.id] = 'unknown';
-    });
-    setItemTags(initialTags);
+    if (invoice && invoice.id !== selectedInvoice.id && totalItemsToReturn > 0) {
+      if (!window.confirm('Switching to a different invoice will clear current selections. Proceed?')) {
+        return;
+      }
+    }
+    loadInvoice(selectedInvoice);
   };
 
   const handleBarcodeScan = (barcode: string) => {
@@ -264,6 +326,7 @@ export default function CreditNoteReplacement() {
     setInvoice(null);
     setSelectedItems({});
     setItemTags({});
+    setVisibleItemIds(new Set());
     setNotes('');
     setSearchError(null);
     if (searchInputRef.current) {
@@ -449,132 +512,130 @@ export default function CreditNoteReplacement() {
 
               {/* Invoice Items */}
               <div className="space-y-2">
-                <h3 className="font-semibold text-gray-900">Select Items for Credit Note</h3>
+                <h3 className="font-semibold text-gray-900">Items for Credit Note</h3>
                 <div className="border rounded-lg divide-y max-h-96 overflow-y-auto">
-                  {invoice.items.map((item) => {
-                    const isSelected = (selectedItems[item.id] || 0) > 0;
-                    const maxQuantity = item.available_quantity;
-                    const selectedQuantity = selectedItems[item.id] || 0;
+                  {invoice.items
+                    .filter((item) => visibleItemIds.has(item.id))
+                    .map((item) => {
+                      const isSelected = (selectedItems[item.id] || 0) > 0;
+                      const maxQuantity = item.available_quantity;
+                      const selectedQuantity = selectedItems[item.id] || 0;
 
-                    return (
-                      <div
-                        key={item.id}
-                        className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''
-                          }`}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => handleItemToggle(item.id)}
-                              className="w-4 h-4 text-blue-600 rounded mt-1"
-                            />
-                            <div className="flex-1">
-                              <div className="font-medium text-gray-900">{item.product_name}</div>
-                              <div className="text-sm text-gray-600 mt-1">
-                                SKU: {item.product_sku}
-                                {item.barcode_value && ` | Barcode: ${item.barcode_value}`}
-                              </div>
-                              <div className="text-sm text-gray-500 mt-1">
-                                Sold: {item.quantity} | Available: {item.available_quantity}
-                              </div>
-                              <div className="text-sm text-gray-600 mt-1">
-                                Price: ₹{formatNumber(item.manual_unit_price || item.unit_price || 0)} per unit
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                            }`}
+                        >
+                          <div className="flex flex-col md:flex-row md:items-center gap-4">
+                            {/* Product Info & Checkbox */}
+                            <div className="flex-1 flex items-start gap-3 min-w-[250px]">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleItemToggle(item.id)}
+                                className="w-4 h-4 text-blue-600 rounded mt-1"
+                              />
+                              <div className="flex-1">
+                                <div className="font-medium text-gray-900 line-clamp-1">{item.product_name}</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5 uppercase tracking-wide">
+                                  SKU: {item.product_sku} | Stock: {item.available_quantity}
+                                </div>
                               </div>
                             </div>
+
+                            {/* Inlined Controls (Price, Condition, Qty) */}
+                            {isSelected && (
+                              <div className="flex flex-wrap items-center gap-x-6 gap-y-3 md:justify-end">
+                                {/* Price Column */}
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">Price</span>
+                                  <span className="text-sm font-semibold text-gray-700">₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}</span>
+                                </div>
+
+                                {/* Condition Column */}
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold mb-1">Condition</span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReturnTagChange(item.id, 'returned')}
+                                      className={`w-5 h-5 rounded-full bg-green-500 border transition-all hover:scale-110 ${itemTags[item.id] === 'returned'
+                                        ? 'border-gray-900 ring-2 ring-green-200'
+                                        : 'border-transparent opacity-30'
+                                        }`}
+                                      title="Returned (Good)"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReturnTagChange(item.id, 'defective')}
+                                      className={`w-5 h-5 rounded-full bg-red-500 border transition-all hover:scale-110 ${itemTags[item.id] === 'defective'
+                                        ? 'border-gray-900 ring-2 ring-red-200'
+                                        : 'border-transparent opacity-30'
+                                        }`}
+                                      title="Defective"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReturnTagChange(item.id, 'unknown')}
+                                      className={`w-5 h-5 rounded-full bg-yellow-400 border transition-all hover:scale-110 ${itemTags[item.id] === 'unknown'
+                                        ? 'border-gray-900 ring-2 ring-yellow-200'
+                                        : 'border-transparent opacity-30'
+                                        }`}
+                                      title="Unknown"
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Quantity Column */}
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold mb-1">Qty</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+                                      onClick={() => selectedQuantity > 0 && handleQuantityChange(item.id, String(selectedQuantity - 1), maxQuantity)}
+                                      disabled={selectedQuantity <= 0}
+                                    >
+                                      <Minus className="h-3 w-3" />
+                                    </button>
+                                    <input
+                                      type="text"
+                                      value={selectedQuantity}
+                                      onChange={(e) => handleQuantityChange(item.id, e.target.value, maxQuantity)}
+                                      onBlur={(e) => {
+                                        const val = Math.max(0, Math.min(parseInt(e.target.value) || 0, maxQuantity));
+                                        handleQuantityChange(item.id, val.toString(), maxQuantity);
+                                      }}
+                                      className="w-10 h-7 text-center border-y focus:outline-none text-sm font-medium"
+                                    />
+                                    <button
+                                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+                                      onClick={() => selectedQuantity < maxQuantity && handleQuantityChange(item.id, String(selectedQuantity + 1), maxQuantity)}
+                                      disabled={selectedQuantity >= maxQuantity}
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Formatted Credit Column */}
+                                <div className="flex flex-col text-right min-w-[80px]">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">Credit</span>
+                                  <span className="text-sm font-bold text-blue-600">
+                                    ₹{(() => {
+                                      const lineTotal = parseFloat(item.line_total || '0');
+                                      const itemQuantity = parseFloat(item.quantity) || 1;
+                                      const pricePerUnit = itemQuantity > 0 ? lineTotal / itemQuantity : parseFloat(item.manual_unit_price || item.unit_price || '0');
+                                      return formatNumber(pricePerUnit * selectedQuantity);
+                                    })()}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          {isSelected && (
-                            <div className="flex flex-col items-end gap-3">
-                              {/* Return Condition (Traffic Signals) */}
-                              <div className="flex items-center gap-2 mb-1">
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'returned')}
-                                  className={`w-5 h-5 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'returned'
-                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-green-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Returned (Good condition)"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'defective')}
-                                  className={`w-5 h-5 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'defective'
-                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-red-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Defective"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'unknown')}
-                                  className={`w-5 h-5 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${itemTags[item.id] === 'unknown'
-                                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Unknown (Default)"
-                                />
-                                <span className="text-[10px] font-bold text-gray-500 capitalize min-w-[50px]">
-                                  {itemTags[item.id] || 'unknown'}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => {
-                                    if (selectedQuantity > 0) {
-                                      handleQuantityChange(item.id, String(selectedQuantity - 1), maxQuantity);
-                                    }
-                                  }}
-                                  disabled={selectedQuantity <= 0}
-                                >
-                                  <Minus className="h-4 w-4" />
-                                </Button>
-                                <Input
-                                  type="number"
-                                  step="1"
-                                  value={selectedQuantity}
-                                  onChange={(e) => handleQuantityChange(item.id, e.target.value, maxQuantity)}
-                                  onBlur={(e) => {
-                                    const val = Math.max(0, Math.min(parseInt(e.target.value) || 0, maxQuantity));
-                                    handleQuantityChange(item.id, val.toString(), maxQuantity);
-                                  }}
-                                  min={0}
-                                  max={maxQuantity}
-                                  className="w-20 text-center"
-                                />
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => {
-                                    if (selectedQuantity < maxQuantity) {
-                                      handleQuantityChange(item.id, String(selectedQuantity + 1), maxQuantity);
-                                    }
-                                  }}
-                                  disabled={selectedQuantity >= maxQuantity}
-                                >
-                                  <Plus className="h-4 w-4" />
-                                </Button>
-                              </div>
-                              {/* Credit amount for this item */}
-                              <div className="text-xs text-purple-600 font-medium">
-                                Credit: ₹{(() => {
-                                  const lineTotal = parseFloat(item.line_total || '0');
-                                  const itemQuantity = parseFloat(item.quantity) || 1;
-                                  // Use line_total / quantity for accurate per-unit price (accounts for discounts/taxes)
-                                  const pricePerUnit = itemQuantity > 0 ? lineTotal / itemQuantity : parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                  return formatNumber(pricePerUnit * selectedQuantity);
-                                })()}
-                              </div>
-                            </div>
-                          )}
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                 </div>
               </div>
 

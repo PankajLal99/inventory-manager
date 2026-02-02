@@ -9,7 +9,7 @@ import {
   Receipt,
   User,
   Calendar,
-  DollarSign,
+  IndianRupee,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import PageHeader from '../../components/ui/PageHeader';
@@ -157,9 +157,9 @@ export default function CreditNotes() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      <DollarSign className="h-4 w-4 text-green-500" />
-                      <span className="font-semibold text-green-700">₹{formatNumber(creditNote.amount)}</span>
+                    <div className="flex items-center gap-1">
+                      <IndianRupee className="h-3.5 w-3.5 text-green-500" />
+                      <span className="font-semibold text-green-700">{formatNumber(creditNote.amount)}</span>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -176,11 +176,11 @@ export default function CreditNotes() {
                   </TableCell>
                   <TableCell>
                     <button
-                      onClick={() => navigate(`/invoices/${creditNote.invoice_id}`)}
-                      className="text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
+                      onClick={() => navigate(`/credit-notes/${creditNote.id}`)}
+                      className="text-purple-600 hover:text-purple-800 flex items-center gap-1 hover:underline font-medium"
                     >
                       <Eye className="h-4 w-4" />
-                      View Invoice
+                      View Detail
                     </button>
                   </TableCell>
                 </TableRow>
@@ -200,8 +200,9 @@ export default function CreditNotes() {
             </div>
             <div className="text-right">
               <p className="text-sm text-gray-600">Total Credit Amount</p>
-              <p className="text-2xl font-bold text-green-700">
-                ₹{formatNumber(
+              <p className="text-2xl font-bold text-green-700 flex items-center justify-end gap-1">
+                <IndianRupee className="h-5 w-5" />
+                {formatNumber(
                   filteredCreditNotes.reduce(
                     (sum, cn) => sum + parseFloat(cn.amount || '0'),
                     0

@@ -74,6 +74,8 @@ class InvoiceAdmin(admin.ModelAdmin):
 class ReturnItemInline(admin.TabularInline):
     model = ReturnItem
     extra = 0
+    fields = ['product', 'barcode', 'product_name', 'product_sku', 'quantity', 'condition', 'refund_amount', 'invoice_item']
+    readonly_fields = ['product', 'barcode', 'product_name', 'product_sku', 'quantity', 'condition', 'refund_amount', 'invoice_item']
 
 
 @admin.register(Return)

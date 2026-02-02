@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from decimal import Decimal
 from backend.catalog.models import Product, ProductVariant
 from backend.parties.models import Customer
@@ -117,7 +118,7 @@ class Invoice(models.Model):
     applied_promotions = models.ManyToManyField(Promotion, related_name='invoices', blank=True)
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='invoices')
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='voided_invoices')
@@ -236,7 +237,12 @@ class Return(models.Model):
 class ReturnItem(models.Model):
     """Return items"""
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='items')
-    invoice_item = models.ForeignKey(InvoiceItem, on_delete=models.CASCADE, related_name='return_items')
+    invoice_item = models.ForeignKey(InvoiceItem, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='return_items', null=True, blank=True)
+    variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
+    barcode = models.ForeignKey('catalog.Barcode', on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
+    product_name = models.CharField(max_length=255, blank=True)
+    product_sku = models.CharField(max_length=100, blank=True)
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     condition = models.CharField(max_length=50)  # e.g., 'saleable', 'damaged', 'expired'
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))

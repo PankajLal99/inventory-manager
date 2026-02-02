@@ -62,6 +62,7 @@ export default function ReplaceProduct() {
   const [showProductScanner, setShowProductScanner] = useState<Record<number, boolean>>({});
   const [productSearchSelectedIndex, setProductSearchSelectedIndex] = useState<Record<number, number>>({});
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode like POS
+  const [visibleItemIds, setVisibleItemIds] = useState<Set<number>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -122,7 +123,39 @@ export default function ReplaceProduct() {
     retry: false,
   });
 
-  // Find invoice by barcode/SKU or invoice number
+  // Helper to load a new invoice
+  const loadInvoice = (newInvoice: Invoice, searchBarcode?: string) => {
+    setInvoice(newInvoice);
+    setSearchError(null);
+    setSearchValue('');
+
+    const initialReplacements: Record<number, ReplacementItem> = {};
+    const initialVisibleItemIds = new Set<number>();
+    const normalizedSearchBarcode = searchBarcode?.toUpperCase();
+
+    newInvoice.items.forEach((item: InvoiceItem) => {
+      const itemBarcode = item.barcode_value?.toUpperCase() || '';
+      const itemSku = item.product_sku?.toUpperCase() || '';
+
+      // Auto-select and show item if barcode or SKU matches
+      if (normalizedSearchBarcode && (itemBarcode === normalizedSearchBarcode || itemSku === normalizedSearchBarcode)) {
+        initialVisibleItemIds.add(item.id);
+        initialReplacements[item.id] = {
+          item_id: item.id,
+          new_product_id: null,
+          new_product_name: '',
+          quantity: Math.min(1, item.available_quantity),
+          return_tag: 'unknown',
+        };
+      }
+    });
+
+    setReplacements(initialReplacements);
+    setVisibleItemIds(initialVisibleItemIds);
+    setProductSearch({});
+  };
+
+  // Find invoice query - used for initial search or deep lookups
   const findInvoiceQuery = useQuery({
     queryKey: ['find-invoice', searchValue],
     queryFn: async () => {
@@ -135,33 +168,9 @@ export default function ReplaceProduct() {
           sku: isInvoiceNumber ? undefined : searchValue.trim(),
           invoice_number: isInvoiceNumber ? searchValue.trim() : undefined,
         });
+
         if (response.data?.invoice) {
-          setInvoice(response.data.invoice);
-          setSearchError(null);
-
-          // Auto-select item if barcode/SKU matches
-          const initialReplacements: Record<number, ReplacementItem> = {};
-          const initialProductSearch: Record<number, string> = {};
-          const searchBarcode = searchValue.trim().toUpperCase();
-
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            const itemBarcode = item.barcode_value?.toUpperCase() || '';
-            const itemSku = item.product_sku?.toUpperCase() || '';
-
-            // Auto-select item if barcode or SKU matches
-            if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
-              initialReplacements[item.id] = {
-                item_id: item.id,
-                new_product_id: null,
-                new_product_name: '',
-                quantity: Math.min(1, item.available_quantity),
-                return_tag: 'unknown',
-              };
-            }
-          });
-
-          setReplacements(initialReplacements);
-          setProductSearch(initialProductSearch);
+          loadInvoice(response.data.invoice, searchValue.trim());
           return response.data;
         }
         return null;
@@ -169,6 +178,7 @@ export default function ReplaceProduct() {
         const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to find invoice';
         setSearchError(errorMsg);
         setInvoice(null);
+        setVisibleItemIds(new Set());
         return null;
       }
     },
@@ -250,22 +260,90 @@ export default function ReplaceProduct() {
     },
   });
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!searchValue.trim()) {
       setSearchError('Please enter a barcode, SKU, or invoice number');
       return;
     }
     setShowInvoiceDropdown(false);
+
+    const searchBarcode = searchValue.trim().toUpperCase();
+
+    // If an invoice is already loaded, check if we're adding to it or switching
+    if (invoice) {
+      // 1. Check if the barcode belongs to an item in the current invoice
+      const matchingItems = invoice.items.filter(item =>
+        item.barcode_value?.toUpperCase() === searchBarcode ||
+        item.product_sku?.toUpperCase() === searchBarcode
+      );
+
+      if (matchingItems.length > 0) {
+        setVisibleItemIds(prev => {
+          const next = new Set(prev);
+          matchingItems.forEach(item => next.add(item.id));
+          return next;
+        });
+
+        // Auto-select matching items
+        setReplacements(prev => {
+          const next = { ...prev };
+          matchingItems.forEach(item => {
+            if (!next[item.id]) {
+              next[item.id] = {
+                item_id: item.id,
+                new_product_id: null,
+                new_product_name: '',
+                quantity: Math.min(1, item.available_quantity),
+                return_tag: 'unknown',
+              };
+            }
+          });
+          return next;
+        });
+
+        setSearchValue('');
+        showToast('Item added to replacement list', 'success');
+        return;
+      }
+
+      // 2. Barcode not in current invoice, see if it belongs to a different invoice
+      try {
+        const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(searchValue.trim()) && searchValue.trim().length >= 3;
+        const response = await posApi.replacement.findInvoiceByBarcode({
+          barcode: isInvoiceNumber ? undefined : searchValue.trim(),
+          sku: isInvoiceNumber ? undefined : searchValue.trim(),
+          invoice_number: isInvoiceNumber ? searchValue.trim() : undefined,
+        });
+
+        if (response.data?.invoice) {
+          const newInvoice = response.data.invoice;
+
+          if (newInvoice.id === invoice.id) {
+            // Should have been caught by the matchingItems check above, but handle just in case
+            loadInvoice(newInvoice, searchValue.trim());
+          } else {
+            // DIFFERENT INVOICE - WARN USER
+            if (window.confirm(`Scanning this barcode will switch to invoice ${newInvoice.invoice_number} and clear current selections. Proceed?`)) {
+              loadInvoice(newInvoice, searchValue.trim());
+            }
+          }
+          return;
+        }
+      } catch (error: any) {
+        // Fall through to default refetch handle below if item not found
+      }
+    }
+
     findInvoiceQuery.refetch();
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
-    setSearchValue(selectedInvoice.invoice_number);
-    setShowInvoiceDropdown(false);
-    setInvoice(selectedInvoice);
-    setSearchError(null);
-    setReplacements({});
-    setProductSearch({});
+    if (invoice && invoice.id !== selectedInvoice.id && Object.keys(replacements).length > 0) {
+      if (!window.confirm('Switching to a different invoice will clear current selections. Proceed?')) {
+        return;
+      }
+    }
+    loadInvoice(selectedInvoice);
   };
 
   const handleBarcodeScan = (barcode: string) => {
@@ -506,6 +584,7 @@ export default function ReplaceProduct() {
     setSearchValue('');
     setInvoice(null);
     setReplacements({});
+    setVisibleItemIds(new Set());
     setProductSearch({});
     setSearchError(null);
     if (searchInputRef.current) {
@@ -720,310 +799,301 @@ export default function ReplaceProduct() {
 
               {/* Invoice Items */}
               <div className="space-y-2">
-                <h3 className="font-semibold text-gray-900">Select Items to Replace</h3>
+                <h3 className="font-semibold text-gray-900">Items to Replace</h3>
                 <div className="border rounded-lg divide-y max-h-96 overflow-y-auto">
-                  {invoice.items.map((item) => {
-                    const replacement = replacements[item.id];
-                    const isSelected = Boolean(replacement);
-                    const maxQuantity = item.available_quantity;
-                    const selectedQuantity = replacement?.quantity || 0;
-                    const products = getProductsForItem(item.id);
-                    const showDropdown = showProductDropdown[item.id] && products.length > 0;
+                  {invoice.items
+                    .filter((item) => visibleItemIds.has(item.id))
+                    .map((item) => {
+                      const replacement = replacements[item.id];
+                      const isSelected = Boolean(replacement);
+                      const maxQuantity = item.available_quantity;
+                      const selectedQuantity = replacement?.quantity || 0;
+                      const products = getProductsForItem(item.id);
+                      const showDropdown = showProductDropdown[item.id] && products.length > 0;
 
-                    return (
-                      <div
-                        key={item.id}
-                        className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''
-                          }`}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => handleItemToggle(item.id)}
-                              className="w-4 h-4 text-blue-600 rounded mt-1"
-                            />
-                            <div className="flex-1">
-                              <div className="font-medium text-gray-900">{item.product_name}</div>
-                              <div className="text-sm text-gray-600 mt-1">
-                                SKU: {item.product_sku}
-                                {item.barcode_value && ` | Barcode: ${item.barcode_value}`}
-                              </div>
-                              <div className="text-sm text-gray-500 mt-1">
-                                Sold: {item.quantity} | Available: {item.available_quantity}
-                              </div>
-                              <div className="text-sm text-gray-600 mt-1">
-                                Current Price: ₹{formatNumber(item.manual_unit_price || item.unit_price || 0)} per unit
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {isSelected && (
-                          <div className="mt-3 ml-7 space-y-4">
-                            {/* Return Condition (Traffic Signals) */}
-                            <div className="flex items-center gap-3 py-2 border-y border-gray-100">
-                              <span className="text-sm font-medium text-gray-700">Return Condition:</span>
-                              <div className="flex items-center gap-3">
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'returned')}
-                                  className={`w-6 h-6 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'returned'
-                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-green-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Returned (Good condition)"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'defective')}
-                                  className={`w-6 h-6 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'defective'
-                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-red-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Defective"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'unknown')}
-                                  className={`w-6 h-6 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'unknown'
-                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-yellow-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Unknown (Default)"
-                                />
-                              </div>
-                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${replacement.return_tag === 'returned' ? 'text-green-700 bg-green-50' :
-                                replacement.return_tag === 'defective' ? 'text-red-700 bg-red-50' :
-                                  'text-yellow-700 bg-yellow-50'
-                                }`}>
-                                {replacement.return_tag}
-                              </span>
-                            </div>
-
-                            {/* Quantity Selection */}
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm text-gray-700">Quantity:</span>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  if (selectedQuantity > 1) {
-                                    handleQuantityChange(item.id, String(selectedQuantity - 1), maxQuantity);
-                                  }
-                                }}
-                                disabled={selectedQuantity <= 1}
-                              >
-                                <Minus className="h-4 w-4" />
-                              </Button>
-                              <Input
-                                type="number"
-                                step="1"
-                                value={selectedQuantity}
-                                onChange={(e) => handleQuantityChange(item.id, e.target.value, maxQuantity)}
-                                min={1}
-                                max={maxQuantity}
-                                className="w-20 text-center"
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                            }`}
+                        >
+                          <div className="flex flex-col md:flex-row md:items-center gap-4">
+                            {/* Product Info & Checkbox */}
+                            <div className="flex-1 flex items-start gap-3 min-w-[250px]">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleItemToggle(item.id)}
+                                className="w-4 h-4 text-blue-600 rounded mt-1"
                               />
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  if (selectedQuantity < maxQuantity) {
-                                    handleQuantityChange(item.id, String(selectedQuantity + 1), maxQuantity);
-                                  }
-                                }}
-                                disabled={selectedQuantity >= maxQuantity}
-                              >
-                                <Plus className="h-4 w-4" />
-                              </Button>
-                            </div>
-
-                            {/* Product Search */}
-                            <div className="relative">
-                              <label className="block text-sm font-medium text-gray-700 mb-1">
-                                Replacement Product:
-                              </label>
-                              <div className="relative">
-                                <Input
-                                  type="text"
-                                  value={productSearch[item.id] || ''}
-                                  onChange={(e) => handleProductSearchChange(item.id, e.target.value)}
-                                  onKeyDown={(e) => handleProductSearchKeyDown(item.id, e)}
-                                  placeholder="Search by name, SKU, or scan barcode..."
-                                  className="w-full pr-32"
-                                />
-                                <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
-                                  <Button
-                                    onClick={() => setStrictBarcodeMode(!strictBarcodeMode)}
-                                    variant="outline"
-                                    size="sm"
-                                    className={`whitespace-nowrap transition-all ${strictBarcodeMode
-                                      ? '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700 hover:!border-blue-700'
-                                      : '!bg-white !text-gray-600 !border-gray-300 hover:!bg-gray-50'
-                                      }`}
-                                    title={strictBarcodeMode ? "Strict barcode matching (ON)" : "Flexible search (OFF)"}
-                                  >
-                                    <Barcode className="h-4 w-4" />
-                                  </Button>
-                                  <Button
-                                    onClick={() => setShowProductScanner(prev => ({ ...prev, [item.id]: true }))}
-                                    variant="outline"
-                                    size="sm"
-                                    className="whitespace-nowrap"
-                                    title="Open camera scanner"
-                                  >
-                                    <Camera className="h-4 w-4" />
-                                  </Button>
+                              <div className="flex-1">
+                                <div className="font-medium text-gray-900 line-clamp-1">{item.product_name}</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5 uppercase tracking-wide">
+                                  SKU: {item.product_sku} | Stock: {item.available_quantity}
                                 </div>
                               </div>
+                            </div>
 
-                              {/* Barcode Scanner for Product Search */}
-                              {showProductScanner[item.id] && (
-                                <div className="mt-2 border rounded-lg p-4 bg-gray-50 flex justify-center">
-                                  <div className="w-full max-w-sm">
-                                    <BarcodeScanner
-                                      isOpen={showProductScanner[item.id]}
-                                      continuous={true}
-                                      onScan={(barcode) => handleProductBarcodeScan(item.id, barcode)}
-                                      onClose={() => setShowProductScanner(prev => ({ ...prev, [item.id]: false }))}
+                            {/* Inlined Controls (Price, Condition, Qty) */}
+                            {isSelected && (
+                              <div className="flex flex-wrap items-center gap-x-6 gap-y-3 md:justify-end">
+                                {/* Price Column */}
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">Price</span>
+                                  <span className="text-sm font-semibold text-gray-700">₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}</span>
+                                </div>
+
+                                {/* Condition Column */}
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold mb-1">Condition</span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReturnTagChange(item.id, 'returned')}
+                                      className={`w-5 h-5 rounded-full bg-green-500 border transition-all hover:scale-110 ${replacement.return_tag === 'returned'
+                                        ? 'border-gray-900 ring-2 ring-green-200'
+                                        : 'border-transparent opacity-30'
+                                        }`}
+                                      title="Returned (Good)"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReturnTagChange(item.id, 'defective')}
+                                      className={`w-5 h-5 rounded-full bg-red-500 border transition-all hover:scale-110 ${replacement.return_tag === 'defective'
+                                        ? 'border-gray-900 ring-2 ring-red-200'
+                                        : 'border-transparent opacity-30'
+                                        }`}
+                                      title="Defective"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleReturnTagChange(item.id, 'unknown')}
+                                      className={`w-5 h-5 rounded-full bg-yellow-400 border transition-all hover:scale-110 ${replacement.return_tag === 'unknown'
+                                        ? 'border-gray-900 ring-2 ring-yellow-200'
+                                        : 'border-transparent opacity-30'
+                                        }`}
+                                      title="Unknown"
                                     />
                                   </div>
                                 </div>
-                              )}
 
-                              {showDropdown && (
-                                <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                                  {products.length === 0 ? (
-                                    <div className="px-4 py-6 text-center text-sm text-gray-500">
-                                      No products found
-                                    </div>
-                                  ) : (
-                                    products.map((product: any, index: number) => {
-                                      const isSelected = (productSearchSelectedIndex[item.id] || -1) === index;
-                                      return (
-                                        <button
-                                          key={product.id}
-                                          type="button"
-                                          onClick={() => handleProductSelect(item.id, product, productSearch[item.id])}
-                                          className={`w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors ${isSelected ? 'bg-blue-50' : ''
-                                            }`}
-                                        >
-                                          <div className="font-medium text-gray-900">{product.name}</div>
-                                          <div className="text-sm text-gray-600 mt-1 space-y-0.5">
-                                            {product.matched_barcode && (
-                                              <div>Short Code: {product.matched_barcode}</div>
-                                            )}
-                                            {product.barcode && product.barcode !== product.matched_barcode && (
-                                              <div>Barcode: {product.barcode}</div>
-                                            )}
-                                            {!product.matched_barcode && !product.barcode && product.sku && (
-                                              <div>SKU: {product.sku}</div>
-                                            )}
-                                          </div>
-                                        </button>
-                                      );
-                                    })
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Barcode status message */}
-                              {activeProductSearchItemId === item.id && barcodeCheckQuery.data?.isUnavailable && (
-                                <div className="mt-2 text-sm text-red-600 flex items-center gap-1">
-                                  <AlertTriangle className="h-4 w-4" />
-                                  {barcodeCheckQuery.data.product?.barcode_status_message || 'This barcode is not available'}
-                                </div>
-                              )}
-
-                              {replacement?.new_product_name && (
-                                <>
-                                  <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
-                                    <Package className="h-4 w-4" />
-                                    Selected: {replacement.new_product_name}
+                                {/* Quantity Column */}
+                                <div className="flex flex-col">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold mb-1">Qty</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+                                      onClick={() => selectedQuantity > 1 && handleQuantityChange(item.id, String(selectedQuantity - 1), maxQuantity)}
+                                      disabled={selectedQuantity <= 1}
+                                    >
+                                      <Minus className="h-3 w-3" />
+                                    </button>
+                                    <input
+                                      type="text"
+                                      value={selectedQuantity}
+                                      onChange={(e) => handleQuantityChange(item.id, e.target.value, maxQuantity)}
+                                      className="w-10 h-7 text-center border-y focus:outline-none text-sm font-medium"
+                                    />
+                                    <button
+                                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 disabled:opacity-50"
+                                      onClick={() => selectedQuantity < maxQuantity && handleQuantityChange(item.id, String(selectedQuantity + 1), maxQuantity)}
+                                      disabled={selectedQuantity >= maxQuantity}
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                    </button>
                                   </div>
-
-                                  {/* Price Adjustment */}
-                                  <div className="mt-3 space-y-2">
-                                    <label className="block text-sm font-medium text-gray-700">
-                                      Price Adjustment:
-                                    </label>
-                                    <div className="grid grid-cols-2 gap-3 text-sm">
-                                      <div>
-                                        <span className="text-gray-600 block text-xs">Old Price (per unit)</span>
-                                        <span className="font-medium">₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}</span>
-                                      </div>
-                                      <div>
-                                        <span className="text-gray-600 block text-xs">New Price (per unit)</span>
-                                        <div className="flex items-center gap-2">
-                                          <Input
-                                            type="number"
-                                            step="0.01"
-                                            min="0"
-                                            value={replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined ? replacement.manual_unit_price.toString() : ''}
-                                            onChange={(e) => handlePriceChange(item.id, e.target.value)}
-                                            placeholder={replacement.new_unit_price !== null && replacement.new_unit_price !== undefined
-                                              ? `Default: ₹${formatNumber(replacement.new_unit_price)}`
-                                              : `Default: ₹${formatNumber(item.manual_unit_price || item.unit_price || 0)}`}
-                                            className="w-full h-9"
-                                          />
-                                        </div>
-                                        {replacement.manual_unit_price === null || replacement.manual_unit_price === undefined ? (
-                                          <span className="text-[10px] text-gray-500 mt-1 block">
-                                            Default: ₹{formatNumber(replacement.new_unit_price || item.manual_unit_price || item.unit_price || 0)}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] text-gray-400 mt-1 block">
-                                            Custom: ₹{formatNumber(replacement.manual_unit_price)}
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    {/* Price Difference Indicator */}
-                                    <div className="mt-2 p-2 bg-gray-50 rounded border">
-                                      <div className="flex justify-between items-center text-xs">
-                                        <span className="text-gray-600 font-medium">Price Diff (Total):</span>
-                                        {(() => {
-                                          const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                          const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                            ? replacement.manual_unit_price
-                                            : (replacement.new_unit_price || originalPrice);
-                                          const diff = currentPrice - originalPrice;
-                                          const totalDiff = diff * selectedQuantity;
-
-                                          return (
-                                            <span className={`font-bold ${totalDiff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                              {totalDiff >= 0 ? `+₹${formatNumber(totalDiff)}` : `₹${formatNumber(totalDiff)}`}
-                                            </span>
-                                          );
-                                        })()}
-                                      </div>
-                                      <div className="text-[10px] text-gray-500 mt-1">
-                                        {(() => {
-                                          const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
-                                          const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
-                                            ? replacement.manual_unit_price
-                                            : (replacement.new_unit_price || originalPrice);
-                                          const diff = currentPrice - originalPrice;
-
-                                          if (diff === 0) return 'No price difference per unit';
-                                          return diff > 0
-                                            ? `Customer pays ₹${formatNumber(diff)} more per unit`
-                                            : `Customer gets ₹${formatNumber(Math.abs(diff))} refund per unit`;
-                                        })()}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </>
-                              )}
-                            </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
+
+                          {isSelected && (
+                            <div className="mt-4 ml-7 pt-3 border-t border-gray-100 space-y-4">
+
+                              {/* Product Search */}
+                              <div className="relative">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                  Replacement Product:
+                                </label>
+                                <div className="relative">
+                                  <Input
+                                    type="text"
+                                    value={productSearch[item.id] || ''}
+                                    onChange={(e) => handleProductSearchChange(item.id, e.target.value)}
+                                    onKeyDown={(e) => handleProductSearchKeyDown(item.id, e)}
+                                    placeholder="Search by name, SKU, or scan barcode..."
+                                    className="w-full pr-32"
+                                  />
+                                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
+                                    <Button
+                                      onClick={() => setStrictBarcodeMode(!strictBarcodeMode)}
+                                      variant="outline"
+                                      size="sm"
+                                      className={`whitespace-nowrap transition-all ${strictBarcodeMode
+                                        ? '!bg-blue-600 !text-white !border-blue-600 hover:!bg-blue-700 hover:!border-blue-700'
+                                        : '!bg-white !text-gray-600 !border-gray-300 hover:!bg-gray-50'
+                                        }`}
+                                      title={strictBarcodeMode ? "Strict barcode matching (ON)" : "Flexible search (OFF)"}
+                                    >
+                                      <Barcode className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      onClick={() => setShowProductScanner(prev => ({ ...prev, [item.id]: true }))}
+                                      variant="outline"
+                                      size="sm"
+                                      className="whitespace-nowrap"
+                                      title="Open camera scanner"
+                                    >
+                                      <Camera className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                {/* Barcode Scanner for Product Search */}
+                                {showProductScanner[item.id] && (
+                                  <div className="mt-2 border rounded-lg p-4 bg-gray-50 flex justify-center">
+                                    <div className="w-full max-w-sm">
+                                      <BarcodeScanner
+                                        isOpen={showProductScanner[item.id]}
+                                        continuous={true}
+                                        onScan={(barcode) => handleProductBarcodeScan(item.id, barcode)}
+                                        onClose={() => setShowProductScanner(prev => ({ ...prev, [item.id]: false }))}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+
+                                {showDropdown && (
+                                  <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                                    {products.length === 0 ? (
+                                      <div className="px-4 py-6 text-center text-sm text-gray-500">
+                                        No products found
+                                      </div>
+                                    ) : (
+                                      products.map((product: any, index: number) => {
+                                        const isSelected = (productSearchSelectedIndex[item.id] || -1) === index;
+                                        return (
+                                          <button
+                                            key={product.id}
+                                            type="button"
+                                            onClick={() => handleProductSelect(item.id, product, productSearch[item.id])}
+                                            className={`w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors ${isSelected ? 'bg-blue-50' : ''
+                                              }`}
+                                          >
+                                            <div className="font-medium text-gray-900">{product.name}</div>
+                                            <div className="text-sm text-gray-600 mt-1 space-y-0.5">
+                                              {product.matched_barcode && (
+                                                <div>Short Code: {product.matched_barcode}</div>
+                                              )}
+                                              {product.barcode && product.barcode !== product.matched_barcode && (
+                                                <div>Barcode: {product.barcode}</div>
+                                              )}
+                                              {!product.matched_barcode && !product.barcode && product.sku && (
+                                                <div>SKU: {product.sku}</div>
+                                              )}
+                                            </div>
+                                          </button>
+                                        );
+                                      })
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Barcode status message */}
+                                {activeProductSearchItemId === item.id && barcodeCheckQuery.data?.isUnavailable && (
+                                  <div className="mt-2 text-sm text-red-600 flex items-center gap-1">
+                                    <AlertTriangle className="h-4 w-4" />
+                                    {barcodeCheckQuery.data.product?.barcode_status_message || 'This barcode is not available'}
+                                  </div>
+                                )}
+
+                                {replacement?.new_product_name && (
+                                  <>
+                                    <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
+                                      <Package className="h-4 w-4" />
+                                      Selected: {replacement.new_product_name}
+                                    </div>
+
+                                    {/* Price Adjustment */}
+                                    <div className="mt-3 space-y-2">
+                                      <label className="block text-sm font-medium text-gray-700">
+                                        Price Adjustment:
+                                      </label>
+                                      <div className="grid grid-cols-2 gap-3 text-sm">
+                                        <div>
+                                          <span className="text-gray-600 block text-xs">Old Price (per unit)</span>
+                                          <span className="font-medium">₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-600 block text-xs">New Price (per unit)</span>
+                                          <div className="flex items-center gap-2">
+                                            <Input
+                                              type="number"
+                                              step="0.01"
+                                              min="0"
+                                              value={replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined ? replacement.manual_unit_price.toString() : ''}
+                                              onChange={(e) => handlePriceChange(item.id, e.target.value)}
+                                              placeholder={replacement.new_unit_price !== null && replacement.new_unit_price !== undefined
+                                                ? `Default: ₹${formatNumber(replacement.new_unit_price)}`
+                                                : `Default: ₹${formatNumber(item.manual_unit_price || item.unit_price || 0)}`}
+                                              className="w-full h-9"
+                                            />
+                                          </div>
+                                          {replacement.manual_unit_price === null || replacement.manual_unit_price === undefined ? (
+                                            <span className="text-[10px] text-gray-500 mt-1 block">
+                                              Default: ₹{formatNumber(replacement.new_unit_price || item.manual_unit_price || item.unit_price || 0)}
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] text-gray-400 mt-1 block">
+                                              Custom: ₹{formatNumber(replacement.manual_unit_price)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* Price Difference Indicator */}
+                                      <div className="mt-2 p-2 bg-gray-50 rounded border">
+                                        <div className="flex justify-between items-center text-xs">
+                                          <span className="text-gray-600 font-medium">Price Diff (Total):</span>
+                                          {(() => {
+                                            const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
+                                            const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+                                              ? replacement.manual_unit_price
+                                              : (replacement.new_unit_price || originalPrice);
+                                            const diff = currentPrice - originalPrice;
+                                            const totalDiff = diff * selectedQuantity;
+
+                                            return (
+                                              <span className={`font-bold ${totalDiff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                {totalDiff >= 0 ? `+₹${formatNumber(totalDiff)}` : `₹${formatNumber(totalDiff)}`}
+                                              </span>
+                                            );
+                                          })()}
+                                        </div>
+                                        <div className="text-[10px] text-gray-500 mt-1">
+                                          {(() => {
+                                            const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
+                                            const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+                                              ? replacement.manual_unit_price
+                                              : (replacement.new_unit_price || originalPrice);
+                                            const diff = currentPrice - originalPrice;
+
+                                            if (diff === 0) return 'No price difference per unit';
+                                            return diff > 0
+                                              ? `Customer pays ₹${formatNumber(diff)} more per unit`
+                                              : `Customer gets ₹${formatNumber(Math.abs(diff))} refund per unit`;
+                                          })()}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
 

@@ -567,12 +567,21 @@ def cart_items(request, pk):
     cart = get_object_or_404(Cart, pk=pk)
     
     # Check if this is a custom product (borrowed product not in inventory)
+    # Check if this is a custom product (borrowed product not in inventory)
     custom_product_name = request.data.get('custom_product_name')
+    custom_product_brand = request.data.get('custom_product_brand')
+    
     if custom_product_name:
         # Handle custom product - create or get product with "Other - <Name>" format
         from backend.catalog.utils import generate_unique_sku
         
-        product_name = f"Other - {custom_product_name.strip()}"
+        clean_name = custom_product_name.strip()
+        clean_brand = custom_product_brand.strip() if custom_product_brand else ""
+        
+        if clean_brand:
+            product_name = f"Other - {clean_name} ({clean_brand})"
+        else:
+            product_name = f"Other - {clean_name}"
         
         # Check if product already exists
         try:
@@ -596,7 +605,13 @@ def cart_items(request, pk):
                 object_name=product.name,
                 object_reference=product.sku,
                 barcode=None,
-                changes={'name': product.name, 'sku': product.sku, 'track_inventory': False, 'custom_product': True}
+                changes={
+                    'name': product.name, 
+                    'sku': product.sku, 
+                    'track_inventory': False, 
+                    'custom_product': True,
+                    'custom_brand': clean_brand
+                }
             )
         
         # For custom products, skip all validations and add directly to cart
@@ -658,6 +673,7 @@ def cart_items(request, pk):
         item_data['product'] = product_id
         item_data['scanned_barcodes'] = []  # Empty list for custom products
         item_data.pop('custom_product_name', None)  # Remove custom_product_name from item_data
+        item_data.pop('custom_product_brand', None)  # Remove custom_product_brand from item_data
         
         serializer = CartItemSerializer(
             data=item_data,
@@ -2035,10 +2051,27 @@ def cart_checkout(request, pk):
         repair_model_name = ''
         repair_booking_amount = None
     
-    # Create invoice number
-    invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+    # Get invoice_date from request if provided, otherwise use current time
+    invoice_date_str = request.data.get('invoice_date')
+    invoice_date = timezone.now()
+    if invoice_date_str:
+        try:
+            from django.utils.dateparse import parse_datetime
+            parsed_date = parse_datetime(invoice_date_str)
+            if parsed_date:
+                # If parsed date is naive, make it aware using current timezone
+                if timezone.is_naive(parsed_date):
+                    invoice_date = timezone.make_aware(parsed_date)
+                else:
+                    invoice_date = parsed_date
+        except (ValueError, TypeError):
+            pass
+
+    # Create invoice number - use invoice_date for date parts
+    date_part = invoice_date.strftime('%Y%m%d')
+    invoice_number = f"INV-{date_part}-{str(uuid.uuid4())[:8].upper()}"
     while Invoice.objects.filter(invoice_number=invoice_number).exists():
-        invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        invoice_number = f"INV-{date_part}-{str(uuid.uuid4())[:8].upper()}"
     
     # Create invoice (already inside atomic transaction)
     invoice = Invoice.objects.create(
@@ -2048,7 +2081,8 @@ def cart_checkout(request, pk):
         customer_id=customer_id,
         invoice_type=invoice_type,
         status='draft',
-        created_by=request.user
+        created_by=request.user,
+        created_at=invoice_date
     )
     
     # Create Repair record if it's a repair shop (regardless of invoice_type)
@@ -5240,8 +5274,12 @@ def replacement_credit_note(request, invoice_id):
                 # Full replacement - delete the invoice item
                 replaced_items.append({
                     'item_id': invoice_item.id,
+                    'product_id': product.id,
+                    'variant_id': invoice_item.variant.id if invoice_item.variant else None,
                     'barcode_id': barcode_obj.id if barcode_obj else None,
                     'barcode': barcode_obj.barcode if barcode_obj else None,
+                    'product_name': product.name,
+                    'product_sku': product.sku,
                     'quantity': str(quantity),
                     'credit_amount': str(credit_amount),
                     'action': 'deleted'
@@ -5266,8 +5304,12 @@ def replacement_credit_note(request, invoice_id):
                 invoice_item.save()
                 replaced_items.append({
                     'item_id': invoice_item.id,
+                    'product_id': product.id,
+                    'variant_id': invoice_item.variant.id if invoice_item.variant else None,
                     'barcode_id': barcode_obj.id if barcode_obj else None,
                     'barcode': barcode_obj.barcode if barcode_obj else None,
+                    'product_name': product.name,
+                    'product_sku': product.sku,
                     'quantity': str(quantity),
                     'credit_amount': str(credit_amount),
                     'action': 'reduced',
@@ -5404,16 +5446,16 @@ def replacement_credit_note(request, invoice_id):
         
         # Create ReturnItems for tracking
         for item_data in replaced_items:
-            # Try to get the invoice item if it still exists (partial replacement)
-            try:
-                invoice_item = InvoiceItem.objects.get(id=item_data['item_id'])
-            except InvoiceItem.DoesNotExist:
-                # Item was deleted (full replacement), skip ReturnItem creation
-                continue
-            
+            # Capture all info from item_data directly to prevent data loss even if invoice_item was deleted
             ReturnItem.objects.create(
                 return_obj=return_obj,
-                invoice_item=invoice_item,
+                # Link to invoice_item ONLY if it still exists (partial replacement)
+                invoice_item_id=item_data['item_id'] if item_data['action'] != 'deleted' else None,
+                product_id=item_data['product_id'],
+                variant_id=item_data['variant_id'],
+                barcode_id=item_data['barcode_id'],
+                product_name=item_data['product_name'],
+                product_sku=item_data['product_sku'],
                 quantity=Decimal(item_data['quantity']),
                 condition='returned',
                 refund_amount=Decimal(item_data['credit_amount'])

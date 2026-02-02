@@ -64,7 +64,18 @@ export default function POS() {
   const [repairBookingAmount, setRepairBookingAmount] = useState('');
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
+  const [customProductBrand, setCustomProductBrand] = useState('');
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [invoiceDate, setInvoiceDate] = useState<string>(() => {
+    const now = new Date();
+    // Use local time for initial state - YYYY-MM-DDTHH:mm
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  });
   // Barcode Queue Types and State
   interface QueueItem {
     id: string;
@@ -1435,6 +1446,14 @@ export default function POS() {
           setCashAmount('');
           setUpiAmount('');
           setBarcodeInput('');
+          // Reset invoice date to current time after successful checkout
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = String(now.getMonth() + 1).padStart(2, '0');
+          const day = String(now.getDate()).padStart(2, '0');
+          const hours = String(now.getHours()).padStart(2, '0');
+          const minutes = String(now.getMinutes()).padStart(2, '0');
+          setInvoiceDate(`${year}-${month}-${day}T${hours}:${minutes}`);
           // Create new cart automatically after checkout if no other tabs
           if (defaultStore) {
             createCartMutation.mutate();
@@ -1686,6 +1705,7 @@ export default function POS() {
     const checkoutData: any = {
       invoice_type: frontendToBackendInvoiceType(finalInvoiceType),
       customer: selectedCustomer?.id || null,
+      invoice_date: invoiceDate,
     };
 
     // Add repair data if it's a repair shop (regardless of invoice type)
@@ -1944,6 +1964,7 @@ export default function POS() {
     const checkoutData: any = {
       invoice_type: frontendToBackendInvoiceType(invoiceType),
       customer: selectedCustomer?.id || null,
+      invoice_date: invoiceDate,
     };
 
     // Add split payment amounts for mixed type
@@ -2130,19 +2151,24 @@ export default function POS() {
   const isEditingPrice = Object.keys(editingManualPrice).length > 0;
 
   // Auto-focus barcode input when cart is created (but not when editing prices or typing)
+  // Auto-focus barcode input when cart is created (but not when editing prices or typing)
   useEffect(() => {
     if (cartId && barcodeInputRef.current && !isEditingPrice && !isTypingInPriceInput.current) {
       // Small delay to ensure DOM is ready
       const timer = setTimeout(() => {
         // Double-check that user is not typing in price input
         if (barcodeInputRef.current && !isEditingPrice && !isTypingInPriceInput.current) {
-          // Check if any price input is currently focused
+          // Check if any input is currently focused - if so, DO NOT steal focus
           const activeElement = document.activeElement;
-          const isPriceInputFocused = activeElement && activeElement.tagName === 'INPUT' &&
-            (activeElement as HTMLInputElement).type === 'number' &&
-            activeElement.closest('[class*="price"]') !== null;
+          const isAnyInputFocused = activeElement && (
+            activeElement.tagName === 'INPUT' ||
+            activeElement.tagName === 'TEXTAREA' ||
+            activeElement.tagName === 'SELECT' ||
+            (activeElement as HTMLElement).isContentEditable
+          );
 
-          if (!isPriceInputFocused) {
+          // Only focus if NO input is focused
+          if (!isAnyInputFocused) {
             barcodeInputRef.current.focus();
           }
         }
@@ -2469,6 +2495,21 @@ export default function POS() {
           )}
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
+          {/* Invoice Date Selector */}
+          <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg px-2 py-1.5 shadow-sm">
+            <label htmlFor="invoice-date" className="text-xs font-semibold text-gray-600 flex items-center gap-1">
+              <FileText className="h-3.5 w-3.5" />
+              <span className="hidden lg:inline">INV DATE</span>
+            </label>
+            <input
+              id="invoice-date"
+              type="datetime-local"
+              value={invoiceDate}
+              onChange={(e) => setInvoiceDate(e.target.value)}
+              className="text-xs sm:text-sm border-0 p-0 focus:ring-0 cursor-pointer bg-transparent font-medium"
+            />
+          </div>
+
           {/* Mobile: Stack buttons, Desktop: Horizontal */}
           <div className="flex items-center gap-2 flex-1 sm:flex-initial">
             {cartId && (
@@ -4325,6 +4366,7 @@ export default function POS() {
         onClose={() => {
           setShowCustomProductModal(false);
           setCustomProductName('');
+          setCustomProductBrand('');
         }}
         title="Add Custom Product"
         size="md"
@@ -4345,16 +4387,43 @@ export default function POS() {
                   // Add custom product to cart
                   addItemMutation.mutate({
                     custom_product_name: customProductName.trim(),
+                    custom_product_brand: customProductBrand.trim(),
                     quantity: 1,
                     unit_price: 0, // Price must be entered manually
                   });
                   setShowCustomProductModal(false);
                   setCustomProductName('');
+                  setCustomProductBrand('');
                 }
               }}
             />
-            <p className="mt-1 text-xs text-gray-500">
-              This product will be saved as "Other - {customProductName || '[name]'}" and won't require inventory tracking.
+
+            <label className="block text-sm font-medium text-gray-700 mb-1 mt-3">
+              Brand (Optional)
+            </label>
+            <Input
+              type="text"
+              placeholder="Enter brand (e.g. Amul)"
+              value={customProductBrand}
+              onChange={(e) => setCustomProductBrand(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && customProductName.trim()) {
+                  // Add custom product to cart
+                  addItemMutation.mutate({
+                    custom_product_name: customProductName.trim(),
+                    custom_product_brand: customProductBrand.trim(),
+                    quantity: 1,
+                    unit_price: 0, // Price must be entered manually
+                  });
+                  setShowCustomProductModal(false);
+                  setCustomProductName('');
+                  setCustomProductBrand('');
+                }
+              }}
+            />
+
+            <p className="mt-2 text-xs text-gray-500">
+              This product will be saved as "Other - {customProductName || '[name]'}{customProductBrand ? ` (${customProductBrand})` : ''}" and won't require inventory tracking.
             </p>
           </div>
           <div className="flex gap-3 pt-2">
@@ -4367,11 +4436,13 @@ export default function POS() {
                 // Add custom product to cart
                 addItemMutation.mutate({
                   custom_product_name: customProductName.trim(),
+                  custom_product_brand: customProductBrand.trim(),
                   quantity: 1,
                   unit_price: 0, // Price must be entered manually
                 });
                 setShowCustomProductModal(false);
                 setCustomProductName('');
+                setCustomProductBrand('');
               }}
               disabled={addItemMutation.isPending || !customProductName.trim()}
               className="flex-1"
@@ -4383,6 +4454,7 @@ export default function POS() {
               onClick={() => {
                 setShowCustomProductModal(false);
                 setCustomProductName('');
+                setCustomProductBrand('');
               }}
               disabled={addItemMutation.isPending}
             >
