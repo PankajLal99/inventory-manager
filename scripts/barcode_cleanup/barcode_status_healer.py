@@ -120,7 +120,7 @@ def status_healer(dry_run=True):
                             if not d['scanned'] and d['quantity'] > 0:
                                 # Legacy case: tracked but no barcodes (manual entry)
                                 ii = InvoiceItem.objects.create(invoice=inv, product=product, quantity=d['quantity'], unit_price=d['price'], line_total=d['price'] * d['quantity'])
-                                logger.log('CREATE', 'InvoiceItem', ii.id, inv.invoice_number, 'ALL', 'NONE', f'Product: {product.name} (Legacy Qty: {d['quantity']})', f'Structural repair (legacy manual) for {inv.invoice_number}', meta)
+                                logger.log('CREATE', 'InvoiceItem', ii.id, inv.invoice_number, 'ALL', 'NONE', f"Product: {product.name} (Legacy Qty: {d['quantity']})", f'Structural repair (legacy manual) for {inv.invoice_number}', meta)
                             else:
                                 for b_val in d['scanned']:
                                     try:
