@@ -44,7 +44,7 @@ export default function Search() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
-  const initialType = searchParams.get('type') || 'all';
+  const initialType = searchParams.get('type') || 'product';
   const [query, setQuery] = useState(initialQuery);
   const [searchType, setSearchType] = useState(initialType);
   const [showScanner, setShowScanner] = useState(false);
@@ -79,7 +79,7 @@ export default function Search() {
   // Sync query with URL params
   useEffect(() => {
     const urlQuery = searchParams.get('q') || '';
-    const urlType = searchParams.get('type') || 'all';
+    const urlType = searchParams.get('type') || 'product';
     if (urlQuery !== query) {
       setQuery(urlQuery);
     }
@@ -92,7 +92,7 @@ export default function Search() {
     e.preventDefault();
     const params: any = {};
     if (query.trim()) params.q = query.trim();
-    if (searchType !== 'all') params.type = searchType;
+    if (searchType !== 'product') params.type = searchType;
     setSearchParams(params);
     // Query will trigger automatically via useQuery
   };
@@ -101,7 +101,7 @@ export default function Search() {
     setSearchType(type);
     if (query.trim()) {
       const params: any = { q: query.trim() };
-      if (type !== 'all') params.type = type;
+      if (type !== 'product') params.type = type;
       setSearchParams(params);
     }
   };
