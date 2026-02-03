@@ -32,19 +32,24 @@ class CheckoutTests(APITestCase):
                 tag='new'
             )
 
-    def test_successful_cart_checkout_auto_assign(self):
-        """Test that checkout auto-assigns barcodes when none are scanned"""
+    def test_successful_cart_checkout_with_scans(self):
+        """Test that checkout succeeds when barcodes are correctly scanned"""
         cart = Cart.objects.create(
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
             invoice_type='cash'
         )
+        # Get 5 barcodes to scan
+        barcodes = list(Barcode.objects.filter(product=self.product, tag='new')[:5])
+        barcode_values = [b.barcode for b in barcodes]
+        
         CartItem.objects.create(
             cart=cart,
             product=self.product,
             quantity=5,
-            unit_price=Decimal('100.00')
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=barcode_values
         )
         
         url = reverse('cart-checkout', args=[cart.id])
@@ -65,11 +70,16 @@ class CheckoutTests(APITestCase):
             created_by=self.user,
             invoice_type='cash'
         )
+        # Get barcodes to scan
+        barcodes = list(Barcode.objects.filter(product=self.product, tag='new')[:2])
+        barcode_values = [b.barcode for b in barcodes]
+        
         CartItem.objects.create(
             cart=cart,
             product=self.product,
             quantity=2,
-            unit_price=Decimal('100.00')
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=barcode_values
         )
         
         url = reverse('cart-checkout', args=[cart.id])
@@ -83,27 +93,32 @@ class CheckoutTests(APITestCase):
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('already checked out', response2.data.get('error', ''))
 
-    def test_insufficient_stock_fail_fast(self):
-        """Test that checkout fails if not enough barcodes are available for a tracked product"""
+    def test_insufficient_scans_fail_fast(self):
+        """Test that checkout fails if not enough barcodes are scanned for a tracked product"""
         cart = Cart.objects.create(
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
             invoice_type='cash'
         )
-        # Request 15, but only 10 available in DB
+        # Request 5, but only scan 2
+        barcodes = list(Barcode.objects.filter(product=self.product, tag='new')[:2])
+        barcode_values = [b.barcode for b in barcodes]
+        
         CartItem.objects.create(
             cart=cart,
             product=self.product,
-            quantity=15,
-            unit_price=Decimal('100.00')
+            quantity=5,
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=barcode_values
         )
         
         url = reverse('cart-checkout', args=[cart.id])
         response = self.client.post(url, {'invoice_type': 'cash'}, format='json')
         
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('Insufficient stock', response.data.get('error', ''))
+        error_text = response.data.get('message', '') + response.data.get('error', '')
+        self.assertIn('Incomplete barcode scans', error_text)
         # Ensure no invoice was created for this cart
         self.assertFalse(Invoice.objects.filter(cart=cart).exists())
 
@@ -115,11 +130,14 @@ class CheckoutTests(APITestCase):
             created_by=self.user,
             invoice_type='pending'
         )
+        # Scan 1 barcode for quantity 1
+        barcode = Barcode.objects.filter(product=self.product, tag='new').first()
         CartItem.objects.create(
             cart=cart,
             product=self.product,
             quantity=1,
-            unit_price=Decimal('100.00')
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[barcode.barcode]
         )
         
         # Create initial pending invoice via cart checkout
@@ -651,3 +669,54 @@ class InvoiceEditTests(APITestCase):
         # Remaining barcode should still be 'sold'
         remaining_bc = Barcode.objects.get(id=self.barcodes1[1].id)
         self.assertEqual(remaining_bc.tag, 'sold')
+
+class BarcodeStrictnessTests(APITestCase):
+    """New tests to enforce strict barcode scanning behavior"""
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'strictuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Strict Store', shop_type='retail')
+        self.category = Category.objects.create(name='Strict Category')
+        self.product = Product.objects.create(
+            name='Strict Tracked Product',
+            category=self.category,
+            track_inventory=True
+        )
+        self.barcode = Barcode.objects.create(
+            product=self.product,
+            barcode=f'STRICT-{uuid.uuid4().hex[:8]}',
+            tag='new'
+        )
+        self.cart = Cart.objects.create(
+            cart_number=f'STRICT-CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active'
+        )
+
+    def test_add_tracked_product_without_barcode_fails(self):
+        """Test that adding a tracked product without a barcode returns 400"""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 100
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('MUST physically scan a barcode', response.data.get('message', ''))
+
+    def test_checkout_with_insufficient_scans_fails(self):
+        """Test that checkout fails if quantity > scanned_barcodes"""
+        CartItem.objects.create(
+            cart=self.cart,
+            product=self.product,
+            quantity=Decimal('2.000'),
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[self.barcode.barcode]
+        )
+        url = reverse('cart-checkout', kwargs={'pk': self.cart.id})
+        response = self.client.post(url, {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        error_text = response.data.get('message', '') + response.data.get('error', '')
+        self.assertIn('Incomplete barcode scans', error_text)

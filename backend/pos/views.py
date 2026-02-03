@@ -1213,46 +1213,12 @@ def cart_items(request, pk):
                 'message': f'Scanned item "{scanned_value_str}" does not exist in the database. Please check the barcode.'
             }, status=status.HTTP_404_NOT_FOUND)
     
-    # If no barcode provided or not found, find an available barcode for this product
+    # If no barcode provided or not found, STRICTLY REQUIRE a scanned barcode for tracked products
     if not barcode_obj:
-        # Get all barcodes already in ALL active carts (to avoid duplicates across carts)
-        all_active_carts = Cart.objects.filter(status='active')
-        all_cart_items_all_carts = CartItem.objects.filter(cart__in=all_active_carts)
-        cart_barcodes = set()
-        for item in all_cart_items_all_carts:
-            if item.scanned_barcodes:
-                cart_barcodes.update(item.scanned_barcodes)
-        
-        # Find available barcodes (new, not sold, not in any active cart, from finalized purchases)
-        available_barcodes = Barcode.objects.filter(
-            product=product,
-            variant_id=variant_id if variant_id else None,
-            tag='new',  # Only new barcodes
-            purchase_item__purchase__status='finalized'  # Only from finalized purchases
-        ).exclude(
-            barcode__in=cart_barcodes
-        )
-        
-        # Exclude barcodes that are already sold
-        sold_barcode_ids = InvoiceItem.objects.filter(
-            barcode__in=available_barcodes.values_list('id', flat=True)
-        ).exclude(
-            invoice__status='void'
-        ).values_list('barcode_id', flat=True)
-        
-        available_barcodes = available_barcodes.exclude(id__in=sold_barcode_ids)
-        
-        # Get a random available barcode (order by random)
-        barcode_obj = available_barcodes.order_by('?').first()
-        
-        if barcode_obj:
-            barcode_value_to_use = barcode_obj.barcode
-        else:
-            # No available barcodes
-            return Response({
-                'error': 'No available items for this product',
-                'message': 'All items of this product have been sold or are already in cart'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'error': 'Barcode required',
+            'message': f'This is a tracked product ({product.name}). You MUST physically scan a barcode to add it to the cart.'
+        }, status=status.HTTP_400_BAD_REQUEST)
     
     # If existing item found, add the barcode to it and increment quantity
     if existing_item:
@@ -2002,19 +1968,10 @@ def cart_checkout(request, pk):
                 continue
             if b.tag in ('new', 'returned', 'in-cart') or (b.tag == 'sold' and b.id not in sold_barcode_ids):
                 available_from_scan += 1
-        if available_from_scan >= quantity_needed:
-            continue
-        need_more = quantity_needed - available_from_scan
-        pool_ids = list(
-            Barcode.objects.filter(
-                product=cart_item.product,
-                variant=cart_item.variant,
-                tag__in=['new', 'returned', 'in-cart']
-            ).exclude(id__in=sold_barcode_ids).values_list('id', flat=True)[:need_more + 1]
-        )
-        if len(pool_ids) < need_more:
+        if available_from_scan < quantity_needed:
             return Response({
-                'error': f'Insufficient stock for {cart_item.product.name} (SKU: {cart_item.product.sku}). Requested {quantity_needed}, available {available_from_scan + len(pool_ids)}.'
+                'error': 'Incomplete barcode scans',
+                'message': f'Product "{cart_item.product.name}" requires {quantity_needed} scans, but only {available_from_scan} valid barcodes were scanned. Please ensure all items are physically scanned.'
             }, status=status.HTTP_400_BAD_REQUEST)
 
     # Debug logging to help diagnose issues
@@ -2126,269 +2083,258 @@ def cart_checkout(request, pk):
                 barcode=repair_barcode
             )
     
-    # Calculate totals
-    subtotal = Decimal('0.00')
-    discount_total = Decimal('0.00')
-    tax_total = Decimal('0.00')
-    
-    # Create invoice items and update stock
-    for cart_item in cart.items.all():
-        # Validate quantity to prevent division errors
-        if cart_item.quantity <= Decimal('0.000'):
-            continue  # Skip items with zero or negative quantity
+        # Calculate totals
+        subtotal = Decimal('0.00')
+        discount_total = Decimal('0.00')
+        tax_total = Decimal('0.00')
         
-        effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0.00')
-        
-        # Calculate per-unit discount and tax safely
-        per_unit_discount = Decimal('0.00')
-        per_unit_tax = Decimal('0.00')
-        if cart_item.quantity > Decimal('0.000'):
-            per_unit_discount = cart_item.discount_amount / cart_item.quantity
-            per_unit_tax = cart_item.tax_amount / cart_item.quantity
-        
-        unit_line_total = effective_price - per_unit_discount + per_unit_tax
-        
-        # Handle non-tracked products differently (no barcodes needed)
-        if not cart_item.product.track_inventory:
-            # For non-tracked products, create a single invoice item with the full quantity
-            line_total = unit_line_total * cart_item.quantity
+        # Create invoice items and update stock
+        for cart_item in cart.items.all():
+            # Validate quantity to prevent division errors
+            if cart_item.quantity <= Decimal('0.000'):
+                continue  # Skip items with zero or negative quantity
             
-            invoice_item = InvoiceItem.objects.create(
-                invoice=invoice,
-                product=cart_item.product,
-                variant=cart_item.variant,
-                barcode=None,  # No barcode for non-tracked products
-                quantity=cart_item.quantity,
-                unit_price=cart_item.unit_price,
-                manual_unit_price=cart_item.manual_unit_price,
-                discount_amount=cart_item.discount_amount,
-                tax_amount=cart_item.tax_amount,
-                line_total=line_total
-            )
+            effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0.00')
             
-            # Audit log: Invoice item created (non-tracked)
-            create_audit_log(
-                request=request,
-                action='invoice_create',
-                model_name='InvoiceItem',
-                object_id=str(invoice_item.id),
-                object_name=f"{cart_item.product.name} (Invoice {invoice.invoice_number})",
-                object_reference=invoice.invoice_number,
-                barcode=None,
-                changes={
-                    'invoice_id': invoice.id,
-                    'invoice_number': invoice.invoice_number,
-                    'product_id': cart_item.product.id,
-                    'product_name': cart_item.product.name,
-                    'product_sku': cart_item.product.sku,
-                    'quantity': str(cart_item.quantity),
-                    'unit_price': str(cart_item.unit_price),
-                    'line_total': str(line_total),
-                    'track_inventory': False,
-                }
-            )
+            # Calculate per-unit discount and tax safely
+            per_unit_discount = Decimal('0.00')
+            per_unit_tax = Decimal('0.00')
+            if cart_item.quantity > Decimal('0.000'):
+                per_unit_discount = cart_item.discount_amount / cart_item.quantity
+                per_unit_tax = cart_item.tax_amount / cart_item.quantity
             
-            subtotal += line_total
-            discount_total += invoice_item.discount_amount
-            tax_total += invoice_item.tax_amount
+            unit_line_total = effective_price - per_unit_discount + per_unit_tax
             
-            # Stock was already decremented when item was added to cart
-            # No need to decrement again on checkout for any invoice type
-            # Stock will remain decremented (already sold/reserved)
-            
-            # For non-tracked products, we do NOT mark the barcode as 'sold'
-            # The barcode stays as 'new' and sold quantity is tracked via InvoiceItems
-            # This allows the product to remain visible and available quantity is tracked via Stock
-            
-            continue  # Skip barcode logic for non-tracked products
-        
-        # For tracked products, handle barcodes
-        # IMPORTANT: Use the exact barcodes from scanned_barcodes - these are the ones the user scanned
-        barcodes_to_assign = []
-        if cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
-            # Use all the scanned barcodes from the list - these are the exact barcodes the user scanned
-            # This ensures we use the exact barcode that was scanned, not a random one
-            for scanned_barcode_value in cart_item.scanned_barcodes:
-                try:
-                    barcode_obj = Barcode.objects.get(barcode=scanned_barcode_value)
-                    # IMPORTANT: Use the exact barcode that was scanned
-                    # Only block if tag is 'sold' and it's currently assigned to an active invoice
-                    # 'returned' barcodes can be sold again even if they were in a previous invoice
-                    if barcode_obj.tag == 'sold':
-                        sold_item = InvoiceItem.objects.filter(
-                            barcode=barcode_obj
-                        ).exclude(
-                            invoice__status='void'
-                        ).first()
-                        if sold_item:
-                            # Skip this barcode - it's already sold and in an active invoice
-                            continue
-                    # Allow 'new', 'returned', and 'in-cart' tags - use the exact barcode that was scanned
-                    # 'in-cart' tags are expected during checkout (barcodes already in cart)
-                    # Don't check for previous invoice assignments for 'returned' tags - they can be resold
-                    if barcode_obj.tag in ['new', 'returned', 'in-cart']:
-                        barcodes_to_assign.append(barcode_obj)
-                except Barcode.DoesNotExist:
-                    # Barcode not found - this shouldn't happen if it was scanned correctly
-                    pass
-        
-        # Auto-assign: one query for up to quantity_needed available barcodes (no N-queries loop)
-        quantity_needed = int(cart_item.quantity)
-        assigned_ids = [b.id for b in barcodes_to_assign]
-        if len(barcodes_to_assign) < quantity_needed:
-            need_more = quantity_needed - len(barcodes_to_assign)
-            extra = list(
-                Barcode.objects.filter(
+            # Handle non-tracked products differently (no barcodes needed)
+            if not cart_item.product.track_inventory:
+                # For non-tracked products, create a single invoice item with the full quantity
+                line_total = unit_line_total * cart_item.quantity
+                
+                invoice_item = InvoiceItem.objects.create(
+                    invoice=invoice,
                     product=cart_item.product,
                     variant=cart_item.variant,
-                    tag__in=['new', 'returned', 'in-cart']
+                    barcode=None,  # No barcode for non-tracked products
+                    quantity=cart_item.quantity,
+                    unit_price=cart_item.unit_price,
+                    manual_unit_price=cart_item.manual_unit_price,
+                    discount_amount=cart_item.discount_amount,
+                    tax_amount=cart_item.tax_amount,
+                    line_total=line_total
                 )
-                .exclude(id__in=assigned_ids)
-                .exclude(
-                    id__in=InvoiceItem.objects.exclude(invoice__status='void').values_list('barcode_id', flat=True)
-                )[:need_more]
-            )
-            barcodes_to_assign.extend(extra)
-
-        if len(barcodes_to_assign) == 0:
-            # No barcodes available
-            continue
+                
+                # Audit log: Invoice item created (non-tracked)
+                create_audit_log(
+                    request=request,
+                    action='invoice_create',
+                    model_name='InvoiceItem',
+                    object_id=str(invoice_item.id),
+                    object_name=f"{cart_item.product.name} (Invoice {invoice.invoice_number})",
+                    object_reference=invoice.invoice_number,
+                    barcode=None,
+                    changes={
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'product_id': cart_item.product.id,
+                        'product_name': cart_item.product.name,
+                        'product_sku': cart_item.product.sku,
+                        'quantity': str(cart_item.quantity),
+                        'unit_price': str(cart_item.unit_price),
+                        'line_total': str(line_total),
+                        'track_inventory': False,
+                    }
+                )
+                
+                subtotal += line_total
+                discount_total += invoice_item.discount_amount
+                tax_total += invoice_item.tax_amount
+                
+                # Stock was already decremented when item was added to cart
+                # No need to decrement again on checkout for any invoice type
+                # Stock will remain decremented (already sold/reserved)
+                
+                # For non-tracked products, we do NOT mark the barcode as 'sold'
+                # The barcode stays as 'new' and sold quantity is tracked via InvoiceItems
+                # This allows the product to remain visible and available quantity is tracked via Stock
+                
+                continue  # Skip barcode logic for non-tracked products
+            
+            # For tracked products, handle barcodes
+            # IMPORTANT: Use the exact barcodes from scanned_barcodes - these are the ones the user scanned
+            barcodes_to_assign = []
+            if cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
+                # Use all the scanned barcodes from the list - these are the exact barcodes the user scanned
+                # This ensures we use the exact barcode that was scanned, not a random one
+                for scanned_barcode_value in cart_item.scanned_barcodes:
+                    try:
+                        barcode_obj = Barcode.objects.get(barcode=scanned_barcode_value)
+                        # IMPORTANT: Use the exact barcode that was scanned
+                        # Only block if tag is 'sold' and it's currently assigned to an active invoice
+                        # 'returned' barcodes can be sold again even if they were in a previous invoice
+                        if barcode_obj.tag == 'sold':
+                            sold_item = InvoiceItem.objects.filter(
+                                barcode=barcode_obj
+                            ).exclude(
+                                invoice__status='void'
+                            ).first()
+                            if sold_item:
+                                # Skip this barcode - it's already sold and in an active invoice
+                                continue
+                        # Allow 'new', 'returned', and 'in-cart' tags - use the exact barcode that was scanned
+                        # 'in-cart' tags are expected during checkout (barcodes already in cart)
+                        # Don't check for previous invoice assignments for 'returned' tags - they can be resold
+                        if barcode_obj.tag in ['new', 'returned', 'in-cart']:
+                            barcodes_to_assign.append(barcode_obj)
+                    except Barcode.DoesNotExist:
+                        # Barcode not found - this shouldn't happen if it was scanned correctly
+                        pass
+            
+            # Use the exact barcodes from scanned_barcodes
+            quantity_needed = int(cart_item.quantity)
+            # The strict check for `len(barcodes_to_assign) < quantity_needed` and the truncation
+            # `barcodes_to_assign = barcodes_to_assign[:quantity_needed]` are now handled in the pre-transaction validation.
+            # So, at this point, `barcodes_to_assign` should contain exactly `quantity_needed` valid barcodes.
+    
+            if len(barcodes_to_assign) == 0:
+                # This case should ideally be caught by pre-transaction validation,
+                # but as a safeguard, skip if no barcodes are available.
+                continue
+            
+            # For tracked products, create one invoice item per barcode (each with quantity 1)
+            for i, barcode_obj in enumerate(barcodes_to_assign):
+                # Calculate line total for this single item
+                line_total = unit_line_total
+            
+                invoice_item = InvoiceItem.objects.create(
+                    invoice=invoice,
+                    product=cart_item.product,
+                    variant=cart_item.variant,
+                    barcode=barcode_obj,  # Assign the barcode
+                    quantity=Decimal('1.000'),  # Each invoice item is quantity 1
+                    unit_price=cart_item.unit_price,
+                    manual_unit_price=cart_item.manual_unit_price,
+                    discount_amount=per_unit_discount,  # Proportional discount (already calculated safely)
+                    tax_amount=per_unit_tax,  # Proportional tax (already calculated safely)
+                    line_total=line_total
+                )
+                
+                # Mark barcode as sold when assigned to invoice item
+                # Mark as 'sold' for all invoice types (including pending) since the item is now in an invoice
+                # Once an item is in an invoice, it should be considered sold regardless of payment status
+                barcode_obj.tag = 'sold'
+                barcode_obj.save(update_fields=['tag'])
+                
+                # Audit log: Invoice item created (tracked with barcode)
+                create_audit_log(
+                    request=request,
+                    action='invoice_create',
+                    model_name='InvoiceItem',
+                    object_id=str(invoice_item.id),
+                    object_name=f"{cart_item.product.name} (Invoice {invoice.invoice_number})",
+                    object_reference=invoice.invoice_number,
+                    barcode=barcode_obj.barcode,
+                    changes={
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'product_id': cart_item.product.id,
+                        'product_name': cart_item.product.name,
+                        'product_sku': cart_item.product.sku,
+                        'barcode': barcode_obj.barcode,
+                        'barcode_tag': barcode_obj.tag,
+                        'quantity': '1.000',
+                        'unit_price': str(cart_item.unit_price),
+                        'line_total': str(line_total),
+                        'track_inventory': True,
+                    }
+                )
+            
+                subtotal += line_total
+                discount_total += invoice_item.discount_amount
+                tax_total += invoice_item.tax_amount
+            
+            # Stock reduction logic:
+            # - For non-tracked products: Stock was already decremented when added to cart
+            # - For tracked products: Stock is now also decremented when added to cart (to prevent double-booking)
+            # So we don't need to reduce stock again at checkout for either type
+            # Stock reduction happens at cart addition time to ensure items are reserved immediately
+            
+            # Note: Stock was already reduced when items were added to cart,
+            # so we don't reduce it again here to avoid double-reduction
+            # Audit logs for stock removal are already created in cart_add operation
         
-        # For tracked products, create one invoice item per barcode (each with quantity 1)
-        for i, barcode_obj in enumerate(barcodes_to_assign):
-            # Calculate line total for this single item
-            line_total = unit_line_total
+        # Update invoice totals
+        invoice.subtotal = subtotal
+        invoice.discount_amount = discount_total
+        invoice.tax_amount = tax_total
+        invoice.total = subtotal - discount_total + tax_total
         
-            invoice_item = InvoiceItem.objects.create(
+        # Set payment status based on invoice_type
+        if invoice_type == 'pending':
+            invoice.status = 'draft'
+            invoice.due_amount = invoice.total
+            invoice.paid_amount = Decimal('0.00')
+        elif invoice_type == 'mixed':
+            # Validate split payments match total
+            if cash_amount + upi_amount != invoice.total:
+                invoice.delete()  # Clean up invoice if validation fails
+                return Response({
+                    'error': f'Split payment amounts (₹{cash_amount + upi_amount}) do not match invoice total (₹{invoice.total})'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            invoice.status = 'paid'
+            invoice.paid_amount = invoice.total
+            invoice.due_amount = Decimal('0.00')
+            
+            # Create Payment records for split payments
+            from backend.pos.models import Payment
+            Payment.objects.create(
                 invoice=invoice,
-                product=cart_item.product,
-                variant=cart_item.variant,
-                barcode=barcode_obj,  # Assign the barcode
-                quantity=Decimal('1.000'),  # Each invoice item is quantity 1
-                unit_price=cart_item.unit_price,
-                manual_unit_price=cart_item.manual_unit_price,
-                discount_amount=per_unit_discount,  # Proportional discount (already calculated safely)
-                tax_amount=per_unit_tax,  # Proportional tax (already calculated safely)
-                line_total=line_total
+                payment_method='cash',
+                amount=cash_amount,
+                created_by=request.user
             )
+            Payment.objects.create(
+                invoice=invoice,
+                payment_method='upi',
+                amount=upi_amount,
+                created_by=request.user
+            )
+        else:  # cash or upi (both are paid)
+            invoice.status = 'paid'
+            invoice.paid_amount = invoice.total
+            invoice.due_amount = Decimal('0.00')
             
-            # Mark barcode as sold when assigned to invoice item
-            # Mark as 'sold' for all invoice types (including pending) since the item is now in an invoice
-            # Once an item is in an invoice, it should be considered sold regardless of payment status
-            barcode_obj.tag = 'sold'
-            barcode_obj.save(update_fields=['tag'])
-            
-            # Audit log: Invoice item created (tracked with barcode)
-            create_audit_log(
-                request=request,
-                action='invoice_create',
-                model_name='InvoiceItem',
-                object_id=str(invoice_item.id),
-                object_name=f"{cart_item.product.name} (Invoice {invoice.invoice_number})",
-                object_reference=invoice.invoice_number,
-                barcode=barcode_obj.barcode,
-                changes={
-                    'invoice_id': invoice.id,
-                    'invoice_number': invoice.invoice_number,
-                    'product_id': cart_item.product.id,
-                    'product_name': cart_item.product.name,
-                    'product_sku': cart_item.product.sku,
-                    'barcode': barcode_obj.barcode,
-                    'barcode_tag': barcode_obj.tag,
-                    'quantity': '1.000',
-                    'unit_price': str(cart_item.unit_price),
-                    'line_total': str(line_total),
-                    'track_inventory': True,
-                }
+            # Create Payment record
+            from backend.pos.models import Payment
+            Payment.objects.create(
+                invoice=invoice,
+                payment_method=invoice_type,  # 'cash' or 'upi'
+                amount=invoice.total,
+                created_by=request.user
             )
         
-            subtotal += line_total
-            discount_total += invoice_item.discount_amount
-            tax_total += invoice_item.tax_amount
+        invoice.save()
         
-        # Stock reduction logic:
-        # - For non-tracked products: Stock was already decremented when added to cart
-        # - For tracked products: Stock is now also decremented when added to cart (to prevent double-booking)
-        # So we don't need to reduce stock again at checkout for either type
-        # Stock reduction happens at cart addition time to ensure items are reserved immediately
-        
-        # Note: Stock was already reduced when items were added to cart,
-        # so we don't reduce it again here to avoid double-reduction
-        # Audit logs for stock removal are already created in cart_add operation
-    
-    # Update invoice totals
-    invoice.subtotal = subtotal
-    invoice.discount_amount = discount_total
-    invoice.tax_amount = tax_total
-    invoice.total = subtotal - discount_total + tax_total
-    
-    # Set payment status based on invoice_type
-    if invoice_type == 'pending':
-        invoice.status = 'draft'
-        invoice.due_amount = invoice.total
-        invoice.paid_amount = Decimal('0.00')
-    elif invoice_type == 'mixed':
-        # Validate split payments match total
-        if cash_amount + upi_amount != invoice.total:
-            invoice.delete()  # Clean up invoice if validation fails
-            return Response({
-                'error': f'Split payment amounts (₹{cash_amount + upi_amount}) do not match invoice total (₹{invoice.total})'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        invoice.status = 'paid'
-        invoice.paid_amount = invoice.total
-        invoice.due_amount = Decimal('0.00')
-        
-        # Create Payment records for split payments
-        from backend.pos.models import Payment
-        Payment.objects.create(
-            invoice=invoice,
-            payment_method='cash',
-            amount=cash_amount,
-            created_by=request.user
-        )
-        Payment.objects.create(
-            invoice=invoice,
-            payment_method='upi',
-            amount=upi_amount,
-            created_by=request.user
-        )
-    else:  # cash or upi (both are paid)
-        invoice.status = 'paid'
-        invoice.paid_amount = invoice.total
-        invoice.due_amount = Decimal('0.00')
-        
-        # Create Payment record
-        from backend.pos.models import Payment
-        Payment.objects.create(
-            invoice=invoice,
-            payment_method=invoice_type,  # 'cash' or 'upi'
-            amount=invoice.total,
-            created_by=request.user
-        )
-    
-    invoice.save()
-    
-    # Create ledger entry if customer exists
-    if invoice.customer and invoice_type == 'pending':
-        from backend.parties.models import LedgerEntry
-        # Pending invoice: Customer owes us (DEBIT entry)
-        entry = LedgerEntry.objects.create(
-            customer=invoice.customer,
-            invoice=invoice,
-            entry_type='debit',
-            amount=invoice.total,
-            description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
-            created_by=request.user,
-            created_at=invoice.created_at or timezone.now()
-        )
-        # Update customer credit_balance (debit means customer owes more)
-        invoice.customer.credit_balance -= entry.amount
-        invoice.customer.save()
-    
-    # Update cart status
-    cart.status = 'completed'
-    cart.save()
+        # Create ledger entry if customer exists
+        if invoice.customer and invoice_type == 'pending':
+            from backend.parties.models import LedgerEntry
+            # Pending invoice: Customer owes us (DEBIT entry)
+            entry = LedgerEntry.objects.create(
+                customer=invoice.customer,
+                invoice=invoice,
+                entry_type='debit',
+                amount=invoice.total,
+                description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
+                created_by=request.user,
+                created_at=invoice.created_at or timezone.now()
+            )
+            # Update customer credit_balance (debit means customer owes more)
+            invoice.customer.credit_balance -= entry.amount
+            invoice.customer.save()
+            
+        # Update cart status
+        cart.status = 'completed'
+        cart.save()
     
     # Audit log: Cart checked out
     items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
@@ -3318,20 +3264,17 @@ def invoice_update(request, pk):
                 b for b in barcodes_to_assign
                 if b.tag in ('new', 'returned', 'in-cart') or (b.tag == 'sold' and b.id not in sold_barcode_ids_inv)
             ]
+            # STRICT MODE: ONLY use the exact barcodes from scanned_barcodes
+            # If the number of scanned barcodes does not match the quantity requested, return an error
+            # This prevents "auto-assigning" random barcodes that weren't actually scanned.
             quantity_needed = int(cart_item.quantity)
             if len(barcodes_to_assign) < quantity_needed:
-                need_more = quantity_needed - len(barcodes_to_assign)
-                assigned_ids = [x.id for x in barcodes_to_assign]
-                extra = list(
-                    Barcode.objects.filter(
-                        product=cart_item.product,
-                        variant=cart_item.variant,
-                        tag__in=['new', 'returned', 'in-cart']
-                    )
-                    .exclude(id__in=assigned_ids)
-                    .exclude(id__in=sold_barcode_ids_inv)[:need_more]
-                )
-                barcodes_to_assign.extend(extra)
+                return Response({
+                    'error': 'Incomplete barcode scans',
+                    'message': f'Product "{cart_item.product.name}" requires {quantity_needed} scans, but only {len(barcodes_to_assign)} valid barcodes were scanned.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            elif len(barcodes_to_assign) > quantity_needed:
+                 barcodes_to_assign = barcodes_to_assign[:quantity_needed]
             for barcode_obj in barcodes_to_assign:
                 line_total = unit_line_total
                 inv_item = InvoiceItem.objects.create(
