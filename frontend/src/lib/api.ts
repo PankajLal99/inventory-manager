@@ -387,6 +387,6 @@ export const reportsApi = {
 
 // Global Search API
 export const searchApi = {
-  search: (query: string) => api.get('/search/', { params: { q: query } }),
+  search: (query: string, type: string = 'all') => api.get('/search/', { params: { q: query, type } }),
 };
 

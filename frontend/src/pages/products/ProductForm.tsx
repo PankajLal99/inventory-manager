@@ -379,7 +379,7 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
   };
 
   return (
-    <Modal isOpen={true} onClose={onClose} title={productId ? 'Edit Product' : 'Add Product'} size="wide">
+    <Modal isOpen={true} onClose={onClose} title={productId ? 'Edit Product' : 'Add Product'} size="wide" closeOnBackdropClick={false}>
       <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
         {/* Product Name - Full Width */}
         <div>

@@ -297,6 +297,7 @@ def audit_log_detail(request, pk):
 def global_search(request):
     """Global search across all entities"""
     query = request.query_params.get('q', '').strip().upper()
+    search_type = request.query_params.get('type', 'all').lower()
     
     if not query:
         return Response({
@@ -311,12 +312,23 @@ def global_search(request):
             'brands': [],
             'stores': [],
             'warehouses': [],
-            'purchase_orders': [],
-            'grns': [],
-            'direct_purchases': [],
+            'purchases': [],
         })
     
-    results = {}
+    results = {
+        'products': [],
+        'variants': [],
+        'barcodes': [],
+        'customers': [],
+        'invoices': [],
+        'carts': [],
+        'suppliers': [],
+        'categories': [],
+        'brands': [],
+        'stores': [],
+        'warehouses': [],
+        'purchases': [],
+    }
     
     # Import models
     from backend.catalog.models import Product, ProductVariant, Barcode, Category, Brand
@@ -333,88 +345,101 @@ def global_search(request):
     from backend.locations.serializers import StoreSerializer, WarehouseSerializer
     from backend.purchasing.serializers import PurchaseSerializer
     
-    # Search Products using django-filter
-    from backend.catalog.filters import ProductFilter
-    products_queryset = Product.objects.all().prefetch_related(
-        'barcodes', 
-        'barcodes__purchase__supplier'
-    )
-    products_filter = ProductFilter({'search': query}, queryset=products_queryset)
-    products = products_filter.qs[:20]
-    results['products'] = ProductListSerializer(products, many=True, context={'request': request}).data
+    # helper for results
+    def add_to_results(key, queryset, serializer_class, many=True, context=None):
+        if context:
+            results[key] = serializer_class(queryset, many=many, context=context).data
+        else:
+            results[key] = serializer_class(queryset, many=many).data
+
+    # Search Products
+    if search_type in ['all', 'product']:
+        from backend.catalog.filters import ProductFilter
+        products_queryset = Product.objects.all().prefetch_related(
+            'barcodes', 
+            'barcodes__purchase__supplier'
+        )
+        products_filter = ProductFilter({'search': query}, queryset=products_queryset)
+        products = products_filter.qs[:20]
+        add_to_results('products', products, ProductListSerializer, context={'request': request})
     
-    # Search Product Variants
-    variants = ProductVariant.objects.filter(
-        Q(name__icontains=query) |
-        Q(sku__icontains=query)
-    )[:20]
-    results['variants'] = ProductVariantSerializer(variants, many=True).data
+    # Search Product Variants (SKU Search)
+    if search_type in ['all', 'sku']:
+        variants = ProductVariant.objects.filter(
+            Q(sku__icontains=query) | Q(name__icontains=query)
+        )[:20]
+        if search_type == 'sku':
+            # Priority to SKU match
+            variants = ProductVariant.objects.filter(Q(sku__icontains=query))[:20]
+        add_to_results('variants', variants, ProductVariantSerializer)
     
     # Search Barcodes
-    barcodes = Barcode.objects.filter(
-        Q(barcode__icontains=query)
-    ).prefetch_related('invoice_items__invoice')[:20]
-    results['barcodes'] = BarcodeSerializer(barcodes, many=True).data
+    if search_type in ['all', 'barcode', 'barcode_status']:
+        barcode_q = Q(barcode__icontains=query)
+        if search_type == 'barcode_status':
+            # Also search by tag if it matches
+            barcode_q |= Q(tag__icontains=query.lower())
+            
+        barcodes = Barcode.objects.filter(barcode_q).prefetch_related('invoice_items__invoice')[:20]
+        add_to_results('barcodes', barcodes, BarcodeSerializer)
     
     # Search Customers
-    customers = Customer.objects.filter(
-        Q(name__icontains=query) |
-        Q(phone__icontains=query) |
-        Q(email__icontains=query)
-    )[:20]
-    results['customers'] = CustomerSerializer(customers, many=True).data
+    if search_type in ['all', 'customer']:
+        customers = Customer.objects.filter(
+            Q(name__icontains=query) |
+            Q(phone__icontains=query) |
+            Q(email__icontains=query)
+        )[:20]
+        add_to_results('customers', customers, CustomerSerializer)
     
     # Search Invoices
-    invoices = Invoice.objects.filter(
-        Q(invoice_number__icontains=query)
-    )[:20]
-    results['invoices'] = InvoiceSerializer(invoices, many=True).data
+    if search_type in ['all']: # Invoices only in 'all' for now unless requested
+        invoices = Invoice.objects.filter(
+            Q(invoice_number__icontains=query)
+        )[:20]
+        add_to_results('invoices', invoices, InvoiceSerializer)
     
     # Search Carts
-    carts = Cart.objects.filter(
-        Q(cart_number__icontains=query)
-    )[:20]
-    results['carts'] = CartSerializer(carts, many=True).data
+    if search_type in ['all']:
+        carts = Cart.objects.filter(
+            Q(cart_number__icontains=query)
+        )[:20]
+        add_to_results('carts', carts, CartSerializer)
     
     # Search Suppliers
-    suppliers = Supplier.objects.filter(
-        Q(name__icontains=query) |
-        Q(code__icontains=query) |
-        Q(phone__icontains=query) |
-        Q(email__icontains=query)
-    )[:20]
-    results['suppliers'] = SupplierSerializer(suppliers, many=True).data
-    
-    # Search Categories
-    categories = Category.objects.filter(
-        Q(name__icontains=query)
-    )[:20]
-    results['categories'] = CategorySerializer(categories, many=True).data
+    if search_type in ['all']:
+        suppliers = Supplier.objects.filter(
+            Q(name__icontains=query) |
+            Q(code__icontains=query) |
+            Q(phone__icontains=query) |
+            Q(email__icontains=query)
+        )[:20]
+        add_to_results('suppliers', suppliers, SupplierSerializer)
     
     # Search Brands
-    brands = Brand.objects.filter(
-        Q(name__icontains=query)
-    )[:20]
-    results['brands'] = BrandSerializer(brands, many=True).data
+    if search_type in ['all', 'brand']:
+        brands = Brand.objects.filter(
+            Q(name__icontains=query)
+        )[:20]
+        add_to_results('brands', brands, BrandSerializer)
+
+    # Search Categories
+    if search_type in ['all', 'category']:
+        categories = Category.objects.filter(
+            Q(name__icontains=query)
+        )[:20]
+        add_to_results('categories', categories, CategorySerializer)
     
-    # Search Stores
-    stores = Store.objects.filter(
-        Q(name__icontains=query) |
-        Q(code__icontains=query)
-    )[:20]
-    results['stores'] = StoreSerializer(stores, many=True).data
-    
-    # Search Warehouses
-    warehouses = Warehouse.objects.filter(
-        Q(name__icontains=query) |
-        Q(code__icontains=query)
-    )[:20]
-    results['warehouses'] = WarehouseSerializer(warehouses, many=True).data
-    
-    # Search Purchases
-    purchases = Purchase.objects.filter(
-        Q(purchase_number__icontains=query) | Q(bill_number__icontains=query)
-    )[:20]
-    results['purchases'] = PurchaseSerializer(purchases, many=True).data
+    # Search Stores/Warehouses/Purchases only in 'all'
+    if search_type == 'all':
+        stores = Store.objects.filter(Q(name__icontains=query) | Q(code__icontains=query))[:20]
+        add_to_results('stores', stores, StoreSerializer)
+        
+        warehouses = Warehouse.objects.filter(Q(name__icontains=query) | Q(code__icontains=query))[:20]
+        add_to_results('warehouses', warehouses, WarehouseSerializer)
+        
+        purchases = Purchase.objects.filter(Q(purchase_number__icontains=query) | Q(bill_number__icontains=query))[:20]
+        add_to_results('purchases', purchases, PurchaseSerializer)
     
     return Response(results)
+

@@ -7,9 +7,17 @@ interface ModalProps {
   title: string;
   children: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'wide';
+  closeOnBackdropClick?: boolean;
 }
 
-export default function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalProps) {
+export default function Modal({
+  isOpen,
+  onClose,
+  title,
+  children,
+  size = 'md',
+  closeOnBackdropClick = true
+}: ModalProps) {
   if (!isOpen) return null;
 
   const sizes = {
@@ -25,7 +33,7 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' }:
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-gray-900/10 backdrop-blur-[2px] transition-opacity"
-        onClick={onClose}
+        onClick={() => closeOnBackdropClick && onClose()}
         aria-hidden="true"
       />
 

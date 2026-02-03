@@ -44,12 +44,14 @@ export default function Search() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
+  const initialType = searchParams.get('type') || 'all';
   const [query, setQuery] = useState(initialQuery);
+  const [searchType, setSearchType] = useState(initialType);
   const [showScanner, setShowScanner] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery<SearchResults>({
-    queryKey: ['global-search', query],
+    queryKey: ['global-search', query, searchType],
     queryFn: async () => {
       if (!query.trim()) {
         return {
@@ -67,7 +69,7 @@ export default function Search() {
           purchases: [],
         };
       }
-      const response = await searchApi.search(query);
+      const response = await searchApi.search(query, searchType);
       return response.data;
     },
     enabled: query.trim().length > 0,
@@ -77,19 +79,31 @@ export default function Search() {
   // Sync query with URL params
   useEffect(() => {
     const urlQuery = searchParams.get('q') || '';
+    const urlType = searchParams.get('type') || 'all';
     if (urlQuery !== query) {
       setQuery(urlQuery);
+    }
+    if (urlType !== searchType) {
+      setSearchType(urlType);
     }
   }, [searchParams]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) {
-      setSearchParams({ q: query.trim() });
-    } else {
-      setSearchParams({});
-    }
+    const params: any = {};
+    if (query.trim()) params.q = query.trim();
+    if (searchType !== 'all') params.type = searchType;
+    setSearchParams(params);
     // Query will trigger automatically via useQuery
+  };
+
+  const handleTypeChange = (type: string) => {
+    setSearchType(type);
+    if (query.trim()) {
+      const params: any = { q: query.trim() };
+      if (type !== 'all') params.type = type;
+      setSearchParams(params);
+    }
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -206,7 +220,7 @@ export default function Search() {
       </div>
 
       <form onSubmit={handleSearch} className="mb-8">
-        <div className="flex gap-2">
+        <div className="flex gap-2 mb-4">
           <div className="relative flex-1">
             <SearchIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
             <Input
@@ -228,7 +242,38 @@ export default function Search() {
             <Camera className="h-5 w-5" />
           </Button>
         </div>
+
+        <div className="flex flex-wrap gap-4 items-center bg-gray-50 p-4 rounded-lg border border-gray-100">
+          <span className="text-sm font-medium text-gray-700">Search for:</span>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'product', label: 'Product search' },
+              { id: 'barcode', label: 'Barcode Search' },
+              { id: 'barcode_status', label: 'Barcode Status Search' },
+              { id: 'sku', label: 'SKU Search' },
+              { id: 'brand', label: 'Brand Search' },
+              { id: 'customer', label: 'Customer Search' },
+              { id: 'category', label: 'Product Category Search' },
+            ].map((type) => (
+              <label key={type.id} className="flex items-center gap-2 cursor-pointer group">
+                <input
+                  type="radio"
+                  name="searchType"
+                  value={type.id}
+                  checked={searchType === type.id}
+                  onChange={() => handleTypeChange(type.id)}
+                  className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer"
+                />
+                <span className={`text-sm ${searchType === type.id ? 'text-blue-600 font-semibold' : 'text-gray-600'} group-hover:text-blue-500 transition-colors`}>
+                  {type.label}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
       </form>
+
 
       {scanError && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">

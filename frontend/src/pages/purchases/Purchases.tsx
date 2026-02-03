@@ -1710,6 +1710,7 @@ export default function Purchases() {
           onClose={() => { setShowForm(false); resetForm(); }}
           title={editingPurchase ? 'Edit Purchase' : 'New Purchase'}
           size="wide"
+          closeOnBackdropClick={false}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -2186,6 +2187,7 @@ export default function Purchases() {
           }}
           title="Create New Supplier"
           size="md"
+          closeOnBackdropClick={false}
         >
           <form
             onSubmit={(e) => {
