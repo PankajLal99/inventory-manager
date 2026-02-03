@@ -38,7 +38,6 @@ def investigator():
     print(f"   - Found {len(zombies)} barcodes stuck in 'in-cart' state with no active session.")
     for b in zombies:
         print(f"     - {b.barcode} (Product {b.product.name if b.product else 'N/A'})")
-    if len(zombies) > 5: print("     ...")
 
     # 2. Duplicate Sale Detection
     # Look for barcodes that appear in multiple 'invoice_create' or 'cart_checkout' logs
@@ -72,7 +71,6 @@ def investigator():
             inv_nums.append(ref)
             logger.log('ANOMALY_DOUBLE_SALE', 'Barcode', b_val, ref, 'tag', 'sold', 'DUPLICATE', 'Sold multiple times without return', f"Log Action: {log_entry.action}, Log ID: {log_entry.id}")
         print(f"     - Barcode {b_val}: Sold {len(logs)} times (Refs: {inv_nums})")
-    if len(anomalies) > 5: print("     ...")
 
     # 3. State-Audit Mismatch
     # Last log action should ideally determine the current tag
@@ -93,8 +91,7 @@ def investigator():
                 # This catches if someone manually changed a tag in Admin without it being logged correctly
                 mismatches += 1
                 logger.log('ANOMALY_STATE_MISMATCH', 'Barcode', b.id, 'NONE', 'tag', b.tag, expected_tag, f"State mismatch: Tag is {b.tag} but last action was {last_log.action}", f"Last Log ID: {last_log.id}")
-                if mismatches <= 5:
-                    print(f"     - Mismatch: {b.barcode}. Last action was '{last_log.action}', but tag is '{b.tag}'.")
+                print(f"     - Mismatch: {b.barcode}. Last action was '{last_log.action}', but tag is '{b.tag}'.")
 
     print(f"   - Total state-audit mismatches found in sample: {mismatches}")
 

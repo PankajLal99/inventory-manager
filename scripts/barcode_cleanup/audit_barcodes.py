@@ -13,6 +13,7 @@ from decimal import Decimal
 from django.db.models import Count, Q
 from backend.catalog.models import Barcode, Product
 from backend.pos.models import Invoice, InvoiceItem, Cart, CartItem
+from csv_logger import logger
 
 def audit_barcodes():
     print("--- Barcode Audit Report ---")
@@ -26,9 +27,10 @@ def audit_barcodes():
             inconsistencies_1.append(b)
             
     print(f"\n1. Barcodes marked SOLD but not in any active InvoiceItem: {len(inconsistencies_1)}")
-    for b in inconsistencies_1[:10]:
-        print(f"   - Barcode: {b.barcode}, Product: {b.product.name if b.product else 'N/A'}")
-    if len(inconsistencies_1) > 10: print("     ...")
+    for b in inconsistencies_1:
+        meta = f"Barcode: {b.barcode}, Product: {b.product.name if b.product else 'N/A'}"
+        print(f"   - {meta}")
+        logger.log('AUDIT_INCONSISTENCY', 'Barcode', b.id, 'NONE', 'tag', 'sold', 'STUCK', 'Sold but no InvoiceItem found', meta)
 
     # 2. Barcodes linked to InvoiceItems that were NOT in the CartItem's scanned_barcodes
     # This identifies auto-assigned barcodes during checkout.
@@ -59,8 +61,9 @@ def audit_barcodes():
                 if ii.barcode.barcode not in scanned_for_prod:
                     mismatches += 1
                     invoices_with_auto_assign.add(inv.invoice_number)
-                    if mismatches <= 5:
-                        print(f"   - Invoice {inv.invoice_number}: Product {ii.product.name}, Barcode {ii.barcode.barcode} was AUTO-ASSIGNED (not in scanned list: {list(scanned_for_prod)})")
+                    meta = f"Product: {ii.product.name}, Barcode: {ii.barcode.barcode}, CartScanned: {list(scanned_for_prod)}"
+                    print(f"   - Invoice {inv.invoice_number}: {meta}")
+                    logger.log('AUDIT_AUTO_ASSIGN', 'InvoiceItem', ii.id, inv.invoice_number, 'barcode', 'SCANNED_MISMATCH', ii.barcode.barcode, 'Auto-assigned barcode (not scanned)', meta)
 
     print(f"\nTotal Auto-assigned barcodes found: {mismatches}")
     print(f"Total Invoices affected: {len(invoices_with_auto_assign)}")
@@ -80,8 +83,9 @@ def audit_barcodes():
                 for b_val in ci.scanned_barcodes:
                     if b_val not in inv_barcodes:
                         lost_scans += 1
-                        if lost_scans <= 5:
-                            print(f"   - Cart {cart.cart_number}: Scanned {b_val} but it's NOT in Invoice {inv.invoice_number}")
+                        meta = f"Cart: {cart.cart_number}, Barcode: {b_val}, Invoice: {inv.invoice_number}"
+                        print(f"   - {meta}")
+                        logger.log('AUDIT_LOST_SCAN', 'CartItem', 'NONE', cart.cart_number, 'barcode', b_val, 'MISSING_IN_INV', 'Scanned barcode lost during checkout', meta)
 
     print(f"\nTotal Scanned barcodes 'lost' during checkout: {lost_scans}")
 

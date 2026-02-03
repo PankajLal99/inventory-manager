@@ -88,7 +88,7 @@ def status_healer(dry_run=True):
                 print(f"    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.")
                 for item in inv_items:
                     data = f"Product: {item.product.name}, Barcode: {item.barcode.barcode if item.barcode else 'N/A'}"
-                    logger.log('DELETE_PROPOSAL', 'InvoiceItem', item.id, 'ALL', data, 'NONE', f'Structural mismatch in {inv.invoice_number}')
+                    logger.log('DELETE_PROPOSAL', 'InvoiceItem', item.id, inv.invoice_number, 'ALL', data, 'NONE', f'Structural mismatch in {inv.invoice_number}')
 
                 for d in cart_data:
                     product = Product.objects.get(id=d['product_id'])
@@ -110,7 +110,7 @@ def status_healer(dry_run=True):
                 with transaction.atomic():
                     for item in inv.items.all():
                         data = f"Product: {item.product.name}, Barcode: {item.barcode.barcode if item.barcode else 'N/A'}"
-                        logger.log('DELETE', 'InvoiceItem', item.id, 'ALL', data, 'NONE', f'Structural mismatch in {inv.invoice_number}')
+                        logger.log('DELETE', 'InvoiceItem', item.id, inv.invoice_number, 'ALL', data, 'NONE', f'Structural mismatch in {inv.invoice_number}')
                         item.delete()
 
                     for d in cart_data:
