@@ -3,7 +3,9 @@ import django
 import sys
 
 # Set up Django environment
-sys.path.append('/Users/pankajlal/Desktop/Projects/inventory-manager')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
+sys.path.append(PROJECT_ROOT)
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.config.settings')
 django.setup()
 

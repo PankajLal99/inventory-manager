@@ -3,8 +3,10 @@ import django
 import sys
 from decimal import Decimal
 
-# Set up Django
-sys.path.append('/Users/pankajlal/Desktop/Projects/inventory-manager')
+# Set up Django environment
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
+sys.path.append(PROJECT_ROOT)
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.config.settings')
 django.setup()
 
