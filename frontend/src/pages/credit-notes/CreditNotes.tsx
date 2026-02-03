@@ -9,7 +9,7 @@ import {
   Receipt,
   User,
   Calendar,
-  DollarSign,
+  IndianRupee,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import PageHeader from '../../components/ui/PageHeader';
@@ -158,7 +158,7 @@ export default function CreditNotes() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <DollarSign className="h-4 w-4 text-green-500" />
+                      <IndianRupee className="h-4 w-4 text-green-500" />
                       <span className="font-semibold text-green-700">₹{formatNumber(creditNote.amount)}</span>
                     </div>
                   </TableCell>
@@ -175,13 +175,22 @@ export default function CreditNotes() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <button
-                      onClick={() => navigate(`/invoices/${creditNote.invoice_id}`)}
-                      className="text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
-                    >
-                      <Eye className="h-4 w-4" />
-                      View Invoice
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => navigate(`/credit-notes/${creditNote.id}`)}
+                        className="text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
+                      >
+                        <Eye className="h-4 w-4" />
+                        View
+                      </button>
+                      <span className="text-gray-300">|</span>
+                      <button
+                        onClick={() => navigate(`/invoices/${creditNote.invoice_id}`)}
+                        className="text-gray-600 hover:text-gray-800 flex items-center gap-1 hover:underline text-sm"
+                      >
+                        Invoice
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

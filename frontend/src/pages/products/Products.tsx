@@ -330,11 +330,13 @@ export default function Products() {
   // No need to group - show Products directly with their barcodes
   const productsList = useMemo(() => {
     return productsWithStock.map((product: any) => {
-      // Use backend's available_quantity (which accounts for cart quantities and draft purchases)
-      // for the barcodeCount field. This is the source of truth for "Available" stock.
-      const barcodeCount = (product.available_quantity !== undefined && product.available_quantity !== null)
-        ? (typeof product.available_quantity === 'number' ? product.available_quantity : parseFloat(product.available_quantity) || 0)
-        : 0;
+      // Use stock_quantity (annotated count from backend) for filtered views like Sold, Defective, In Cart
+      // Use available_quantity (available for sale) for the default "New" view
+      const barcodeCount = tagFilter && tagFilter !== 'new'
+        ? (product.stock_quantity || 0)
+        : (product.available_quantity !== undefined && product.available_quantity !== null
+          ? (typeof product.available_quantity === 'number' ? product.available_quantity : parseFloat(product.available_quantity) || 0)
+          : 0);
 
       // Stock is at product level
       const lowStockThreshold = product.low_stock_threshold || 0;

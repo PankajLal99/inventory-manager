@@ -253,10 +253,12 @@ def audit_log_list(request):
     if not request.user.is_staff:
         queryset = queryset.filter(user=request.user)
     
-    # Filter by action
+    # Filter by action (comma-separated for multiple, e.g. action=invoice_update,invoice_edit)
     action_filter = request.query_params.get('action', None)
     if action_filter:
-        queryset = queryset.filter(action=action_filter)
+        actions = [a.strip() for a in action_filter.split(',') if a.strip()]
+        if actions:
+            queryset = queryset.filter(action__in=actions)
     
     # Filter by model_name
     model_filter = request.query_params.get('model', None)

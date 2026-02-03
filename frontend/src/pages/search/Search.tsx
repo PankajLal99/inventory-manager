@@ -370,6 +370,11 @@ export default function Search() {
                                   Stock Breakdown: ({item.stock_bifurcation})
                                 </div>
                               )}
+                              {item.price_bifurcation && (
+                                <div className="text-sm font-medium text-green-600 mt-0.5">
+                                  Price Breakdown: ({item.price_bifurcation})
+                                </div>
+                              )}
                             </div>
                             <div className="flex flex-col items-end gap-2 flex-shrink-0">
                               {price && (

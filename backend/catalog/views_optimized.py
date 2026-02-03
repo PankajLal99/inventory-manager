@@ -94,10 +94,10 @@ def _optimized_product_list_internal(request):
     include_barcodes = request.query_params.get('include_barcodes', 'false')
     
     # Only fetch barcodes when:
-    # 1. Tag-based filters require them (defective, returned, sold, in-cart)
+    # 1. Tag-based filters require them (defective, returned, sold, in-cart, unknown)
     # 2. OR frontend explicitly requests them (include_barcodes=true)
     needs_barcode_prefetch = (
-        tag in ['defective', 'returned', 'sold', 'in-cart'] or 
+        tag in ['new', 'defective', 'returned', 'sold', 'in-cart', 'unknown'] or
         include_barcodes.lower() == 'true'
     )
     
@@ -111,8 +111,12 @@ def _optimized_product_list_internal(request):
             barcode_tags = ['sold']
         elif tag == 'in-cart':
             barcode_tags = ['in-cart']
+        elif tag == 'unknown':
+            barcode_tags = ['unknown']
+        elif tag == 'new':
+            barcode_tags = ['new', 'returned']
         else:
-            barcode_tags = ['new', 'returned']  # Fallback
+            barcode_tags = ['new', 'returned']  # Fallback for include_barcodes=true
         
         # Only fetch barcodes when tag filters require them
         queryset = queryset.prefetch_related(
@@ -122,13 +126,13 @@ def _optimized_product_list_internal(request):
                     tag__in=barcode_tags
                 ).exclude(
                     purchase__status='draft'
-                ).select_related('purchase', 'purchase__supplier'),
-                to_attr='available_barcodes'
+                ).select_related('purchase', 'purchase__supplier')
             )
         ).annotate(
             annotated_barcode_count=Count(
                 'barcodes',
-                filter=Q(barcodes__tag__in=barcode_tags) & ~Q(barcodes__purchase__status='draft')
+                filter=Q(barcodes__tag__in=barcode_tags) & ~Q(barcodes__purchase__status='draft'),
+                distinct=True
             )
         )
         logger.info(f"Fetching barcodes with tags {barcode_tags} (tag filter requires them)")

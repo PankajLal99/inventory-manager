@@ -47,6 +47,7 @@ const actionIcons: Record<string, any> = {
   price_change: Coins,
   invoice_void: FileText,
   invoice_create: FileText,
+  invoice_edit: Edit,
   invoice_update: FileText,
   invoice_checkout: FileText,
   payment_add: Coins,
@@ -75,6 +76,7 @@ const actionColors: Record<string, string> = {
   price_change: 'bg-yellow-100 text-yellow-700 border-yellow-200',
   invoice_void: 'bg-orange-100 text-orange-700 border-orange-200',
   invoice_create: 'bg-teal-100 text-teal-700 border-teal-200',
+  invoice_edit: 'bg-cyan-100 text-cyan-700 border-cyan-200',
   invoice_update: 'bg-cyan-100 text-cyan-700 border-cyan-200',
   invoice_checkout: 'bg-emerald-100 text-emerald-700 border-emerald-200',
   payment_add: 'bg-green-100 text-green-700 border-green-200',
@@ -102,12 +104,16 @@ export default function History() {
   const [dateTo, setDateTo] = useState('');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
   const [showModal, setShowModal] = useState(false);
+  // Default: show only invoice edits (invoice_edit + invoice_update). Toggle to show all logs.
+  const [showOnlyInvoiceEdits, setShowOnlyInvoiceEdits] = useState(true);
+
+  const effectiveActionFilter = showOnlyInvoiceEdits ? 'invoice_update,invoice_edit' : (actionFilter || undefined);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['audit-logs', search, actionFilter, modelFilter, dateFrom, dateTo],
+    queryKey: ['audit-logs', search, effectiveActionFilter, modelFilter, dateFrom, dateTo],
     queryFn: async () => {
       const response = await historyApi.list({
-        action: actionFilter || undefined,
+        action: effectiveActionFilter,
         model: modelFilter || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
@@ -193,9 +199,17 @@ export default function History() {
           formatted.push(key);
         }
       } else if (Array.isArray(value)) {
-        formatted.push(`${key}: ${value.length} item(s)`);
-        if (key === 'items') {
-          shortFormatted.push(`${value.length} item(s)`);
+        const isLineItems = (key === 'old_items' || key === 'new_items') && value.length > 0 && typeof value[0] === 'object' && value[0] !== null && ('product_name' in value[0] || 'product_id' in value[0]);
+        if (isLineItems) {
+          formatted.push(`${key === 'old_items' ? 'Previous' : 'New'} line items: ${value.length}`);
+          if (key === 'old_items' || key === 'new_items') {
+            shortFormatted.push(`${key === 'old_items' ? 'Before' : 'After'}: ${value.length} line(s)`);
+          }
+        } else {
+          formatted.push(`${key}: ${value.length} item(s)`);
+          if (key === 'items') {
+            shortFormatted.push(`${value.length} item(s)`);
+          }
         }
       } else if (value !== null && value !== undefined) {
         // For short version, only show key-value for important fields
@@ -247,13 +261,39 @@ export default function History() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
             <HistoryIcon className="h-8 w-8 text-blue-600" />
             Activity History
           </h1>
-          <p className="text-gray-600 mt-1">View all system activity and audit logs</p>
+          <p className="text-gray-600 mt-1">
+            {showOnlyInvoiceEdits ? 'Invoice edits only' : 'All system activity and audit logs'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600 whitespace-nowrap">
+            {showOnlyInvoiceEdits ? 'Invoice edits' : 'All logs'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowOnlyInvoiceEdits(!showOnlyInvoiceEdits)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+              showOnlyInvoiceEdits ? 'bg-blue-600' : 'bg-gray-200'
+            }`}
+            role="switch"
+            aria-checked={!showOnlyInvoiceEdits}
+            title={showOnlyInvoiceEdits ? 'Show all logs' : 'Show only invoice edits'}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                showOnlyInvoiceEdits ? 'translate-x-1' : 'translate-x-6'
+              }`}
+            />
+          </button>
+          <span className="text-sm text-gray-600 whitespace-nowrap">
+            {showOnlyInvoiceEdits ? 'Show all' : 'Edits only'}
+          </span>
         </div>
       </div>
 
@@ -291,6 +331,7 @@ export default function History() {
               <option value="return">Return</option>
               <option value="refund">Refund</option>
               <option value="invoice_create">Invoice Created</option>
+              <option value="invoice_edit">Invoice Edit Started</option>
               <option value="invoice_update">Invoice Updated</option>
               <option value="invoice_checkout">Invoice Checkout</option>
               <option value="invoice_void">Invoice Void</option>
@@ -622,6 +663,24 @@ export default function History() {
                             <span className="text-xs text-gray-700">{String(value.old)}</span>
                             <span className="text-gray-400">→</span>
                             <span className="text-xs font-medium text-gray-900">{String(value.new)}</span>
+                          </div>
+                        </div>
+                      );
+                    } else if ((key === 'old_items' || key === 'new_items') && Array.isArray(value) && value.length > 0 && typeof value[0] === 'object' && value[0] !== null && ('product_name' in value[0] || 'product_id' in value[0])) {
+                      const label = key === 'old_items' ? 'Previous line items' : 'Updated line items';
+                      return (
+                        <div key={key} className="bg-white rounded p-3 border border-green-200">
+                          <span className="text-xs font-medium text-gray-600 block mb-2 capitalize">{label} ({value.length})</span>
+                          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                            {(value as Array<{ product_name?: string; product_id?: number; quantity?: string; unit_price?: string }>).map((item: any, idx: number) => (
+                              <div key={idx} className="text-xs text-gray-800 border-b border-gray-100 pb-1.5 last:border-0 last:pb-0">
+                                <span className="font-medium">{item.product_name ?? `Product #${item.product_id}`}</span>
+                                {' · '}
+                                <span>Qty: {item.quantity ?? '-'}</span>
+                                {' · '}
+                                <span>Price: {item.unit_price != null ? `₹${item.unit_price}` : '-'}</span>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       );

@@ -139,7 +139,8 @@ export default function ReplaceProduct() {
           setInvoice(response.data.invoice);
           setSearchError(null);
 
-          // Auto-select item if barcode/SKU matches
+          // Backend returns only matching barcode/SKU line items when found by barcode/SKU
+          // Auto-select item(s) for replacement
           const initialReplacements: Record<number, ReplacementItem> = {};
           const initialProductSearch: Record<number, string> = {};
           const searchBarcode = searchValue.trim().toUpperCase();
@@ -718,7 +719,7 @@ export default function ReplaceProduct() {
                 </div>
               </div>
 
-              {/* Invoice Items */}
+              {/* Invoice Items - backend returns only matching barcode/SKU items when search was by barcode/SKU */}
               <div className="space-y-2">
                 <h3 className="font-semibold text-gray-900">Select Items to Replace</h3>
                 <div className="border rounded-lg divide-y max-h-96 overflow-y-auto">

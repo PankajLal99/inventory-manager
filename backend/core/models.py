@@ -40,6 +40,7 @@ class AuditLog(models.Model):
         ('price_change', 'Price Change'),
         ('invoice_void', 'Invoice Void'),
         ('invoice_create', 'Invoice Created'),
+        ('invoice_edit', 'Invoice Edit Started'),
         ('invoice_update', 'Invoice Updated'),
         ('invoice_checkout', 'Invoice Checkout'),
         ('payment_add', 'Payment Added'),

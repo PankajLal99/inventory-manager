@@ -25,7 +25,6 @@ import {
   Coins,
   Printer,
   Download,
-  Edit,
   ShoppingCart,
   Plus,
   Minus,
@@ -72,8 +71,10 @@ export default function InvoiceDetail() {
   const [expandedInvoiceItems, setExpandedInvoiceItems] = useState<Record<string, boolean>>({});
   const [editingInvoiceType, setEditingInvoiceType] = useState(false);
   const [editingStore, setEditingStore] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(false);
   const [selectedInvoiceType, setSelectedInvoiceType] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
 
   const { data: invoice, isLoading, error } = useQuery({
     queryKey: ['invoice', invoiceId],
@@ -93,6 +94,13 @@ export default function InvoiceDetail() {
   });
 
   const customer = customerData?.data || customerData;
+
+  const { data: customersList } = useQuery({
+    queryKey: ['customers-list'],
+    queryFn: () => customersApi.list({ page_size: 500 }),
+    enabled: editingCustomer,
+  });
+  const customers = (customersList?.data?.results ?? customersList?.data ?? []) as any[];
 
   const { prevBalance, totalOutstanding } = useMemo(() => {
     if (!inv || !customer) return { prevBalance: 0, totalOutstanding: 0 };
@@ -330,7 +338,7 @@ export default function InvoiceDetail() {
   });
 
   const updateInvoiceMutation = useMutation({
-    mutationFn: (data: { invoice_type?: string; store?: number }) =>
+    mutationFn: (data: { invoice_type?: string; store?: number; customer?: number | null }) =>
       posApi.invoices.update(invoiceId, data),
     onSuccess: async () => {
       // Invalidate and refetch to get updated totals
@@ -339,9 +347,25 @@ export default function InvoiceDetail() {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       setEditingInvoiceType(false);
       setEditingStore(false);
+      setEditingCustomer(false);
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to update invoice');
+    },
+  });
+
+  const editInvoiceMutation = useMutation({
+    mutationFn: () => posApi.invoices.edit(invoiceId),
+    onSuccess: (res: any) => {
+      const cartId = res?.data?.cart_id;
+      if (cartId != null) {
+        navigate(`/invoices/${invoiceId}/edit`, { state: { cartId } });
+      } else {
+        alert('Failed to start edit: no cart returned');
+      }
+    },
+    onError: (error: any) => {
+      alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to start edit');
     },
   });
 
@@ -513,8 +537,9 @@ export default function InvoiceDetail() {
     });
   };
 
-  // Check if invoice is editable (draft credit or pending)
-  const isEditable = inv.status === 'draft' && (inv.invoice_type === 'credit' || inv.invoice_type === 'pending');
+  // Edit invoice (cart): show for non-void, hide for invoice_type pending
+  const canEditItems = inv.status !== 'void' && inv.invoice_type !== 'pending';
+  const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
 
   // Group items by product only (not by barcode)
@@ -1590,16 +1615,17 @@ export default function InvoiceDetail() {
 
               {/* Secondary Actions */}
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
-                {/* Edit */}
-                {isEditable && (
+                {/* Edit invoice (items via cart) - not shown for invoice_type pending */}
+                {canEditItems && (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setShowEditModal(true)}
+                    onClick={() => editInvoiceMutation.mutate()}
                     className="w-full sm:w-auto"
+                    disabled={editInvoiceMutation.isPending}
                   >
-                    <Edit className="h-4 w-4 mr-2" />
-                    Edit
+                    <Pencil className="h-4 w-4 mr-2" />
+                    {editInvoiceMutation.isPending ? 'Opening...' : 'Edit invoice'}
                   </Button>
                 )}
 
@@ -1721,15 +1747,71 @@ export default function InvoiceDetail() {
                 )}
               </div>
             </div>
-            {inv.customer_name && (
-              <div className="flex items-start gap-3">
-                <User className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <dt className="text-sm font-medium text-gray-500 mb-1">Customer</dt>
-                  <dd className="text-sm text-gray-900">{inv.customer_name}</dd>
-                </div>
+            <div className="flex items-start gap-3">
+              <User className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <dt className="text-sm font-medium text-gray-500 mb-1 flex items-center gap-2">
+                  Customer
+                  {!isRestrictedUser && (
+                    <button
+                      onClick={() => {
+                        setSelectedCustomerId(inv.customer ?? null);
+                        setEditingCustomer(true);
+                      }}
+                      className="p-1 rounded hover:bg-gray-100 transition-colors"
+                      title="Edit customer"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-gray-400 hover:text-gray-600" />
+                    </button>
+                  )}
+                </dt>
+                {editingCustomer ? (
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={selectedCustomerId ?? ''}
+                      onChange={(e) => setSelectedCustomerId(e.target.value ? parseInt(e.target.value) : null)}
+                      className="flex-1 text-sm"
+                    >
+                      <option value="">Walk-in (no customer)</option>
+                      {customers.map((c: any) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                          {c.phone ? ` – ${c.phone}` : ''}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const newId = selectedCustomerId ?? null;
+                        const currentId = inv.customer ?? null;
+                        if (newId !== currentId) {
+                          updateInvoiceMutation.mutate({ customer: newId });
+                        } else {
+                          setEditingCustomer(false);
+                        }
+                      }}
+                      disabled={updateInvoiceMutation.isPending}
+                    >
+                      {updateInvoiceMutation.isPending ? 'Saving...' : 'Save'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingCustomer(false);
+                        setSelectedCustomerId(inv.customer ?? null);
+                      }}
+                      disabled={updateInvoiceMutation.isPending}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <dd className="text-sm text-gray-900">{inv.customer_name || 'Walk-in'}</dd>
+                )}
               </div>
-            )}
+            </div>
             <div className="flex items-start gap-3">
               <FileText className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
@@ -2435,10 +2517,19 @@ export default function InvoiceDetail() {
                         setIsSearchTyped(newValue.trim().length > 0);
                         setProductSearchSelectedIndex(-1);
                       }}
+                      onInput={(e) => {
+                        const target = e.target as HTMLInputElement;
+                        const currentValue = target.value;
+                        if (currentValue !== barcodeInput) {
+                          setBarcodeInput(currentValue);
+                          setIsSearchTyped(currentValue.trim().length > 0);
+                        }
+                      }}
                       onKeyDown={async (e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const searchValue = barcodeInput.trim();
+                          const inputElement = e.currentTarget as HTMLInputElement;
+                          const searchValue = (inputElement.value || '').trim();
                           if (!searchValue) return;
 
                           // If a product is selected in dropdown, select it
@@ -2469,14 +2560,17 @@ export default function InvoiceDetail() {
                               };
                               addItemMutation.mutate(itemData);
                               setBarcodeInput('');
+                              inputElement.value = '';
                               setProductSearchSelectedIndex(-1);
                               setIsSearchTyped(false);
                               return;
                             }
                           }
 
-                          // Otherwise, try barcode scan
+                          // Otherwise, try barcode scan (value from DOM for physical scanner speed)
                           await handleBarcodeScan(searchValue);
+                          setBarcodeInput('');
+                          inputElement.value = '';
                         } else if (e.key === 'ArrowDown') {
                           e.preventDefault();
                           if (products) {
@@ -3622,9 +3716,16 @@ export default function InvoiceDetail() {
                   placeholder="Scan barcode or enter SKU..."
                   value={barcodeInput}
                   onChange={(e) => setBarcodeInput(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter' && barcodeInput.trim()) {
-                      handleBarcodeScan(barcodeInput);
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const inputEl = e.currentTarget as HTMLInputElement;
+                      const b = (inputEl.value || '').trim();
+                      if (b) {
+                        handleBarcodeScan(b);
+                        setBarcodeInput('');
+                        inputEl.value = '';
+                      }
                     }
                   }}
                   className="flex-1"

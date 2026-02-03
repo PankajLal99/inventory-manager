@@ -132,6 +132,7 @@ class ProductSerializer(serializers.ModelSerializer):
     stock_quantity = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
     stock_bifurcation = serializers.SerializerMethodField()
+    price_bifurcation = serializers.SerializerMethodField()
 
 
     def get_stock_quantity(self, obj):
@@ -203,6 +204,39 @@ class ProductSerializer(serializers.ModelSerializer):
         sorted_counts = sorted(supplier_counts.items(), key=lambda x: x[1], reverse=True)
         return ", ".join([f"{count} {name}" for name, count in sorted_counts])
 
+    def get_price_bifurcation(self, obj):
+        """Calculate price breakdown by supplier
+        Format: "AMS: ₹100, P+: ₹120"
+        Only includes barcodes that are available (not sold)
+        """
+        supplier_prices = {}
+        barcodes = obj.barcodes.exclude(tag='sold').select_related('purchase__supplier', 'purchase_item')
+        
+        for barcode in barcodes:
+            supplier_name = "Unknown"
+            if barcode.purchase and barcode.purchase.supplier:
+                supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+            
+            # Use selling_price if available and > 0, otherwise purchase_price
+            price = barcode.get_selling_price() or barcode.get_purchase_price() or 0
+            price_val = float(price)
+            
+            if supplier_name not in supplier_prices:
+                supplier_prices[supplier_name] = set()
+            supplier_prices[supplier_name].add(price_val)
+            
+        if not supplier_prices:
+            return ""
+            
+        parts = []
+        # Sort suppliers by name for consistency
+        for supplier in sorted(supplier_prices.keys()):
+            prices = sorted(list(supplier_prices[supplier]))
+            price_str = "/".join([f"₹{p:g}" for p in prices])
+            parts.append(f"{supplier}: {price_str}")
+            
+        return ", ".join(parts)
+
     def get_available_quantity(self, obj):
         """Calculate available quantity - uses barcode count as SUPREME source of truth
         Available Stock = All barcodes with tag 'new' or 'returned'
@@ -245,7 +279,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'brand', 'brand_id', 'brand_name',
             'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
             'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
-            'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'stock_bifurcation'
+            'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'stock_bifurcation', 'price_bifurcation'
         ]
 
 
@@ -257,6 +291,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     available_quantity = serializers.SerializerMethodField()
     sold_quantity = serializers.SerializerMethodField()
     stock_bifurcation = serializers.SerializerMethodField()
+    price_bifurcation = serializers.SerializerMethodField()
     purchase_price = serializers.SerializerMethodField()
     selling_price = serializers.SerializerMethodField()
 
@@ -494,9 +529,50 @@ class ProductListSerializer(serializers.ModelSerializer):
         sorted_counts = sorted(supplier_counts.items(), key=lambda x: x[1], reverse=True)
         return ", ".join([f"{count} {name}" for name, count in sorted_counts])
 
+    def get_price_bifurcation(self, obj):
+        """Calculate price breakdown by supplier
+        Format: "AMS: ₹100, P+: ₹120"
+        Only includes barcodes that are available (not sold)
+        """
+        # Performance check: if we already have the count from annotation and it's 0, return empty
+        if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
+            return ""
+
+        supplier_prices = {}
+        
+        # Use prefetched barcodes if available (fast path)
+        all_barcodes = obj.barcodes.all()
+        for barcode in all_barcodes:
+            # Only count barcodes that are NOT sold
+            if barcode.tag != 'sold':
+                supplier_name = "Unknown"
+                if barcode.purchase and barcode.purchase.supplier:
+                    # Use supplier code if available, otherwise name
+                    supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                
+                # Use selling_price if available and > 0, otherwise purchase_price
+                price = barcode.get_selling_price() or barcode.get_purchase_price() or 0
+                price_val = float(price)
+                
+                if supplier_name not in supplier_prices:
+                    supplier_prices[supplier_name] = set()
+                supplier_prices[supplier_name].add(price_val)
+            
+        if not supplier_prices:
+            return ""
+            
+        parts = []
+        # Sort suppliers by name for consistency
+        for supplier in sorted(supplier_prices.keys()):
+            prices = sorted(list(supplier_prices[supplier]))
+            price_str = "/".join([f"₹{p:g}" for p in prices])
+            parts.append(f"{supplier}: {price_str}")
+            
+        return ", ".join(parts)
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation']
+        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation', 'price_bifurcation']
 
 
 class DefectiveProductItemSerializer(serializers.ModelSerializer):
