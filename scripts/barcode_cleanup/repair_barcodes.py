@@ -37,11 +37,18 @@ def repair_barcodes(dry_run=True):
     repaired_swaps = 0
     repaired_removals = 0
     
+    processed_carts = {} # cart_id -> first_invoice_number
+    
     invoices = Invoice.objects.exclude(status='void').prefetch_related('items', 'cart__items')
     
     for inv in invoices:
         cart = inv.cart
         if not cart: continue
+        
+        # PROD SAFETY: Detect if this cart is already processed by another invoice
+        if cart.id in processed_carts:
+            continue
+        processed_carts[cart.id] = inv.invoice_number
         
         # Get scanned barcodes from cart
         scanned_list = []

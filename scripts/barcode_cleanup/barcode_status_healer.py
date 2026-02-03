@@ -28,12 +28,21 @@ def status_healer(dry_run=True):
         'tag_fixes': 0
     }
     
+    processed_carts = {} # cart_id -> first_invoice_number
+    
     for inv in invoices:
         stats['total_analyzed'] += 1
         cart = inv.cart
         if not cart:
             continue
             
+        # PROD SAFETY: Detect if this cart is already linked to another healed invoice
+        if cart.id in processed_carts:
+            print(f"\n[WARNING] DUPLICATE CART DETECTED: Invoice {inv.invoice_number} shares Cart {cart.id} with {processed_carts[cart.id]}.")
+            print(f"    - Action: Skipping this invoice to prevent duplicate inventory deduction.")
+            continue
+        processed_carts[cart.id] = inv.invoice_number
+
         # Get what SHOULD be on the invoice according to the cart beeps
         cart_data = []
         for ci in cart.items.all():
@@ -76,6 +85,12 @@ def status_healer(dry_run=True):
             
             if dry_run:
                 print(f"    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.")
+                for d in cart_data:
+                    product = Product.objects.get(id=d['product_id'])
+                    if product.track_inventory:
+                        print(f"      - Use Barcodes: {d['scanned']}")
+                    else:
+                        print(f"      - Use Non-tracked Product: {product.name} (Qty: {d['quantity']})")
             else:
                 print(f"    [HEALING]: Reconstructing invoice items...")
                 stats['structural_fixes'] += 1

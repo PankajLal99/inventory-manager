@@ -62,7 +62,12 @@ def investigator():
 
     print(f"   - Found {len(anomalies)} potential Double-Sale anomalies (multiple sales without recorded returns).")
     for b_val, logs in anomalies:
-        print(f"     - Barcode {b_val}: Sold {len(logs)} times.")
+        inv_nums = []
+        for log in logs:
+            # Extract invoice number from context if available, otherwise use action
+            ctx = log.context or {}
+            inv_nums.append(ctx.get('invoice_number', log.action))
+        print(f"     - Barcode {b_val}: Sold {len(logs)} times (Refs: {inv_nums})")
     if len(anomalies) > 5: print("     ...")
 
     # 3. State-Audit Mismatch
