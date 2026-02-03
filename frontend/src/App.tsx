@@ -19,12 +19,14 @@ import Pricing from './pages/pricing/Pricing';
 import History from './pages/history/History';
 import Invoices from './pages/invoices/Invoices';
 import InvoiceDetail from './pages/invoices/InvoiceDetail';
+import InvoiceEdit from './pages/invoices/InvoiceEdit';
 import Reports from './pages/reports/Reports';
 import Replacement from './pages/replacement/Replacement';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
 import CreditNotes from './pages/credit-notes/CreditNotes';
+import CreditNoteDetails from './pages/credit-notes/CreditNoteDetails';
 import Repairs from './pages/repair/Repairs';
 import Ledger from './pages/ledger/Ledger';
 import LedgerDetail from './pages/ledger/LedgerDetail';
@@ -124,7 +126,9 @@ function App() {
                 <Route path="pricing" element={<Pricing />} />
                 <Route path="invoices" element={<Invoices />} />
                 <Route path="invoices/:id" element={<InvoiceDetail />} />
+                <Route path="invoices/:id/edit" element={<InvoiceEdit />} />
                 <Route path="credit-notes" element={<CreditNotes />} />
+                <Route path="credit-notes/:id" element={<CreditNoteDetails />} />
                 <Route path="history" element={<History />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="replacement" element={<Replacement />} />

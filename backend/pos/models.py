@@ -236,13 +236,19 @@ class Return(models.Model):
 class ReturnItem(models.Model):
     """Return items"""
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='items')
-    invoice_item = models.ForeignKey(InvoiceItem, on_delete=models.CASCADE, related_name='return_items')
+    invoice_item = models.ForeignKey(InvoiceItem, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='return_items', null=True, blank=True)
+    variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
+    barcode = models.ForeignKey('catalog.Barcode', on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
+    product_name = models.CharField(max_length=255, blank=True)
+    product_sku = models.CharField(max_length=100, blank=True)
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     condition = models.CharField(max_length=50)  # e.g., 'saleable', 'damaged', 'expired'
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
 
     class Meta:
         db_table = 'return_items'
+
 
 
 class CreditNote(models.Model):

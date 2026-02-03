@@ -93,6 +93,8 @@ export default function CreditNoteReplacement() {
         if (response.data?.invoice) {
           setInvoice(response.data.invoice);
           setSearchError(null);
+
+          // Backend returns only matching barcode/SKU line items when found by barcode/SKU
           const initialSelected: Record<number, number> = {};
           const searchBarcode = searchValue.trim().toUpperCase();
 
@@ -140,10 +142,16 @@ export default function CreditNoteReplacement() {
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-notes'] });
       queryClient.invalidateQueries({ queryKey: ['cart'] });
       showToast(`Credit note ${data.data.credit_note.credit_note_number} created successfully`, 'success');
-      // Navigate to invoice page after successful credit note creation
-      navigate(`/invoices/${variables.invoice_id}`);
+      // Navigate to credit note detail view
+      const creditNoteId = data.data?.credit_note?.id;
+      if (creditNoteId) {
+        navigate(`/credit-notes/${creditNoteId}`);
+      } else {
+        navigate(`/invoices/${variables.invoice_id}`);
+      }
     },
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to process credit note';
@@ -447,7 +455,7 @@ export default function CreditNoteReplacement() {
                 </div>
               </div>
 
-              {/* Invoice Items */}
+              {/* Invoice Items - backend returns only matching barcode/SKU items when search was by barcode/SKU */}
               <div className="space-y-2">
                 <h3 className="font-semibold text-gray-900">Select Items for Credit Note</h3>
                 <div className="border rounded-lg divide-y max-h-96 overflow-y-auto">

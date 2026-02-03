@@ -6,11 +6,20 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, className = '', onBlur, onChange, ...props }, ref) => {
+  ({ label, error, className = '', onBlur, onChange, onWheel, ...props }, ref) => {
+  const inputType = props.type || 'text';
+
+  const handleWheel = (e: React.WheelEvent<HTMLInputElement>) => {
+    if (inputType === 'number') {
+      (e.target as HTMLInputElement).blur();
+    }
+    onWheel?.(e);
+  };
+
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     // Trim value on blur for text-like inputs
-    const inputType = props.type || 'text';
-    const shouldTrim = ['text', 'search', 'email', 'tel', 'url', 'password'].includes(inputType);
+    const typeForTrim = props.type || 'text';
+    const shouldTrim = ['text', 'search', 'email', 'tel', 'url', 'password'].includes(typeForTrim);
     
     if (shouldTrim && e.target.value !== e.target.value.trim()) {
       e.target.value = e.target.value.trim();
@@ -44,8 +53,10 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           error ? 'border-red-300 focus:border-red-500 focus:ring-red-500' : 'border-gray-300'
         } ${className}`}
         {...props}
+        type={inputType}
         onChange={onChange}
         onBlur={handleBlur}
+        onWheel={handleWheel}
       />
       {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
     </div>

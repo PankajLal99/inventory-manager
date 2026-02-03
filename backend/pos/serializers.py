@@ -174,9 +174,34 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
 
 class ReturnItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+    product_sku = serializers.SerializerMethodField()
+    barcode_value = serializers.SerializerMethodField()
+
     class Meta:
         model = ReturnItem
-        fields = ['id', 'invoice_item', 'quantity', 'condition', 'refund_amount']
+        fields = ['id', 'invoice_item', 'product', 'product_name', 'product_sku', 'barcode_value', 'quantity', 'condition', 'refund_amount']
+
+    def get_product_name(self, obj):
+        if obj.product_name:
+            return obj.product_name
+        if obj.invoice_item and obj.invoice_item.product:
+            return obj.invoice_item.product.name
+        return "Unknown Product"
+
+    def get_product_sku(self, obj):
+        if obj.product_sku:
+            return obj.product_sku
+        if obj.invoice_item and obj.invoice_item.product:
+            return obj.invoice_item.product.sku
+        return ""
+
+    def get_barcode_value(self, obj):
+        if obj.barcode:
+            return obj.barcode.barcode
+        if obj.invoice_item and obj.invoice_item.barcode:
+            return obj.invoice_item.barcode.barcode
+        return None
 
 
 class ReturnSerializer(serializers.ModelSerializer):
@@ -190,13 +215,26 @@ class ReturnSerializer(serializers.ModelSerializer):
 class CreditNoteSerializer(serializers.ModelSerializer):
     invoice_number = serializers.CharField(source='return_obj.invoice.invoice_number', read_only=True)
     invoice_id = serializers.IntegerField(source='return_obj.invoice.id', read_only=True)
-    customer_name = serializers.CharField(source='return_obj.invoice.customer.name', read_only=True)
+    customer_name = serializers.SerializerMethodField()
     return_number = serializers.CharField(source='return_obj.return_number', read_only=True)
+    return_details = ReturnSerializer(source='return_obj', read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
-    
+
+    def get_customer_name(self, obj):
+        if obj.return_obj and obj.return_obj.invoice and obj.return_obj.invoice.customer:
+            return obj.return_obj.invoice.customer.name
+        return None
+
     class Meta:
         model = CreditNote
-        fields = ['id', 'credit_note_number', 'return_obj', 'return_number', 'invoice_id', 'invoice_number', 'customer_name', 'amount', 'notes', 'created_by', 'created_by_username', 'created_at']
+        fields = ['id', 'credit_note_number', 'return_obj', 'return_number', 'invoice_id', 'invoice_number', 'customer_name', 'amount', 'notes', 'created_by', 'created_by_username', 'created_at', 'return_details']
+
+class CreditNoteDetailSerializer(CreditNoteSerializer):
+    """Credit note with nested return and return items for detail view."""
+    return_obj = ReturnSerializer(read_only=True)
+
+    class Meta(CreditNoteSerializer.Meta):
+        fields = ['id', 'credit_note_number', 'return_obj', 'return_number', 'invoice_id', 'invoice_number', 'customer_name', 'amount', 'notes', 'created_by', 'created_by_username', 'created_at', 'return_details']
 
 
 class POSSessionSerializer(serializers.ModelSerializer):
