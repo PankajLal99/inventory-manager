@@ -13,6 +13,7 @@ django.setup()
 from django.db import transaction
 from backend.catalog.models import Barcode, Product
 from backend.pos.models import Invoice, InvoiceItem, Cart, CartItem
+from csv_logger import logger
 
 def status_healer(dry_run=True):
     print(f"--- Enhanced Barcode Status Healer (Dry Run: {dry_run}) ---")
@@ -85,30 +86,58 @@ def status_healer(dry_run=True):
             
             if dry_run:
                 print(f"    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.")
+                for item in inv_items:
+                    data = f"Product: {item.product.name}, Barcode: {item.barcode.barcode if item.barcode else 'N/A'}"
+                    logger.log('DELETE_PROPOSAL', 'InvoiceItem', item.id, 'ALL', data, 'NONE', f'Structural mismatch in {inv.invoice_number}')
+
                 for d in cart_data:
                     product = Product.objects.get(id=d['product_id'])
+                    meta = f"Product: {product.name}, SKU: {product.sku if hasattr(product, 'sku') else 'N/A'}"
                     if product.track_inventory:
-                        print(f"      - Use Barcodes: {d['scanned']}")
+                        if not d['scanned'] and d['quantity'] > 0:
+                            print(f"      - Use Legacy Tracked Product (No beeps): {product.name} (Qty: {d['quantity']})")
+                            logger.log('CREATE_PROPOSAL', 'InvoiceItem', 'NEW', inv.invoice_number, 'product', 'NONE', f"{product.name} (Legacy Qty: {d['quantity']})", f'Structural repair (legacy manual) for {inv.invoice_number}', meta)
+                        else:
+                            print(f"      - Use Barcodes: {d['scanned']}")
+                            for b_val in d['scanned']:
+                                logger.log('CREATE_PROPOSAL', 'InvoiceItem', 'NEW', inv.invoice_number, 'barcode', 'NONE', b_val, f'Structural repair for {inv.invoice_number}', meta)
                     else:
                         print(f"      - Use Non-tracked Product: {product.name} (Qty: {d['quantity']})")
+                        logger.log('CREATE_PROPOSAL', 'InvoiceItem', 'NEW', inv.invoice_number, 'product', 'NONE', product.name, f'Structural repair (non-tracked) for {inv.invoice_number}', meta)
             else:
                 print(f"    [HEALING]: Reconstructing invoice items...")
                 stats['structural_fixes'] += 1
                 with transaction.atomic():
-                    inv.items.all().delete()
+                    for item in inv.items.all():
+                        data = f"Product: {item.product.name}, Barcode: {item.barcode.barcode if item.barcode else 'N/A'}"
+                        logger.log('DELETE', 'InvoiceItem', item.id, 'ALL', data, 'NONE', f'Structural mismatch in {inv.invoice_number}')
+                        item.delete()
+
                     for d in cart_data:
                         product = Product.objects.get(id=d['product_id'])
+                        meta = f"Product: {product.name}, SKU: {product.sku if hasattr(product, 'sku') else 'N/A'}"
                         if product.track_inventory:
-                            for b_val in d['scanned']:
-                                try:
-                                    b_obj = Barcode.objects.get(barcode=b_val)
-                                    b_obj.tag = 'sold'
-                                    b_obj.save(update_fields=['tag'])
-                                    InvoiceItem.objects.create(invoice=inv, product=product, barcode=b_obj, quantity=1, price=d['price'], subtotal=d['price'])
-                                except Barcode.DoesNotExist:
-                                    InvoiceItem.objects.create(invoice=inv, product=product, quantity=1, price=d['price'], subtotal=d['price'])
+                            if not d['scanned'] and d['quantity'] > 0:
+                                # Legacy case: tracked but no barcodes (manual entry)
+                                ii = InvoiceItem.objects.create(invoice=inv, product=product, quantity=d['quantity'], unit_price=d['price'], line_total=d['price'] * d['quantity'])
+                                logger.log('CREATE', 'InvoiceItem', ii.id, inv.invoice_number, 'ALL', 'NONE', f'Product: {product.name} (Legacy Qty: {d['quantity']})', f'Structural repair (legacy manual) for {inv.invoice_number}', meta)
+                            else:
+                                for b_val in d['scanned']:
+                                    try:
+                                        b_obj = Barcode.objects.get(barcode=b_val)
+                                        old_tag = b_obj.tag
+                                        b_obj.tag = 'sold'
+                                        b_obj.save(update_fields=['tag'])
+                                        logger.log('UPDATE', 'Barcode', b_obj.id, inv.invoice_number, 'tag', old_tag, 'sold', f'Repair for {inv.invoice_number}', meta)
+
+                                        ii = InvoiceItem.objects.create(invoice=inv, product=product, barcode=b_obj, quantity=1, unit_price=d['price'], line_total=d['price'])
+                                        logger.log('CREATE', 'InvoiceItem', ii.id, inv.invoice_number, 'ALL', 'NONE', f'Barcode: {b_val}', f'Structural repair for {inv.invoice_number}', meta)
+                                    except Barcode.DoesNotExist:
+                                        ii = InvoiceItem.objects.create(invoice=inv, product=product, quantity=1, unit_price=d['price'], line_total=d['price'])
+                                        logger.log('CREATE', 'InvoiceItem', ii.id, inv.invoice_number, 'ALL', 'NONE', 'Product only', f'Structural repair (missing barcode) for {inv.invoice_number}', meta)
                         else:
-                            InvoiceItem.objects.create(invoice=inv, product=product, quantity=d['quantity'], price=d['price'], subtotal=d['price'] * d['quantity'])
+                            ii = InvoiceItem.objects.create(invoice=inv, product=product, quantity=d['quantity'], unit_price=d['price'], line_total=d['price'] * d['quantity'])
+                            logger.log('CREATE', 'InvoiceItem', ii.id, inv.invoice_number, 'ALL', 'NONE', f'Product: {product.name}', f'Structural repair (non-tracked) for {inv.invoice_number}', meta)
             continue
 
         # Tag status check for items that exist but have the wrong status
@@ -118,9 +147,12 @@ def status_healer(dry_run=True):
                 print(f"    - Description: This item was sold, but its tag escaped the 'sold' status transition.")
                 if dry_run:
                     print(f"    [PROPOSAL]: Force tag change to 'sold'.")
+                    logger.log('UPDATE_PROPOSAL', 'Barcode', ii.barcode.id, inv.invoice_number, 'tag', ii.barcode.tag, 'sold', f'Status mismatch on {inv.invoice_number}', f"Barcode: {ii.barcode.barcode}")
                 else:
+                    old_tag = ii.barcode.tag
                     ii.barcode.tag = 'sold'
                     ii.barcode.save(update_fields=['tag'])
+                    logger.log('UPDATE', 'Barcode', ii.barcode.id, inv.invoice_number, 'tag', old_tag, 'sold', f'Status mismatch on {inv.invoice_number}', f"Barcode: {ii.barcode.barcode}")
                     stats['tag_fixes'] += 1
                     print(f"    [HEALING]: Marked as 'sold'.")
 

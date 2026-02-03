@@ -13,6 +13,7 @@ django.setup()
 from django.db import transaction
 from backend.catalog.models import Barcode
 from backend.pos.models import Invoice, InvoiceItem, Cart
+from csv_logger import logger
 
 def repair_barcodes(dry_run=True):
     print(f"--- Barcode Repair Process (Dry Run: {dry_run}) ---")
@@ -27,10 +28,15 @@ def repair_barcodes(dry_run=True):
             
     print(f"\n1. Found {len(sold_barcodes_no_item)} barcodes marked SOLD without active InvoiceItem.")
     for b in sold_barcodes_no_item:
+        meta = f"Barcode: {b.barcode}, Product: {b.product.name if b.product else 'N/A'}"
         print(f"   - Reverting {b.barcode} (Product: {b.product.name if b.product else 'N/A'}) to 'new'")
-        if not dry_run:
+        if dry_run:
+            logger.log('UPDATE_PROPOSAL', 'Barcode', b.id, 'NONE', 'tag', 'sold', 'new', 'Sold but no InvoiceItem found', meta)
+        else:
+            old_tag = b.tag
             b.tag = 'new'
             b.save(update_fields=['tag'])
+            logger.log('UPDATE', 'Barcode', b.id, 'NONE', 'tag', old_tag, 'new', 'Sold but no InvoiceItem found', meta)
 
     # 2. Fix Auto-assigned mismatches
     print("\n2. Identifying and repairing auto-assigned barcodes:")
@@ -84,30 +90,47 @@ def repair_barcodes(dry_run=True):
             
             if match_scan:
                 print(f"   - Invoice {inv.invoice_number}: SWAPPING auto-assigned {old_barcode.barcode} with scanned {match_scan}")
-                if not dry_run:
+                meta = f"Old Barcode: {old_barcode.barcode}, New Barcode: {match_scan}, Product: {item.product.name}"
+                if dry_run:
+                    logger.log('UPDATE_PROPOSAL', 'Barcode', old_barcode.id, inv.invoice_number, 'tag', old_barcode.tag, 'new', f'Auto-assigned swap in {inv.invoice_number}', meta)
+                    logger.log('UPDATE_PROPOSAL', 'Barcode', match_scan, inv.invoice_number, 'tag', 'unknown', 'sold', f'Scanned repair in {inv.invoice_number}', meta)
+                    logger.log('UPDATE_PROPOSAL', 'InvoiceItem', item.id, inv.invoice_number, 'barcode', old_barcode.barcode, match_scan, f'Auto-assigned swap in {inv.invoice_number}', meta)
+                else:
                     with transaction.atomic():
+                        old_tag = old_barcode.tag
                         old_barcode.tag = 'new'
                         old_barcode.save(update_fields=['tag'])
+                        logger.log('UPDATE', 'Barcode', old_barcode.id, inv.invoice_number, 'tag', old_tag, 'new', f'Auto-assigned swap in {inv.invoice_number}', meta)
                         
                         new_barcode_obj = Barcode.objects.get(barcode=match_scan)
+                        new_old_tag = new_barcode_obj.tag
                         new_barcode_obj.tag = 'sold'
                         new_barcode_obj.save(update_fields=['tag'])
+                        logger.log('UPDATE', 'Barcode', new_barcode_obj.id, inv.invoice_number, 'tag', new_old_tag, 'sold', f'Scanned repair in {inv.invoice_number}', meta)
                         
                         item.barcode = new_barcode_obj
                         item.save(update_fields=['barcode'])
+                        logger.log('UPDATE', 'InvoiceItem', item.id, inv.invoice_number, 'barcode', old_barcode.barcode, match_scan, f'Auto-assigned swap in {inv.invoice_number}', meta)
                 
                 lost_scans.remove(match_scan)
                 repaired_swaps += 1
             else:
                 # Case B: No matching scan found. Revert barcode and unlink from invoice.
                 print(f"   - Invoice {inv.invoice_number}: REVERTING auto-assigned {old_barcode.barcode} and unlinking (no scan found)")
-                if not dry_run:
+                meta = f"Barcode: {old_barcode.barcode}, Product: {item.product.name}"
+                if dry_run:
+                    logger.log('UPDATE_PROPOSAL', 'Barcode', old_barcode.id, inv.invoice_number, 'tag', old_barcode.tag, 'new', f'No scan found in {inv.invoice_number}', meta)
+                    logger.log('UPDATE_PROPOSAL', 'InvoiceItem', item.id, inv.invoice_number, 'barcode', old_barcode.barcode, 'None', f'No scan found in {inv.invoice_number}', meta)
+                else:
                     with transaction.atomic():
+                        old_tag = old_barcode.tag
                         old_barcode.tag = 'new'
                         old_barcode.save(update_fields=['tag'])
+                        logger.log('UPDATE', 'Barcode', old_barcode.id, inv.invoice_number, 'tag', old_tag, 'new', f'No scan found in {inv.invoice_number}', meta)
                         
                         item.barcode = None
                         item.save(update_fields=['barcode'])
+                        logger.log('UPDATE', 'InvoiceItem', item.id, inv.invoice_number, 'barcode', old_barcode.barcode, 'None', f'No scan found in {inv.invoice_number}', meta)
                 repaired_removals += 1
 
     print(f"\nTotal swaps performed: {repaired_swaps}")

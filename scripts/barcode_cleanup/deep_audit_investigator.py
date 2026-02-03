@@ -14,6 +14,7 @@ django.setup()
 from backend.core.models import AuditLog
 from backend.catalog.models import Barcode, Product
 from backend.pos.models import Invoice, InvoiceItem, Cart, CartItem
+from csv_logger import logger
 
 def investigator():
     print("--- Deep Audit Investigation ---")
@@ -32,6 +33,7 @@ def investigator():
         
         if not active_in_cart:
             zombies.append(b)
+            logger.log('ANOMALY_ZOMBIE', 'Barcode', b.id, 'NONE', 'tag', 'in-cart', 'STUCK', 'In-cart with no active session', f"Barcode: {b.barcode}, Product: {b.product.name if b.product else 'N/A'}")
             
     print(f"   - Found {len(zombies)} barcodes stuck in 'in-cart' state with no active session.")
     for b in zombies:
@@ -63,10 +65,12 @@ def investigator():
     print(f"   - Found {len(anomalies)} potential Double-Sale anomalies (multiple sales without recorded returns).")
     for b_val, logs in anomalies:
         inv_nums = []
-        for log in logs:
-            # Extract invoice number from context if available, otherwise use action
-            ctx = log.context or {}
-            inv_nums.append(ctx.get('invoice_number', log.action))
+        for log_entry in logs:
+            # Extract invoice number from changes if available, otherwise use action
+            changes = log_entry.changes or {}
+            ref = changes.get('invoice_number', log_entry.action)
+            inv_nums.append(ref)
+            logger.log('ANOMALY_DOUBLE_SALE', 'Barcode', b_val, ref, 'tag', 'sold', 'DUPLICATE', 'Sold multiple times without return', f"Log Action: {log_entry.action}, Log ID: {log_entry.id}")
         print(f"     - Barcode {b_val}: Sold {len(logs)} times (Refs: {inv_nums})")
     if len(anomalies) > 5: print("     ...")
 
@@ -88,6 +92,7 @@ def investigator():
                 # Only flag if the last log is significantly newer than the barcode modified time (approx)
                 # This catches if someone manually changed a tag in Admin without it being logged correctly
                 mismatches += 1
+                logger.log('ANOMALY_STATE_MISMATCH', 'Barcode', b.id, 'NONE', 'tag', b.tag, expected_tag, f"State mismatch: Tag is {b.tag} but last action was {last_log.action}", f"Last Log ID: {last_log.id}")
                 if mismatches <= 5:
                     print(f"     - Mismatch: {b.barcode}. Last action was '{last_log.action}', but tag is '{b.tag}'.")
 

@@ -8,6 +8,7 @@ from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
 from backend.pos.models import Cart, CartItem, Invoice
 from backend.core.models import AuditLog
+from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -118,7 +119,7 @@ class CheckoutTests(APITestCase):
         
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         error_text = response.data.get('message', '') + response.data.get('error', '')
-        self.assertIn('Incomplete barcode scans', error_text)
+        self.assertIn('Inventory Mismatch', error_text)
         # Ensure no invoice was created for this cart
         self.assertFalse(Invoice.objects.filter(cart=cart).exists())
 
@@ -706,6 +707,21 @@ class BarcodeStrictnessTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('MUST physically scan a barcode', response.data.get('message', ''))
 
+    def test_increment_tracked_product_fails(self):
+        """Test that manually incrementing a tracked product returns 400 (scanning required)"""
+        # Create a cart item first via scanning (valid state)
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=self.product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[self.barcode.barcode]
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        response = self.client.patch(url, {'action': 'increment'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('requires active scanning', response.data.get('message', ''))
+
     def test_checkout_with_insufficient_scans_fails(self):
         """Test that checkout fails if quantity > scanned_barcodes"""
         CartItem.objects.create(
@@ -719,4 +735,130 @@ class BarcodeStrictnessTests(APITestCase):
         response = self.client.post(url, {}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         error_text = response.data.get('message', '') + response.data.get('error', '')
-        self.assertIn('Incomplete barcode scans', error_text)
+        self.assertIn('Inventory Mismatch', error_text)
+
+    def test_increment_untracked_product_succeeds(self):
+        """Test that manually incrementing a non-tracked product succeeds"""
+        untracked_product = Product.objects.create(
+            name='Untracked Product',
+            category=self.category,
+            track_inventory=False
+        )
+        Stock.objects.create(product=untracked_product, store=self.store, quantity=Decimal('10.000'))
+        
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=untracked_product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[]
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        response = self.client.patch(url, {'action': 'increment'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.quantity, Decimal('2.000'))
+
+    def test_untracked_product_checkout_succeeds(self):
+        """Test that checkout succeeds for non-tracked products without barcodes"""
+        untracked_product = Product.objects.create(
+            name='Service Item',
+            category=self.category,
+            track_inventory=False
+        )
+        Barcode.objects.create(product=untracked_product, barcode='SERV-001', tag='new') # Need at least one barcode for price fallback logic
+        
+        CartItem.objects.create(
+            cart=self.cart,
+            product=untracked_product,
+            quantity=Decimal('5.000'),
+            unit_price=Decimal('500.00'),
+            scanned_barcodes=[]
+        )
+        url = reverse('cart-checkout', kwargs={'pk': self.cart.id})
+        response = self.client.post(url, {'invoice_type': 'cash'}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invoice = Invoice.objects.get(id=response.data['id'])
+        self.assertEqual(invoice.items.count(), 1)
+        self.assertEqual(invoice.items.first().quantity, Decimal('5.000'))
+        self.assertIsNone(invoice.items.first().barcode)
+
+    def test_mixed_checkout_integrity(self):
+        """Test that checkout correctly handles both tracked and non-tracked items in one cart"""
+        # 1. Tracked product (scanned)
+        CartItem.objects.create(
+            cart=self.cart,
+            product=self.product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            scanned_barcodes=[self.barcode.barcode]
+        )
+        # 2. Non-tracked product (no barcode)
+        untracked = Product.objects.create(name='Untracked', track_inventory=False)
+        Barcode.objects.create(product=untracked, barcode='UNTR-001', tag='new')
+        CartItem.objects.create(
+            cart=self.cart,
+            product=untracked,
+            quantity=Decimal('10.000'),
+            unit_price=Decimal('5.00'),
+            scanned_barcodes=[]
+        )
+        
+        url = reverse('cart-checkout', kwargs={'pk': self.cart.id})
+        response = self.client.post(url, {'invoice_type': 'cash'}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invoice = Invoice.objects.get(id=response.data['id'])
+        
+        # Tracked item should create 1 InvoiceItem with barcode
+        # Non-tracked item should create 1 InvoiceItem with qty 10
+        self.assertEqual(invoice.items.count(), 2)
+        
+        tracked_ii = invoice.items.get(product=self.product)
+        self.assertEqual(tracked_ii.barcode, self.barcode)
+        self.assertEqual(tracked_ii.barcode.tag, 'sold')
+        
+        untracked_ii = invoice.items.get(product=untracked)
+        self.assertEqual(untracked_ii.quantity, Decimal('10.000'))
+        self.assertIsNone(untracked_ii.barcode)
+
+class RaceConditionTests(APITestCase):
+    """Tests for concurrent requests and integrity"""
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'raceuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Race Store', shop_type='retail')
+        self.category = Category.objects.create(name='Race Category')
+        self.product = Product.objects.create(
+            name='Race Product',
+            category=self.category,
+            track_inventory=True
+        )
+        self.barcode = Barcode.objects.create(product=self.product, barcode='RACE-001', tag='new')
+        self.cart = Cart.objects.create(
+            cart_number='RACE-CART',
+            store=self.store,
+            created_by=self.user,
+            status='active'
+        )
+        CartItem.objects.create(
+            cart=self.cart, product=self.product, quantity=1,
+            unit_price=100, scanned_barcodes=['RACE-001']
+        )
+
+    def test_simulated_dual_checkout_integrity(self):
+        """
+        Since we can't easily multithread APITestCase in real-time without complex infra,
+        we verify that the 'status' guard and transaction logic works if status is updated.
+        """
+        url = reverse('cart-checkout', kwargs={'pk': self.cart.id})
+        
+        # 1. First checkout succeeds
+        response1 = self.client.post(url, {'invoice_type': 'cash'}, format='json')
+        self.assertEqual(response1.status_code, status.HTTP_201_CREATED)
+        
+        # 2. Second checkout immediately after should fail with 400 (guarded by status check + lock)
+        response2 = self.client.post(url, {'invoice_type': 'cash'}, format='json')
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already checked out', response2.data.get('error', ''))

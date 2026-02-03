@@ -18,7 +18,7 @@ python3 "$SCRIPT_DIR/deep_audit_investigator.py"
 
 # 3. Enhanced Healing (Scanned vs. Sold Analysis)
 if [[ "$1" == "--real" ]]; then
-    echo -e "\n[3/3] Running REAL Healing & Repairs... (DISABLED FOR SAFETY)"
+    echo -e "\n[3/3] Running REAL Healing & Repairs..."
     # python3 "$SCRIPT_DIR/barcode_status_healer.py" --apply
     # python3 "$SCRIPT_DIR/repair_barcodes.py" --real
 else

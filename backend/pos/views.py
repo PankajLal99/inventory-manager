@@ -1581,45 +1581,12 @@ def cart_item_update(request, pk, item_id):
                 cart_item.scanned_barcodes = []
             
             if action == 'increment':
-                # Find next available barcode for this product
-                # Check across ALL active carts
-                all_active_carts = Cart.objects.filter(status='active')
-                all_cart_items_all_carts = CartItem.objects.filter(cart__in=all_active_carts)
-                cart_barcodes = set()
-                for item in all_cart_items_all_carts:
-                    if item.scanned_barcodes:
-                        cart_barcodes.update(item.scanned_barcodes)
-                
-                # Find available barcodes (new, not sold, not in any active cart)
-                available_barcodes = Barcode.objects.filter(
-                    product=cart_item.product,
-                    variant=cart_item.variant,
-                    tag='new'
-                ).exclude(
-                    barcode__in=cart_barcodes
-                )
-                
-                # Exclude barcodes that are already sold
-                sold_barcode_ids = InvoiceItem.objects.filter(
-                    barcode__in=available_barcodes.values_list('id', flat=True)
-                ).exclude(
-                    invoice__status='void'
-                ).values_list('barcode_id', flat=True)
-                
-                available_barcodes = available_barcodes.exclude(id__in=sold_barcode_ids)
-                next_barcode = available_barcodes.order_by('?').first()
-                
-                if not next_barcode:
-                    return Response({
-                        'error': 'No available items',
-                        'message': 'No more available SKUs for this product'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                
-                # Add barcode to list
-                if next_barcode.barcode not in cart_item.scanned_barcodes:
-                    cart_item.scanned_barcodes.append(next_barcode.barcode)
-                    cart_item.quantity = Decimal(len(cart_item.scanned_barcodes))
-                    cart_item.save(update_fields=['scanned_barcodes', 'quantity'])
+                # For tracked products, we enforce physical scanning.
+                # Auto-assigning a random barcode leads to inventory mismatches (Audit anomalies).
+                return Response({
+                    'error': 'Scanning Required',
+                    'message': f'Product "{cart_item.product.name}" requires active scanning. Please scan the barcode instead of using the manual increment button.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             
             elif action == 'decrement':
                 # Remove last barcode from list
@@ -1866,501 +1833,234 @@ def cart_unhold(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def cart_checkout(request, pk):
-    """Checkout a cart - create invoice with invoice_type and update stock"""
-    cart = get_object_or_404(Cart, pk=pk)
+    """
+    Checkout a cart - create invoice and update stock with row-level locking.
+    Uses @transaction.atomic for full integrity.
+    """
+    try:
+        # Use select_for_update() to lock the cart row and prevent concurrent checkouts.
+        # This is the PRIMARY protection against race conditions.
+        cart = Cart.objects.select_for_update().get(pk=pk)
+    except Cart.DoesNotExist:
+        return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    # Determine if it's a repair shop first to allow empty carts for bookings
-    is_repair_shop = False
-    if cart.store:
-        cart.store.refresh_from_db()
-        shop_type = cart.store.shop_type.lower() if cart.store.shop_type else None
-        is_repair_shop = (shop_type == 'repair')
-    
-    # Block duplicate checkout first: cart already completed
+    # 1. Prevent double-checkout: If another request already settled this cart, block this one.
     if cart.status == 'completed':
-        create_audit_log(
-            request=request,
-            action='cart_checkout',
-            model_name='Cart',
-            object_id=str(cart.id),
-            object_name='Blocked Duplicate Checkout',
-            object_reference=cart.cart_number or str(cart.id),
-            barcode=None,
-            changes={'reason': 'Cart already completed'}
-        )
         return Response(
             {'error': 'Cart already checked out. This cart has already been completed.'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    # Empty cart check - allow empty carts ONLY for repair shops (bookings)
-    if not cart.items.exists() and not is_repair_shop:
-        return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
-
-    # Get invoice_type from request or use cart's invoice_type
-    invoice_type = request.data.get('invoice_type', cart.invoice_type or 'cash')
-    customer_id = request.data.get('customer', cart.customer_id if cart.customer else None)
-    
-    # For mixed payments, get split amounts
-    cash_amount = request.data.get('cash_amount', None)
-    upi_amount = request.data.get('upi_amount', None)
-    
-    # Validate split payments for mixed type
-    if invoice_type == 'mixed':
-        if cash_amount is None or upi_amount is None:
-            return Response({
-                'error': 'Both cash_amount and upi_amount are required for mixed payment type'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        cash_amount = Decimal(str(cash_amount))
-        upi_amount = Decimal(str(upi_amount))
-        total_split = cash_amount + upi_amount
-        # Will validate against invoice.total later after calculation
-    
-    # For Cash/UPI/Mixed invoices, validate that all items have prices
-    if invoice_type in ['cash', 'upi', 'mixed']:
-        items_without_price = []
-        for item in cart.items.all():
-            effective_price = item.manual_unit_price or item.unit_price
-            if not effective_price or effective_price == 0:
-                items_without_price.append({
-                    'id': item.id,
-                    'product_name': item.product.name,
-                    'product_sku': item.product.sku
-                })
+    try:
+        # 2. Determine shop type
+        is_repair_shop = False
+        if cart.store:
+            cart.store.refresh_from_db()
+            shop_type = (cart.store.shop_type or '').lower()
+            is_repair_shop = (shop_type == 'repair')
         
-        if items_without_price:
-            return Response({
-                'error': 'All items must have a selling price for Sale/Credit invoices',
-                'message': f'{len(items_without_price)} item(s) are missing prices',
-                'items_without_price': items_without_price
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # 3. Validation: Empty Cart
+        if not cart.items.exists() and not is_repair_shop:
+            return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # For tracked products: validate sufficient barcodes (stock) before creating invoice
-    tracked_items = list(
-        cart.items.select_related('product').filter(
-            product__track_inventory=True
-        ).exclude(quantity__lte=Decimal('0.000'))
-    )
-    scanned_values = set()
-    for ci in tracked_items:
-        if ci.scanned_barcodes:
-            scanned_values.update(ci.scanned_barcodes)
-    # One query: all barcodes for scanned values (product match done in Python)
-    scanned_barcodes_by_product = {}
-    if scanned_values:
-        for b in Barcode.objects.filter(barcode__in=scanned_values).only('id', 'barcode', 'product_id', 'tag'):
-            if b.product_id not in scanned_barcodes_by_product:
-                scanned_barcodes_by_product[b.product_id] = []
-            scanned_barcodes_by_product[b.product_id].append(b)
-    # One query: sold barcode ids (non-void invoices)
-    sold_barcode_ids = set(
-        InvoiceItem.objects.exclude(invoice__status='void')
-        .exclude(barcode_id__isnull=True)
-        .values_list('barcode_id', flat=True)
-    )
-    for cart_item in tracked_items:
-        quantity_needed = int(cart_item.quantity)
-        this_scanned = set(cart_item.scanned_barcodes or [])
-        available_from_scan = 0
-        for b in (scanned_barcodes_by_product.get(cart_item.product_id) or []):
-            if b.barcode not in this_scanned:
-                continue
-            if b.tag in ('new', 'returned', 'in-cart') or (b.tag == 'sold' and b.id not in sold_barcode_ids):
-                available_from_scan += 1
-        if available_from_scan < quantity_needed:
-            return Response({
-                'error': 'Incomplete barcode scans',
-                'message': f'Product "{cart_item.product.name}" requires {quantity_needed} scans, but only {available_from_scan} valid barcodes were scanned. Please ensure all items are physically scanned.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # 4. Extract and Validate Input
+        invoice_type = request.data.get('invoice_type', cart.invoice_type or 'cash')
+        customer_id = request.data.get('customer', cart.customer_id if cart.customer else None)
+        
+        # Mixed payment validation
+        cash_amount = Decimal(str(request.data.get('cash_amount', '0'))) if invoice_type == 'mixed' else Decimal('0')
+        upi_amount = Decimal(str(request.data.get('upi_amount', '0'))) if invoice_type == 'mixed' else Decimal('0')
+        if invoice_type == 'mixed' and (not request.data.get('cash_amount') or not request.data.get('upi_amount')):
+             return Response({'error': 'Both cash_amount and upi_amount required for mixed type'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Debug logging to help diagnose issues
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Checkout: cart_id={cart.id}, store_id={cart.store.id if cart.store else None}, "
-                f"store_name={cart.store.name if cart.store else None}, "
-                f"shop_type={cart.store.shop_type if cart.store else None}, "
-                f"is_repair_shop={is_repair_shop}, invoice_type={invoice_type}")
-    
-    # For repair shops, validate repair fields regardless of invoice_type
-    # Only validate if shop_type is explicitly 'repair' (case-insensitive)
-    # Also check if repair data is being sent (frontend might have switched stores)
-    repair_contact_no = request.data.get('repair_contact_no', '').strip()
-    repair_model_name = request.data.get('repair_model_name', '').strip()
-    repair_description = request.data.get('repair_description', '').strip()
-    repair_booking_amount = request.data.get('repair_booking_amount', None)
-    
-    # Only treat as repair shop if:
-    # 1. Store shop_type is 'repair' AND repair data is provided, OR
-    # 2. Repair data is explicitly provided (even if store type doesn't match - user might have switched stores)
-    has_repair_data = bool(repair_contact_no or repair_model_name)
-    
-    # If repair data is provided but store is not repair shop, log warning but allow it
-    # (This handles cases where user switched stores but frontend still sends repair data)
-    if has_repair_data and not is_repair_shop:
-        logger.warning(f"Repair data provided but cart store (id={cart.store.id if cart.store else None}, shop_type={shop_type}) is not repair shop. Allowing checkout but will not create Repair record.")
-    
-    # Only require repair fields if store is actually a repair shop
-    # If store is NOT a repair shop, ignore any repair data that might be sent (user might have switched stores)
-    if is_repair_shop:
-        # Store is a repair shop - require repair fields
-        if not repair_contact_no:
-            return Response({
-                'error': 'repair_contact_no is required for repair shop invoices',
-                'message': 'Contact number is required for repair orders'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        if not repair_model_name:
-            return Response({
-                'error': 'repair_model_name is required for repair shop invoices',
-                'message': 'Model name is required for repair orders'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Validate booking amount if provided (for repair shops only)
-        if repair_booking_amount:
-            try:
-                booking_amount_decimal = Decimal(str(repair_booking_amount))
-                if booking_amount_decimal < 0:
-                    return Response({
-                        'error': 'repair_booking_amount cannot be negative',
-                        'message': 'Booking amount must be a positive number'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-            except (ValueError, TypeError, InvalidOperation):
-                return Response({
-                    'error': 'Invalid repair_booking_amount format',
-                    'message': 'Booking amount must be a valid number'
+        # 5. Inventory Pre-Check (Efficiency)
+        tracked_items = cart.items.select_related('product').filter(product__track_inventory=True)
+        for ci in tracked_items:
+            qty_needed = int(ci.quantity)
+            if qty_needed <= 0: continue
+            scanned = ci.scanned_barcodes or []
+            
+            # Check if scanned barcodes are still available (not sold)
+            available_count = Barcode.objects.filter(
+                barcode__in=scanned, product=ci.product
+            ).exclude(tag='sold').count()
+
+            if available_count < qty_needed:
+                 return Response({
+                    'error': 'Inventory Mismatch',
+                    'message': f'Product "{ci.product.name}" requires {qty_needed} scans, but only {available_count} available barcodes were found.'
                 }, status=status.HTTP_400_BAD_REQUEST)
-    elif has_repair_data:
-        # Repair data provided but store is not repair shop - ignore it (user might have switched stores)
-        # Log warning but don't require repair fields for non-repair stores
-        logger.warning(f"Repair data provided for non-repair store (cart_id={cart.id}, store_id={cart.store.id if cart.store else None}, shop_type={shop_type}). Ignoring repair data and allowing checkout.")
-        # Clear repair data so it's not used
-        repair_contact_no = ''
-        repair_model_name = ''
-        repair_booking_amount = None
-    
-    # Generate invoice number
-    invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-    while Invoice.objects.filter(invoice_number=invoice_number).exists():
+
+        # 6. Generate Invoice Number (Unique)
         invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-    
-    # Create invoice within transaction to ensure atomicity
-    with transaction.atomic():
+        while Invoice.objects.filter(invoice_number=invoice_number).exists():
+            invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+        # 7. Create Invoice
         invoice = Invoice.objects.create(
             invoice_number=invoice_number,
-            cart=cart,
-            store=cart.store,
+            cart=cart, store=cart.store,
             customer_id=customer_id,
             invoice_type=invoice_type,
             status='draft',
             created_by=request.user
         )
-        
-        # Create Repair record if it's a repair shop (regardless of invoice_type)
-        # Only create if store is actually a repair shop (don't create for retail stores even if repair data is sent)
+
+        # 8. Handle Repairs
         if is_repair_shop:
-            # Get repair-specific fields (already validated above)
-            # These are already extracted earlier in the function
-            
-            # Parse booking amount (already validated above)
-            booking_amount_decimal = None
-            if repair_booking_amount:
-                booking_amount_decimal = Decimal(str(repair_booking_amount))
-            
-            # Generate repair barcode
-            repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-            while Repair.objects.filter(barcode=repair_barcode).exists():
+            contact_no = request.data.get('repair_contact_no', '').strip()
+            model_name = request.data.get('repair_model_name', '').strip()
+            if contact_no and model_name:
                 repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-            
-            # Create Repair record (within same transaction as invoice)
-            Repair.objects.create(
-                invoice=invoice,
-                contact_no=repair_contact_no,
-                model_name=repair_model_name,
-                description=repair_description,
-                booking_amount=booking_amount_decimal,
-                status='received',
-                barcode=repair_barcode
-            )
-    
-        # Calculate totals
+                booking_amt = request.data.get('repair_booking_amount')
+                Repair.objects.create(
+                    invoice=invoice, contact_no=contact_no, model_name=model_name,
+                    description=request.data.get('repair_description', ''),
+                    booking_amount=Decimal(str(booking_amt)) if booking_amt else None,
+                    status='received', barcode=repair_barcode
+                )
+
+        # 9. Process Items
         subtotal = Decimal('0.00')
         discount_total = Decimal('0.00')
         tax_total = Decimal('0.00')
-        
-        # Create invoice items and update stock
-        for cart_item in cart.items.all():
-            # Validate quantity to prevent division errors
-            if cart_item.quantity <= Decimal('0.000'):
-                continue  # Skip items with zero or negative quantity
+        items_added = 0
+
+        for ci in cart.items.all():
+            if ci.quantity <= 0: continue
             
-            effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0.00')
-            
-            # Calculate per-unit discount and tax safely
-            per_unit_discount = Decimal('0.00')
-            per_unit_tax = Decimal('0.00')
-            if cart_item.quantity > Decimal('0.000'):
-                per_unit_discount = cart_item.discount_amount / cart_item.quantity
-                per_unit_tax = cart_item.tax_amount / cart_item.quantity
-            
-            unit_line_total = effective_price - per_unit_discount + per_unit_tax
-            
-            # Handle non-tracked products differently (no barcodes needed)
-            if not cart_item.product.track_inventory:
-                # For non-tracked products, create a single invoice item with the full quantity
-                line_total = unit_line_total * cart_item.quantity
-                
-                invoice_item = InvoiceItem.objects.create(
-                    invoice=invoice,
-                    product=cart_item.product,
-                    variant=cart_item.variant,
-                    barcode=None,  # No barcode for non-tracked products
-                    quantity=cart_item.quantity,
-                    unit_price=cart_item.unit_price,
-                    manual_unit_price=cart_item.manual_unit_price,
-                    discount_amount=cart_item.discount_amount,
-                    tax_amount=cart_item.tax_amount,
+            up = ci.manual_unit_price or ci.unit_price or Decimal('0.00')
+            pd = ci.discount_amount / ci.quantity if ci.quantity > 0 else Decimal('0.00')
+            pt = ci.tax_amount / ci.quantity if ci.quantity > 0 else Decimal('0.00')
+            line_unit_total = up - pd + pt
+
+            if not ci.product.track_inventory:
+                line_total = line_unit_total * ci.quantity
+                InvoiceItem.objects.create(
+                    invoice=invoice, product=ci.product, variant=ci.variant,
+                    quantity=ci.quantity, unit_price=ci.unit_price,
+                    manual_unit_price=ci.manual_unit_price,
+                    discount_amount=ci.discount_amount, tax_amount=ci.tax_amount,
                     line_total=line_total
                 )
-                
-                # Audit log: Invoice item created (non-tracked)
-                create_audit_log(
-                    request=request,
-                    action='invoice_create',
-                    model_name='InvoiceItem',
-                    object_id=str(invoice_item.id),
-                    object_name=f"{cart_item.product.name} (Invoice {invoice.invoice_number})",
-                    object_reference=invoice.invoice_number,
-                    barcode=None,
-                    changes={
-                        'invoice_id': invoice.id,
-                        'invoice_number': invoice.invoice_number,
-                        'product_id': cart_item.product.id,
-                        'product_name': cart_item.product.name,
-                        'product_sku': cart_item.product.sku,
-                        'quantity': str(cart_item.quantity),
-                        'unit_price': str(cart_item.unit_price),
-                        'line_total': str(line_total),
-                        'track_inventory': False,
-                    }
-                )
-                
                 subtotal += line_total
-                discount_total += invoice_item.discount_amount
-                tax_total += invoice_item.tax_amount
+                discount_total += ci.discount_amount
+                tax_total += ci.tax_amount
+                items_added += 1
+            else:
+                scanned = ci.scanned_barcodes or []
+                # ATOMIC CHECK: Lock barcodes and verify availability inside transaction
+                barcodes_qs = Barcode.objects.select_for_update().filter(
+                    barcode__in=scanned, 
+                    product=ci.product
+                ).exclude(tag='sold')[:int(ci.quantity)]
                 
-                # Stock was already decremented when item was added to cart
-                # No need to decrement again on checkout for any invoice type
-                # Stock will remain decremented (already sold/reserved)
+                barcodes_list = list(barcodes_qs)
+                if len(barcodes_list) < int(ci.quantity):
+                    raise ValueError(f"Insufficient available barcodes for {ci.product.name}. Required {int(ci.quantity)}, found {len(barcodes_list)}.")
                 
-                # For non-tracked products, we do NOT mark the barcode as 'sold'
-                # The barcode stays as 'new' and sold quantity is tracked via InvoiceItems
-                # This allows the product to remain visible and available quantity is tracked via Stock
-                
-                continue  # Skip barcode logic for non-tracked products
-            
-            # For tracked products, handle barcodes
-            # IMPORTANT: Use the exact barcodes from scanned_barcodes - these are the ones the user scanned
-            barcodes_to_assign = []
-            if cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
-                # Use all the scanned barcodes from the list - these are the exact barcodes the user scanned
-                # This ensures we use the exact barcode that was scanned, not a random one
-                for scanned_barcode_value in cart_item.scanned_barcodes:
-                    try:
-                        barcode_obj = Barcode.objects.get(barcode=scanned_barcode_value)
-                        # IMPORTANT: Use the exact barcode that was scanned
-                        # Only block if tag is 'sold' and it's currently assigned to an active invoice
-                        # 'returned' barcodes can be sold again even if they were in a previous invoice
-                        if barcode_obj.tag == 'sold':
-                            sold_item = InvoiceItem.objects.filter(
-                                barcode=barcode_obj
-                            ).exclude(
-                                invoice__status='void'
-                            ).first()
-                            if sold_item:
-                                # Skip this barcode - it's already sold and in an active invoice
-                                continue
-                        # Allow 'new', 'returned', and 'in-cart' tags - use the exact barcode that was scanned
-                        # 'in-cart' tags are expected during checkout (barcodes already in cart)
-                        # Don't check for previous invoice assignments for 'returned' tags - they can be resold
-                        if barcode_obj.tag in ['new', 'returned', 'in-cart']:
-                            barcodes_to_assign.append(barcode_obj)
-                    except Barcode.DoesNotExist:
-                        # Barcode not found - this shouldn't happen if it was scanned correctly
-                        pass
-            
-            # Use the exact barcodes from scanned_barcodes
-            quantity_needed = int(cart_item.quantity)
-            # The strict check for `len(barcodes_to_assign) < quantity_needed` and the truncation
-            # `barcodes_to_assign = barcodes_to_assign[:quantity_needed]` are now handled in the pre-transaction validation.
-            # So, at this point, `barcodes_to_assign` should contain exactly `quantity_needed` valid barcodes.
-    
-            if len(barcodes_to_assign) == 0:
-                # This case should ideally be caught by pre-transaction validation,
-                # but as a safeguard, skip if no barcodes are available.
-                continue
-            
-            # For tracked products, create one invoice item per barcode (each with quantity 1)
-            for i, barcode_obj in enumerate(barcodes_to_assign):
-                # Calculate line total for this single item
-                line_total = unit_line_total
-            
-                invoice_item = InvoiceItem.objects.create(
-                    invoice=invoice,
-                    product=cart_item.product,
-                    variant=cart_item.variant,
-                    barcode=barcode_obj,  # Assign the barcode
-                    quantity=Decimal('1.000'),  # Each invoice item is quantity 1
-                    unit_price=cart_item.unit_price,
-                    manual_unit_price=cart_item.manual_unit_price,
-                    discount_amount=per_unit_discount,  # Proportional discount (already calculated safely)
-                    tax_amount=per_unit_tax,  # Proportional tax (already calculated safely)
-                    line_total=line_total
-                )
-                
-                # Mark barcode as sold when assigned to invoice item
-                # Mark as 'sold' for all invoice types (including pending) since the item is now in an invoice
-                # Once an item is in an invoice, it should be considered sold regardless of payment status
-                barcode_obj.tag = 'sold'
-                barcode_obj.save(update_fields=['tag'])
-                
-                # Audit log: Invoice item created (tracked with barcode)
-                create_audit_log(
-                    request=request,
-                    action='invoice_create',
-                    model_name='InvoiceItem',
-                    object_id=str(invoice_item.id),
-                    object_name=f"{cart_item.product.name} (Invoice {invoice.invoice_number})",
-                    object_reference=invoice.invoice_number,
-                    barcode=barcode_obj.barcode,
-                    changes={
-                        'invoice_id': invoice.id,
-                        'invoice_number': invoice.invoice_number,
-                        'product_id': cart_item.product.id,
-                        'product_name': cart_item.product.name,
-                        'product_sku': cart_item.product.sku,
-                        'barcode': barcode_obj.barcode,
-                        'barcode_tag': barcode_obj.tag,
-                        'quantity': '1.000',
-                        'unit_price': str(cart_item.unit_price),
-                        'line_total': str(line_total),
-                        'track_inventory': True,
-                    }
-                )
-            
-                subtotal += line_total
-                discount_total += invoice_item.discount_amount
-                tax_total += invoice_item.tax_amount
-            
-            # Stock reduction logic:
-            # - For non-tracked products: Stock was already decremented when added to cart
-            # - For tracked products: Stock is now also decremented when added to cart (to prevent double-booking)
-            # So we don't need to reduce stock again at checkout for either type
-            # Stock reduction happens at cart addition time to ensure items are reserved immediately
-            
-            # Note: Stock was already reduced when items were added to cart,
-            # so we don't reduce it again here to avoid double-reduction
-            # Audit logs for stock removal are already created in cart_add operation
-        
-        # Update invoice totals
+                for b_obj in barcodes_list:
+                    InvoiceItem.objects.create(
+                        invoice=invoice, product=ci.product, variant=ci.variant,
+                        barcode=b_obj, quantity=Decimal('1.000'),
+                        unit_price=ci.unit_price, manual_unit_price=ci.manual_unit_price,
+                        discount_amount=pd, tax_amount=pt,
+                        line_total=line_unit_total
+                    )
+                    b_obj.tag = 'sold'
+                    b_obj.save(update_fields=['tag'])
+                    
+                    subtotal += line_unit_total
+                    discount_total += pd
+                    tax_total += pt
+                    items_added += 1
+
+        if items_added == 0 and not is_repair_shop:
+            transaction.set_rollback(True)
+            return Response({
+                'error': 'Empty cart',
+                'message': 'Cannot checkout: No valid items found in cart.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 10. Finalize Totals & Payments
         invoice.subtotal = subtotal
         invoice.discount_amount = discount_total
         invoice.tax_amount = tax_total
         invoice.total = subtotal - discount_total + tax_total
-        
-        # Set payment status based on invoice_type
+
         if invoice_type == 'pending':
             invoice.status = 'draft'
             invoice.due_amount = invoice.total
             invoice.paid_amount = Decimal('0.00')
         elif invoice_type == 'mixed':
-            # Validate split payments match total
-            if cash_amount + upi_amount != invoice.total:
-                invoice.delete()  # Clean up invoice if validation fails
+            if (cash_amount + upi_amount) != invoice.total:
+                transaction.set_rollback(True)
                 return Response({
-                    'error': f'Split payment amounts (₹{cash_amount + upi_amount}) do not match invoice total (₹{invoice.total})'
+                    'error': 'Payment mismatch',
+                    'message': f'Split payment total mismatch: expected {invoice.total}, got {cash_amount + upi_amount}'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
             invoice.status = 'paid'
             invoice.paid_amount = invoice.total
             invoice.due_amount = Decimal('0.00')
-            
-            # Create Payment records for split payments
             from backend.pos.models import Payment
-            Payment.objects.create(
-                invoice=invoice,
-                payment_method='cash',
-                amount=cash_amount,
-                created_by=request.user
-            )
-            Payment.objects.create(
-                invoice=invoice,
-                payment_method='upi',
-                amount=upi_amount,
-                created_by=request.user
-            )
-        else:  # cash or upi (both are paid)
+            Payment.objects.create(invoice=invoice, payment_method='cash', amount=cash_amount, created_by=request.user)
+            Payment.objects.create(invoice=invoice, payment_method='upi', amount=upi_amount, created_by=request.user)
+        else: # cash/upi
             invoice.status = 'paid'
             invoice.paid_amount = invoice.total
             invoice.due_amount = Decimal('0.00')
-            
-            # Create Payment record
             from backend.pos.models import Payment
-            Payment.objects.create(
-                invoice=invoice,
-                payment_method=invoice_type,  # 'cash' or 'upi'
-                amount=invoice.total,
-                created_by=request.user
-            )
+            Payment.objects.create(invoice=invoice, payment_method=invoice_type, amount=invoice.total, created_by=request.user)
         
         invoice.save()
-        
-        # Create ledger entry if customer exists
+
+        # 11. Ledger
         if invoice.customer and invoice_type == 'pending':
             from backend.parties.models import LedgerEntry
-            # Pending invoice: Customer owes us (DEBIT entry)
-            entry = LedgerEntry.objects.create(
-                customer=invoice.customer,
-                invoice=invoice,
-                entry_type='debit',
-                amount=invoice.total,
-                description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
-                created_by=request.user,
-                created_at=invoice.created_at or timezone.now()
+            LedgerEntry.objects.create(
+                customer=invoice.customer, invoice=invoice, entry_type='debit',
+                amount=invoice.total, description=f'Invoice {invoice.invoice_number} (PENDING)',
+                created_by=request.user
             )
-            # Update customer credit_balance (debit means customer owes more)
-            invoice.customer.credit_balance -= entry.amount
+            invoice.customer.credit_balance -= invoice.total
             invoice.customer.save()
-            
-        # Update cart status
+
+        # 12. Settle Cart
         cart.status = 'completed'
         cart.save()
-    
-    # Audit log: Cart checked out
-    items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
-    create_audit_log(
-        request=request,
-        action='cart_checkout',
-        model_name='Cart',
-        object_id=str(cart.id),
-        object_name=f"Cart #{cart.cart_number or cart.id}",
-        object_reference=f"Invoice {invoice.invoice_number}",
-        barcode=None,
-        changes={
-            'cart_id': cart.id,
-            'cart_number': cart.cart_number,
-            'invoice_id': invoice.id,
-            'invoice_number': invoice.invoice_number,
-            'invoice_type': invoice_type,
-            'items_count': invoice.items.count(),
-            'items': items_summary,
-            'total': str(invoice.total),
-            'customer': invoice.customer.name if invoice.customer else None,
-        }
-    )
-    
-    serializer = InvoiceSerializer(invoice)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        # 13. Audit Log
+        create_audit_log(
+            request=request,
+            action='cart_checkout',
+            model_name='Invoice',
+            object_id=str(invoice.id),
+            object_name=f"Invoice {invoice.invoice_number}",
+            object_reference=invoice.invoice_number,
+            changes={
+                'cart_id': cart.id,
+                'invoice_type': invoice_type,
+                'total': str(invoice.total),
+                'items_count': items_added
+            }
+        )
+
+        serializer = InvoiceSerializer(invoice)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    except ValueError as e:
+        transaction.set_rollback(True)
+        return Response({'error': 'Inventory Mismatch', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        transaction.set_rollback(True)
+        import traceback
+        return Response({
+            'error': 'Checkout Failed', 
+            'message': str(e),
+            'traceback': traceback.format_exc() if settings.DEBUG else None
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # Invoice views
