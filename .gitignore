@@ -59,6 +59,8 @@ backend/.pytype/
 backend/.meson-python.egg-info/
 backend/*/__pycache__/*
 
+*/__pycache__/*
+
 *.conf
 venv/
 venv
