@@ -636,6 +636,11 @@ export default function Purchases() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Prevent multiple submissions
+    if (createMutation.isPending || updateMutation.isPending) {
+      return;
+    }
+
     if (purchaseItems.length === 0) {
       alert('Please add at least one product to the purchase');
       return;
