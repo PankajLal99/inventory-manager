@@ -10,6 +10,7 @@ from backend.pos.models import Cart, CartItem, Invoice
 from backend.core.models import AuditLog
 from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 
 User = get_user_model()
 
@@ -862,3 +863,26 @@ class RaceConditionTests(APITestCase):
         response2 = self.client.post(url, {'invoice_type': 'cash'}, format='json')
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('already checked out', response2.data.get('error', ''))
+class WholesaleCartTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='wholesale_user', password='password')
+        self.wholesale_group, _ = Group.objects.get_or_create(name='Wholesale')
+        self.user.groups.add(self.wholesale_group)
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Wholesale Store', shop_type='retail')
+
+    def test_wholesale_cart_default_invoice_type(self):
+        """Test that carts created by wholesale users default to 'pending' invoice type"""
+        url = reverse('cart-list-create')
+        data = {'store': self.store.id}
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['invoice_type'], 'pending')
+
+    def test_wholesale_cart_explicit_override(self):
+        """Test that explicit invoice type in request is respected even for wholesale users"""
+        url = reverse('cart-list-create')
+        data = {'store': self.store.id, 'invoice_type': 'cash'}
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['invoice_type'], 'cash')

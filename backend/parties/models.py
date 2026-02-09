@@ -69,6 +69,7 @@ class LedgerEntry(models.Model):
     invoice = models.ForeignKey('pos.Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='ledger_entries')
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'), help_text='Total quantity associated with this entry (e.g. sum of invoice items)')
     description = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='ledger_entries')
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates

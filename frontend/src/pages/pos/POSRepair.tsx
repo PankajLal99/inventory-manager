@@ -26,7 +26,7 @@ import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getStockInfo } from '../../lib/utils';
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -1235,6 +1235,57 @@ export default function POS() {
 
       // Backend is already updated, localStorage will sync via useEffect hook
     },
+    onError: async (error: any) => {
+      const existingCartId = error?.response?.data?.existing_cart_id;
+      if (error?.response?.status === 400 && existingCartId && username) {
+        try {
+          const cartRes = await posApi.carts.get(existingCartId);
+          const cartData = cartRes?.data;
+          if (!cartData) return;
+
+          const tabExists = getUserTabs(username).some((t) => t.id === existingCartId);
+          if (!tabExists) {
+            const cartTab: CartTab = {
+              id: cartData.id,
+              cartNumber: cartData.cart_number || `CART-${cartData.id}`,
+              storeId: cartData.store || defaultStore?.id || 0,
+              customerId: cartData.customer || null,
+              customerName: cartData.customer_name || null,
+              invoiceType: backendToFrontendInvoiceType(cartData.invoice_type || 'cash'),
+              itemCount: cartData.items?.length || 0,
+              createdAt: cartData.created_at || new Date().toISOString(),
+              updatedAt: cartData.updated_at || new Date().toISOString(),
+            };
+            addCartTab(username, cartTab);
+          }
+          setActiveTab(username, existingCartId);
+          const tabs = getUserTabs(username);
+          tabs.sort((a, b) => {
+            const aTime = new Date(a.updatedAt || a.createdAt).getTime();
+            const bTime = new Date(b.updatedAt || b.createdAt).getTime();
+            return aTime - bTime;
+          });
+          setCartTabs(tabs);
+          setCartId(existingCartId);
+          setActiveTabId(existingCartId);
+          if (cartData.customer) {
+            setSelectedCustomer({
+              id: cartData.customer,
+              name: cartData.customer_name || '',
+              phone: cartData.customer_phone || null,
+            });
+          }
+          setCustomerSearch('');
+          await queryClient.invalidateQueries({ queryKey: ['cart', existingCartId] });
+          showToast('This customer already has an active cart. Switched to it.', 'success');
+        } catch (_e) {
+          showToast(error?.response?.data?.error || 'Failed to switch to existing cart', 'error');
+        }
+        return;
+      }
+      const errorMessage = error?.response?.data?.error || error?.response?.data?.detail || 'Failed to update cart';
+      showToast(errorMessage, 'error');
+    },
   });
 
 
@@ -2066,31 +2117,9 @@ export default function POS() {
         throw new Error(errorMsg);
       }
 
-      // Additional validation: Check if product is in stock and purchase is finalized
-      // Custom products (with "Other -" prefix) are always available - skip stock check
-      const isCustomProduct = product.name && product.name.startsWith('Other -');
-
-      if (!isCustomProduct) {
-        // For tracked products: Check if stock_quantity > 0 (stock only exists for finalized purchases)
-        // For non-tracked products: Check if stock_quantity > 0 (stock only exists for finalized purchases)
-        const trackInventory = product.track_inventory !== false; // Default to true if not specified
-        const stockQuantity = product.stock_quantity || 0;
-        const availableQuantity = product.available_quantity || 0;
-
-        // Check stock availability
-        if (trackInventory) {
-          // For tracked products, check if there are available barcodes (stock_quantity > 0)
-          // Stock quantity is only updated when purchase is finalized
-          if (stockQuantity <= 0 && availableQuantity <= 0) {
-            throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
-          }
-        } else {
-          // For non-tracked products, check stock_quantity
-          // Stock quantity is only updated when purchase is finalized
-          if (stockQuantity <= 0) {
-            throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
-          }
-        }
+      // Additional validation: Check if product is in stock (custom products exempt in getStockInfo)
+      if (getStockInfo(product).isOutOfStock) {
+        throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
       }
 
       // Do NOT auto-populate price - it must be entered manually
@@ -3018,38 +3047,15 @@ export default function POS() {
 
                           // Handle product selection (same logic as button onClick)
                           const handleProductSelect = async () => {
-                            // Check stock availability before adding
-                            // Custom products (with "Other -" prefix) are always available
-                            const isCustomProduct = product.name && product.name.startsWith('Other -');
-                            const trackInventory = product.track_inventory !== false;
-                            const stockQuantity = product.stock_quantity || 0;
-                            const availableQuantity = product.available_quantity || 0;
-
-                            // Skip stock check for custom products
-                            if (!isCustomProduct) {
-                              if (trackInventory) {
-                                if (stockQuantity <= 0 && availableQuantity <= 0) {
-                                  const errorMsg = `Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`;
-                                  setBarcodeStatus('error');
-                                  setBarcodeMessage(errorMsg);
-                                  setTimeout(() => {
-                                    setBarcodeStatus('idle');
-                                    setBarcodeMessage('');
-                                  }, 5000);
-                                  return;
-                                }
-                              } else {
-                                if (stockQuantity <= 0) {
-                                  const errorMsg = `Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`;
-                                  setBarcodeStatus('error');
-                                  setBarcodeMessage(errorMsg);
-                                  setTimeout(() => {
-                                    setBarcodeStatus('idle');
-                                    setBarcodeMessage('');
-                                  }, 5000);
-                                  return;
-                                }
-                              }
+                            if (getStockInfo(product).isOutOfStock) {
+                              const errorMsg = `Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`;
+                              setBarcodeStatus('error');
+                              setBarcodeMessage(errorMsg);
+                              setTimeout(() => {
+                                setBarcodeStatus('idle');
+                                setBarcodeMessage('');
+                              }, 5000);
+                              return;
                             }
 
                             if (searchValue && searchValue.length >= 3) {
@@ -3164,16 +3170,7 @@ export default function POS() {
                             for (let i = start + 1; i < (showCustomOption ? productList.length + 1 : productList.length); i++) {
                               if (showCustomOption && i === 0) return 0; // Custom option
                               const p = productList[showCustomOption ? i - 1 : i];
-                              // Custom products (with "Other -" prefix) are always available
-                              const isCustomProduct = p.name && p.name.startsWith('Other -');
-                              const trackInv = p.track_inventory !== false;
-                              const stockQty = p.stock_quantity || 0;
-                              const availQty = p.available_quantity || 0;
-                              const isAvailable = isCustomProduct
-                                ? true // Custom products are always available
-                                : trackInv
-                                  ? (stockQty > 0 || availQty > 0)
-                                  : (stockQty > 0);
+                              const isAvailable = !getStockInfo(p).isOutOfStock;
                               if (isAvailable) return showCustomOption ? i : i;
                             }
                             return startIndex; // Stay on current if no available products found
@@ -3211,16 +3208,7 @@ export default function POS() {
                             if (showCustomOption && i === 0) return 0; // Custom option
                             if (i < 0) return -1;
                             const p = productList[showCustomOption ? i - 1 : i];
-                            // Custom products (with "Other -" prefix) are always available
-                            const isCustomProduct = p.name && p.name.startsWith('Other -');
-                            const trackInv = p.track_inventory !== false;
-                            const stockQty = p.stock_quantity || 0;
-                            const availQty = p.available_quantity || 0;
-                            const isAvailable = isCustomProduct
-                              ? true // Custom products are always available
-                              : trackInv
-                                ? (stockQty > 0 || availQty > 0)
-                                : (stockQty > 0);
+                            const isAvailable = !getStockInfo(p).isOutOfStock;
                             if (isAvailable) return showCustomOption ? i : i;
                           }
                           return showCustomOption ? 0 : -1; // Go to custom option or -1
@@ -3486,17 +3474,7 @@ export default function POS() {
                           // Adjust index for custom option
                           const adjustedIndex = showCustomOption ? index + 1 : index;
                           const isSelected = adjustedIndex === productSearchSelectedIndex;
-                          // Check if product is available
-                          // Custom products (with "Other -" prefix) are always available
-                          const isCustomProduct = product.name && product.name.startsWith('Other -');
-                          const trackInventory = product.track_inventory !== false;
-                          const stockQuantity = product.stock_quantity || 0;
-                          const availableQuantity = product.available_quantity || 0;
-                          const isOutOfStock = isCustomProduct
-                            ? false // Custom products are always available
-                            : trackInventory
-                              ? (stockQuantity <= 0 && availableQuantity <= 0)
-                              : (stockQuantity <= 0);
+                          const isOutOfStock = getStockInfo(product).isOutOfStock;
 
                           return (
                             <button
@@ -4272,13 +4250,14 @@ export default function POS() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Phone Number
+              Phone Number <span className="text-red-500">*</span>
             </label>
             <Input
               type="tel"
-              placeholder="Enter phone number (optional)"
+              placeholder="Enter phone number"
               value={newCustomerPhone}
               onChange={(e) => setNewCustomerPhone(e.target.value)}
+              required
               onKeyPress={(e) => {
                 if (e.key === 'Enter' && newCustomerName.trim()) {
                   createCustomerMutation.mutate({
@@ -4296,12 +4275,16 @@ export default function POS() {
                   showToast('Customer name is required', 'error');
                   return;
                 }
+                if (!newCustomerPhone.trim()) {
+                  showToast('Phone number is required', 'error');
+                  return;
+                }
                 createCustomerMutation.mutate({
                   name: newCustomerName.trim(),
-                  phone: newCustomerPhone.trim() || undefined,
+                  phone: newCustomerPhone.trim(),
                 });
               }}
-              disabled={createCustomerMutation.isPending || !newCustomerName.trim()}
+              disabled={createCustomerMutation.isPending || !newCustomerName.trim() || !newCustomerPhone.trim()}
               className="flex-1"
             >
               {createCustomerMutation.isPending ? 'Creating...' : 'Create Customer'}

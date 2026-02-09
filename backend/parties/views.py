@@ -85,10 +85,12 @@ def customer_list_create(request):
     if request.method == 'GET':
         search = request.query_params.get('search', None)
         customer_group = request.query_params.get('customer_group', None)
+        exclude_group = request.query_params.get('exclude_group', None)
         
         # Try cache first
         from backend.core.model_cache import get_customer_list_cache_key, CUSTOMER_LIST_CACHE_TTL
-        cache_key = get_customer_list_cache_key(search or '', customer_group or '')
+        # Incorporate exclude_group into cache key
+        cache_key = f"{get_customer_list_cache_key(search or '', customer_group or '')}_excl_{exclude_group or ''}"
         cached_data = cache.get(cache_key)
         if cached_data:
             response = Response(cached_data)
@@ -101,6 +103,8 @@ def customer_list_create(request):
             queryset = queryset.filter(Q(name__icontains=search) | Q(phone__icontains=search))
         if customer_group:
             queryset = queryset.filter(customer_group_id=customer_group)
+        if exclude_group:
+            queryset = queryset.exclude(customer_group_id=exclude_group)
         serializer = CustomerSerializer(queryset, many=True)
         response_data = serializer.data
         

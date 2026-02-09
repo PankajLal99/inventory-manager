@@ -14,11 +14,12 @@ import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Pagination from '../../components/ui/Pagination';
-import { Plus, Edit, Trash2, FileText, UserPlus, Filter, Search, X, Printer, Loader2, RotateCcw } from 'lucide-react';
+import { Plus, Edit, Trash2, FileText, UserPlus, Filter, Search, X, Printer, Loader2, RotateCcw, Store } from 'lucide-react';
 import Badge from '../../components/ui/Badge';
 import ProductForm from '../products/ProductForm';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
 import DatePicker from '../../components/ui/DatePicker';
+import PurchaseStockModal from './PurchaseStockModal';
 
 interface PurchaseItem {
   id?: number;
@@ -78,6 +79,7 @@ export default function Purchases() {
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
   const [currentPage, setCurrentPage] = useState(1);
+  const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
 
   // Fetch products for search (must be before useEffect hooks that use products)
   const { data: productsData } = useQuery({
@@ -1035,8 +1037,6 @@ export default function Purchases() {
           return { productId, purchaseId, labelKey, data: { all_generated: false }, error: error.message };
         }
       },
-      staleTime: 2 * 60 * 1000, // 2 minutes - label status doesn't change frequently
-      gcTime: 10 * 60 * 1000, // 10 minutes cache
       retry: false,
       enabled: productId > 0,
     })),
@@ -1323,6 +1323,17 @@ export default function Purchases() {
                               <span>Edit</span>
                             </Button>
                           )}
+                          {purchase.status === 'finalized' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setStockModalPurchase(purchase)}
+                              className="gap-1.5 text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                            >
+                              <Store className="h-4 w-4" />
+                              <span>Stock</span>
+                            </Button>
+                          )}
                           {!isRetailUser && (
                             <Button
                               variant="outline"
@@ -1547,6 +1558,17 @@ export default function Purchases() {
                             title="Edit purchase"
                           >
                             <Edit className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {purchase.status === 'finalized' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setStockModalPurchase(purchase)}
+                            className="p-2 text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                            title="Distribute stock"
+                          >
+                            <Store className="h-4 w-4" />
                           </Button>
                         )}
                         {!isRetailUser && (
@@ -2287,6 +2309,19 @@ export default function Purchases() {
             queryClient.invalidateQueries({ queryKey: ['products'] });
           }}
           onProductCreated={handleProductCreated}
+        />
+      )}
+
+      {/* Stock Redistribution Modal */}
+      {stockModalPurchse && (
+        <PurchaseStockModal
+          isOpen={!!stockModalPurchse}
+          purchase={stockModalPurchse}
+          onClose={() => setStockModalPurchase(null)}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ['purchases'] });
+            setStockModalPurchase(null);
+          }}
         />
       )}
     </div>

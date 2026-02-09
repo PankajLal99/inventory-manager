@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect, useRef } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { searchApi, productsApi } from '../../lib/api';
 import {
@@ -19,7 +19,7 @@ import {
   Barcode as BarcodeIcon,
   Camera,
 } from 'lucide-react';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getStockInfo } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -49,9 +49,11 @@ export default function Search() {
   const [searchType, setSearchType] = useState(initialType);
   const [showScanner, setShowScanner] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [productLimit, setProductLimit] = useState(40);
+  const scrollYRef = useRef<number | null>(null);
 
-  const { data, isLoading, error } = useQuery<SearchResults>({
-    queryKey: ['global-search', query, searchType],
+  const { data, isLoading, error, isFetching } = useQuery<SearchResults>({
+    queryKey: ['global-search', query, searchType, productLimit],
     queryFn: async () => {
       if (!query.trim()) {
         return {
@@ -69,24 +71,40 @@ export default function Search() {
           purchases: [],
         };
       }
-      const response = await searchApi.search(query, searchType);
+      const response = await searchApi.search(query, searchType, { product_limit: productLimit });
       return response.data;
     },
     enabled: query.trim().length > 0,
     retry: false,
+    placeholderData: keepPreviousData,
   });
 
-  // Sync query with URL params
+  // Sync query with URL params and reset product limit when search changes
   useEffect(() => {
     const urlQuery = searchParams.get('q') || '';
     const urlType = searchParams.get('type') || 'product';
     if (urlQuery !== query) {
       setQuery(urlQuery);
+      setProductLimit(40);
     }
     if (urlType !== searchType) {
       setSearchType(urlType);
+      setProductLimit(40);
     }
   }, [searchParams]);
+
+  // Restore scroll position after "Load more" / "Show all" finish loading (so we restore once new data is in the DOM)
+  useEffect(() => {
+    if (scrollYRef.current === null || isFetching || !data) return;
+    const saved = scrollYRef.current;
+    scrollYRef.current = null;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo(0, saved);
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [data, isFetching]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -340,6 +358,7 @@ export default function Search() {
                 });
 
                 return (
+                  <>
                   <ResultSection
                     title="Products"
                     icon={Package}
@@ -355,11 +374,10 @@ export default function Search() {
                       if (item.brand_name) parts.push(`Brand: ${item.brand_name}`);
                       // Show Category
                       if (item.category_name) parts.push(`Category: ${item.category_name}`);
-                      // Show Available Qty
-                      if (item.available_quantity !== undefined && item.available_quantity !== null) {
-                        parts.push(`Available Qty: ${parseFloat(item.available_quantity).toFixed(0)}`);
-                      }
-                      // Show SKU removed as per user request
+                      // Show Available Qty using standardized utility
+                      const stockInfo = getStockInfo(item);
+                      parts.push(`Available: ${stockInfo.displayAvailable}${stockInfo.total > stockInfo.available ? ` / Total: ${stockInfo.displayTotal}` : ''}`);
+
                       return parts.length > 0 ? parts.join(' | ') : 'No details available';
                     }}
                     getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
@@ -370,16 +388,11 @@ export default function Search() {
                         : (item.purchase_price || null);
                       const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
 
-                      // Get quantity
-                      const quantity = item.available_quantity !== undefined && item.available_quantity !== null
-                        ? parseFloat(item.available_quantity).toFixed(0)
-                        : null;
-
-                      // Build other details (excluding quantity since it's shown separately)
-                      const details = [];
-                      if (item.brand_name) details.push(`Brand: ${item.brand_name}`);
-                      if (item.category_name) details.push(`Category: ${item.category_name}`);
-                      // SKU removed as per user request
+                      // Get quantity using standardized utility
+                      const stockInfo = getStockInfo(item);
+                      const quantity = stockInfo.displayAvailable;
+                      // Display total stock if different from available (e.g. some in cart)
+                      const showTotal = stockInfo.total > stockInfo.available;
 
                       return (
                         <div
@@ -389,54 +402,93 @@ export default function Search() {
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-2">
-                                <h3 className="font-medium text-gray-900 group-hover:text-blue-600">
-                                  {item.name}
-                                </h3>
+                              <div className="flex items-start gap-2 mb-2">
+                                <div className="flex-1 min-w-0">
+                                  <h3 className="font-medium text-gray-900 group-hover:text-blue-600 block sm:inline">
+                                    {item.name}
+                                  </h3>
+                                  {(item.brand_name || item.category_name) && (
+                                    <span className="hidden md:inline-flex items-center text-sm text-gray-500 ml-2 font-normal">
+                                      {item.brand_name && <span>{item.brand_name}</span>}
+                                      {item.brand_name && item.category_name && <span className="mx-1.5 text-gray-300">|</span>}
+                                      {item.category_name && <span>{item.category_name}</span>}
+                                    </span>
+                                  )}
+                                </div>
                                 {item.is_active ? (
-                                  <Badge variant="outline" className="text-xs">
+                                  <Badge variant="outline" className="text-xs shrink-0">
                                     Active
                                   </Badge>
                                 ) : (
-                                  <Badge variant="outline" className="text-xs">
+                                  <Badge variant="outline" className="text-xs shrink-0">
                                     Inactive
                                   </Badge>
                                 )}
                               </div>
-                              {details.length > 0 && (
-                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-600">
-                                  {details.map((detail, detailIdx) => (
-                                    <span key={detailIdx}>{detail}</span>
-                                  ))}
+
+                              {/* Desktop/Tablet Details List (Mobile hidden) */}
+                              <div className="md:hidden flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-600 mb-2">
+                                {item.brand_name && <span>{item.brand_name}</span>}
+                                {item.category_name && <span>{item.category_name}</span>}
+                              </div>
+
+                              {/* Supplier Breakdown Table */}
+                              {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
+                                <div className="mt-4 overflow-hidden border border-gray-100 rounded-md">
+                                  <table className="min-w-full divide-y divide-gray-100">
+                                    <thead className="bg-gray-50">
+                                      <tr>
+                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Supplier</th>
+                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Price</th>
+                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider">Shop</th>
+                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider">Whse</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-50">
+                                      {item.supplier_breakdown.map((s: any, sIdx: number) => (
+                                        <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px]">{s.supplier}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium">{s.price}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold">{formatNumber(s.shop_stock)}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold">{formatNumber(s.warehouse_stock)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
                                 </div>
                               )}
-                              {item.stock_bifurcation && (
-                                <div className="text-sm font-medium text-blue-600 mt-1">
-                                  Stock Breakdown: ({item.stock_bifurcation})
-                                </div>
-                              )}
-                              {item.price_bifurcation && (
-                                <div className="text-sm font-medium text-green-600 mt-0.5">
-                                  Price Breakdown: ({item.price_bifurcation})
+
+                              {/* Fallback to simple breakdown if supplier_breakdown missing */}
+                              {!item.supplier_breakdown && (item.stock_bifurcation || item.price_bifurcation) && (
+                                <div className="space-y-0.5 mt-2">
+                                  {item.stock_bifurcation && (
+                                    <div className="text-sm font-medium text-blue-600">
+                                      Stock: {item.stock_bifurcation}
+                                    </div>
+                                  )}
+                                  {item.price_bifurcation && (
+                                    <div className="text-sm font-medium text-green-600">
+                                      Price: {item.price_bifurcation}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
-                            <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                            <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
                               {price && (
                                 <div className="text-right">
-                                  <div className="text-2xl font-bold text-green-600 group-hover:text-green-700">
+                                  <div className="text-2xl font-bold text-green-600 group-hover:text-green-700 leading-none">
                                     {priceDisplay}
                                   </div>
                                 </div>
                               )}
-                              {quantity !== null && (
-                                <div className="text-right">
-                                  <div className="text-sm text-gray-500 mb-0.5">Qty</div>
-                                  <div className="text-xl font-semibold text-blue-600 group-hover:text-blue-700">
-                                    {item.stock_quantity || 0}
-                                  </div>
+                              <div className="text-right">
+                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Avail / Total</div>
+                                <div className="text-xl font-bold text-blue-600 group-hover:text-blue-700 leading-none">
+                                  {quantity}
+                                  {showTotal && <span className="text-sm text-gray-400 ml-1">/ {stockInfo.displayTotal}</span>}
                                 </div>
-                              )}
+                              </div>
                               <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
                             </div>
                           </div>
@@ -444,6 +496,45 @@ export default function Search() {
                       );
                     }}
                   />
+                  {(searchType === 'all' || searchType === 'product') &&
+                    productLimit > 0 &&
+                    productLimit < 500 &&
+                    sortedProducts.length >= productLimit && (
+                      <div className="flex flex-wrap items-center gap-2 mt-3">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            scrollYRef.current = window.scrollY;
+                            setProductLimit((prev) => Math.min(prev + 50, 500));
+                          }}
+                          disabled={isFetching}
+                        >
+                          {isFetching ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                              Loading…
+                            </>
+                          ) : (
+                            'Load 50 more'
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            scrollYRef.current = window.scrollY;
+                            setProductLimit(0);
+                          }}
+                          disabled={isFetching}
+                        >
+                          Show all
+                        </Button>
+                      </div>
+                    )}
+                </>
                 );
               })()}
 
@@ -521,18 +612,53 @@ export default function Search() {
                                   </Badge>
                                 )}
                               </div>
-                              <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-600">
-                                {item.product && (
-                                  <span>Product ID: {item.product}</span>
-                                )}
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-4 text-sm mt-3">
                                 {item.invoice_number && (
-                                  <span className="font-semibold text-blue-600">
-                                    Invoice: {item.invoice_number}
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-400 font-medium">Invoice:</span>
+                                    <span className="font-semibold text-blue-600">{item.invoice_number}</span>
+                                  </div>
+                                )}
+                                {item.customer_name && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-400 font-medium whitespace-nowrap">Customer:</span>
+                                    <span className="text-gray-700 font-medium truncate">{item.customer_name}</span>
+                                  </div>
+                                )}
+                                {item.invoice_type_display && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-400 font-medium whitespace-nowrap">Payment:</span>
+                                    <span className="text-gray-700 font-medium">{item.invoice_type_display}</span>
+                                  </div>
+                                )}
+                                {item.product && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-400 font-medium whitespace-nowrap">Product ID:</span>
+                                    <span className="text-gray-600">{item.product}</span>
+                                  </div>
                                 )}
                               </div>
                             </div>
-                            <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors flex-shrink-0 ml-2" />
+                            <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
+                              {item.sold_price !== null && item.sold_price !== undefined && (
+                                <div className="text-right">
+                                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Sold Price</div>
+                                  <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
+                                    ₹{formatNumber(item.sold_price)}
+                                  </div>
+                                </div>
+                              )}
+                              {item.sold_quantity !== null && item.sold_quantity !== undefined && (
+                                <div className="text-right">
+                                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Qty</div>
+                                  <div className="text-lg font-bold text-gray-700 leading-none">
+                                    {formatNumber(item.sold_quantity)}
+                                  </div>
+                                </div>
+                              )}
+                              <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
+                            </div>
                           </div>
                         </div>
                       );

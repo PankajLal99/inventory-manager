@@ -3,6 +3,7 @@ import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } f
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { getStockInfo } from '../../lib/utils';
 import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, ChevronDown, ChevronRight, Coins, FileText, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Table from '../../components/ui/Table';
@@ -214,8 +215,6 @@ export default function Products() {
           return { productId, data: { all_generated: false }, error: error.message };
         }
       },
-      staleTime: 2 * 60 * 1000, // 2 minutes - label status doesn't change frequently
-      gcTime: 10 * 60 * 1000, // 10 minutes cache
       retry: false,
       enabled: productId > 0,
     })),
@@ -290,70 +289,41 @@ export default function Products() {
   } : null;
 
 
-  // Combine products with their stock information
-  // All products track inventory now - always show stock
-  // Backend provides stock_quantity and available_quantity directly (barcode-based)
-  const productsWithStock = allProducts.map((product: any) => {
-    // Ensure low_stock_threshold is a number
-    const threshold = typeof product.low_stock_threshold === 'number'
-      ? product.low_stock_threshold
-      : (product.low_stock_threshold ? parseInt(product.low_stock_threshold) : 0);
+  // Enhance products with calculated stock fields
+  const productsWithStock = useMemo(() => {
+    return allProducts.map((product: any) => {
+      const stock = getStockInfo(product);
 
-    // Use backend's available_quantity (barcode-based) as source of truth
-    // Backend calculates: barcodes with 'new'/'returned' tags minus barcodes in active carts
-    const availableQty = (product.available_quantity !== undefined && product.available_quantity !== null)
-      ? (typeof product.available_quantity === 'number' ? product.available_quantity : parseFloat(product.available_quantity) || 0)
-      : 0;
-
-    // Use barcode-based stock_quantity from backend as source of truth
-    // Backend calculates: count of barcodes with 'new' and 'returned' tags
-    const barcodeBasedStock = (product.stock_quantity !== undefined && product.stock_quantity !== null)
-      ? (typeof product.stock_quantity === 'number' ? product.stock_quantity : parseFloat(product.stock_quantity) || 0)
-      : 0;
-
-    // Check low stock if threshold is set and stock is above 0 but below or equal to threshold
-    const isLowStock = threshold > 0 && barcodeBasedStock > 0 && barcodeBasedStock <= threshold;
-    // Mark as out of stock if total is 0
-    const isOutOfStock = barcodeBasedStock === 0;
-
-    return {
-      ...product,
-      stock_quantity: barcodeBasedStock,
-      reserved_quantity: 0, // Reserved quantity is handled by backend via available_quantity
-      available_quantity: availableQty,
-      isLowStock,
-      isOutOfStock,
-    };
-  });
+      return {
+        ...product,
+        stock_quantity: stock.total,
+        available_quantity: stock.available,
+        isLowStock: stock.isLowStock,
+        isOutOfStock: stock.isOutOfStock,
+      };
+    });
+  }, [allProducts]);
 
   // With new model: ONE Product per name, barcodes are individual items
   // No need to group - show Products directly with their barcodes
   const productsList = useMemo(() => {
     return productsWithStock.map((product: any) => {
-      // Use stock_quantity (annotated count from backend) for filtered views like Sold, Defective, In Cart
-      // Use available_quantity (available for sale) for the default "New" view
+      const stock = getStockInfo(product);
+
+      // Use total stock for filtered views (Sold, Defective, etc.)
+      // Use available stock for the default "New" view
       const barcodeCount = tagFilter && tagFilter !== 'new'
-        ? (product.stock_quantity || 0)
-        : (product.available_quantity !== undefined && product.available_quantity !== null
-          ? (typeof product.available_quantity === 'number' ? product.available_quantity : parseFloat(product.available_quantity) || 0)
-          : 0);
-
-      // Stock is at product level
-      const lowStockThreshold = product.low_stock_threshold || 0;
-
-      // Check stock status based on available quantity (barcodeCount)
-      // This ensures status reflects real-time availability
-      const isLowStock = lowStockThreshold > 0 && barcodeCount > 0 && barcodeCount <= lowStockThreshold;
-      const isOutOfStock = barcodeCount === 0;
+        ? stock.total
+        : stock.available;
 
       return {
         ...product,
-        barcodeCount, // Available quantity - reflects real-time availability
-        isLowStock,
-        isOutOfStock,
+        barcodeCount, // Quantity to display in the badge
+        isLowStock: stock.isLowStock,
+        isOutOfStock: stock.isOutOfStock,
       };
     });
-  }, [productsWithStock]);
+  }, [productsWithStock, tagFilter]);
 
   const stores = (() => {
     if (!storesResponse) return [];

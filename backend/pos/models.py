@@ -256,6 +256,7 @@ class CreditNote(models.Model):
     credit_note_number = models.CharField(max_length=100, unique=True)
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='credit_notes')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='credit_notes')
     created_at = models.DateTimeField(auto_now_add=True)

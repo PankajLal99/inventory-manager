@@ -1,0 +1,2 @@
+# This file ensures the logs directory exists in the repo.
+# Log files (django.log, errors.log, app.log) are gitignored and written at runtime in dev and production.

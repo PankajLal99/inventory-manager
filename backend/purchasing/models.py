@@ -56,6 +56,9 @@ class PurchaseItem(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     selling_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Selling price for this item. If null/0, falls back to purchase price for validation.')
+    # Quantity distribution
+    shop_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    warehouse_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     is_printed = models.BooleanField(default=False)
     printed_at = models.DateTimeField(null=True, blank=True)
 

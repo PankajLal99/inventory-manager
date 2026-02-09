@@ -13,17 +13,18 @@ import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Badge from '../../components/ui/Badge';
-import { 
-  Users, 
-  Eye, 
-  Copy, 
-  ExternalLink, 
-  Phone, 
-  Mail, 
+import {
+  Users,
+  Eye,
+  Copy,
+  ExternalLink,
+  Phone,
+  Mail,
   MapPin,
   ShoppingBag,
   CheckCircle,
   Plus,
+  Pencil,
 } from 'lucide-react';
 
 export default function Vendors() {
@@ -31,6 +32,8 @@ export default function Vendors() {
   const queryClient = useQueryClient();
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingSupplierId, setEditingSupplierId] = useState<number | null>(null);
   const [supplierFormData, setSupplierFormData] = useState({
     name: '',
     code: '',
@@ -104,6 +107,42 @@ export default function Vendors() {
     window.open(getVendorLink(supplierId), '_blank');
   };
 
+  const handleEdit = (supplier: any) => {
+    setSupplierFormData({
+      name: supplier.name || '',
+      code: supplier.code || '',
+      phone: supplier.phone || '',
+      email: supplier.email || '',
+      address: supplier.address || '',
+      contact_person: supplier.contact_person || '',
+    });
+    setIsEditing(true);
+    setEditingSupplierId(supplier.id);
+    setShowSupplierForm(true);
+  };
+
+  const updateSupplierMutation = useMutation({
+    mutationFn: (data: any) => purchasingApi.suppliers.update(editingSupplierId!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      setShowSupplierForm(false);
+      setIsEditing(false);
+      setEditingSupplierId(null);
+      setSupplierFormData({
+        name: '',
+        code: '',
+        phone: '',
+        email: '',
+        address: '',
+        contact_person: '',
+      });
+      toast('Vendor updated successfully', 'success');
+    },
+    onError: (error: any) => {
+      toast(error?.response?.data?.message || error?.response?.data?.error || 'Failed to update vendor', 'error');
+    },
+  });
+
   const createSupplierMutation = useMutation({
     mutationFn: (data: any) => purchasingApi.suppliers.create(data),
     onSuccess: () => {
@@ -118,9 +157,10 @@ export default function Vendors() {
         address: '',
         contact_person: '',
       });
+      toast('Vendor created successfully', 'success');
     },
     onError: (error: any) => {
-      toast(error?.response?.data?.message || error?.response?.data?.error || 'Failed to create supplier', 'error');
+      toast(error?.response?.data?.message || error?.response?.data?.error || 'Failed to create vendor', 'error');
     },
   });
 
@@ -145,7 +185,19 @@ export default function Vendors() {
         icon={Users}
         action={
           <Button
-            onClick={() => setShowSupplierForm(true)}
+            onClick={() => {
+              setIsEditing(false);
+              setEditingSupplierId(null);
+              setSupplierFormData({
+                name: '',
+                code: '',
+                phone: '',
+                email: '',
+                address: '',
+                contact_person: '',
+              });
+              setShowSupplierForm(true);
+            }}
             className="gap-2"
           >
             <Plus className="h-5 w-5" />
@@ -228,6 +280,16 @@ export default function Vendors() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2 justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEdit(supplier)}
+                          className="gap-1.5"
+                          title="Edit vendor details"
+                        >
+                          <Pencil className="h-4 w-4" />
+                          <span>Edit</span>
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
@@ -396,6 +458,8 @@ export default function Vendors() {
           isOpen={showSupplierForm}
           onClose={() => {
             setShowSupplierForm(false);
+            setIsEditing(false);
+            setEditingSupplierId(null);
             setSupplierFormData({
               name: '',
               code: '',
@@ -405,7 +469,7 @@ export default function Vendors() {
               contact_person: '',
             });
           }}
-          title="Create New Supplier"
+          title={isEditing ? "Edit Vendor" : "Add New Vendor"}
           size="md"
         >
           <form
@@ -413,32 +477,37 @@ export default function Vendors() {
               e.preventDefault();
               // Validate required fields
               if (!supplierFormData.name.trim()) {
-                toast('Supplier Name is required', 'error');
+                toast('Vendor Name is required', 'error');
                 return;
               }
-              if (!supplierFormData.code.trim()) {
-                toast('Supplier Code is required', 'error');
-                return;
+              if (isEditing) {
+                updateSupplierMutation.mutate(supplierFormData);
+              } else {
+                if (!supplierFormData.code.trim()) {
+                  toast('Vendor Code is required', 'error');
+                  return;
+                }
+                createSupplierMutation.mutate(supplierFormData);
               }
-              createSupplierMutation.mutate(supplierFormData);
             }}
             className="space-y-4"
           >
             <Input
-              label="Supplier Name *"
+              label="Vendor Name / Shop Name *"
               value={supplierFormData.name}
               onChange={(e) => setSupplierFormData({ ...supplierFormData, name: e.target.value })}
               required
             />
             <Input
-              label="Supplier Code *"
+              label="Vendor Code"
               value={supplierFormData.code}
               onChange={(e) => setSupplierFormData({ ...supplierFormData, code: e.target.value })}
-              placeholder="Enter supplier code"
-              required
+              placeholder={isEditing ? "Cannot change code" : "Enter vendor code"}
+              required={!isEditing}
+              disabled={isEditing}
             />
             <Input
-              label="Phone"
+              label="Mobile / Phone"
               type="tel"
               value={supplierFormData.phone}
               onChange={(e) => setSupplierFormData({ ...supplierFormData, phone: e.target.value })}
@@ -473,6 +542,8 @@ export default function Vendors() {
                 variant="outline"
                 onClick={() => {
                   setShowSupplierForm(false);
+                  setIsEditing(false);
+                  setEditingSupplierId(null);
                   setSupplierFormData({
                     name: '',
                     code: '',
@@ -487,9 +558,9 @@ export default function Vendors() {
               </Button>
               <Button
                 type="submit"
-                disabled={createSupplierMutation.isPending || !supplierFormData.name.trim() || !supplierFormData.code.trim()}
+                disabled={createSupplierMutation.isPending || updateSupplierMutation.isPending || !supplierFormData.name.trim()}
               >
-                {createSupplierMutation.isPending ? 'Creating...' : 'Create Supplier'}
+                {createSupplierMutation.isPending || updateSupplierMutation.isPending ? 'Saving...' : (isEditing ? 'Update Vendor' : 'Create Vendor')}
               </Button>
             </div>
           </form>

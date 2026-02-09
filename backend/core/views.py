@@ -295,10 +295,20 @@ def audit_log_detail(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def global_search(request):
-    """Global search across all entities"""
-    query = request.query_params.get('q', '').strip().upper()
+    """Global search across all entities. Optional product_limit (default 40); 0 or 'all' = cap at 500."""
+    query = request.query_params.get('q', '').strip()
     search_type = request.query_params.get('type', 'all').lower()
-    
+    raw_limit = request.query_params.get('product_limit') or request.query_params.get('limit')
+    if raw_limit in (None, ''):
+        product_limit = 40
+    elif str(raw_limit).lower() in ('0', 'all'):
+        product_limit = 500
+    else:
+        try:
+            product_limit = min(500, max(1, int(raw_limit)))
+        except (TypeError, ValueError):
+            product_limit = 40
+
     if not query:
         return Response({
             'products': [],
@@ -352,15 +362,21 @@ def global_search(request):
         else:
             results[key] = serializer_class(queryset, many=many).data
 
-    # Search Products
+    # Search Products: use name_only so "FOLDER BKC" matches "FOLDER BKC 8A" (all words in name)
     if search_type in ['all', 'product']:
         from backend.catalog.filters import ProductFilter
-        products_queryset = Product.objects.all().prefetch_related(
-            'barcodes', 
-            'barcodes__purchase__supplier'
+        products_queryset = Product.objects.filter(is_active=True).prefetch_related(
+            'barcodes',
+            'barcodes__purchase__supplier',
+            'stock_entries',
+            'stock_entries__store',
+            'stock_entries__warehouse'
         )
-        products_filter = ProductFilter({'search': query}, queryset=products_queryset)
-        products = products_filter.qs[:20]
+        products_filter = ProductFilter(
+            {'search': query, 'search_mode': 'name_only'},
+            queryset=products_queryset
+        )
+        products = products_filter.qs.order_by('name')[:product_limit]
         add_to_results('products', products, ProductListSerializer, context={'request': request})
     
     # Search Product Variants (SKU Search)

@@ -656,3 +656,101 @@ def vendor_purchase_cancel(request, pk):
             pass
     
     return Response(PurchaseSerializer(purchase).data, status=status.HTTP_200_OK)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def purchase_redistribute_stock(request, pk):
+    """Redistribute stock for a finalized purchase between shop and warehouse"""
+    from django.db import transaction
+    from backend.inventory.models import Stock
+    from backend.locations.models import Store, Warehouse
+    from decimal import Decimal
+    
+    purchase = get_object_or_404(Purchase.objects.prefetch_related('items', 'items__product'), pk=pk)
+    
+    if purchase.status != 'finalized':
+        return Response(
+            {'error': 'Can only redistribute stock for finalized purchases.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Expecting items distribution data
+    # format: [{"item_id": 1, "shop_quantity": 20, "warehouse_quantity": 10}, ...]
+    items_distribution = request.data.get('items', [])
+    
+    if not items_distribution:
+        return Response({'error': 'Distribution data is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    with transaction.atomic():
+        for dist in items_distribution:
+            item_id = dist.get('item_id')
+            new_shop_qty = Decimal(str(dist.get('shop_quantity', 0)))
+            new_wh_qty = Decimal(str(dist.get('warehouse_quantity', 0)))
+            
+            item = get_object_or_404(PurchaseItem, pk=item_id, purchase=purchase)
+            
+            # Validation: Sum must equal total quantity and quantities cannot be negative
+            if new_shop_qty < 0 or new_wh_qty < 0:
+                return Response(
+                    {'error': f"Quantities for {item.product.name} cannot be negative."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
+            if new_shop_qty + new_wh_qty != item.quantity:
+                return Response(
+                    {'error': f"Distribution sum ({new_shop_qty + new_wh_qty}) for {item.product.name} must equal total quantity ({item.quantity})."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Calculate differences to update Stock model
+            shop_diff = new_shop_qty - item.shop_quantity
+            wh_diff = new_wh_qty - item.warehouse_quantity
+            
+            # Update PurchaseItem
+            item.shop_quantity = new_shop_qty
+            item.warehouse_quantity = new_wh_qty
+            item.save()
+            
+            # Update Shop Stock
+            if shop_diff != 0:
+                shop = Store.objects.filter(shop_type='retail', is_active=True).first()
+                if not shop: shop = Store.objects.filter(is_active=True).exclude(shop_type='warehouse').first()
+                if shop:
+                    stock, _ = Stock.objects.get_or_create(
+                        product=item.product, variant=item.variant, store=shop, warehouse=None,
+                        defaults={'quantity': Decimal('0.000')}
+                    )
+                    stock.quantity += shop_diff
+                    stock.save()
+            
+            # Update Warehouse Stock
+            if wh_diff != 0:
+                warehouse = Warehouse.objects.filter(is_active=True).first()
+                if not warehouse:
+                    warehouse_store = Store.objects.filter(shop_type='warehouse', is_active=True).first()
+                    if warehouse_store:
+                        stock, _ = Stock.objects.get_or_create(
+                            product=item.product, variant=item.variant, store=warehouse_store, warehouse=None,
+                            defaults={'quantity': Decimal('0.000')}
+                        )
+                        stock.quantity += wh_diff
+                        stock.save()
+                else:
+                    stock, _ = Stock.objects.get_or_create(
+                        product=item.product, variant=item.variant, store=None, warehouse=warehouse,
+                        defaults={'quantity': Decimal('0.000')}
+                    )
+                    stock.quantity += wh_diff
+                    stock.save()
+            
+        # Create audit log for redistribution
+        create_audit_log(
+            request=request,
+            action='redistribute_stock',
+            model_name='Purchase',
+            object_id=str(purchase.id),
+            object_name=f"Purchase {purchase.purchase_number}",
+            object_reference=purchase.purchase_number,
+            changes={'items': items_distribution}
+        )
+        
+    return Response(PurchaseSerializer(purchase).data)

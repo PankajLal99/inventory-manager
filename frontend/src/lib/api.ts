@@ -326,6 +326,7 @@ export const purchasingApi = {
     update: (id: number, data: any) => api.patch(`/purchases/${id}/`, data),
     delete: (id: number) => api.delete(`/purchases/${id}/`),
     finalize: (id: number, data?: any) => api.post(`/purchases/${id}/finalize/`, data || {}),
+    redistributeStock: (id: number, items: any[]) => api.post(`/purchases/${id}/redistribute-stock/`, { items }),
     items: {
       list: (purchaseId: number) => api.get(`/purchases/${purchaseId}/items/`),
       create: (purchaseId: number, data: any) => api.post(`/purchases/${purchaseId}/items/`, data),
@@ -387,6 +388,7 @@ export const reportsApi = {
 
 // Global Search API
 export const searchApi = {
-  search: (query: string, type: string = 'all') => api.get('/search/', { params: { q: query, type } }),
+  search: (query: string, type: string = 'all', params?: { product_limit?: number }) =>
+    api.get('/search/', { params: { q: query, type, ...params } }),
 };
 
