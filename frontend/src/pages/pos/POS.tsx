@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getStockInfo } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   loadUserCarts,
@@ -511,10 +511,30 @@ export default function POS() {
     retry: false,
   });
 
-  const { data: customersResponse } = useQuery({
-    queryKey: ['customers', customerSearch.trim()],
+  // Fetch customer groups to find 'REPAIR' group
+  const { data: customerGroups } = useQuery({
+    queryKey: ['customer-groups'],
     queryFn: async () => {
-      const response = await customersApi.list({ search: customerSearch.trim() });
+      const response = await customersApi.groups.list();
+      return response.data;
+    },
+  });
+
+  const repairGroupId = useMemo(() => {
+    if (!customerGroups) return null;
+    const groups = customerGroups.results || customerGroups.data || customerGroups;
+    const repairGroup = Array.isArray(groups) ? groups.find((g: any) => g.name === 'REPAIR') : null;
+    return repairGroup?.id;
+  }, [customerGroups]);
+
+  const { data: customersResponse } = useQuery({
+    queryKey: ['customers', customerSearch.trim(), repairGroupId],
+    queryFn: async () => {
+      const params: any = { search: customerSearch.trim() };
+      if (repairGroupId) {
+        params.exclude_group = repairGroupId;
+      }
+      const response = await customersApi.list(params);
       return response.data;
     },
     enabled: customerSearch.trim().length > 0,
@@ -1079,23 +1099,24 @@ export default function POS() {
         setIsSearchTyped(false);
         setBarcodeStatus('success');
         setBarcodeMessage('Quantity updated');
+        // Immediately refocus after clearing input
+        if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
+          // Double-check focus
+          const activeElement = document.activeElement;
+          const isPriceFocused = activeElement && (
+            activeElement.classList.contains('price-input') ||
+            activeElement.closest('.price-input') !== null ||
+            (activeElement.tagName === 'INPUT' && (activeElement as HTMLInputElement).type === 'number')
+          );
+
+          if (!isPriceFocused) {
+            barcodeInputRef.current.focus();
+          }
+        }
+
         setTimeout(() => {
           setBarcodeStatus('idle');
           setBarcodeMessage('');
-          // Only refocus if user is not editing a price or typing in price input
-          if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
-            // Check if any focusable element is currently focused
-            const activeElement = document.activeElement;
-            const isAnyInputFocused = activeElement && (
-              activeElement.tagName === 'INPUT' ||
-              activeElement.tagName === 'TEXTAREA' ||
-              (activeElement as HTMLElement).isContentEditable
-            );
-
-            if (!isAnyInputFocused) {
-              barcodeInputRef.current.focus();
-            }
-          }
         }, 1500);
       } else {
         setBarcodeInput('');
@@ -1112,7 +1133,8 @@ export default function POS() {
             const isAnyInputFocused = activeElement && (
               activeElement.tagName === 'INPUT' ||
               activeElement.tagName === 'TEXTAREA' ||
-              (activeElement as HTMLElement).isContentEditable
+              (activeElement as HTMLElement).isContentEditable ||
+              activeElement.classList.contains('price-input')
             );
 
             if (!isAnyInputFocused) {
@@ -1128,23 +1150,18 @@ export default function POS() {
       setBarcodeMessage(errorMessage);
       // Show error longer for sold items
       const timeoutDuration = errorMessage.includes('already been sold') || errorMessage.includes('not available') ? 5000 : 2000;
+      // Immediately refocus after error (unless typing elsewhere)
+      if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
+        const activeElement = document.activeElement;
+        const isPriceFocused = activeElement && activeElement.classList.contains('price-input');
+        if (!isPriceFocused) {
+          barcodeInputRef.current.focus();
+        }
+      }
+
       setTimeout(() => {
         setBarcodeStatus('idle');
         setBarcodeMessage('');
-        // Only refocus if user is not editing a price or typing in price input
-        if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
-          // Check if any focusable element is currently focused
-          const activeElement = document.activeElement;
-          const isAnyInputFocused = activeElement && (
-            activeElement.tagName === 'INPUT' ||
-            activeElement.tagName === 'TEXTAREA' ||
-            (activeElement as HTMLElement).isContentEditable
-          );
-
-          if (!isAnyInputFocused) {
-            barcodeInputRef.current.focus();
-          }
-        }
       }, timeoutDuration);
     },
   });
@@ -1162,9 +1179,11 @@ export default function POS() {
 
       // Clear price error and editing state if update was successful (backend validated and accepted the price)
       if (variables.data.manual_unit_price !== undefined) {
-        const newErrors = { ...priceErrors };
-        delete newErrors[variables.itemId];
-        setPriceErrors(newErrors);
+        setPriceErrors((prev) => {
+          const newErrors = { ...prev };
+          delete newErrors[variables.itemId];
+          return newErrors;
+        });
 
         // Clear editing state after successful save
         setEditingManualPrice((prev) => {
@@ -1199,10 +1218,10 @@ export default function POS() {
 
         if (isPriceValidationError) {
           const purchasePrice = errorData.purchase_price ? parseFloat(errorData.purchase_price || '0') : 0;
-          setPriceErrors({
-            ...priceErrors,
+          setPriceErrors((prev) => ({
+            ...prev,
             [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${formatNumber(purchasePrice)})`
-          });
+          }));
           // Keep editing state so user can see the error and fix it
           // Don't clear editingManualPrice - let user see what they entered
           return; // Don't show toast for price validation errors, they're shown in-place
@@ -1647,6 +1666,11 @@ export default function POS() {
       return;
     }
 
+    if (!selectedCustomer?.id) {
+      alert('Please select a customer. Customer name is mandatory to create an invoice.');
+      return;
+    }
+
     // Check if current store is a Repair shop (lowercase as per backend)
     const isRepairShop = defaultStore?.shop_type === 'repair';
 
@@ -1914,6 +1938,11 @@ export default function POS() {
       return;
     }
 
+    if (!selectedCustomer?.id) {
+      alert('Please select a customer. Customer name is mandatory to create an invoice.');
+      return;
+    }
+
     // Validate split payments for mixed type
     if (invoiceType === 'mixed') {
       const total = calculateTotal();
@@ -2042,31 +2071,10 @@ export default function POS() {
         throw new Error(errorMsg);
       }
 
-      // Additional validation: Check if product is in stock and purchase is finalized
-      // Custom products (with "Other -" prefix) are always available - skip stock check
-      const isCustomProduct = product.name && product.name.startsWith('Other -');
-
-      if (!isCustomProduct) {
-        // For tracked products: Check if stock_quantity > 0 (stock only exists for finalized purchases)
-        // For non-tracked products: Check if stock_quantity > 0 (stock only exists for finalized purchases)
-        const trackInventory = product.track_inventory !== false; // Default to true if not specified
-        const stockQuantity = product.stock_quantity || 0;
-        const availableQuantity = product.available_quantity || 0;
-
-        // Check stock availability
-        if (trackInventory) {
-          // For tracked products, check if there are available barcodes (stock_quantity > 0)
-          // Stock quantity is only updated when purchase is finalized
-          if (stockQuantity <= 0 && availableQuantity <= 0) {
-            throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
-          }
-        } else {
-          // For non-tracked products, check stock_quantity
-          // Stock quantity is only updated when purchase is finalized
-          if (stockQuantity <= 0) {
-            throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
-          }
-        }
+      // Additional validation: Check if product is in stock (custom products exempt in getStockInfo)
+      const stockInfo = getStockInfo(product);
+      if (stockInfo.isOutOfStock) {
+        throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
       }
 
       // Do NOT auto-populate price - it must be entered manually
@@ -2128,9 +2136,10 @@ export default function POS() {
         if (barcodeInputRef.current && !isEditingPrice && !isTypingInPriceInput.current) {
           // Check if any price input is currently focused
           const activeElement = document.activeElement;
-          const isPriceInputFocused = activeElement && activeElement.tagName === 'INPUT' &&
-            (activeElement as HTMLInputElement).type === 'number' &&
-            activeElement.closest('[class*="price"]') !== null;
+          const isPriceInputFocused = activeElement && (
+            activeElement.classList.contains('price-input') ||
+            (activeElement.tagName === 'INPUT' && (activeElement as HTMLInputElement).type === 'number' && activeElement.closest('[class*="price"]') !== null)
+          );
 
           if (!isPriceInputFocused) {
             barcodeInputRef.current.focus();
@@ -2587,6 +2596,11 @@ export default function POS() {
                         <User className="h-4 w-4 flex-shrink-0" />
                         <span className="text-sm font-semibold truncate max-w-[140px] sm:max-w-[220px]">
                           {selectedCustomer.name || `Customer #${selectedCustomer.id}`}
+                          {selectedCustomer.customer_group_name && (
+                            <span className="ml-1.5 px-1.5 py-0.5 bg-blue-200 text-blue-900 text-[10px] uppercase tracking-wider rounded font-bold">
+                              {selectedCustomer.customer_group_name}
+                            </span>
+                          )}
                         </span>
                         <button
                           onClick={(e) => {
@@ -2660,7 +2674,7 @@ export default function POS() {
                       }
                     }}
                     className={`w-full h-11 text-sm font-medium border-2 rounded-lg transition-all ${selectedCustomer && !customerSearch
-                      ? 'pl-[155px] sm:pl-[240px]'
+                      ? 'pl-[185px] sm:pl-[270px]'
                       : ''
                       }`}
                   />
@@ -2689,7 +2703,14 @@ export default function POS() {
                                   }`}
                                 onMouseEnter={() => setCustomerSearchSelectedIndex(index)}
                               >
-                                <div className="font-medium">{customer.name}</div>
+                                <div className="flex items-center justify-between">
+                                  <div className="font-medium">{customer.name}</div>
+                                  {customer.customer_group_name && (
+                                    <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] uppercase tracking-wider rounded font-bold">
+                                      {customer.customer_group_name}
+                                    </span>
+                                  )}
+                                </div>
                                 {customer.phone && (
                                   <div className="text-sm text-gray-500">{customer.phone}</div>
                                 )}
@@ -3006,38 +3027,15 @@ export default function POS() {
 
                           // Handle product selection (same logic as button onClick)
                           const handleProductSelect = async () => {
-                            // Check stock availability before adding
-                            // Custom products (with "Other -" prefix) are always available
-                            const isCustomProduct = product.name && product.name.startsWith('Other -');
-                            const trackInventory = product.track_inventory !== false;
-                            const stockQuantity = product.stock_quantity || 0;
-                            const availableQuantity = product.available_quantity || 0;
-
-                            // Skip stock check for custom products
-                            if (!isCustomProduct) {
-                              if (trackInventory) {
-                                if (stockQuantity <= 0 && availableQuantity <= 0) {
-                                  const errorMsg = `Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`;
-                                  setBarcodeStatus('error');
-                                  setBarcodeMessage(errorMsg);
-                                  setTimeout(() => {
-                                    setBarcodeStatus('idle');
-                                    setBarcodeMessage('');
-                                  }, 5000);
-                                  return;
-                                }
-                              } else {
-                                if (stockQuantity <= 0) {
-                                  const errorMsg = `Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`;
-                                  setBarcodeStatus('error');
-                                  setBarcodeMessage(errorMsg);
-                                  setTimeout(() => {
-                                    setBarcodeStatus('idle');
-                                    setBarcodeMessage('');
-                                  }, 5000);
-                                  return;
-                                }
-                              }
+                            if (getStockInfo(product).isOutOfStock) {
+                              const errorMsg = `Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`;
+                              setBarcodeStatus('error');
+                              setBarcodeMessage(errorMsg);
+                              setTimeout(() => {
+                                setBarcodeStatus('idle');
+                                setBarcodeMessage('');
+                              }, 5000);
+                              return;
                             }
 
                             if (searchValue && searchValue.length >= 3) {
@@ -3125,6 +3123,14 @@ export default function POS() {
                         setBarcodeInput('');
                         setIsSearchTyped(false);
                         setProductSearchSelectedIndex(-1);
+                        // Immediately refocus after adding to queue - only if not editing a price
+                        if (!isEditingPrice && !isTypingInPriceInput.current) {
+                          const activeElement = document.activeElement;
+                          const isPriceFocused = activeElement && activeElement.classList.contains('price-input');
+                          if (!isPriceFocused) {
+                            barcodeInputRef.current?.focus();
+                          }
+                        }
                       }
                     } else if (e.key === 'ArrowDown') {
                       e.preventDefault();
@@ -3152,16 +3158,7 @@ export default function POS() {
                             for (let i = start + 1; i < (showCustomOption ? productList.length + 1 : productList.length); i++) {
                               if (showCustomOption && i === 0) return 0; // Custom option
                               const p = productList[showCustomOption ? i - 1 : i];
-                              // Custom products (with "Other -" prefix) are always available
-                              const isCustomProduct = p.name && p.name.startsWith('Other -');
-                              const trackInv = p.track_inventory !== false;
-                              const stockQty = p.stock_quantity || 0;
-                              const availQty = p.available_quantity || 0;
-                              const isAvailable = isCustomProduct
-                                ? true // Custom products are always available
-                                : trackInv
-                                  ? (stockQty > 0 || availQty > 0)
-                                  : (stockQty > 0);
+                              const isAvailable = !getStockInfo(p).isOutOfStock;
                               if (isAvailable) return showCustomOption ? i : i;
                             }
                             return startIndex; // Stay on current if no available products found
@@ -3199,16 +3196,7 @@ export default function POS() {
                             if (showCustomOption && i === 0) return 0; // Custom option
                             if (i < 0) return -1;
                             const p = productList[showCustomOption ? i - 1 : i];
-                            // Custom products (with "Other -" prefix) are always available
-                            const isCustomProduct = p.name && p.name.startsWith('Other -');
-                            const trackInv = p.track_inventory !== false;
-                            const stockQty = p.stock_quantity || 0;
-                            const availQty = p.available_quantity || 0;
-                            const isAvailable = isCustomProduct
-                              ? true // Custom products are always available
-                              : trackInv
-                                ? (stockQty > 0 || availQty > 0)
-                                : (stockQty > 0);
+                            const isAvailable = !getStockInfo(p).isOutOfStock;
                             if (isAvailable) return showCustomOption ? i : i;
                           }
                           return showCustomOption ? 0 : -1; // Go to custom option or -1
@@ -3474,17 +3462,7 @@ export default function POS() {
                           // Adjust index for custom option
                           const adjustedIndex = showCustomOption ? index + 1 : index;
                           const isSelected = adjustedIndex === productSearchSelectedIndex;
-                          // Check if product is available
-                          // Custom products (with "Other -" prefix) are always available
-                          const isCustomProduct = product.name && product.name.startsWith('Other -');
-                          const trackInventory = product.track_inventory !== false;
-                          const stockQuantity = product.stock_quantity || 0;
-                          const availableQuantity = product.available_quantity || 0;
-                          const isOutOfStock = isCustomProduct
-                            ? false // Custom products are always available
-                            : trackInventory
-                              ? (stockQuantity <= 0 && availableQuantity <= 0)
-                              : (stockQuantity <= 0);
+                          const isOutOfStock = getStockInfo(product).isOutOfStock;
 
                           return (
                             <button
@@ -3845,7 +3823,7 @@ export default function POS() {
                                   isTypingInPriceInput.current = true;
 
                                   const value = e.target.value;
-                                  setEditingManualPrice({ ...editingManualPrice, [item.id]: value });
+                                  setEditingManualPrice((prev) => ({ ...prev, [item.id]: value }));
 
                                   // Validate selling price or purchase price for Cash/UPI/Mixed invoices only (if can_go_below_purchase_price is false)
                                   if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed')) {
@@ -3867,46 +3845,61 @@ export default function POS() {
                                         if (minPrice > 0 && price < minPrice) {
                                           // Price is below minimum - show error
                                           const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
-                                          setPriceErrors({
-                                            ...priceErrors,
+                                          setPriceErrors((prev) => ({
+                                            ...prev,
                                             [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
-                                          });
+                                          }));
                                         } else if (minPrice === 0) {
                                           // Purchase price not available - clear error but backend will validate
                                           // Don't show error here as it might be cached data, backend will handle it
-                                          const newErrors = { ...priceErrors };
-                                          delete newErrors[item.id];
-                                          setPriceErrors(newErrors);
+                                          setPriceErrors((prev) => {
+                                            const newErrors = { ...prev };
+                                            delete newErrors[item.id];
+                                            return newErrors;
+                                          });
                                         } else {
                                           // Price is valid - clear any errors
-                                          const newErrors = { ...priceErrors };
-                                          delete newErrors[item.id];
-                                          setPriceErrors(newErrors);
+                                          setPriceErrors((prev) => {
+                                            const newErrors = { ...prev };
+                                            delete newErrors[item.id];
+                                            return newErrors;
+                                          });
                                         }
                                       } else {
                                         // canGoBelow is true - clear errors
-                                        const newErrors = { ...priceErrors };
-                                        delete newErrors[item.id];
-                                        setPriceErrors(newErrors);
+                                        setPriceErrors((prev) => {
+                                          const newErrors = { ...prev };
+                                          delete newErrors[item.id];
+                                          return newErrors;
+                                        });
                                       }
                                     } else {
                                       // Invalid price or 0 - clear errors
-                                      const newErrors = { ...priceErrors };
-                                      delete newErrors[item.id];
-                                      setPriceErrors(newErrors);
+                                      setPriceErrors((prev) => {
+                                        const newErrors = { ...prev };
+                                        delete newErrors[item.id];
+                                        return newErrors;
+                                      });
                                     }
                                   } else {
                                     // Clear errors for pending invoices or empty value
-                                    const newErrors = { ...priceErrors };
-                                    delete newErrors[item.id];
-                                    setPriceErrors(newErrors);
+                                    setPriceErrors((prev) => {
+                                      const newErrors = { ...prev };
+                                      delete newErrors[item.id];
+                                      return newErrors;
+                                    });
                                   }
                                 }}
                                 onBlur={() => {
                                   // Reset typing flag after a short delay to allow state updates
+                                  // BUT check if focus moved to another price input
                                   setTimeout(() => {
-                                    isTypingInPriceInput.current = false;
-                                  }, 100);
+                                    const activeElement = document.activeElement;
+                                    const isPriceInputStillFocused = activeElement && activeElement.classList.contains('price-input');
+                                    if (!isPriceInputStillFocused) {
+                                      isTypingInPriceInput.current = false;
+                                    }
+                                  }, 150);
 
                                   const value = editingManualPrice[item.id];
                                   if (value !== undefined) {
@@ -3916,9 +3909,11 @@ export default function POS() {
                                       // Also check if there's already a price error set
                                       if (priceErrors[item.id]) {
                                         // Don't save if there's a validation error - clear editing state to revert
-                                        const newEditingPrices = { ...editingManualPrice };
-                                        delete newEditingPrices[item.id];
-                                        setEditingManualPrice(newEditingPrices);
+                                        setEditingManualPrice((prev) => {
+                                          const newEditingPrices = { ...prev };
+                                          delete newEditingPrices[item.id];
+                                          return newEditingPrices;
+                                        });
                                         return;
                                       }
 
@@ -3938,14 +3933,16 @@ export default function POS() {
                                           if (minPrice > 0 && price < minPrice) {
                                             // Price is below minimum - show error and don't save
                                             const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
-                                            setPriceErrors({
-                                              ...priceErrors,
+                                            setPriceErrors((prev) => ({
+                                              ...prev,
                                               [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
-                                            });
+                                            }));
                                             // Don't save if validation fails - clear editing state to revert to saved value
-                                            const newEditingPrices = { ...editingManualPrice };
-                                            delete newEditingPrices[item.id];
-                                            setEditingManualPrice(newEditingPrices);
+                                            setEditingManualPrice((prev) => {
+                                              const newEditingPrices = { ...prev };
+                                              delete newEditingPrices[item.id];
+                                              return newEditingPrices;
+                                            });
                                             return;
                                           }
                                           // If minPrice is 0, we can't validate on frontend, but backend will catch it
@@ -3967,9 +3964,11 @@ export default function POS() {
                                         data: { manual_unit_price: null },
                                       });
                                       // Clear editing state
-                                      const newEditingPrices = { ...editingManualPrice };
-                                      delete newEditingPrices[item.id];
-                                      setEditingManualPrice(newEditingPrices);
+                                      setEditingManualPrice((prev) => {
+                                        const newEditingPrices = { ...prev };
+                                        delete newEditingPrices[item.id];
+                                        return newEditingPrices;
+                                      });
                                     }
                                   }
                                 }}
@@ -3988,7 +3987,7 @@ export default function POS() {
                                   // Mark that user is typing in price input
                                   isTypingInPriceInput.current = true;
                                 }}
-                                className={`w-full pl-6 pr-2 py-1.5 text-xs font-semibold border rounded-md transition-all ${priceErrors[item.id]
+                                className={`w-full pl-6 pr-2 py-1.5 text-xs font-semibold border rounded-md transition-all price-input ${priceErrors[item.id]
                                   ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200 bg-red-50'
                                   : 'border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white'
                                   }`}
@@ -4169,19 +4168,22 @@ export default function POS() {
                 onClick={handleCheckout}
                 disabled={
                   checkoutMutation.isPending ||
+                  !selectedCustomer?.id ||
                   !cart?.data?.items ||
                   cart.data.items.length === 0 ||
                   (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
                   (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
                 }
                 title={
-                  invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
-                    ? 'Please enter both cash and UPI amounts'
-                    : invoiceType !== 'pending' && !allItemsHavePrices()
-                      ? 'Please enter prices for all items'
-                      : hasPriceErrors()
-                        ? 'Please fix price validation errors'
-                        : undefined
+                  !selectedCustomer?.id
+                    ? 'Please select a customer (mandatory)'
+                    : invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
+                      ? 'Please enter both cash and UPI amounts'
+                      : invoiceType !== 'pending' && !allItemsHavePrices()
+                        ? 'Please enter prices for all items'
+                        : hasPriceErrors()
+                          ? 'Please fix price validation errors'
+                          : undefined
                 }
               >
                 {checkoutMutation.isPending ? 'Processing...' : 'Complete Order (F8)'}
@@ -4193,19 +4195,22 @@ export default function POS() {
                 onClick={handleCheckoutAndPrintThermal}
                 disabled={
                   checkoutAndPrintThermalMutation.isPending ||
+                  !selectedCustomer?.id ||
                   !cart?.data?.items ||
                   cart.data.items.length === 0 ||
                   (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
                   (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
                 }
                 title={
-                  invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
-                    ? 'Please enter both cash and UPI amounts'
-                    : invoiceType !== 'pending' && !allItemsHavePrices()
-                      ? 'Please enter prices for all items'
-                      : hasPriceErrors()
-                        ? 'Please fix price validation errors'
-                        : undefined
+                  !selectedCustomer?.id
+                    ? 'Please select a customer (mandatory)'
+                    : invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
+                      ? 'Please enter both cash and UPI amounts'
+                      : invoiceType !== 'pending' && !allItemsHavePrices()
+                        ? 'Please enter prices for all items'
+                        : hasPriceErrors()
+                          ? 'Please fix price validation errors'
+                          : undefined
                 }
               >
                 {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}

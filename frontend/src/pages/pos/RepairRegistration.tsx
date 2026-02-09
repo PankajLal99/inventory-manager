@@ -166,16 +166,16 @@ export default function RepairRegistration() {
 
     const registerMutation = useMutation({
         mutationFn: async (data: any) => {
-            // 1. Create a temporary cart for this store
-            const cartResp = await posApi.carts.create({ store: currentStore.id });
-            const cartId = cartResp.data.id;
-
-            // 2. Set customer
+            // 1. Create a cart with the store and selected customer
+            const cartPayload: any = { store: currentStore.id };
             if (selectedCustomer) {
-                await posApi.carts.update(cartId, { customer: selectedCustomer.id });
+                cartPayload.customer = selectedCustomer.id;
             }
 
-            // 3. Checkout with repair info
+            const cartResp = await posApi.carts.create(cartPayload);
+            const cartId = cartResp.data.id;
+
+            // 2. Checkout with repair info
             const checkoutResp = await posApi.carts.checkout(cartId, {
                 invoice_type: 'pending',
                 repair_contact_no: data.contact_no,

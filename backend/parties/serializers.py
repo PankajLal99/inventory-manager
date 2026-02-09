@@ -36,7 +36,7 @@ class LedgerEntrySerializer(serializers.ModelSerializer):
         model = LedgerEntry
         fields = [
             'id', 'customer', 'customer_name', 'customer_group_name', 'invoice', 'invoice_number',
-            'entry_type', 'amount', 'description', 'created_by', 'created_by_username', 'created_at'
+            'entry_type', 'amount', 'quantity', 'description', 'created_by', 'created_by_username', 'created_at'
         ]
 
 

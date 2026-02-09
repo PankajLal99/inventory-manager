@@ -26,7 +26,7 @@ import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
 import CreditNotes from './pages/credit-notes/CreditNotes';
-import CreditNoteDetails from './pages/credit-notes/CreditNoteDetails';
+import CreditNoteShowcase from './pages/credit-notes/CreditNoteShowcase';
 import Repairs from './pages/repair/Repairs';
 import Ledger from './pages/ledger/Ledger';
 import LedgerDetail from './pages/ledger/LedgerDetail';
@@ -47,42 +47,20 @@ const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       retry: 1,
-      // Default cache settings: 5 minutes stale time, 30 minutes garbage collection
-      staleTime: 5 * 60 * 1000, // 5 minutes
-      gcTime: 30 * 60 * 1000, // 30 minutes (formerly cacheTime)
+      // No caching: Always fetch fresh data on navigation
+      staleTime: 0,
+      gcTime: 0,
     },
   },
 });
 
 // Helper to get cache settings for specific query types
-export const getCacheConfig = (queryType: 'products' | 'customers' | 'barcodes' | 'purchases' | 'dashboard' | 'default') => {
-  const configs = {
-    products: {
-      staleTime: 2 * 60 * 1000, // 2 minutes - products change frequently
-      gcTime: 15 * 60 * 1000, // 15 minutes
-    },
-    customers: {
-      staleTime: 5 * 60 * 1000, // 5 minutes - customers change less frequently
-      gcTime: 30 * 60 * 1000, // 30 minutes
-    },
-    barcodes: {
-      staleTime: 1 * 60 * 1000, // 1 minute - barcodes change very frequently
-      gcTime: 10 * 60 * 1000, // 10 minutes
-    },
-    purchases: {
-      staleTime: 3 * 60 * 1000, // 3 minutes - purchases change moderately
-      gcTime: 20 * 60 * 1000, // 20 minutes
-    },
-    dashboard: {
-      staleTime: 1 * 60 * 1000, // 1 minute - dashboard KPIs change frequently with new transactions
-      gcTime: 10 * 60 * 1000, // 10 minutes
-    },
-    default: {
-      staleTime: 5 * 60 * 1000,
-      gcTime: 30 * 60 * 1000,
-    },
+export const getCacheConfig = () => {
+  // All caching disabled per request: Always return zero stale and GC time
+  return {
+    staleTime: 0,
+    gcTime: 0,
   };
-  return configs[queryType] || configs.default;
 };
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -128,7 +106,7 @@ function App() {
                 <Route path="invoices/:id" element={<InvoiceDetail />} />
                 <Route path="invoices/:id/edit" element={<InvoiceEdit />} />
                 <Route path="credit-notes" element={<CreditNotes />} />
-                <Route path="credit-notes/:id" element={<CreditNoteDetails />} />
+                <Route path="credit-notes/:id" element={<CreditNoteShowcase />} />
                 <Route path="history" element={<History />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="replacement" element={<Replacement />} />

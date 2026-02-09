@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework import serializers
 from .models import Category, Brand, TaxRate, Product, ProductVariant, Barcode, ProductComponent, DefectiveProductMoveOut, DefectiveProductItem
 
@@ -33,11 +34,43 @@ class BarcodeSerializer(serializers.ModelSerializer):
     purchase_date = serializers.SerializerMethodField()
     invoice_number = serializers.SerializerMethodField()
     invoice_id = serializers.SerializerMethodField()
+    customer_name = serializers.SerializerMethodField()
+    invoice_type_display = serializers.SerializerMethodField()
+    sold_price = serializers.SerializerMethodField()
+    sold_quantity = serializers.SerializerMethodField()
     
     class Meta:
         model = Barcode
-        fields = ['id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 'tag', 'tag_display', 'purchase_price', 'supplier_name', 'purchase_date', 'invoice_number', 'invoice_id', 'created_at']
+        fields = [
+            'id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 
+            'tag', 'tag_display', 'purchase_price', 'supplier_name', 'purchase_date', 
+            'invoice_number', 'invoice_id', 'customer_name', 'invoice_type_display',
+            'sold_price', 'sold_quantity', 'created_at'
+        ]
     
+    def _get_active_invoice_item(self, obj):
+        """Helper to get the active (non-void) invoice item for this barcode"""
+        if hasattr(obj, '_active_invoice_item'):
+            return obj._active_invoice_item
+            
+        # Check prefetched invoice_items first
+        if hasattr(obj, 'invoice_items'):
+            for invoice_item in obj.invoice_items.all():
+                if invoice_item.invoice and invoice_item.invoice.status != 'void':
+                    obj._active_invoice_item = invoice_item
+                    return invoice_item
+        
+        # Fallback to query
+        from backend.pos.models import InvoiceItem
+        invoice_item = InvoiceItem.objects.filter(
+            barcode=obj
+        ).exclude(
+            invoice__status='void'
+        ).select_related('invoice', 'invoice__customer').first()
+        
+        obj._active_invoice_item = invoice_item
+        return invoice_item
+
     def get_purchase_price(self, obj):
         """Get purchase price for this specific barcode"""
         return float(obj.get_purchase_price())
@@ -56,41 +89,41 @@ class BarcodeSerializer(serializers.ModelSerializer):
     
     def get_invoice_number(self, obj):
         """Get invoice number if barcode is sold"""
-        # Check prefetched invoice_items first
-        if hasattr(obj, 'invoice_items'):
-            for invoice_item in obj.invoice_items.all():
-                if invoice_item.invoice and invoice_item.invoice.status != 'void':
-                    return invoice_item.invoice.invoice_number
-        
-        # Fallback to query if not prefetched
-        from backend.pos.models import InvoiceItem
-        invoice_item = InvoiceItem.objects.filter(
-            barcode=obj
-        ).exclude(
-            invoice__status='void'
-        ).select_related('invoice').only('invoice__invoice_number').first()
-        if invoice_item:
-            return invoice_item.invoice.invoice_number
-        return None
+        item = self._get_active_invoice_item(obj)
+        return item.invoice.invoice_number if item and item.invoice else None
     
     def get_invoice_id(self, obj):
         """Get invoice ID if barcode is sold"""
-        # Check prefetched invoice_items first
-        if hasattr(obj, 'invoice_items'):
-            for invoice_item in obj.invoice_items.all():
-                if invoice_item.invoice and invoice_item.invoice.status != 'void':
-                    return invoice_item.invoice.id
-        
-        # Fallback to query if not prefetched
-        from backend.pos.models import InvoiceItem
-        invoice_item = InvoiceItem.objects.filter(
-            barcode=obj
-        ).exclude(
-            invoice__status='void'
-        ).select_related('invoice').only('invoice__id').first()
-        if invoice_item:
-            return invoice_item.invoice.id
+        item = self._get_active_invoice_item(obj)
+        return item.invoice.id if item and item.invoice else None
+
+    def get_customer_name(self, obj):
+        """Get customer name if sold"""
+        item = self._get_active_invoice_item(obj)
+        if item and item.invoice and item.invoice.customer:
+            return item.invoice.customer.name
+        return "Walk-in Customer" if item and item.invoice else None
+
+    def get_invoice_type_display(self, obj):
+        """Get human-readable invoice type"""
+        item = self._get_active_invoice_item(obj)
+        if item and item.invoice:
+            return item.invoice.get_invoice_type_display()
         return None
+
+    def get_sold_price(self, obj):
+        """Get the price it was sold at"""
+        item = self._get_active_invoice_item(obj)
+        if item:
+            # line_total is (unit_price - discount + tax) * quantity
+            # For barcodes, quantity is usually 1.000, but we should be safe
+            return float(item.line_total / item.quantity) if item.quantity > 0 else 0
+        return None
+
+    def get_sold_quantity(self, obj):
+        """Get the quantity sold (usually 1 for barcodes)"""
+        item = self._get_active_invoice_item(obj)
+        return float(item.quantity) if item else None
 
 
 class ProductComponentSerializer(serializers.ModelSerializer):
@@ -147,7 +180,6 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_barcodes(self, obj):
         # Only return barcodes that are not sold and not in active carts
         from backend.pos.models import CartItem
-        from decimal import Decimal
         
         # For non-tracked inventory products, we need special handling
         if not obj.track_inventory:
@@ -290,6 +322,9 @@ class ProductListSerializer(serializers.ModelSerializer):
     stock_quantity = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
     sold_quantity = serializers.SerializerMethodField()
+    supplier_breakdown = serializers.SerializerMethodField()
+    shop_stock = serializers.SerializerMethodField()
+    warehouse_stock = serializers.SerializerMethodField()
     stock_bifurcation = serializers.SerializerMethodField()
     price_bifurcation = serializers.SerializerMethodField()
     purchase_price = serializers.SerializerMethodField()
@@ -385,6 +420,23 @@ class ProductListSerializer(serializers.ModelSerializer):
         
         return BarcodeSerializer(filtered_barcodes, many=True).data
 
+    def get_shop_stock(self, obj):
+        """Calculate total quantity in retail shops"""
+        # Prefetched stock_entries
+        total = Decimal('0.000')
+        for entry in obj.stock_entries.all():
+            if entry.store and entry.store.shop_type != 'warehouse':
+                total += entry.quantity
+        return float(total)
+
+    def get_warehouse_stock(self, obj):
+        """Calculate total quantity in warehouses"""
+        total = Decimal('0.000')
+        for entry in obj.stock_entries.all():
+            if entry.warehouse or (entry.store and entry.store.shop_type == 'warehouse'):
+                total += entry.quantity
+        return float(total)
+
     def get_stock_quantity(self, obj):
         """Calculate total stock quantity from barcodes - SUPREME SOURCE OF TRUTH
         Total Stock = All Barcodes count of product (regardless of tag)
@@ -461,7 +513,6 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_sold_quantity(self, obj):
         """Calculate sold quantity from InvoiceItems for completed invoices"""
         from backend.pos.models import InvoiceItem
-        from decimal import Decimal
         
         # For non-tracked inventory products, sum quantities from InvoiceItems
         if not obj.track_inventory:
@@ -482,17 +533,17 @@ class ProductListSerializer(serializers.ModelSerializer):
         return sold_barcodes.count()
 
     def get_purchase_price(self, obj):
-        """Get purchase price from product's first barcode"""
-        product_barcode = obj.barcodes.first()
+        """Get purchase price from product's primary barcode or first barcode"""
+        product_barcode = obj.barcodes.filter(is_primary=True).first() or obj.barcodes.first()
         if product_barcode:
             purchase_price = product_barcode.get_purchase_price()
             return float(purchase_price) if purchase_price else None
         return None
 
     def get_selling_price(self, obj):
-        """Get selling price from product's first barcode.
+        """Get selling price from product's primary barcode or first barcode.
         Returns None if selling_price is 0 or null, indicating fallback to purchase price."""
-        product_barcode = obj.barcodes.first()
+        product_barcode = obj.barcodes.filter(is_primary=True).first() or obj.barcodes.first()
         if product_barcode:
             selling_price = product_barcode.get_selling_price()
             return float(selling_price) if selling_price else None
@@ -570,9 +621,73 @@ class ProductListSerializer(serializers.ModelSerializer):
             
         return ", ".join(parts)
 
+    def get_supplier_breakdown(self, obj):
+        """
+        Calculate detailed breakdown by supplier
+        Returns a list of dicts: [
+            {
+                'supplier': 'Supplier Name',
+                'price': '₹100/₹120',
+                'count': 10,
+                'shop_stock': 5,      # Estimated or product total
+                'warehouse_stock': 5  # Estimated or product total
+            }, ...
+        ]
+        """
+        # Group data by supplier
+        breakdown_map = {}
+        
+        # Use prefetched barcodes (fast path)
+        all_barcodes = obj.barcodes.all()
+        for barcode in all_barcodes:
+            if barcode.tag != 'sold':
+                supplier_name = "Unknown"
+                if barcode.purchase and barcode.purchase.supplier:
+                    supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
+                
+                if supplier_name not in breakdown_map:
+                    breakdown_map[supplier_name] = {
+                        'supplier': supplier_name,
+                        'prices': set(),
+                        'count': 0
+                    }
+                
+                # Get price
+                price = barcode.get_selling_price() or barcode.get_purchase_price() or 0
+                breakdown_map[supplier_name]['prices'].add(float(price))
+                breakdown_map[supplier_name]['count'] += 1
+        
+        # Convert map to list and add stock info
+        # We'll use the product's total shop/warehouse stock for now as we don't track it per supplier
+        # But we'll scale it by the supplier's share of available barcodes if multiple suppliers exist
+        # to provide a meaningful (though estimated) breakdown.
+        total_available = sum(d['count'] for d in breakdown_map.values())
+        shop_total = self.get_shop_stock(obj)
+        wh_total = self.get_warehouse_stock(obj)
+        
+        breakdown = []
+        for supplier, data in breakdown_map.items():
+            prices = sorted(list(data['prices']))
+            price_str = "/".join([f"₹{p:g}" for p in prices])
+            
+            # Simple proportional estimation for location stock
+            # (If 100% of barcodes are from this supplier, they get 100% of the stock)
+            share = data['count'] / total_available if total_available > 0 else 0
+            
+            breakdown.append({
+                'supplier': supplier,
+                'price': price_str,
+                'count': data['count'],
+                'shop_stock': round(shop_total * share, 1) if total_available > 0 else 0,
+                'warehouse_stock': round(wh_total * share, 1) if total_available > 0 else 0
+            })
+            
+        # Sort by count descending
+        return sorted(breakdown, key=lambda x: x['count'], reverse=True)
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation', 'price_bifurcation']
+        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'shop_stock', 'warehouse_stock', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown']
 
 
 class DefectiveProductItemSerializer(serializers.ModelSerializer):

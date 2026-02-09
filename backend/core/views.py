@@ -296,7 +296,7 @@ def audit_log_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def global_search(request):
     """Global search across all entities"""
-    query = request.query_params.get('q', '').strip().upper()
+    query = request.query_params.get('q', '').strip()
     search_type = request.query_params.get('type', 'all').lower()
     
     if not query:
@@ -357,7 +357,10 @@ def global_search(request):
         from backend.catalog.filters import ProductFilter
         products_queryset = Product.objects.all().prefetch_related(
             'barcodes', 
-            'barcodes__purchase__supplier'
+            'barcodes__purchase__supplier',
+            'stock_entries',
+            'stock_entries__store',
+            'stock_entries__warehouse'
         )
         products_filter = ProductFilter({'search': query}, queryset=products_queryset)
         products = products_filter.qs[:20]
