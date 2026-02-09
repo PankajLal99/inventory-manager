@@ -5,7 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import F, Q, Sum
+from django.conf import settings
 from decimal import Decimal, InvalidOperation
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair
@@ -30,7 +31,7 @@ def repair_invoices_list(request):
     queryset = Invoice.objects.filter(
         store__in=repair_stores,
         repair__isnull=False  # Only invoices with Repair records
-    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'payments').order_by('-created_at')
+    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'payments').order_by('-repair__created_at')
     
     # Filter by repair status if provided
     repair_status = request.query_params.get('repair_status', None)
@@ -442,7 +443,29 @@ def cart_list_create(request):
         serializer = CartSerializer(carts, many=True)
         return Response(serializer.data)
     else:  # POST
-        serializer = CartSerializer(data=request.data)
+        customer_id = request.data.get('customer')
+        if customer_id:
+            # Check if active cart already exists for this customer
+            existing_cart = Cart.objects.filter(
+                customer_id=customer_id,
+                status='active',
+                created_by=request.user
+            ).exclude(cart_number__startswith='EDIT-').first()
+            
+            if existing_cart:
+                # Return existing cart instead of creating new one
+                return Response(CartSerializer(existing_cart).data, status=status.HTTP_200_OK)
+
+        # Prepare data for serializer
+        data = request.data.copy()
+        
+        # Default invoice_type to 'pending' for Wholesale users if not provided
+        if 'invoice_type' not in data:
+            is_wholesale = request.user.groups.filter(name__in=['Wholesale', 'WholesaleAdmin']).exists()
+            if is_wholesale:
+                data['invoice_type'] = 'pending'
+        
+        serializer = CartSerializer(data=data)
         if serializer.is_valid():
             # Auto-generate cart_number if not provided
             validated_data = serializer.validated_data.copy()
@@ -551,6 +574,22 @@ def cart_detail(request, pk):
                 {'error': 'Permission denied', 'detail': 'You can only update your own carts'},
                 status=status.HTTP_403_FORBIDDEN
             )
+        # When assigning a customer, ensure they don't already have another active cart (one cart per customer)
+        new_customer_id = request.data.get('customer')
+        if new_customer_id is not None:
+            existing_cart = Cart.objects.filter(
+                customer_id=new_customer_id,
+                status='active',
+                created_by=request.user
+            ).exclude(pk=cart.pk).exclude(cart_number__startswith='EDIT-').first()
+            if existing_cart:
+                return Response(
+                    {
+                        'error': 'This customer already has an active cart. Switch to it to continue.',
+                        'existing_cart_id': existing_cart.id,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         serializer = CartSerializer(cart, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -1769,6 +1808,19 @@ def cart_item_remove_sku(request, pk, item_id):
     cart_item.scanned_barcodes.remove(barcode_to_remove)
     cart_item.quantity = Decimal(len(cart_item.scanned_barcodes))
     
+    # Update stock quantity when tracked item barcode is removed
+    if cart.store:
+        stock, created = Stock.objects.get_or_create(
+            product=cart_item.product,
+            variant=cart_item.variant,
+            store=cart.store,
+            defaults={'quantity': Decimal('0.000')}
+        )
+        # Use F() to ensure atomic increment - stock is returned to inventory
+        Stock.objects.filter(id=stock.id).update(
+            quantity=F('quantity') + Decimal('1.000')
+        )
+
     # If quantity becomes 0, delete the cart item
     if cart_item.quantity == 0:
         cart_item.delete()
@@ -1915,12 +1967,39 @@ def cart_checkout(request, pk):
             if contact_no and model_name:
                 repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
                 booking_amt = request.data.get('repair_booking_amount')
+                booking_amt_decimal = Decimal(str(booking_amt)) if booking_amt else Decimal('0.00')
                 Repair.objects.create(
                     invoice=invoice, contact_no=contact_no, model_name=model_name,
                     description=request.data.get('repair_description', ''),
-                    booking_amount=Decimal(str(booking_amt)) if booking_amt else None,
+                    booking_amount=booking_amt_decimal if booking_amt_decimal > 0 else None,
                     status='received', barcode=repair_barcode
                 )
+                
+                # If booking amount provided, create initial payment
+                if booking_amt_decimal > 0:
+                    from backend.pos.models import Payment
+                    payment = Payment.objects.create(
+                        invoice=invoice,
+                        payment_method=invoice_type if invoice_type in ['cash', 'upi'] else 'cash',
+                        amount=booking_amt_decimal,
+                        notes='Booking amount for repair',
+                        created_by=request.user
+                    )
+                    
+                    # Create ledger credit entry if customer exists
+                    if invoice.customer:
+                        from backend.parties.models import LedgerEntry
+                        LedgerEntry.objects.create(
+                            customer=invoice.customer,
+                            invoice=invoice,
+                            entry_type='credit',
+                            amount=booking_amt_decimal,
+                            description=f'Booking payment for Repair {repair_barcode}',
+                            created_by=request.user,
+                            created_at=timezone.now()
+                        )
+                        invoice.customer.credit_balance += booking_amt_decimal
+                        invoice.customer.save()
 
         # 9. Process Items
         subtotal = Decimal('0.00')
@@ -1992,8 +2071,9 @@ def cart_checkout(request, pk):
 
         if invoice_type == 'pending':
             invoice.status = 'draft'
-            invoice.due_amount = invoice.total
-            invoice.paid_amount = Decimal('0.00')
+            # Calculate paid_amount based on actual payments (e.g. repair booking)
+            invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+            invoice.due_amount = invoice.total - invoice.paid_amount
         elif invoice_type == 'mixed':
             if (cash_amount + upi_amount) != invoice.total:
                 transaction.set_rollback(True)
@@ -2019,9 +2099,12 @@ def cart_checkout(request, pk):
         # 11. Ledger
         if invoice.customer and invoice_type == 'pending':
             from backend.parties.models import LedgerEntry
+            # Calculate total quantity for ledger
+            total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
             LedgerEntry.objects.create(
                 customer=invoice.customer, invoice=invoice, entry_type='debit',
-                amount=invoice.total, description=f'Invoice {invoice.invoice_number} (PENDING)',
+                amount=invoice.total, quantity=total_qty,
+                description=f'Invoice {invoice.invoice_number} (PENDING)',
                 created_by=request.user
             )
             invoice.customer.credit_balance -= invoice.total
@@ -2231,8 +2314,9 @@ def invoice_detail(request, pk):
             # If invoice_type changed to 'pending', reset status and payment fields
             if invoice_type_changed and invoice.invoice_type == 'pending':
                 invoice.status = 'draft'
-                invoice.paid_amount = Decimal('0.00')
-                invoice.due_amount = Decimal('0.00')
+                # Calculate paid_amount based on actual payments
+                invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+                invoice.due_amount = invoice.total - invoice.paid_amount
                 invoice.save()
             
             if invoice_type_changed or not update_fields.issubset(allowed_fields_for_all):
@@ -2676,22 +2760,12 @@ def invoice_checkout(request, pk):
     # For non-tracked products: Stock was already decremented when item was added to cart/invoice
     # For tracked products: Stock needs to be decremented per barcode
     # Also mark barcodes as sold (for tracked products only)
+    # Update stock for all items (ONLY for tracked items if they weren't already marked as sold)
+    # Actually, stock for BOTH tracked and non-tracked items should be deducted when added to cart.
+    # So we should NOT deduct stock again here in invoice_checkout.
+    # The only thing we need to do is ensure the Barcode tag is set to 'sold'.
     if new_invoice_type in ['cash', 'upi', 'mixed']:
         for item in invoice.items.all():
-            if invoice.store:
-                if item.product.track_inventory:
-                    # For tracked products, stock needs to be decremented per barcode (quantity 1 per barcode)
-                    stock, created = Stock.objects.get_or_create(
-                        product=item.product,
-                        variant=item.variant,
-                        store=invoice.store,
-                        defaults={'quantity': Decimal('0.000')}
-                    )
-                    stock.quantity = max(Decimal('0.000'), stock.quantity - item.quantity)
-                    stock.save()
-                # For non-tracked products, stock was already decremented when item was added to cart/invoice
-                # No need to decrement again here
-            
             # Mark barcode as sold when checking out as sale/credit invoice
             if item.barcode:
                 # For tracked products: mark the item's barcode as 'sold'
@@ -2713,11 +2787,10 @@ def invoice_checkout(request, pk):
     
     if new_invoice_type == 'pending':
         # For pending: Just save prices, keep as draft, don't checkout
-        # Don't update invoice_type (keep it as pending)
-        # Don't update stock or mark barcodes as sold (already handled above - skipped for pending)
         invoice.status = 'draft'
-        invoice.paid_amount = Decimal('0.00')
-        invoice.due_amount = invoice.total
+        # Calculate paid_amount based on actual payments (e.g. repair booking)
+        invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        invoice.due_amount = invoice.total - invoice.paid_amount
         invoice.save()
     elif new_invoice_type == 'mixed':
         # Validate split payments match total
@@ -2727,12 +2800,16 @@ def invoice_checkout(request, pk):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Actually checkout - update invoice type, mark as paid, update stock
-        # Stock and barcodes already updated above
         invoice.invoice_type = new_invoice_type
         invoice.status = 'paid'
         invoice.paid_amount = invoice.total
         invoice.due_amount = Decimal('0.00')
         invoice.save()
+        
+        # In mixed mode, we assume the amounts provided ARE the final split.
+        # We should delete old payments for this invoice to avoid duplication in mixed mode
+        # as the user explicitly provided the full split now.
+        invoice.payments.all().delete()
         
         # Create Payment records for split payments
         from backend.pos.models import Payment
@@ -2749,22 +2826,27 @@ def invoice_checkout(request, pk):
             created_by=request.user
         )
     else:
+        # Calculate remaining due to avoid duplicating payments (e.g. if booking amount exists)
+        current_paid = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        remaining_due = invoice.total - current_paid
+        
         # For cash/upi: Actually checkout - update invoice type, mark as paid, update stock
-        # Stock and barcodes already updated above (lines 1934-1960)
         invoice.invoice_type = new_invoice_type
         invoice.status = 'paid'
         invoice.paid_amount = invoice.total
         invoice.due_amount = Decimal('0.00')
         invoice.save()
         
-        # Create Payment record
-        from backend.pos.models import Payment
-        Payment.objects.create(
-            invoice=invoice,
-            payment_method=new_invoice_type,  # 'cash' or 'upi'
-            amount=invoice.total,
-            created_by=request.user
-        )
+        # Create Payment record ONLY for the remaining balance
+        if remaining_due > 0:
+            from backend.pos.models import Payment
+            Payment.objects.create(
+                invoice=invoice,
+                payment_method=new_invoice_type,  # 'cash' or 'upi'
+                amount=remaining_due,
+                notes=f'Final payment for {new_invoice_type.upper()} checkout',
+                created_by=request.user
+            )
     
     # Audit log: Invoice checkout (pending to paid conversion)
     items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
@@ -2793,8 +2875,12 @@ def invoice_checkout(request, pk):
         from backend.parties.models import LedgerEntry
         from django.db.models import Sum
         
+        # Calculate total quantity for ledger
+        total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
+        
         # 1. Calculate net effect of existing entries for this invoice to reverse it
         existing_entries = LedgerEntry.objects.filter(invoice=invoice)
+        # ... reversal logic remains same ...
         net_reversal = Decimal('0.00')
         for e in existing_entries:
             if e.entry_type == 'debit':
@@ -2807,13 +2893,12 @@ def invoice_checkout(request, pk):
         invoice.customer.credit_balance += net_reversal
         
         # 3. Create fresh entries based on the new state
-        # DEBIT entry (Purchase) - A 'pending' invoice that is being settled or updated
-        # always counts as a credit purchase trail.
         entry_debit = LedgerEntry.objects.create(
             customer=invoice.customer,
             invoice=invoice,
             entry_type='debit',
             amount=invoice.total,
+            quantity=total_qty,
             description=f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Purchase)',
             created_by=request.user,
             created_at=invoice.created_at or timezone.now()
@@ -2827,6 +2912,7 @@ def invoice_checkout(request, pk):
                 invoice=invoice,
                 entry_type='credit',
                 amount=invoice.total,
+                quantity=total_qty,
                 description=f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Settlement)',
                 created_by=request.user,
                 created_at=timezone.now()
@@ -2913,9 +2999,22 @@ def invoice_update(request, pk):
 
     with transaction.atomic():
         for inv_item in list(invoice.items.select_related('barcode').all()):
+            # Restore stock when deleting old items (since cart_update will deduct them again)
+            if invoice.store:
+                stock, created = Stock.objects.get_or_create(
+                    product=inv_item.product,
+                    variant=inv_item.variant,
+                    store=invoice.store,
+                    defaults={'quantity': Decimal('0.000')}
+                )
+                Stock.objects.filter(id=stock.id).update(
+                    quantity=F('quantity') + inv_item.quantity
+                )
+
             if inv_item.barcode:
                 inv_item.barcode.tag = 'new'
                 inv_item.barcode.save(update_fields=['tag'])
+            
             inv_item.delete()
         sold_barcode_ids_inv = set(
             InvoiceItem.objects.exclude(invoice__status='void')
@@ -2946,6 +3045,9 @@ def invoice_update(request, pk):
                     tax_amount=cart_item.tax_amount,
                     line_total=line_total
                 )
+                # Deduct stock for the new item in non-tracked mode
+                if invoice.store:
+                    reduce_stock_for_cart_item(cart_item.product, cart_item.variant_id, invoice.store, cart_item.quantity)
                 new_items_for_audit.append({
                     'product_id': cart_item.product_id,
                     'product_name': cart_item.product.name if cart_item.product else None,
@@ -2989,6 +3091,9 @@ def invoice_update(request, pk):
                     tax_amount=per_unit_tax,
                     line_total=line_total
                 )
+                # Deduct stock for the new barcode in tracked mode
+                if invoice.store:
+                    reduce_stock_for_cart_item(cart_item.product, cart_item.variant_id, invoice.store, Decimal('1.000'))
                 barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 subtotal += line_total
@@ -3142,8 +3247,9 @@ def invoice_mark_credit(request, pk):
             )
         
         # Set due_amount and paid_amount
-        invoice.due_amount = invoice.total  # Customer owes the full amount
-        invoice.paid_amount = Decimal('0.00')
+        # Calculate paid_amount based on actual payments
+        invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        invoice.due_amount = invoice.total - invoice.paid_amount
         # Ensure status remains 'credit' when saving final values
         invoice.status = 'credit'
         invoice.save()
@@ -3478,16 +3584,10 @@ def update_invoice_totals(invoice):
     """Helper function to recalculate invoice totals"""
     items = invoice.items.all()
     
-    # For pending invoices, totals should always be 0
-    if invoice.invoice_type == 'pending' and invoice.status == 'draft':
-        invoice.subtotal = Decimal('0.00')
-        invoice.total = Decimal('0.00')
-        invoice.due_amount = Decimal('0.00')
-    else:
-        subtotal = sum(item.line_total for item in items)
-        invoice.subtotal = subtotal
-        invoice.total = subtotal - invoice.discount_amount + invoice.tax_amount
-        invoice.due_amount = invoice.total - invoice.paid_amount
+    subtotal = sum(item.line_total for item in items)
+    invoice.subtotal = subtotal
+    invoice.total = subtotal - invoice.discount_amount + invoice.tax_amount
+    invoice.due_amount = invoice.total - invoice.paid_amount
     
     invoice.save()
 
@@ -5252,62 +5352,30 @@ def replacement_credit_note(request, invoice_id):
         # Update invoice totals after all items are processed
         update_invoice_totals(invoice)
         invoice.refresh_from_db()
+
+        # IMPORTANT: Calculate the ACTUAL credit amount (overpayment)
+        # If they paid more than the new total, the excess is the credit
+        # If they haven't paid fully, the return just reduces their due amount
+        actual_credit_amount = max(Decimal('0.00'), invoice.paid_amount - invoice.total)
         
-        # Adjust paid_amount if invoice was fully paid and items were returned
-        # If paid_amount exceeds the new total, reduce it proportionally
-        if invoice.paid_amount > invoice.total:
-            # Calculate the refund amount (excess payment)
-            excess_payment = invoice.paid_amount - invoice.total
+        if actual_credit_amount > 0:
+            # Shift the excess payment to credit note
+            # This balances the invoice (paid_amount matches total)
             invoice.paid_amount = invoice.total
             invoice.due_amount = Decimal('0.00')
-            
-            # Create a refund Payment record to track the refund
-            if excess_payment > 0:
-                # Get the most recent payment method to use for refund (or default to 'cash')
-                last_payment = invoice.payments.order_by('-created_at').first()
-                refund_payment_method = last_payment.payment_method if last_payment else 'cash'
-                
-                # Create refund payment record
-                refund_payment = Payment.objects.create(
-                    invoice=invoice,
-                    payment_method='refund',  # Use 'refund' payment method for clarity
-                    amount=-excess_payment,  # Negative amount to indicate refund
-                    reference=f'REFUND-CN-{invoice.invoice_number}',
-                    notes=f'Refund for credit note replacement (Credit Amount: {total_credit_amount}). Original payment method: {refund_payment_method}',
-                    created_by=request.user
-                )
-                
-                # Audit log: Refund payment created
-                create_audit_log(
-                    request=request,
-                    action='payment_refund',
-                    model_name='Payment',
-                    object_id=str(refund_payment.id),
-                    object_name=f"Refund Payment for Credit Note Replacement - Invoice {invoice.invoice_number}",
-                    object_reference=invoice.invoice_number,
-                    barcode=None,
-                    changes={
-                        'payment_id': refund_payment.id,
-                        'invoice_id': invoice.id,
-                        'invoice_number': invoice.invoice_number,
-                        'refund_amount': str(excess_payment),
-                        'credit_note_amount': str(total_credit_amount),
-                        'payment_method': refund_payment_method,
-                    }
-                )
+            invoice.status = 'paid'
+            invoice.save()
         else:
             # Recalculate due_amount based on new total
             invoice.due_amount = invoice.total - invoice.paid_amount
-        
-        # Update invoice status based on payment
-        if invoice.due_amount <= Decimal('0.00'):
-            invoice.status = 'paid'
-        elif invoice.paid_amount > Decimal('0.00'):
-            invoice.status = 'partial'
-        else:
-            invoice.status = 'draft'
-        
-        invoice.save()
+            # Update invoice status
+            if invoice.due_amount <= Decimal('0.00'):
+                invoice.status = 'paid'
+            elif invoice.paid_amount > Decimal('0.00'):
+                invoice.status = 'partial'
+            else:
+                invoice.status = 'draft'
+            invoice.save()
         
         # Create Return object for credit note
         from .models import Return, ReturnItem
@@ -5342,29 +5410,39 @@ def replacement_credit_note(request, invoice_id):
                 refund_amount=Decimal(item_data['credit_amount'])
             )
         
-        # Generate credit note number
-        credit_note_number = f"CN-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        while CreditNote.objects.filter(credit_note_number=credit_note_number).exists():
+        # Total quantity for credit note (sum of quantities of replaced items)
+        total_replaced_qty = sum(Decimal(item['quantity']) for item in replaced_items)
+
+        # Create credit note only if there is an actual credit amount OR if there are items returned (to track quantity)
+        # But per USER request, "Fix zero-amount bug" implies we might want to avoid zero amount if it's purely monetary.
+        # However, "Add quantity tracking to CreditNote" implies it can be used for quantity.
+        # Let's create it if there's EITHER amount > 0 OR quantity > 0.
+        credit_note = None
+        if actual_credit_amount > 0 or total_replaced_qty > 0:
             credit_note_number = f"CN-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        
-        # Create credit note
-        credit_note = CreditNote.objects.create(
-            return_obj=return_obj,
-            credit_note_number=credit_note_number,
-            amount=total_credit_amount,
-            notes=notes or f'Credit note for replacement of items from invoice {invoice.invoice_number}',
-            created_by=request.user
-        )
+            while CreditNote.objects.filter(credit_note_number=credit_note_number).exists():
+                credit_note_number = f"CN-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+            
+            # Create credit note
+            credit_note = CreditNote.objects.create(
+                return_obj=return_obj,
+                credit_note_number=credit_note_number,
+                amount=actual_credit_amount,
+                quantity=total_replaced_qty,
+                notes=notes or f'Credit note for replacement of items from invoice {invoice.invoice_number}',
+                created_by=request.user
+            )
         
         # Create ledger entry for credit note (CREDIT - refunding customer)
-        if invoice.customer and total_credit_amount > 0:
+        if invoice.customer and actual_credit_amount > 0 and credit_note:
             from backend.parties.models import LedgerEntry
             entry = LedgerEntry.objects.create(
                 customer=invoice.customer,
                 invoice=invoice,
                 entry_type='credit',
-                amount=total_credit_amount,
-                description=f'Credit note {credit_note_number} for replacement of items from Invoice {invoice.invoice_number}',
+                amount=actual_credit_amount,
+                quantity=total_replaced_qty,
+                description=f'Credit note {credit_note.credit_note_number} for replacement of items from Invoice {invoice.invoice_number}',
                 created_by=request.user,
                 created_at=timezone.now()
             )
@@ -5373,30 +5451,33 @@ def replacement_credit_note(request, invoice_id):
             invoice.customer.save()
         
         # Audit log: Credit note replacement
-        create_audit_log(
-            request=request,
-            action='replacement_credit_note',
-            model_name='CreditNote',
-            object_id=str(credit_note.id),
-            object_name=f"Credit Note {credit_note_number}",
-            object_reference=invoice.invoice_number,
-            barcode=None,
-            changes={
-                'invoice_id': invoice.id,
-                'invoice_number': invoice.invoice_number,
-                'credit_note_number': credit_note_number,
-                'credit_amount': str(total_credit_amount),
-                'items_count': len(replaced_items),
-                'notes': notes,
-            }
-        )
+        if credit_note:
+            create_audit_log(
+                request=request,
+                action='replacement_credit_note',
+                model_name='CreditNote',
+                object_id=str(credit_note.id),
+                object_name=f"Credit Note {credit_note.credit_note_number}",
+                object_reference=invoice.invoice_number,
+                barcode=None,
+                changes={
+                    'invoice_id': invoice.id,
+                    'invoice_number': invoice.invoice_number,
+                    'credit_note_number': credit_note.credit_note_number,
+                    'credit_amount': str(actual_credit_amount),
+                    'quantity': str(total_replaced_qty),
+                    'items_count': len(replaced_items),
+                    'notes': notes,
+                }
+            )
     
     # Return updated invoice and credit note
     serializer = InvoiceSerializer(invoice)
     return Response({
         'message': 'Credit note replacement processed successfully',
         'invoice': serializer.data,
-        'credit_note': CreditNoteSerializer(credit_note).data,
+        'credit_note': CreditNoteSerializer(credit_note).data if credit_note else None,
         'replaced_items': replaced_items,
-        'total_credit_amount': str(total_credit_amount)
+        'actual_credit_amount': str(actual_credit_amount),
+        'total_replaced_qty': str(total_replaced_qty)
     })

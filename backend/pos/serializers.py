@@ -88,6 +88,12 @@ class CartSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     customer_phone = serializers.CharField(source='customer.phone', read_only=True)
 
+    customer = serializers.PrimaryKeyRelatedField(
+        queryset=Cart._meta.get_field('customer').related_model.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
     class Meta:
         model = Cart
         fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'items']
@@ -164,6 +170,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
 
+    customer = serializers.PrimaryKeyRelatedField(queryset=Invoice._meta.get_field('customer').related_model.objects.all(), required=True)
+
     class Meta:
         model = Invoice
         fields = [
@@ -227,7 +235,7 @@ class CreditNoteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CreditNote
-        fields = ['id', 'credit_note_number', 'return_obj', 'return_number', 'invoice_id', 'invoice_number', 'customer_name', 'amount', 'notes', 'created_by', 'created_by_username', 'created_at', 'return_details']
+        fields = ['id', 'credit_note_number', 'return_obj', 'return_number', 'invoice_id', 'invoice_number', 'customer_name', 'amount', 'quantity', 'notes', 'created_by', 'created_by_username', 'created_at', 'return_details']
 
 class CreditNoteDetailSerializer(CreditNoteSerializer):
     """Credit note with nested return and return items for detail view."""
