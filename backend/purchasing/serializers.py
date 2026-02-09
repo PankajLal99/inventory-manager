@@ -470,6 +470,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                         # Status changed, skip stock update
                         continue
                     from backend.locations.models import Store, Warehouse
+                    from backend.inventory.models import Stock
                     
                     # Update Shop Stock
                     if purchase_item.shop_quantity > 0:
