@@ -1242,6 +1242,58 @@ export default function POS() {
 
       // Backend is already updated, localStorage will sync via useEffect hook
     },
+    onError: async (error: any) => {
+      // Customer already has another active cart — switch to that cart
+      const existingCartId = error?.response?.data?.existing_cart_id;
+      if (error?.response?.status === 400 && existingCartId && username) {
+        try {
+          const cartRes = await posApi.carts.get(existingCartId);
+          const cartData = cartRes?.data;
+          if (!cartData) return;
+
+          const tabExists = getUserTabs(username).some((t) => t.id === existingCartId);
+          if (!tabExists) {
+            const cartTab: CartTab = {
+              id: cartData.id,
+              cartNumber: cartData.cart_number || `CART-${cartData.id}`,
+              storeId: cartData.store || defaultStore?.id || 0,
+              customerId: cartData.customer || null,
+              customerName: cartData.customer_name || null,
+              invoiceType: backendToFrontendInvoiceType(cartData.invoice_type || 'cash'),
+              itemCount: cartData.items?.length || 0,
+              createdAt: cartData.created_at || new Date().toISOString(),
+              updatedAt: cartData.updated_at || new Date().toISOString(),
+            };
+            addCartTab(username, cartTab);
+          }
+          setActiveTab(username, existingCartId);
+          const tabs = getUserTabs(username);
+          tabs.sort((a, b) => {
+            const aTime = new Date(a.updatedAt || a.createdAt).getTime();
+            const bTime = new Date(b.updatedAt || b.createdAt).getTime();
+            return aTime - bTime;
+          });
+          setCartTabs(tabs);
+          setCartId(existingCartId);
+          setActiveTabId(existingCartId);
+          if (cartData.customer) {
+            setSelectedCustomer({
+              id: cartData.customer,
+              name: cartData.customer_name || '',
+              phone: cartData.customer_phone || null,
+            });
+          }
+          setCustomerSearch('');
+          await queryClient.invalidateQueries({ queryKey: ['cart', existingCartId] });
+          showToast('This customer already has an active cart. Switched to it.', 'success');
+        } catch (_e) {
+          showToast(error?.response?.data?.error || 'Failed to switch to existing cart', 'error');
+        }
+        return;
+      }
+      const errorMessage = error?.response?.data?.error || error?.response?.data?.detail || 'Failed to update cart';
+      showToast(errorMessage, 'error');
+    },
   });
 
 

@@ -574,6 +574,22 @@ def cart_detail(request, pk):
                 {'error': 'Permission denied', 'detail': 'You can only update your own carts'},
                 status=status.HTTP_403_FORBIDDEN
             )
+        # When assigning a customer, ensure they don't already have another active cart (one cart per customer)
+        new_customer_id = request.data.get('customer')
+        if new_customer_id is not None:
+            existing_cart = Cart.objects.filter(
+                customer_id=new_customer_id,
+                status='active',
+                created_by=request.user
+            ).exclude(pk=cart.pk).exclude(cart_number__startswith='EDIT-').first()
+            if existing_cart:
+                return Response(
+                    {
+                        'error': 'This customer already has an active cart. Switch to it to continue.',
+                        'existing_cart_id': existing_cart.id,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         serializer = CartSerializer(cart, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()

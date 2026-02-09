@@ -29,10 +29,13 @@ export const formatNumber = (num: number | string | undefined | null, decimals: 
 };
 
 /**
- * Interface for standardized product stock information
+ * Standardized product stock information.
+ * All quantities are derived from barcode counts; "available to sell" = barcodes with status new or returned only.
  */
 export interface ProductStockInfo {
+    /** Stock available to sell: barcode count (new + returned), minus in-cart for tracked products */
     available: number;
+    /** Total non-sold barcode count (new, returned, defective, in-cart, etc.) */
     total: number;
     isLowStock: boolean;
     isOutOfStock: boolean;
@@ -49,11 +52,18 @@ const isCustomProduct = (product: any): boolean =>
     !!(product?.name && typeof product.name === 'string' && product.name.startsWith('Other -'));
 
 /**
+ * Stock quantities are calculated by counting barcodes (backend is source of truth).
+ *
+ * - Available to sell = count of barcodes with status 'new' or 'returned' only.
+ *   For tracked products, backend subtracts barcodes that are in active carts.
+ * - Total stock = backend's stock_quantity (all non-sold barcodes: new, returned,
+ *   defective, in-cart, unknown). Use available for "can sell" checks.
+ *
  * Extracts and calculates standardized stock information from a product object.
  * Consistent across Products, Search, and POS pages.
  * Custom products are exempt from stock checks and always treated as in stock.
  *
- * @param product The product object containing quantity fields
+ * @param product The product object containing quantity fields from backend
  * @returns Standardized ProductStockInfo
  */
 export const getStockInfo = (product: any): ProductStockInfo => {
@@ -70,12 +80,13 @@ export const getStockInfo = (product: any): ProductStockInfo => {
         };
     }
 
-    // available_quantity: barcodes with 'new'/'returned' tags - barcodes in active carts
+    // available_quantity (backend): count of barcodes with tag 'new' or 'returned';
+    // for tracked products, excludes barcodes in active carts. This is "stock available to sell".
     const available = typeof product.available_quantity === 'number'
         ? product.available_quantity
         : parseFloat(product.available_quantity || '0');
 
-    // stock_quantity: count of all non-sold barcodes (new, returned, defective, etc.)
+    // stock_quantity (backend): count of all non-sold barcodes (new, returned, defective, in-cart, etc.)
     const total = typeof product.stock_quantity === 'number'
         ? product.stock_quantity
         : parseFloat(product.stock_quantity || '0');
