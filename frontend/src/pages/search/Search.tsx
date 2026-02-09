@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect, useRef } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { searchApi, productsApi } from '../../lib/api';
 import {
@@ -49,9 +49,11 @@ export default function Search() {
   const [searchType, setSearchType] = useState(initialType);
   const [showScanner, setShowScanner] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [productLimit, setProductLimit] = useState(40);
+  const scrollYRef = useRef<number | null>(null);
 
-  const { data, isLoading, error } = useQuery<SearchResults>({
-    queryKey: ['global-search', query, searchType],
+  const { data, isLoading, error, isFetching } = useQuery<SearchResults>({
+    queryKey: ['global-search', query, searchType, productLimit],
     queryFn: async () => {
       if (!query.trim()) {
         return {
@@ -69,24 +71,40 @@ export default function Search() {
           purchases: [],
         };
       }
-      const response = await searchApi.search(query, searchType);
+      const response = await searchApi.search(query, searchType, { product_limit: productLimit });
       return response.data;
     },
     enabled: query.trim().length > 0,
     retry: false,
+    placeholderData: keepPreviousData,
   });
 
-  // Sync query with URL params
+  // Sync query with URL params and reset product limit when search changes
   useEffect(() => {
     const urlQuery = searchParams.get('q') || '';
     const urlType = searchParams.get('type') || 'product';
     if (urlQuery !== query) {
       setQuery(urlQuery);
+      setProductLimit(40);
     }
     if (urlType !== searchType) {
       setSearchType(urlType);
+      setProductLimit(40);
     }
   }, [searchParams]);
+
+  // Restore scroll position after "Load more" / "Show all" finish loading (so we restore once new data is in the DOM)
+  useEffect(() => {
+    if (scrollYRef.current === null || isFetching || !data) return;
+    const saved = scrollYRef.current;
+    scrollYRef.current = null;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo(0, saved);
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [data, isFetching]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -340,6 +358,7 @@ export default function Search() {
                 });
 
                 return (
+                  <>
                   <ResultSection
                     title="Products"
                     icon={Package}
@@ -477,6 +496,45 @@ export default function Search() {
                       );
                     }}
                   />
+                  {(searchType === 'all' || searchType === 'product') &&
+                    productLimit > 0 &&
+                    productLimit < 500 &&
+                    sortedProducts.length >= productLimit && (
+                      <div className="flex flex-wrap items-center gap-2 mt-3">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            scrollYRef.current = window.scrollY;
+                            setProductLimit((prev) => Math.min(prev + 50, 500));
+                          }}
+                          disabled={isFetching}
+                        >
+                          {isFetching ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                              Loading…
+                            </>
+                          ) : (
+                            'Load 50 more'
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            scrollYRef.current = window.scrollY;
+                            setProductLimit(0);
+                          }}
+                          disabled={isFetching}
+                        >
+                          Show all
+                        </Button>
+                      </div>
+                    )}
+                </>
                 );
               })()}
 

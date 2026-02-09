@@ -388,6 +388,7 @@ export const reportsApi = {
 
 // Global Search API
 export const searchApi = {
-  search: (query: string, type: string = 'all') => api.get('/search/', { params: { q: query, type } }),
+  search: (query: string, type: string = 'all', params?: { product_limit?: number }) =>
+    api.get('/search/', { params: { q: query, type, ...params } }),
 };
 

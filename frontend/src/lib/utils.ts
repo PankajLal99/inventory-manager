@@ -80,8 +80,8 @@ export const getStockInfo = (product: any): ProductStockInfo => {
         };
     }
 
-    // available_quantity (backend): count of barcodes with tag 'new' or 'returned';
-    // for tracked products, excludes barcodes in active carts. This is "stock available to sell".
+    // available_quantity (backend): barcode count (new+returned, minus in-cart) capped by shop_stock.
+    // So "available to sell" = only what is in shop; barcode count is source of truth.
     const available = typeof product.available_quantity === 'number'
         ? product.available_quantity
         : parseFloat(product.available_quantity || '0');

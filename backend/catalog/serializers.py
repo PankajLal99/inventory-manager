@@ -269,40 +269,46 @@ class ProductSerializer(serializers.ModelSerializer):
             
         return ", ".join(parts)
 
+    def _shop_stock(self, obj):
+        """Quantity in shop (store where shop_type != 'warehouse'). Used to cap available_quantity."""
+        total = Decimal('0.000')
+        for entry in obj.stock_entries.all():
+            if entry.store and entry.store.shop_type != 'warehouse':
+                total += entry.quantity
+        return float(total)
+
+    def _warehouse_stock(self, obj):
+        """Quantity in warehouse. Used for fallback when no distribution data."""
+        total = Decimal('0.000')
+        for entry in obj.stock_entries.all():
+            if entry.warehouse or (entry.store and entry.store.shop_type == 'warehouse'):
+                total += entry.quantity
+        return float(total)
+
     def get_available_quantity(self, obj):
-        """Calculate available quantity - uses barcode count as SUPREME source of truth
-        Available Stock = All barcodes with tag 'new' or 'returned'
-        Excludes barcodes from draft purchases (not finalized yet)
-        For tracked products, also excludes barcodes in active carts
+        """Available to sell = barcode count (new+returned, minus in-cart) capped by shop stock.
+        When no distribution (0 shop, 0 warehouse), return raw barcode count.
         """
         from backend.pos.models import CartItem
-        
-        # Available Stock = All barcodes with tag 'new' or 'returned'
-        available_barcodes = obj.barcodes.filter(
-            tag__in=['new', 'returned']
-        )
-        
-        # For tracked products, exclude barcodes that are in active carts
+
+        available_barcodes = obj.barcodes.filter(tag__in=['new', 'returned'])
         if obj.track_inventory:
-            # Get all barcodes that are in active carts
             active_carts_barcodes = set()
             cart_items = CartItem.objects.filter(
                 cart__status='active'
             ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-            
             for cart_item in cart_items:
                 if cart_item.scanned_barcodes:
                     active_carts_barcodes.update(cart_item.scanned_barcodes)
-            
-            # Exclude barcodes in active carts
             if active_carts_barcodes:
                 available_barcodes = available_barcodes.exclude(barcode__in=active_carts_barcodes)
-            
-            return float(available_barcodes.count())
+        available_count = float(max(0, available_barcodes.count()))
 
-        # For non-tracked products, return count of barcodes with 'new' or 'returned' tags
-        # (Non-tracked products don't have individual barcodes in carts, so no need to exclude)
-        return float(available_barcodes.count())
+        shop_stock = self._shop_stock(obj)
+        warehouse_stock = self._warehouse_stock(obj)
+        if shop_stock == 0 and warehouse_stock == 0:
+            return available_count
+        return min(available_count, shop_stock)
 
     class Meta:
         model = Product
@@ -453,62 +459,48 @@ class ProductListSerializer(serializers.ModelSerializer):
         return float(barcode_count)
 
     def get_available_quantity(self, obj):
-        """Calculate available quantity
-        Available Stock = All barcodes with tag 'new' or 'returned'
-        Excludes barcodes from draft purchases (not finalized yet)
-        For tracked products, also excludes barcodes in active carts
+        """Available to sell = barcode count (new+returned, minus in-cart) capped by shop_stock.
+        Barcode count is single source of truth; user can only sell what is in shop.
+        E.g. 100 barcodes, 50 shop / 50 warehouse -> show 50. 10 barcodes, 20 shop / 80 warehouse -> show 10.
         """
         from backend.pos.models import CartItem
-        
-        # Available Stock = All barcodes with tag 'new' or 'returned'
-        available_barcodes = obj.barcodes.filter(
-            tag__in=['new', 'returned']
-        )
-        
-        # For tracked products, exclude barcodes that are in active carts
+
+        available_barcodes = obj.barcodes.filter(tag__in=['new', 'returned'])
+
         if obj.track_inventory:
-            # Use context data if available (fast path)
             active_cart_barcodes = self.context.get('active_cart_barcodes')
-            
             if active_cart_barcodes is not None:
-                # Count how many of THIS product's available barcodes are in the active cart set
-                # Since we prefetched barcodes, we can iterate in Python without DB hit
-                reserved_count = 0
-                for barcode in obj.barcodes.all():
-                    if barcode.tag in ['new', 'returned'] and barcode.barcode in active_cart_barcodes:
-                        reserved_count += 1
-                
+                reserved_count = sum(
+                    1 for barcode in obj.barcodes.all()
+                    if barcode.tag in ['new', 'returned'] and barcode.barcode in active_cart_barcodes
+                )
                 available_count = available_barcodes.count() - reserved_count
-                return float(max(0, available_count))
             else:
-                # Fallback to slow path (db query)
                 active_carts_barcodes = set()
                 cart_items = CartItem.objects.filter(
                     cart__status='active'
                 ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-                
                 for cart_item in cart_items:
                     if cart_item.scanned_barcodes:
                         active_carts_barcodes.update(cart_item.scanned_barcodes)
-                
-                # Exclude barcodes in active carts
                 if active_carts_barcodes:
                     available_barcodes = available_barcodes.exclude(barcode__in=active_carts_barcodes)
-                
-                return float(available_barcodes.count())
-        
-        # For non-tracked products, return count of barcodes with 'new' or 'returned' tags
-        # Check context for active cart quantities
-        active_cart_product_quantities = self.context.get('active_cart_product_quantities')
-        
-        if active_cart_product_quantities is not None:
-            # Fast path - subtract reserved quantity from available barcodes
-            reserved_qty = active_cart_product_quantities.get(obj.id, 0)
-            available_count = available_barcodes.count()
-            return float(max(0, available_count - reserved_qty))
+                available_count = available_barcodes.count()
         else:
-            # Fallback path - just return count of available barcodes
-            return float(available_barcodes.count())
+            active_cart_product_quantities = self.context.get('active_cart_product_quantities')
+            if active_cart_product_quantities is not None:
+                reserved_qty = active_cart_product_quantities.get(obj.id, 0)
+                available_count = max(0, available_barcodes.count() - reserved_qty)
+            else:
+                available_count = available_barcodes.count()
+
+        available_count = float(max(0, available_count))
+        shop_stock = self.get_shop_stock(obj)
+        warehouse_stock = self.get_warehouse_stock(obj)
+        # No distribution data (0 shop, 0 warehouse): show raw barcode count so we don't hide stock
+        if shop_stock == 0 and warehouse_stock == 0:
+            return available_count
+        return min(available_count, shop_stock)
 
     def get_sold_quantity(self, obj):
         """Calculate sold quantity from InvoiceItems for completed invoices"""

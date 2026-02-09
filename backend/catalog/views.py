@@ -528,7 +528,14 @@ def product_list_create(request):
 @permission_classes([IsAuthenticated])
 def product_detail(request, pk):
     """Retrieve, update or delete a product"""
-    product = get_object_or_404(Product, pk=pk)
+    if request.method == 'GET':
+        # Prefetch stock_entries for shop/warehouse in available_quantity
+        product_queryset = Product.objects.prefetch_related(
+            'stock_entries', 'stock_entries__store', 'stock_entries__warehouse'
+        )
+        product = get_object_or_404(product_queryset, pk=pk)
+    else:
+        product = get_object_or_404(Product, pk=pk)
     
     if request.method == 'GET':
         # Try cache first

@@ -17,6 +17,10 @@ import os
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+# Logs directory: always used in dev and production; create at startup so file handlers never fail.
+LOGS_DIR = BASE_DIR / 'logs'
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Load environment variables from .env file in project root
 # This will look for .env file in the project root directory
 env_path = BASE_DIR / '.env'
@@ -29,7 +33,7 @@ load_dotenv(dotenv_path=env_path)
 SECRET_KEY = os.getenv('SECRET_KEY', '')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
 if DEBUG:
     ALLOWED_HOSTS = ['*']
@@ -261,15 +265,21 @@ LOGGING = {
             'formatter': 'verbose',
         },
         'file': {
-            'level': 'ERROR',
+            'level': 'INFO',
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'django.log',
+            'filename': str(LOGS_DIR / 'django.log'),
             'formatter': 'verbose',
         },
         'error_file': {
             'level': 'ERROR',
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'errors.log',
+            'filename': str(LOGS_DIR / 'errors.log'),
+            'formatter': 'verbose',
+        },
+        'app_file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': str(LOGS_DIR / 'app.log'),
             'formatter': 'verbose',
         },
     },
@@ -294,27 +304,22 @@ LOGGING = {
             'propagate': False,
         },
         'backend': {
-            'handlers': ['console', 'error_file'],
+            'handlers': ['console', 'error_file', 'app_file'],
             'level': 'INFO',
             'propagate': False,
         },
         'backend.locations': {
-            'handlers': ['console', 'error_file'],
+            'handlers': ['console', 'error_file', 'app_file'],
             'level': 'INFO',
             'propagate': False,
         },
         'backend.reports': {
-            'handlers': ['console', 'error_file'],
+            'handlers': ['console', 'error_file', 'app_file'],
             'level': 'INFO',
             'propagate': False,
         },
     },
 }
-
-# Create logs directory if it doesn't exist
-LOGS_DIR = BASE_DIR / 'logs'
-if not LOGS_DIR.exists():
-    os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Azure Function Configuration for Barcode Label Generation
 # These can also be set via environment variables: AZURE_FUNCTION_URL and AZURE_FUNCTION_KEY
