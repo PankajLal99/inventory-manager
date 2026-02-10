@@ -1931,26 +1931,47 @@ def cart_checkout(request, pk):
         tracked_items = cart.items.select_related('product').filter(product__track_inventory=True)
         for ci in tracked_items:
             qty_needed = int(ci.quantity)
-            if qty_needed <= 0: continue
+            if qty_needed <= 0:
+                continue
             scanned = ci.scanned_barcodes or []
             
             # Check if scanned barcodes are still available (not sold)
             available_count = Barcode.objects.filter(
                 barcode__in=scanned, product=ci.product
             ).exclude(tag='sold').count()
-
+            
             if available_count < qty_needed:
                  return Response({
                     'error': 'Inventory Mismatch',
                     'message': f'Product "{ci.product.name}" requires {qty_needed} scans, but only {available_count} available barcodes were found.'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        # 6. Generate Invoice Number (Unique)
+        # 6. Validate that all items have a selling price for sale/credit invoices
+        # This prevents invoices being created with line_total = 0 when the UI shows a price
+        if invoice_type in ['cash', 'upi', 'mixed']:
+            items_without_price = []
+            for ci in cart.items.select_related('product').all():
+                if ci.quantity <= 0:
+                    continue
+                effective_price = ci.manual_unit_price or ci.unit_price
+                if not effective_price or effective_price <= Decimal('0.00'):
+                    items_without_price.append({
+                        'product_name': ci.product.name if ci.product else 'Unknown product',
+                        'product_sku': ci.product.sku if ci.product else '',
+                    })
+            if items_without_price:
+                return Response({
+                    'error': 'All items must have a selling price before checkout',
+                    'message': f'{len(items_without_price)} item(s) are missing prices. Please enter a price for every item before completing the sale.',
+                    'items_without_price': items_without_price,
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 7. Generate Invoice Number (Unique)
         invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         while Invoice.objects.filter(invoice_number=invoice_number).exists():
             invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
-        # 7. Create Invoice
+        # 8. Create Invoice
         invoice = Invoice.objects.create(
             invoice_number=invoice_number,
             cart=cart, store=cart.store,
@@ -1960,7 +1981,7 @@ def cart_checkout(request, pk):
             created_by=request.user
         )
 
-        # 8. Handle Repairs
+        # 9. Handle Repairs
         if is_repair_shop:
             contact_no = request.data.get('repair_contact_no', '').strip()
             model_name = request.data.get('repair_model_name', '').strip()
@@ -2001,7 +2022,7 @@ def cart_checkout(request, pk):
                         invoice.customer.credit_balance += booking_amt_decimal
                         invoice.customer.save()
 
-        # 9. Process Items
+        # 10. Process Items
         subtotal = Decimal('0.00')
         discount_total = Decimal('0.00')
         tax_total = Decimal('0.00')
@@ -2873,9 +2894,8 @@ def invoice_checkout(request, pk):
     # Update ledger entry if customer exists
     if invoice.customer:
         from backend.parties.models import LedgerEntry
-        from django.db.models import Sum
-        
-        # Calculate total quantity for ledger
+
+        # Calculate total quantity for ledger (Sum imported at top of file)
         total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
         
         # 1. Calculate net effect of existing entries for this invoice to reverse it

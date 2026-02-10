@@ -96,7 +96,9 @@ def purchase_detail(request, pk):
         )
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            # Refresh so reverse relation (items) is correct after deletes
+            serializer.instance.refresh_from_db()
+            return Response(PurchaseSerializer(serializer.instance, context=serializer.context).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     elif request.method == 'PATCH':
         data = request.data.copy()
@@ -110,7 +112,8 @@ def purchase_detail(request, pk):
         )
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            serializer.instance.refresh_from_db()
+            return Response(PurchaseSerializer(serializer.instance, context=serializer.context).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE
         from backend.catalog.models import Barcode, BarcodeLabel
