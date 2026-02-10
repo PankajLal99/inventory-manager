@@ -1372,8 +1372,10 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
     response_data = serializer.data
     
     # Include the matched barcode and availability status
-    # Prefer short_code if available (it's what users search for), otherwise use full barcode
+    # matched_barcode: for display (prefer short_code if available)
+    # canonical_barcode: always the DB barcode field - use this when adding to cart so cart stores exactly this
     response_data['matched_barcode'] = barcode_obj.short_code or barcode_obj.barcode
+    response_data['canonical_barcode'] = barcode_obj.barcode
     response_data['barcode_tag'] = barcode_obj.tag
     response_data['barcode_available'] = barcode_obj.tag in ['new', 'returned']
     
@@ -1554,6 +1556,7 @@ def barcode_by_barcode(request, barcode=None):
                 if product_barcode:
                     is_sold, sold_invoice = check_barcode_sold_status(product_barcode)
                     response_data['matched_barcode'] = product_barcode.barcode
+                    response_data['canonical_barcode'] = product_barcode.barcode
                     response_data['barcode_tag'] = product_barcode.tag
                     response_data['barcode_available'] = product_barcode.tag in ['new', 'returned']
                     
@@ -1606,6 +1609,7 @@ def barcode_by_barcode(request, barcode=None):
                 if product_barcode:
                     is_sold, sold_invoice = check_barcode_sold_status(product_barcode)
                     response_data['matched_barcode'] = product_barcode.barcode
+                    response_data['canonical_barcode'] = product_barcode.barcode
                     response_data['barcode_tag'] = product_barcode.tag
                     response_data['barcode_available'] = product_barcode.tag in ['new', 'returned']
                     
@@ -1663,6 +1667,7 @@ def barcode_by_barcode(request, barcode=None):
                         sold_invoice = sold_item.invoice.invoice_number
                 
                 response_data['matched_barcode'] = searched_barcode_obj.barcode
+                response_data['canonical_barcode'] = searched_barcode_obj.barcode
                 response_data['barcode_tag'] = searched_barcode_obj.tag
                 response_data['barcode_available'] = searched_barcode_obj.tag in ['new', 'returned']
                 

@@ -6,6 +6,8 @@ from decimal import Decimal
 import uuid
 from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
+from backend.parties.models import Supplier
+from backend.purchasing.models import Purchase, PurchaseItem
 from backend.pos.models import Cart, CartItem, Invoice
 from backend.core.models import AuditLog
 from backend.inventory.models import Stock
@@ -886,3 +888,107 @@ class WholesaleCartTests(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['invoice_type'], 'cash')
+
+
+class CartBarcodeConsistencyTests(APITestCase):
+    """Ensure the barcode scanned and the barcode stored in cart are consistent (concrete logic)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'barcodeuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Barcode Store', shop_type='retail')
+        self.category = Category.objects.create(name='Barcode Category')
+        self.supplier = Supplier.objects.create(name='Test Supplier', code='SUP1')
+        self.product = Product.objects.create(
+            name='Barcode Test Product',
+            category=self.category,
+            product_type='simple',
+            track_inventory=True,
+        )
+        # Create a finalized purchase and purchase item so barcode can be added to cart
+        self.purchase = Purchase.objects.create(
+            purchase_number=f'PUR-{uuid.uuid4().hex[:8]}',
+            supplier=self.supplier,
+            purchase_date=timezone.now().date(),
+            store=self.store,
+            status='finalized',
+            created_by=self.user,
+        )
+        self.purchase_item = PurchaseItem.objects.create(
+            purchase=self.purchase,
+            product=self.product,
+            quantity=Decimal('5.000'),
+            unit_price=Decimal('100.00'),
+            shop_quantity=Decimal('5.000'),
+            warehouse_quantity=Decimal('0.000'),
+        )
+        # Full barcode (canonical) - what we store in cart
+        self.full_barcode = f'BC-FULL-{uuid.uuid4().hex[:8]}'
+        self.barcode = Barcode.objects.create(
+            product=self.product,
+            barcode=self.full_barcode,
+            short_code=None,
+            tag='new',
+            purchase_item=self.purchase_item,
+        )
+        self.cart = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            status='active',
+            invoice_type='cash',
+        )
+
+    def test_add_by_full_barcode_stores_same_barcode_in_cart(self):
+        """When adding by full barcode, cart item scanned_barcodes must contain exactly that barcode."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': Decimal('100.00'),
+            'barcode': self.full_barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIn('scanned_barcodes', response.data)
+        stored = response.data['scanned_barcodes']
+        self.assertIsInstance(stored, list)
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0], self.full_barcode, 'Cart must store the same barcode that was sent (scanned).')
+
+        # Verify in DB
+        cart_item = CartItem.objects.get(cart=self.cart, product=self.product)
+        self.assertEqual(cart_item.scanned_barcodes, [self.full_barcode])
+
+    def test_add_by_short_code_stores_canonical_barcode_in_cart(self):
+        """When adding by short_code, cart item scanned_barcodes must contain canonical (full) barcode, not short_code."""
+        short_code = f'SC-{uuid.uuid4().hex[:6]}'
+        self.barcode.short_code = short_code
+        self.barcode.save(update_fields=['short_code'])
+
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': Decimal('100.00'),
+            'barcode': short_code,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIn('scanned_barcodes', response.data)
+        stored = response.data['scanned_barcodes']
+        self.assertIsInstance(stored, list)
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(
+            stored[0],
+            self.full_barcode,
+            'Cart must store canonical (full) barcode when user scans short_code, so scan and stored are consistent.',
+        )
+        self.assertNotEqual(
+            stored[0],
+            short_code,
+            'Cart must not store short_code; it must store the canonical barcode.',
+        )
+
+        cart_item = CartItem.objects.get(cart=self.cart, product=self.product)
+        self.assertEqual(cart_item.scanned_barcodes, [self.full_barcode])

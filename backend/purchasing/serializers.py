@@ -472,8 +472,42 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     from backend.locations.models import Store, Warehouse
                     from backend.inventory.models import Stock
                     
-                    # Update Shop Stock
-                    if purchase_item.shop_quantity > 0:
+                    # When purchase has warehouse set, add stock to that warehouse (direct-to-warehouse)
+                    if purchase.warehouse:
+                        stock, _ = Stock.objects.get_or_create(
+                            product=purchase_item.product,
+                            variant=purchase_item.variant,
+                            store=None,
+                            warehouse=purchase.warehouse,
+                            defaults={'quantity': Decimal('0.000')}
+                        )
+                        old_stock = stock.quantity
+                        stock.quantity += quantity
+                        stock.save()
+                        request = self.context.get('request')
+                        if request:
+                            create_audit_log(
+                                request=request,
+                                action='stock_purchase',
+                                model_name='Stock',
+                                object_id=str(stock.id),
+                                object_name=purchase_item.product.name,
+                                object_reference=purchase.purchase_number,
+                                barcode=None,
+                                changes={
+                                    'purchase_id': purchase.id,
+                                    'purchase_number': purchase.purchase_number,
+                                    'product_id': purchase_item.product.id,
+                                    'product_name': purchase_item.product.name,
+                                    'product_sku': purchase_item.product.sku,
+                                    'quantity_added': str(quantity),
+                                    'stock_before': str(old_stock),
+                                    'stock_after': str(stock.quantity),
+                                    'location': f"Warehouse: {purchase.warehouse.name}",
+                                }
+                            )
+                    # Update Shop Stock (when no warehouse or when store is set)
+                    elif purchase_item.shop_quantity > 0:
                         shop = Store.objects.filter(shop_type='retail', is_active=True).first()
                         if not shop:
                             shop = Store.objects.filter(is_active=True).exclude(shop_type='warehouse').first()
@@ -872,25 +906,6 @@ class PurchaseSerializer(serializers.ModelSerializer):
             
             # Let's stick to the difference approach for cleaner audit logs if possible, 
             # OR replicate the "Reverse Old, Add New" pattern but per item.
-            
-            # --- HANDLE DELETED ITEMS ---
-            for old_item in items_to_delete:
-                # Delete all non-sold barcodes
-                barcodes_to_delete = Barcode.objects.filter(
-                    purchase_item=old_item
-                ).exclude(tag__in=['sold', 'in-cart'])
-                
-                barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
-                
-                if barcode_ids:
-                    try:
-                        from backend.catalog.azure_label_service import delete_blobs_for_barcodes
-                        delete_blobs_for_barcodes(barcode_ids)
-                    except Exception:
-                        pass
-                
-                barcodes_to_delete.delete()
-                old_item.delete()
 
             # Create new items and update stock
             for item_data in items_to_create:

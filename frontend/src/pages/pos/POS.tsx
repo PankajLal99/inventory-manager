@@ -634,7 +634,8 @@ export default function POS() {
               return;
             }
             productData = barcodeCheck.data;
-            scannedBarcode = barcodeCheck.data.matched_barcode || barcodeToScan;
+            // Use canonical_barcode so cart stores exactly what backend uses (no scan vs stored mismatch)
+            scannedBarcode = (barcodeCheck.data as any).canonical_barcode ?? barcodeCheck.data.matched_barcode ?? barcodeToScan;
           }
         } catch (err: any) {
           // Not found as strict barcode
@@ -1723,6 +1724,31 @@ export default function POS() {
       return;
     }
 
+    // Frontend safeguard: ensure all items have a valid selling price for non-pending invoices
+    const isPendingInvoice = invoiceType === 'pending';
+    if (!isPendingInvoice) {
+      const itemsWithMissingPrice =
+        cart.data.items?.filter((item: any) => {
+          const rawPrice = item.manual_unit_price ?? item.unit_price;
+          const priceNum =
+            typeof rawPrice === 'string'
+              ? parseFloat(rawPrice)
+              : Number(rawPrice ?? 0);
+          return !rawPrice || isNaN(priceNum) || priceNum <= 0;
+        }) || [];
+
+      if (itemsWithMissingPrice.length > 0) {
+        const names = itemsWithMissingPrice
+          .map((item: any) => item.product_name || item.product?.name || 'Unknown product')
+          .join(', ');
+        alert(
+          `All items must have a selling price before checkout.\n` +
+          `These item(s) are missing prices or have zero price: ${names}.`
+        );
+        return;
+      }
+    }
+
     // Check if current store is a Repair shop (lowercase as per backend)
     const isRepairShop = defaultStore?.shop_type === 'repair';
 
@@ -1995,6 +2021,31 @@ export default function POS() {
       return;
     }
 
+    // Frontend safeguard: ensure all items have a valid selling price for non-pending invoices
+    const isPendingInvoice = invoiceType === 'pending';
+    if (!isPendingInvoice) {
+      const itemsWithMissingPrice =
+        cart.data.items?.filter((item: any) => {
+          const rawPrice = item.manual_unit_price ?? item.unit_price;
+          const priceNum =
+            typeof rawPrice === 'string'
+              ? parseFloat(rawPrice)
+              : Number(rawPrice ?? 0);
+          return !rawPrice || isNaN(priceNum) || priceNum <= 0;
+        }) || [];
+
+      if (itemsWithMissingPrice.length > 0) {
+        const names = itemsWithMissingPrice
+          .map((item: any) => item.product_name || item.product?.name || 'Unknown product')
+          .join(', ');
+        alert(
+          `All items must have a selling price before checkout.\n` +
+          `These item(s) are missing prices or have zero price: ${names}.`
+        );
+        return;
+      }
+    }
+
     // Validate split payments for mixed type
     if (invoiceType === 'mixed') {
       const total = calculateTotal();
@@ -2037,14 +2088,11 @@ export default function POS() {
     }
 
     // FIRST: UI-level check - Check if this barcode is already in the cart BEFORE any API call
-    // This must happen synchronously, before any async operations
+    // This must happen synchronously, before any async operations (exact string match)
     if (cart?.data?.items && Array.isArray(cart.data.items)) {
       for (const item of cart.data.items) {
         const scannedBarcodes = item.scanned_barcodes || [];
-        // Direct synchronous check - no function calls, no async
         if (scannedBarcodes.some((bc: string) => bc && typeof bc === 'string' && bc.trim() === trimmedBarcode)) {
-          // Barcode already in cart - show message and return immediately
-          // NO API CALL - this is pure UI-level check
           setBarcodeInput('');
           setIsSearchTyped(false);
           setBarcodeStatus('success');
@@ -2057,8 +2105,6 @@ export default function POS() {
         }
       }
     }
-
-    // Only proceed if barcode is NOT in cart
 
 
     // Mark barcode as processing
@@ -2115,6 +2161,22 @@ export default function POS() {
         throw new Error(`Barcode "${trimmedBarcode}" not found. Please ensure the barcode is correct or scan again.`);
       }
 
+      // After API: also check if canonical/matched barcode is already in cart (handles short_code vs full barcode)
+      const canonicalForCheck = (product as any).canonical_barcode ?? matchedBarcode;
+      if (canonicalForCheck && cart?.data?.items?.length) {
+        for (const item of cart.data.items) {
+          const scannedBarcodes = item.scanned_barcodes || [];
+          if (scannedBarcodes.some((bc: string) => bc && String(bc).trim() === String(canonicalForCheck).trim())) {
+            setBarcodeInput('');
+            setIsSearchTyped(false);
+            setBarcodeStatus('success');
+            setBarcodeMessage('Item already in cart');
+            setTimeout(() => { setBarcodeStatus('idle'); setBarcodeMessage(''); }, 1500);
+            return Promise.resolve();
+          }
+        }
+      }
+
       // Double-check: if we have a matched barcode and it's not available, throw error
       if (isActualBarcode && matchedBarcode && product.barcode_available === false) {
         const errorMsg = product.sold_invoice
@@ -2131,8 +2193,7 @@ export default function POS() {
 
       // Do NOT auto-populate price - it must be entered manually
       // Use a promise-based approach for the mutation
-      // If we found a barcode match, use that exact barcode
-      // Otherwise, let backend find an available barcode automatically
+      // Use canonical_barcode from API when present so cart stores the same value backend uses (no scan vs stored mismatch)
       return new Promise<void>((resolve, reject) => {
         const mutationData: any = {
           product: product.id,
@@ -2140,9 +2201,9 @@ export default function POS() {
           unit_price: 0, // Price must be entered manually, start with 0
         };
 
-        // Always use the exact scanned barcode - what the user scanned should be what gets added
-        // The backend will validate that this barcode exists and belongs to the product
-        mutationData.barcode = trimmedBarcode;
+        // Use canonical_barcode from API so what we send is exactly what gets stored in cart (concrete logic)
+        const barcodeToSend = (product as any).canonical_barcode ?? matchedBarcode ?? trimmedBarcode;
+        mutationData.barcode = barcodeToSend;
 
         addItemMutation.mutate(
           mutationData,
