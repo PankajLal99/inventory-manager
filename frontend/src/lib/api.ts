@@ -122,16 +122,21 @@ export const productsApi = {
     return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
   },
   generateLabel: (zplCode: string) => api.post('/products/generate-label/', { zpl_code: zplCode }),
-  generateLabels: (productId: number, purchaseId?: number) => {
+  generateLabels: (productId: number, purchaseId?: number, supplierId?: string) => {
     const data = purchaseId ? { purchase_id: purchaseId } : {};
-    return api.post(`/products/${productId}/generate-labels/`, data);
+    const params = supplierId ? { supplier: supplierId } : {};
+    return api.post(`/products/${productId}/generate-labels/`, data, { params });
   },
-  getLabels: (productId: number, purchaseId?: number) => {
-    const params = purchaseId ? { purchase_id: purchaseId } : {};
+  getLabels: (productId: number, purchaseId?: number, supplierId?: string) => {
+    const params: Record<string, number | string> = {};
+    if (purchaseId) params.purchase_id = purchaseId;
+    if (supplierId) params.supplier = supplierId;
     return api.get(`/products/${productId}/labels/`, { params });
   },
-  labelsStatus: (productId: number, purchaseId?: number) => {
-    const params = purchaseId ? { purchase_id: purchaseId } : {};
+  labelsStatus: (productId: number, purchaseId?: number, supplierId?: string) => {
+    const params: Record<string, number | string> = {};
+    if (purchaseId) params.purchase_id = purchaseId;
+    if (supplierId) params.supplier = supplierId;
     return api.get(`/products/${productId}/labels-status/`, { params });
   },
   regenerateLabels: (productId: number, purchaseId?: number) => {

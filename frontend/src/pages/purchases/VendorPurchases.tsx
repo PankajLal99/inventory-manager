@@ -54,7 +54,8 @@ export default function VendorPurchases() {
     queryKey: ['vendor-purchases', supplierId],
     queryFn: async () => {
       if (!supplierId) return { results: [] };
-      const response = await purchasingApi.vendorPurchases.list(supplierId);
+      // Only show draft purchases on vendor-purchases page (vendors create/edit drafts)
+      const response = await purchasingApi.vendorPurchases.list(supplierId, { status: 'draft' });
       return response.data;
     },
     enabled: !!supplierId,
@@ -131,7 +132,7 @@ export default function VendorPurchases() {
   }, [showForm, showProductDropdown, products, productSearch]);
 
   // Helper function to auto-generate labels for all products in a purchase (async, non-blocking)
-  const autoGenerateLabels = (items: any[]) => {
+  const autoGenerateLabels = (items: any[], purchaseId?: number) => {
     // Extract product IDs from items (handle both PurchaseItem format and API response format)
     const productIds = items
       .map(item => item.product || item.product_id || (typeof item === 'object' && item.product))
@@ -149,7 +150,7 @@ export default function VendorPurchases() {
         try {
           // Check if labels are already generated
           try {
-            const statusResponse = await productsApi.labelsStatus(productId);
+            const statusResponse = await productsApi.labelsStatus(productId, purchaseId, supplierId || undefined);
             if (statusResponse.data?.all_generated) {
               // Already generated, skip
               return;
@@ -159,7 +160,7 @@ export default function VendorPurchases() {
           }
           
           // Generate labels in background (don't await - let it run async)
-          productsApi.generateLabels(productId).catch((error) => {
+          productsApi.generateLabels(productId, purchaseId, supplierId || undefined).catch((error) => {
             // Log error but don't block user - labels can be generated manually
             console.error(`Background label generation failed for product ${productId}:`, error);
           });
@@ -182,9 +183,10 @@ export default function VendorPurchases() {
       
       // Auto-generate labels for all products in the background (async, non-blocking)
       if (items.length > 0) {
+        const createdPurchaseId = createdPurchase?.id ? parseInt(String(createdPurchase.id)) : undefined;
         // Wait a bit for barcodes to be fully created in backend
         setTimeout(() => {
-          autoGenerateLabels(items);
+          autoGenerateLabels(items, createdPurchaseId);
         }, 1000);
       }
       
@@ -208,9 +210,10 @@ export default function VendorPurchases() {
       
       // Auto-generate labels for all products in the background (async, non-blocking)
       if (items.length > 0) {
+        const updatedPurchaseId = updatedPurchase?.id ? parseInt(String(updatedPurchase.id)) : undefined;
         // Wait a bit for barcodes to be fully created/updated in backend
         setTimeout(() => {
-          autoGenerateLabels(items);
+          autoGenerateLabels(items, updatedPurchaseId);
         }, 1000);
       }
       

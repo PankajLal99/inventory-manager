@@ -53,8 +53,9 @@ export default function VendorPurchaseDetail() {
             }
           }));
 
-          // Check label status first
-          productsApi.labelsStatus(productId)
+          // Check label status first (pass supplier & purchase_id for unauthenticated vendor access)
+          const purchaseIdForLabels = purchase?.id ? parseInt(String(purchase.id)) : undefined;
+          productsApi.labelsStatus(productId, purchaseIdForLabels, supplierId || undefined)
             .then((response) => {
               if (response.data) {
                 const allGenerated = response.data.all_generated || false;
@@ -78,8 +79,8 @@ export default function VendorPurchaseDetail() {
                     }
                   }));
 
-                  // Generate labels in background
-                  productsApi.generateLabels(productId)
+                  // Generate labels in background (pass supplier & purchase_id for unauthenticated vendor access)
+                  productsApi.generateLabels(productId, purchaseIdForLabels, supplierId || undefined)
                     .then((response) => {
                       // Check the response directly - if total_labels > 0, labels were generated
                       const totalLabels = response.data?.total_labels || 0;
@@ -95,7 +96,7 @@ export default function VendorPurchaseDetail() {
 
                       // Optionally verify with status check for extra confirmation
                       // But don't wait for it - update UI immediately based on response
-                      productsApi.labelsStatus(productId)
+                      productsApi.labelsStatus(productId, purchaseIdForLabels, supplierId || undefined)
                         .then((statusResponse) => {
                           const nowGenerated = statusResponse.data?.all_generated || false;
                           setLabelStatuses(prev => ({
@@ -175,7 +176,7 @@ export default function VendorPurchaseDetail() {
 
   const generateLabelsMutation = useMutation({
     mutationFn: ({ productId, purchaseId }: { productId: number; purchaseId?: number }) =>
-      productsApi.generateLabels(productId, purchaseId),
+      productsApi.generateLabels(productId, purchaseId, supplierId || undefined),
     onSuccess: (data, { productId }) => {
       setLabelStatuses(prev => ({
         ...prev,
@@ -216,8 +217,8 @@ export default function VendorPurchaseDetail() {
   const handlePrintLabels = async (product: any) => {
     try {
       // Fetch existing labels filtered by this purchase (without generating new ones)
-      const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
-      const response = await productsApi.getLabels(product.id, purchaseId);
+      const purchaseId = purchase?.id ? parseInt(String(purchase.id)) : undefined;
+      const response = await productsApi.getLabels(product.id, purchaseId, supplierId || undefined);
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
       } else {
@@ -256,11 +257,11 @@ export default function VendorPurchaseDetail() {
       const productIds = trackableItems.map((item: any) => item.product);
 
       // Generate/fetch labels for all products, filtered by this purchase
-      const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
+      const purchaseId = purchase?.id ? parseInt(String(purchase.id)) : undefined;
       const labelPromises = productIds.map(async (productId: number) => {
         try {
           // Use getLabels to fetch existing labels filtered by purchase
-          const response = await productsApi.getLabels(productId, purchaseId);
+          const response = await productsApi.getLabels(productId, purchaseId, supplierId || undefined);
           if (response.data?.labels) {
             return response.data.labels;
           }
