@@ -2,6 +2,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from backend.core.permissions import IsAuthenticatedOrVendorPurchaseLabels
 from django.db.models import Q, Count
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -777,7 +778,7 @@ def product_generate_label(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticatedOrVendorPurchaseLabels])
 def product_generate_labels(request, pk):
     """Batch generate labels for all barcodes of a product - OPTIMIZED for shared hosting
     
@@ -1092,7 +1093,7 @@ def product_generate_labels(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticatedOrVendorPurchaseLabels])
 def product_get_labels(request, pk):
     """Get existing labels for a product (without generating new ones)
     
@@ -1146,7 +1147,7 @@ def product_get_labels(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticatedOrVendorPurchaseLabels])
 def product_labels_status(request, pk):
     """Check if labels are already generated for a product
     
