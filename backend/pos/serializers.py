@@ -184,11 +184,12 @@ class InvoiceSerializer(serializers.ModelSerializer):
 class ReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
     product_sku = serializers.SerializerMethodField()
+    product_brand_name = serializers.SerializerMethodField()
     barcode_value = serializers.SerializerMethodField()
 
     class Meta:
         model = ReturnItem
-        fields = ['id', 'invoice_item', 'product', 'product_name', 'product_sku', 'barcode_value', 'quantity', 'condition', 'refund_amount']
+        fields = ['id', 'invoice_item', 'product', 'product_name', 'product_sku', 'product_brand_name', 'barcode_value', 'quantity', 'condition', 'refund_amount']
 
     def get_product_name(self, obj):
         if obj.product_name:
@@ -203,6 +204,12 @@ class ReturnItemSerializer(serializers.ModelSerializer):
         if obj.invoice_item and obj.invoice_item.product:
             return obj.invoice_item.product.sku
         return ""
+
+    def get_product_brand_name(self, obj):
+        product = obj.product or (obj.invoice_item.product if obj.invoice_item else None)
+        if product and product.brand:
+            return product.brand.name
+        return None
 
     def get_barcode_value(self, obj):
         if obj.barcode:

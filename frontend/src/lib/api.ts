@@ -117,6 +117,8 @@ export const productsApi = {
   delete: (id: number) => api.delete(`/products/${id}/`),
   variants: (id: number) => api.get(`/products/${id}/variants/`),
   barcodes: (id: number, params?: any) => api.get(`/products/${id}/barcodes/`, { params }),
+  barcodesFull: (id: number) => api.get(`/products/${id}/barcodes-full/`),
+  invoices: (id: number) => api.get(`/products/${id}/invoices/`),
   byBarcode: (barcode: string, barcodeOnly: boolean = false) => {
     const params = barcodeOnly ? { barcode_only: 'true' } : {};
     return api.get(`/barcodes/by-barcode/${barcode}/`, { params });

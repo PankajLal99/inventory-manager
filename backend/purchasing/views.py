@@ -19,12 +19,15 @@ def purchase_list_create(request):
         
         # Filters
         supplier = request.query_params.get('supplier', None)
+        product = request.query_params.get('product', None)
         date_from = request.query_params.get('date_from', None)
         date_to = request.query_params.get('date_to', None)
         status_filter = request.query_params.get('status', None)
 
         if supplier:
             queryset = queryset.filter(supplier_id=supplier)
+        if product:
+            queryset = queryset.filter(items__product_id=product).distinct()
         if date_from:
             queryset = queryset.filter(purchase_date__gte=date_from)
         if date_to:
@@ -662,13 +665,19 @@ def vendor_purchase_cancel(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def purchase_redistribute_stock(request, pk):
-    """Redistribute stock for a finalized purchase between shop and warehouse"""
+    """Redistribute stock for a finalized purchase between shop and warehouse.
+    Uses purchase.store (Store model) for shop stock and purchase.warehouse (Warehouse model)
+    or Store with shop_type='warehouse' for warehouse stock. Falls back to first active location if not set.
+    """
     from django.db import transaction
     from backend.inventory.models import Stock
     from backend.locations.models import Store, Warehouse
     from decimal import Decimal
     
-    purchase = get_object_or_404(Purchase.objects.prefetch_related('items', 'items__product'), pk=pk)
+    purchase = get_object_or_404(
+        Purchase.objects.select_related('store', 'warehouse').prefetch_related('items', 'items__product'),
+        pk=pk
+    )
     
     if purchase.status != 'finalized':
         return Response(
@@ -683,6 +692,23 @@ def purchase_redistribute_stock(request, pk):
     if not items_distribution:
         return Response({'error': 'Distribution data is required.'}, status=status.HTTP_400_BAD_REQUEST)
     
+    # Use purchase's store/warehouse from Purchase model; fallback to defaults if not set
+    shop_store = purchase.store
+    if not shop_store:
+        shop_store = Store.objects.filter(shop_type='retail', is_active=True).first()
+    if not shop_store:
+        shop_store = Store.objects.filter(is_active=True).exclude(shop_type='warehouse').first()
+
+    warehouse_obj = purchase.warehouse
+    warehouse_store = None  # Store with shop_type='warehouse' as alternative
+    if not warehouse_obj:
+        # Prefer Warehouse with code GODOWN (primary warehouse)
+        warehouse_obj = Warehouse.objects.filter(code='GODOWN', is_active=True).first()
+    if not warehouse_obj:
+        warehouse_store = Store.objects.filter(shop_type='warehouse', is_active=True).first()
+    if not warehouse_obj and not warehouse_store:
+        warehouse_obj = Warehouse.objects.filter(is_active=True).first()
+
     with transaction.atomic():
         for dist in items_distribution:
             item_id = dist.get('item_id')
@@ -708,38 +734,63 @@ def purchase_redistribute_stock(request, pk):
             shop_diff = new_shop_qty - item.shop_quantity
             wh_diff = new_wh_qty - item.warehouse_quantity
             
+            # Validation: ensure Stock won't go negative (shop/warehouse may have less than PurchaseItem due to sales)
+            if shop_diff < 0 and shop_store:
+                shop_stock, _ = Stock.objects.get_or_create(
+                    product=item.product, variant=item.variant, store=shop_store, warehouse=None,
+                    defaults={'quantity': Decimal('0.000')}
+                )
+                if shop_stock.quantity + shop_diff < 0:
+                    return Response(
+                        {'error': f"Cannot move {abs(shop_diff)} from shop for {item.product.name}. "
+                                  f"Only {shop_stock.quantity} in shop (some may have been sold)."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            if wh_diff < 0:
+                wh_stock = None
+                if warehouse_obj:
+                    wh_stock, _ = Stock.objects.get_or_create(
+                        product=item.product, variant=item.variant, store=None, warehouse=warehouse_obj,
+                        defaults={'quantity': Decimal('0.000')}
+                    )
+                elif warehouse_store:
+                    wh_stock, _ = Stock.objects.get_or_create(
+                        product=item.product, variant=item.variant, store=warehouse_store, warehouse=None,
+                        defaults={'quantity': Decimal('0.000')}
+                    )
+                if wh_stock and wh_stock.quantity + wh_diff < 0:
+                    return Response(
+                        {'error': f"Cannot move {abs(wh_diff)} from warehouse for {item.product.name}. "
+                                  f"Only {wh_stock.quantity} in warehouse."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
             # Update PurchaseItem
             item.shop_quantity = new_shop_qty
             item.warehouse_quantity = new_wh_qty
             item.save()
             
-            # Update Shop Stock
-            if shop_diff != 0:
-                shop = Store.objects.filter(shop_type='retail', is_active=True).first()
-                if not shop: shop = Store.objects.filter(is_active=True).exclude(shop_type='warehouse').first()
-                if shop:
+            # Update Shop Stock (use Store model: purchase.store or first retail store)
+            if shop_diff != 0 and shop_store:
+                stock, _ = Stock.objects.get_or_create(
+                    product=item.product, variant=item.variant, store=shop_store, warehouse=None,
+                    defaults={'quantity': Decimal('0.000')}
+                )
+                stock.quantity += shop_diff
+                stock.save()
+            
+            # Update Warehouse Stock (use Warehouse model or Store with shop_type='warehouse')
+            if wh_diff != 0:
+                if warehouse_obj:
                     stock, _ = Stock.objects.get_or_create(
-                        product=item.product, variant=item.variant, store=shop, warehouse=None,
+                        product=item.product, variant=item.variant, store=None, warehouse=warehouse_obj,
                         defaults={'quantity': Decimal('0.000')}
                     )
-                    stock.quantity += shop_diff
+                    stock.quantity += wh_diff
                     stock.save()
-            
-            # Update Warehouse Stock
-            if wh_diff != 0:
-                warehouse = Warehouse.objects.filter(is_active=True).first()
-                if not warehouse:
-                    warehouse_store = Store.objects.filter(shop_type='warehouse', is_active=True).first()
-                    if warehouse_store:
-                        stock, _ = Stock.objects.get_or_create(
-                            product=item.product, variant=item.variant, store=warehouse_store, warehouse=None,
-                            defaults={'quantity': Decimal('0.000')}
-                        )
-                        stock.quantity += wh_diff
-                        stock.save()
-                else:
+                elif warehouse_store:
                     stock, _ = Stock.objects.get_or_create(
-                        product=item.product, variant=item.variant, store=None, warehouse=warehouse,
+                        product=item.product, variant=item.variant, store=warehouse_store, warehouse=None,
                         defaults={'quantity': Decimal('0.000')}
                     )
                     stock.quantity += wh_diff
