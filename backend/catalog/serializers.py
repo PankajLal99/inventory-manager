@@ -584,10 +584,13 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_supplier_breakdown(self, obj):
         """
-        Breakdown by supplier. Shop and warehouse quantities are from purchase only
-        (PurchaseItem.shop_quantity / warehouse_quantity). Unknown tag does NOT mean warehouse.
+        Breakdown by supplier. Warehouse from purchase (PurchaseItem.warehouse_quantity).
+        Shop Qty = in shop only = max(0, purchase shop_quantity - sold barcode count per supplier).
         """
         from backend.purchasing.models import PurchaseItem
+        from backend.parties.models import Supplier
+        from django.db.models import Count
+
         items = PurchaseItem.objects.filter(
             product=obj,
             purchase__status='finalized'
@@ -602,15 +605,43 @@ class ProductListSerializer(serializers.ModelSerializer):
                     'supplier': supplier_name,
                     'shop_stock': 0.0,
                     'warehouse_stock': 0.0,
+                    'sold_count': 0,
                     'prices': set(),
                 }
             breakdown_map[supplier_name]['shop_stock'] += float(item.shop_quantity)
             breakdown_map[supplier_name]['warehouse_stock'] += float(item.warehouse_quantity)
             if item.unit_price:
                 breakdown_map[supplier_name]['prices'].add(float(item.unit_price))
+
+        # Per-supplier sold barcode count (one aggregation)
+        sold_counts = obj.barcodes.filter(
+            tag='sold'
+        ).values('purchase__supplier').annotate(
+            sold_count=Count('id')
+        )
+        supplier_ids = [r['purchase__supplier'] for r in sold_counts if r['purchase__supplier'] is not None]
+        supplier_name_by_id = {}
+        if supplier_ids:
+            for s in Supplier.objects.filter(id__in=supplier_ids).only('id', 'code', 'name'):
+                supplier_name_by_id[s.id] = s.code or s.name
+        for r in sold_counts:
+            sid = r['purchase__supplier']
+            supplier_name = supplier_name_by_id.get(sid, "Unknown") if sid is not None else "Unknown"
+            if supplier_name not in breakdown_map:
+                breakdown_map[supplier_name] = {
+                    'supplier': supplier_name,
+                    'shop_stock': 0.0,
+                    'warehouse_stock': 0.0,
+                    'sold_count': 0,
+                    'prices': set(),
+                }
+            breakdown_map[supplier_name]['sold_count'] += r['sold_count']
+
         breakdown = []
         for supplier, data in breakdown_map.items():
-            if data['shop_stock'] == 0 and data['warehouse_stock'] == 0:
+            # Shop Qty = in shop only = max(0, shop_quantity - sold from this supplier)
+            shop_qty = max(0.0, data['shop_stock'] - data['sold_count'])
+            if data['shop_stock'] == 0 and data['warehouse_stock'] == 0 and shop_qty == 0:
                 continue
             prices = sorted(list(data['prices'])) if data['prices'] else [0]
             price_str = "/".join([f"₹{p:g}" for p in prices])
@@ -619,8 +650,9 @@ class ProductListSerializer(serializers.ModelSerializer):
                 'price': price_str,
                 'shop_stock': data['shop_stock'],
                 'warehouse_stock': data['warehouse_stock'],
+                'shop_barcode_count': shop_qty,  # Shop Qty = in shop only (shop - sold)
             })
-        return sorted(breakdown, key=lambda x: x['shop_stock'] + x['warehouse_stock'], reverse=True)
+        return sorted(breakdown, key=lambda x: x['shop_barcode_count'] + x['warehouse_stock'], reverse=True)
 
     class Meta:
         model = Product
