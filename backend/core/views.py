@@ -365,6 +365,8 @@ def global_search(request):
     # Search Products: use name_only so "FOLDER BKC" matches "FOLDER BKC 8A" (all words in name)
     if search_type in ['all', 'product']:
         from backend.catalog.filters import ProductFilter
+        from backend.pos.models import CartItem
+
         products_queryset = Product.objects.filter(is_active=True).prefetch_related(
             'barcodes',
             'barcodes__purchase__supplier',
@@ -377,7 +379,20 @@ def global_search(request):
             queryset=products_queryset
         )
         products = products_filter.qs.order_by('name')[:product_limit]
-        add_to_results('products', products, ProductListSerializer, context={'request': request})
+
+        # Pass active_cart_barcodes so available_quantity matches Products page (barcode count is source of truth)
+        active_cart_barcodes = set()
+        for item in CartItem.objects.filter(cart__status='active').exclude(
+            scanned_barcodes__isnull=True
+        ).exclude(scanned_barcodes=[]).only('scanned_barcodes'):
+            if item.scanned_barcodes:
+                active_cart_barcodes.update(item.scanned_barcodes)
+
+        product_context = {
+            'request': request,
+            'active_cart_barcodes': active_cart_barcodes,
+        }
+        add_to_results('products', products, ProductListSerializer, context=product_context)
     
     # Search Product Variants (SKU Search)
     if search_type in ['all', 'sku']:
@@ -389,12 +404,13 @@ def global_search(request):
             variants = ProductVariant.objects.filter(Q(sku__icontains=query))[:20]
         add_to_results('variants', variants, ProductVariantSerializer)
     
-    # Search Barcodes
+    # Search Barcodes - exact match for barcode value and tag
     if search_type in ['all', 'barcode', 'barcode_status']:
-        barcode_q = Q(barcode__icontains=query)
+        query_upper = query.upper()
+        barcode_q = Q(barcode__iexact=query_upper)
         if search_type == 'barcode_status':
-            # Also search by tag if it matches
-            barcode_q |= Q(tag__icontains=query.lower())
+            # Also search by tag (exact match, e.g. "sold", "new", "returned")
+            barcode_q |= Q(tag__iexact=query.lower())
             
         barcodes = Barcode.objects.filter(barcode_q).prefetch_related('invoice_items__invoice')[:20]
         add_to_results('barcodes', barcodes, BarcodeSerializer)

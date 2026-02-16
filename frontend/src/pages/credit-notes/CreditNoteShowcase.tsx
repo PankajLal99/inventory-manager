@@ -70,11 +70,35 @@ export default function CreditNoteShowcase() {
     const returnedItems = Array.isArray(returnDetails.items) ? returnDetails.items :
         Array.isArray(creditNote.items) ? creditNote.items : [];
 
+    // Group items by product + brand: one product row with all barcodes listed
+    type GroupedProduct = { productName: string; productBrandName?: string | null; productSku: string; barcodes: string[]; totalQty: number; items: any[] };
+    const groupedByProduct = (() => {
+        const groups = new Map<string, GroupedProduct>();
+        for (const item of returnedItems) {
+            const key = `${item.product ?? 0}|${item.product_name ?? ''}|${item.product_sku ?? ''}|${item.product_brand_name ?? ''}`;
+            if (!groups.has(key)) {
+                groups.set(key, {
+                    productName: item.product_name || 'Unknown',
+                    productBrandName: item.product_brand_name ?? null,
+                    productSku: item.product_sku || '',
+                    barcodes: [],
+                    totalQty: 0,
+                    items: [],
+                });
+            }
+            const g = groups.get(key)!;
+            g.items.push(item);
+            g.totalQty += parseFloat(item.quantity || 0);
+            if (item.barcode_value) g.barcodes.push(item.barcode_value);
+        }
+        return Array.from(groups.values());
+    })();
+
     const generateA4CreditNoteHTML = (isPreview = false) => {
         const cnDate = formatDateForInvoice(creditNote.created_at);
         const companyName = 'Manish Traders';
         const companyAddress = 'Shop Number124-A Ground Floor\nChaitaniya Market Ghoda Nikkas Bhopal';
-        const totalPcs = returnedItems.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0);
+        const totalPcs = groupedByProduct.reduce((sum, g) => sum + g.totalQty, 0);
 
         return `
 <!DOCTYPE html>
@@ -162,10 +186,10 @@ export default function CreditNoteShowcase() {
                     </tr>
                 </thead>
                 <tbody>
-                    ${returnedItems.map((item: any) => `
+                    ${groupedByProduct.map((g: GroupedProduct) => `
                         <tr>
-                            <td>${item.product_name} ${item.product_brand_name ? `(${item.product_brand_name})` : ''}</td>
-                            <td class="text-center">${formatNumber(item.quantity, 3)}</td>
+                            <td>${g.productName}${g.productBrandName ? ` (${g.productBrandName})` : ''}${g.barcodes.length > 0 ? `<br><small style="color:#666;">Barcodes: ${g.barcodes.join(', ')}</small>` : ''}</td>
+                            <td class="text-center">${formatNumber(g.totalQty, 3)}</td>
                         </tr>
                     `).join('')}
                     <tr style="height: 100%;"><td style="border-bottom: none;"></td><td style="border-bottom: none;"></td></tr>
@@ -282,10 +306,10 @@ export default function CreditNoteShowcase() {
             </tr>
         </thead>
         <tbody>
-            ${returnedItems.map((item: any) => `
+            ${groupedByProduct.map((g: GroupedProduct) => `
                 <tr>
-                    <td>${(item.product_name || 'Unknown').substring(0, 30)}</td>
-                    <td class="text-right">${item.quantity}</td>
+                    <td>${(g.productName + (g.productBrandName ? ` (${g.productBrandName})` : '')).substring(0, 30)}${g.barcodes.length > 0 ? '<br><small>Barcodes: ' + g.barcodes.slice(0, 5).join(', ') + (g.barcodes.length > 5 ? '...' : '') + '</small>' : ''}</td>
+                    <td class="text-right">${formatNumber(g.totalQty, 0)}</td>
                 </tr>
             `).join('')}
         </tbody>
@@ -435,27 +459,41 @@ export default function CreditNoteShowcase() {
                     <Card>
                         <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                             <ShoppingBag className="h-5 w-5 text-gray-400" />
-                            Returned Items ({returnedItems.length})
+                            Returned Items ({groupedByProduct.length} product{groupedByProduct.length !== 1 ? 's' : ''}, {returnedItems.length} barcode{returnedItems.length !== 1 ? 's' : ''})
                         </h3>
                         <div className="overflow-x-auto">
-                            <Table headers={['Product Details', 'SKU', 'Quantity']}>
-                                {returnedItems.length === 0 ? (
+                            <Table headers={['Product (Brand)', 'Barcodes', 'Quantity']}>
+                                {groupedByProduct.length === 0 ? (
                                     <TableRow>
                                         <TableCell colSpan={3} className="text-center py-8 text-gray-500">
                                             No items found in this return.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    returnedItems.map((item: any) => (
-                                        <TableRow key={item.id}>
+                                    groupedByProduct.map((g, idx) => (
+                                        <TableRow key={idx}>
                                             <TableCell>
-                                                <span className="font-semibold text-gray-900">{item.product_name}</span>
+                                                <span className="font-semibold text-gray-900">{g.productName}</span>
+                                                {g.productBrandName && (
+                                                    <span className="text-gray-500 font-normal"> ({g.productBrandName})</span>
+                                                )}
+                                                {g.productSku && (
+                                                    <p className="text-xs text-gray-500 font-mono mt-0.5">SKU: {g.productSku}</p>
+                                                )}
                                             </TableCell>
                                             <TableCell>
-                                                <span className="text-xs text-gray-600 font-mono">{item.product_sku}</span>
+                                                {g.barcodes.length > 0 ? (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {g.barcodes.map((b, i) => (
+                                                            <span key={i} className="text-xs font-mono bg-gray-100 px-2 py-0.5 rounded">{b}</span>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-gray-400 text-sm">—</span>
+                                                )}
                                             </TableCell>
                                             <TableCell>
-                                                <span className="font-bold text-gray-900">{item.quantity}</span>
+                                                <span className="font-bold text-gray-900">{formatNumber(g.totalQty, 0)}</span>
                                             </TableCell>
                                         </TableRow>
                                     ))
@@ -471,13 +509,13 @@ export default function CreditNoteShowcase() {
                         <h3 className="text-lg font-semibold text-gray-900 mb-4 border-b pb-4">Summary</h3>
                         <div className="space-y-4">
                             <div className="flex justify-between items-center py-2">
-                                <span className="text-sm text-gray-600">Items Count</span>
-                                <span className="text-sm font-medium text-gray-900">{returnedItems.length}</span>
+                                <span className="text-sm text-gray-600">Products</span>
+                                <span className="text-sm font-medium text-gray-900">{groupedByProduct.length}</span>
                             </div>
                             <div className="flex justify-between items-center py-2">
                                 <span className="text-sm text-gray-600">Total Returned Qty</span>
                                 <span className="text-sm font-medium text-gray-900">
-                                    {returnedItems.reduce((sum: number, item: any) => sum + parseFloat(item.quantity || 0), 0)}
+                                    {groupedByProduct.reduce((sum, g) => sum + g.totalQty, 0)}
                                 </span>
                             </div>
                             <div className="pt-6 border-t border-gray-100">

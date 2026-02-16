@@ -1,4 +1,5 @@
 from decimal import Decimal
+from django.db.models import Sum
 from rest_framework import serializers
 from .models import Category, Brand, TaxRate, Product, ProductVariant, Barcode, ProductComponent, DefectiveProductMoveOut, DefectiveProductItem
 
@@ -34,6 +35,7 @@ class BarcodeSerializer(serializers.ModelSerializer):
     purchase_date = serializers.SerializerMethodField()
     invoice_number = serializers.SerializerMethodField()
     invoice_id = serializers.SerializerMethodField()
+    invoice_date = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
     invoice_type_display = serializers.SerializerMethodField()
     sold_price = serializers.SerializerMethodField()
@@ -44,7 +46,7 @@ class BarcodeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 
             'tag', 'tag_display', 'purchase_price', 'supplier_name', 'purchase_date', 
-            'invoice_number', 'invoice_id', 'customer_name', 'invoice_type_display',
+            'invoice_number', 'invoice_id', 'invoice_date', 'customer_name', 'invoice_type_display',
             'sold_price', 'sold_quantity', 'created_at'
         ]
     
@@ -96,6 +98,13 @@ class BarcodeSerializer(serializers.ModelSerializer):
         """Get invoice ID if barcode is sold"""
         item = self._get_active_invoice_item(obj)
         return item.invoice.id if item and item.invoice else None
+
+    def get_invoice_date(self, obj):
+        """Get invoice date if barcode is sold"""
+        item = self._get_active_invoice_item(obj)
+        if item and item.invoice and item.invoice.created_at:
+            return item.invoice.created_at.isoformat()
+        return None
 
     def get_customer_name(self, obj):
         """Get customer name if sold"""
@@ -164,6 +173,8 @@ class ProductSerializer(serializers.ModelSerializer):
     sku = serializers.CharField(read_only=True)
     stock_quantity = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
+    shop_stock = serializers.SerializerMethodField()
+    warehouse_stock = serializers.SerializerMethodField()
     stock_bifurcation = serializers.SerializerMethodField()
     price_bifurcation = serializers.SerializerMethodField()
 
@@ -286,29 +297,27 @@ class ProductSerializer(serializers.ModelSerializer):
         return float(total)
 
     def get_available_quantity(self, obj):
-        """Available to sell = barcode count (new+returned, minus in-cart) capped by shop stock.
-        When no distribution (0 shop, 0 warehouse), return raw barcode count.
+        """Available to sell = barcode count with tag 'new' or 'returned'.
+        Single source of truth: count of barcodes available for sale.
         """
-        from backend.pos.models import CartItem
+        available_count = obj.barcodes.filter(tag__in=['new', 'returned']).count()
+        return float(max(0, available_count))
 
-        available_barcodes = obj.barcodes.filter(tag__in=['new', 'returned'])
-        if obj.track_inventory:
-            active_carts_barcodes = set()
-            cart_items = CartItem.objects.filter(
-                cart__status='active'
-            ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-            for cart_item in cart_items:
-                if cart_item.scanned_barcodes:
-                    active_carts_barcodes.update(cart_item.scanned_barcodes)
-            if active_carts_barcodes:
-                available_barcodes = available_barcodes.exclude(barcode__in=active_carts_barcodes)
-        available_count = float(max(0, available_barcodes.count()))
+    def get_shop_stock(self, obj):
+        """Quantity in retail shops (store where shop_type != 'warehouse')."""
+        total = Decimal('0.000')
+        for entry in obj.stock_entries.all():
+            if entry.store and entry.store.shop_type != 'warehouse':
+                total += entry.quantity
+        return int(round(float(max(Decimal('0'), total))))
 
-        shop_stock = self._shop_stock(obj)
-        warehouse_stock = self._warehouse_stock(obj)
-        if shop_stock == 0 and warehouse_stock == 0:
-            return available_count
-        return min(available_count, shop_stock)
+    def get_warehouse_stock(self, obj):
+        """Quantity in warehouse."""
+        total = Decimal('0.000')
+        for entry in obj.stock_entries.all():
+            if entry.warehouse or (entry.store and entry.store.shop_type == 'warehouse'):
+                total += entry.quantity
+        return int(round(float(max(Decimal('0'), total))))
 
     class Meta:
         model = Product
@@ -317,7 +326,8 @@ class ProductSerializer(serializers.ModelSerializer):
             'brand', 'brand_id', 'brand_name',
             'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
             'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
-            'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'stock_bifurcation', 'price_bifurcation'
+            'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'shop_stock', 'warehouse_stock',
+            'stock_bifurcation', 'price_bifurcation'
         ]
 
 
@@ -426,22 +436,41 @@ class ProductListSerializer(serializers.ModelSerializer):
         
         return BarcodeSerializer(filtered_barcodes, many=True).data
 
+    def _get_new_returned_count(self, obj):
+        """Count of barcodes with tag 'new' or 'returned' (available to sell)."""
+        return float(obj.barcodes.filter(tag__in=['new', 'returned']).count())
+
+    def _get_shop_from_purchase(self, obj):
+        """Shop qty from purchase only: sum of PurchaseItem.shop_quantity (no addition/subtraction)."""
+        from backend.purchasing.models import PurchaseItem
+        total = PurchaseItem.objects.filter(
+            product=obj,
+            purchase__status='finalized'
+        ).aggregate(s=Sum('shop_quantity'))['s']
+        return float(total or 0)
+
+    def _get_warehouse_from_purchase(self, obj):
+        """Warehouse qty from purchase only: sum of PurchaseItem.warehouse_quantity (no addition/subtraction)."""
+        from backend.purchasing.models import PurchaseItem
+        total = PurchaseItem.objects.filter(
+            product=obj,
+            purchase__status='finalized'
+        ).aggregate(s=Sum('warehouse_quantity'))['s']
+        return float(total or 0)
+
+    def get_available_quantity(self, obj):
+        """Available = (barcodes new+returned) - warehouse_qty from purchase. If negative, 0."""
+        new_returned = self._get_new_returned_count(obj)
+        warehouse_qty = self._get_warehouse_from_purchase(obj)
+        return float(max(0, new_returned - warehouse_qty))
+
     def get_shop_stock(self, obj):
-        """Calculate total quantity in retail shops"""
-        # Prefetched stock_entries
-        total = Decimal('0.000')
-        for entry in obj.stock_entries.all():
-            if entry.store and entry.store.shop_type != 'warehouse':
-                total += entry.quantity
-        return float(total)
+        """Shop qty = number from purchase only (sum of shop_quantity). No addition/subtraction."""
+        return self._get_shop_from_purchase(obj)
 
     def get_warehouse_stock(self, obj):
-        """Calculate total quantity in warehouses"""
-        total = Decimal('0.000')
-        for entry in obj.stock_entries.all():
-            if entry.warehouse or (entry.store and entry.store.shop_type == 'warehouse'):
-                total += entry.quantity
-        return float(total)
+        """Warehouse qty = number from purchase only (sum of warehouse_quantity). No addition/subtraction."""
+        return self._get_warehouse_from_purchase(obj)
 
     def get_stock_quantity(self, obj):
         """Calculate total stock quantity from barcodes - SUPREME SOURCE OF TRUTH
@@ -457,50 +486,6 @@ class ProductListSerializer(serializers.ModelSerializer):
         # Count ALL barcodes, excluding sold
         barcode_count = obj.barcodes.exclude(tag='sold').count()
         return float(barcode_count)
-
-    def get_available_quantity(self, obj):
-        """Available to sell = barcode count (new+returned, minus in-cart) capped by shop_stock.
-        Barcode count is single source of truth; user can only sell what is in shop.
-        E.g. 100 barcodes, 50 shop / 50 warehouse -> show 50. 10 barcodes, 20 shop / 80 warehouse -> show 10.
-        """
-        from backend.pos.models import CartItem
-
-        available_barcodes = obj.barcodes.filter(tag__in=['new', 'returned'])
-
-        if obj.track_inventory:
-            active_cart_barcodes = self.context.get('active_cart_barcodes')
-            if active_cart_barcodes is not None:
-                reserved_count = sum(
-                    1 for barcode in obj.barcodes.all()
-                    if barcode.tag in ['new', 'returned'] and barcode.barcode in active_cart_barcodes
-                )
-                available_count = available_barcodes.count() - reserved_count
-            else:
-                active_carts_barcodes = set()
-                cart_items = CartItem.objects.filter(
-                    cart__status='active'
-                ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-                for cart_item in cart_items:
-                    if cart_item.scanned_barcodes:
-                        active_carts_barcodes.update(cart_item.scanned_barcodes)
-                if active_carts_barcodes:
-                    available_barcodes = available_barcodes.exclude(barcode__in=active_carts_barcodes)
-                available_count = available_barcodes.count()
-        else:
-            active_cart_product_quantities = self.context.get('active_cart_product_quantities')
-            if active_cart_product_quantities is not None:
-                reserved_qty = active_cart_product_quantities.get(obj.id, 0)
-                available_count = max(0, available_barcodes.count() - reserved_qty)
-            else:
-                available_count = available_barcodes.count()
-
-        available_count = float(max(0, available_count))
-        shop_stock = self.get_shop_stock(obj)
-        warehouse_stock = self.get_warehouse_stock(obj)
-        # No distribution data (0 shop, 0 warehouse): show raw barcode count so we don't hide stock
-        if shop_stock == 0 and warehouse_stock == 0:
-            return available_count
-        return min(available_count, shop_stock)
 
     def get_sold_quantity(self, obj):
         """Calculate sold quantity from InvoiceItems for completed invoices"""
@@ -542,29 +527,19 @@ class ProductListSerializer(serializers.ModelSerializer):
         return None
 
     def get_stock_bifurcation(self, obj):
-        """Calculate stock breakdown by supplier
-        Format: "30 AMS, 20 P+"
-        Only includes barcodes that are NOT sold
-        """
-        # Performance check: if we already have the count from annotation and it's 0, return empty
+        """Stock breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT counted."""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
 
-        # Group barcodes by supplier
         supplier_counts = {}
-        
-        # Use prefetched barcodes if available (fast path)
         all_barcodes = obj.barcodes.all()
         for barcode in all_barcodes:
-            # Only count barcodes that are NOT sold
-            if barcode.tag != 'sold':
+            if barcode.tag in ['new', 'returned']:
                 supplier_name = "Unknown"
                 if barcode.purchase and barcode.purchase.supplier:
-                    # Use supplier code if available, otherwise name
                     supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
-                
                 supplier_counts[supplier_name] = supplier_counts.get(supplier_name, 0) + 1
-            
+
         if not supplier_counts:
             return ""
             
@@ -573,21 +548,15 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ", ".join([f"{count} {name}" for name, count in sorted_counts])
 
     def get_price_bifurcation(self, obj):
-        """Calculate price breakdown by supplier
-        Format: "AMS: ₹100, P+: ₹120"
-        Only includes barcodes that are available (not sold)
-        """
-        # Performance check: if we already have the count from annotation and it's 0, return empty
+        """Price breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT included."""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
 
         supplier_prices = {}
-        
-        # Use prefetched barcodes if available (fast path)
         all_barcodes = obj.barcodes.all()
         for barcode in all_barcodes:
-            # Only count barcodes that are NOT sold
-            if barcode.tag != 'sold':
+            # Only include AVAILABLE (new+returned)
+            if barcode.tag in ['new', 'returned']:
                 supplier_name = "Unknown"
                 if barcode.purchase and barcode.purchase.supplier:
                     # Use supplier code if available, otherwise name
@@ -615,67 +584,43 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_supplier_breakdown(self, obj):
         """
-        Calculate detailed breakdown by supplier
-        Returns a list of dicts: [
-            {
-                'supplier': 'Supplier Name',
-                'price': '₹100/₹120',
-                'count': 10,
-                'shop_stock': 5,      # Estimated or product total
-                'warehouse_stock': 5  # Estimated or product total
-            }, ...
-        ]
+        Breakdown by supplier. Shop and warehouse quantities are from purchase only
+        (PurchaseItem.shop_quantity / warehouse_quantity). Unknown tag does NOT mean warehouse.
         """
-        # Group data by supplier
+        from backend.purchasing.models import PurchaseItem
+        items = PurchaseItem.objects.filter(
+            product=obj,
+            purchase__status='finalized'
+        ).select_related('purchase__supplier').order_by('purchase__supplier_id')
         breakdown_map = {}
-        
-        # Use prefetched barcodes (fast path)
-        all_barcodes = obj.barcodes.all()
-        for barcode in all_barcodes:
-            if barcode.tag != 'sold':
-                supplier_name = "Unknown"
-                if barcode.purchase and barcode.purchase.supplier:
-                    supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
-                
-                if supplier_name not in breakdown_map:
-                    breakdown_map[supplier_name] = {
-                        'supplier': supplier_name,
-                        'prices': set(),
-                        'count': 0
-                    }
-                
-                # Get price
-                price = barcode.get_selling_price() or barcode.get_purchase_price() or 0
-                breakdown_map[supplier_name]['prices'].add(float(price))
-                breakdown_map[supplier_name]['count'] += 1
-        
-        # Convert map to list and add stock info
-        # We'll use the product's total shop/warehouse stock for now as we don't track it per supplier
-        # But we'll scale it by the supplier's share of available barcodes if multiple suppliers exist
-        # to provide a meaningful (though estimated) breakdown.
-        total_available = sum(d['count'] for d in breakdown_map.values())
-        shop_total = self.get_shop_stock(obj)
-        wh_total = self.get_warehouse_stock(obj)
-        
+        for item in items:
+            supplier_name = "Unknown"
+            if item.purchase and item.purchase.supplier:
+                supplier_name = item.purchase.supplier.code or item.purchase.supplier.name
+            if supplier_name not in breakdown_map:
+                breakdown_map[supplier_name] = {
+                    'supplier': supplier_name,
+                    'shop_stock': 0.0,
+                    'warehouse_stock': 0.0,
+                    'prices': set(),
+                }
+            breakdown_map[supplier_name]['shop_stock'] += float(item.shop_quantity)
+            breakdown_map[supplier_name]['warehouse_stock'] += float(item.warehouse_quantity)
+            if item.unit_price:
+                breakdown_map[supplier_name]['prices'].add(float(item.unit_price))
         breakdown = []
         for supplier, data in breakdown_map.items():
-            prices = sorted(list(data['prices']))
+            if data['shop_stock'] == 0 and data['warehouse_stock'] == 0:
+                continue
+            prices = sorted(list(data['prices'])) if data['prices'] else [0]
             price_str = "/".join([f"₹{p:g}" for p in prices])
-            
-            # Simple proportional estimation for location stock
-            # (If 100% of barcodes are from this supplier, they get 100% of the stock)
-            share = data['count'] / total_available if total_available > 0 else 0
-            
             breakdown.append({
                 'supplier': supplier,
                 'price': price_str,
-                'count': data['count'],
-                'shop_stock': round(shop_total * share, 1) if total_available > 0 else 0,
-                'warehouse_stock': round(wh_total * share, 1) if total_available > 0 else 0
+                'shop_stock': data['shop_stock'],
+                'warehouse_stock': data['warehouse_stock'],
             })
-            
-        # Sort by count descending
-        return sorted(breakdown, key=lambda x: x['count'], reverse=True)
+        return sorted(breakdown, key=lambda x: x['shop_stock'] + x['warehouse_stock'], reverse=True)
 
     class Meta:
         model = Product

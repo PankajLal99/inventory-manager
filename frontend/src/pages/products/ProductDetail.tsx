@@ -1,13 +1,25 @@
-import { useParams } from 'react-router-dom';
+import { useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { productsApi, catalogApi } from '../../lib/api';
 import Badge from '../../components/ui/Badge';
-import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle } from 'lucide-react';
+import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { format } from 'date-fns';
+
+const TAG_LABELS: Record<string, string> = {
+  new: 'New (Fresh)',
+  returned: 'Returned',
+  'in-cart': 'In Cart',
+  defective: 'Defective',
+  unknown: 'Unknown',
+  sold: 'Sold',
+};
 
 export default function ProductDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const productId = parseInt(id || '0');
+  const [expandedTags, setExpandedTags] = useState<Record<string, boolean>>({ new: true, returned: true, sold: false });
 
   const { data: product, isLoading, error } = useQuery({
     queryKey: ['product', productId],
@@ -16,7 +28,18 @@ export default function ProductDetail() {
     retry: false,
   });
 
-  // Fetch tax rates to get tax rate name
+  const { data: barcodesFull } = useQuery({
+    queryKey: ['product-barcodes-full', productId],
+    queryFn: () => productsApi.barcodesFull(productId),
+    enabled: !!productId && !!product?.data,
+  });
+
+  const { data: invoicesData } = useQuery({
+    queryKey: ['product-invoices', productId],
+    queryFn: () => productsApi.invoices(productId),
+    enabled: !!productId && !!product?.data,
+  });
+
   const { data: taxRatesData } = useQuery({
     queryKey: ['tax-rates'],
     queryFn: () => catalogApi.taxRates.list(),
@@ -24,6 +47,10 @@ export default function ProductDetail() {
   });
 
   const taxRate = taxRatesData?.data?.find((tr: any) => tr.id === product?.data?.tax_rate);
+
+  const toggleTag = (tag: string) => {
+    setExpandedTags((prev) => ({ ...prev, [tag]: !prev[tag] }));
+  };
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64">Loading...</div>;
@@ -40,14 +67,17 @@ export default function ProductDetail() {
   }
 
   const p = product.data;
+  const byTag = barcodesFull?.data?.by_tag || {};
+  const invoices = invoicesData?.data?.invoices || [];
+  const tagOrder = ['new', 'returned', 'in-cart', 'defective', 'unknown', 'sold'];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
           {p.image && (
-            <img 
-              src={p.image} 
+            <img
+              src={p.image}
               alt={p.name}
               className="w-16 h-16 object-cover rounded-lg"
               onError={(e) => {
@@ -115,15 +145,31 @@ export default function ProductDetail() {
                   <div className="flex-1">
                     <dt className="text-sm text-gray-500">Total Stock</dt>
                     <dd className="text-sm font-medium text-green-600">{p.stock_quantity || 0}</dd>
-                    <p className="text-xs text-gray-400 mt-0.5">All barcodes count</p>
+                    <p className="text-xs text-gray-400 mt-0.5">All barcodes (excl. sold)</p>
                   </div>
                 </div>
                 <div className="flex items-center">
-                  <ShoppingCart className="h-5 w-5 text-blue-600 mr-2" />
+                  <Store className="h-5 w-5 text-blue-600 mr-2" />
                   <div className="flex-1">
-                    <dt className="text-sm text-gray-500">Available Stock</dt>
-                    <dd className="text-sm font-medium text-blue-600">{p.available_quantity || 0}</dd>
-                    <p className="text-xs text-gray-400 mt-0.5">Barcodes with tag 'new' or 'returned'</p>
+                    <dt className="text-sm text-gray-500">Shop Stock</dt>
+                    <dd className="text-sm font-medium text-blue-600">{p.shop_stock ?? 0}</dd>
+                    <p className="text-xs text-gray-400 mt-0.5">In retail store(s)</p>
+                  </div>
+                </div>
+                <div className="flex items-center">
+                  <Warehouse className="h-5 w-5 text-gray-600 mr-2" />
+                  <div className="flex-1">
+                    <dt className="text-sm text-gray-500">Warehouse Stock</dt>
+                    <dd className="text-sm font-medium text-gray-700">{p.warehouse_stock ?? 0}</dd>
+                    <p className="text-xs text-gray-400 mt-0.5">In warehouse</p>
+                  </div>
+                </div>
+                <div className="flex items-center">
+                  <ShoppingCart className="h-5 w-5 text-emerald-600 mr-2" />
+                  <div className="flex-1">
+                    <dt className="text-sm text-gray-500">Available to Sell</dt>
+                    <dd className="text-sm font-medium text-emerald-600">{p.available_quantity || 0}</dd>
+                    <p className="text-xs text-gray-400 mt-0.5">New + returned barcodes</p>
                   </div>
                 </div>
                 {p.low_stock_threshold > 0 && (
@@ -164,6 +210,127 @@ export default function ProductDetail() {
         </div>
       </div>
 
+      {/* Barcodes - grouped by tag, collapsible */}
+      {barcodesFull?.data?.total > 0 && (
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h2 className="text-xl font-semibold mb-4 flex items-center">
+            <Barcode className="h-5 w-5 mr-2" />
+            Barcodes ({barcodesFull?.data?.total ?? 0})
+          </h2>
+          <div className="space-y-2">
+            {tagOrder.map((tag) => {
+              const items = byTag[tag] || [];
+              if (items.length === 0) return null;
+              const isExpanded = expandedTags[tag] !== false;
+              return (
+                <div key={tag} className="border border-gray-200 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => toggleTag(tag)}
+                    className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      {isExpanded ? (
+                        <ChevronDown className="h-4 w-4 text-gray-500" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-gray-500" />
+                      )}
+                      <Badge
+                        variant={
+                          tag === 'new' ? 'success' :
+                          tag === 'returned' ? 'info' :
+                          tag === 'sold' ? 'default' :
+                          tag === 'defective' ? 'danger' : 'default'
+                        }
+                      >
+                        {TAG_LABELS[tag] || tag}
+                      </Badge>
+                      <span className="text-sm text-gray-600">{items.length} barcode(s)</span>
+                    </div>
+                  </button>
+                  {isExpanded && (
+                    <div className="border-t border-gray-200">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-100">
+                          <thead className="bg-gray-50/50">
+                            <tr>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Barcode</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Location</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Supplier</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Purchase Date</th>
+                              <th className="px-4 py-2 text-right text-xs font-medium text-gray-500">Price</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-50">
+                            {items.map((b: any) => (
+                              <tr key={b.id} className="hover:bg-gray-50/50">
+                                <td className="px-4 py-2 text-sm font-mono">{b.barcode}</td>
+                                <td className="px-4 py-2 text-sm text-gray-600">{b.location}</td>
+                                <td className="px-4 py-2 text-sm">{b.supplier_name || '—'}</td>
+                                <td className="px-4 py-2 text-sm">{b.purchase_date || '—'}</td>
+                                <td className="px-4 py-2 text-sm text-right">
+                                  {b.sold_price != null ? `₹${b.sold_price}` : b.purchase_price != null ? `₹${b.purchase_price}` : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Related Invoices */}
+      {invoices.length > 0 && (
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h2 className="text-xl font-semibold mb-4 flex items-center">
+            <FileText className="h-5 w-5 mr-2" />
+            Related Invoices ({invoices.length})
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Invoice</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Date</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Customer</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Status</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Qty</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {invoices.map((inv: any) => (
+                  <tr
+                    key={inv.id}
+                    className="hover:bg-gray-50 cursor-pointer"
+                    onClick={() => navigate(`/invoices/${inv.id}`)}
+                  >
+                    <td className="px-4 py-3 text-sm font-medium text-blue-600">{inv.invoice_number}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">
+                      {inv.created_at ? format(new Date(inv.created_at), 'dd MMM yyyy') : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-sm">{inv.customer_name}</td>
+                    <td className="px-4 py-3 text-sm">
+                      <Badge variant={inv.status === 'paid' ? 'success' : inv.status === 'credit' ? 'info' : 'default'}>
+                        {inv.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-right">{inv.product_quantity}</td>
+                    <td className="px-4 py-3 text-sm text-right font-medium">₹{inv.total?.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {p.variants && Array.isArray(p.variants) && p.variants.length > 0 && (
         <div className="bg-white rounded-2xl shadow p-6">
           <h2 className="text-xl font-semibold mb-4">Variants</h2>
@@ -199,54 +366,6 @@ export default function ProductDetail() {
                       <Badge variant={variant.is_active ? 'success' : 'default'}>
                         {variant.is_active ? 'Active' : 'Inactive'}
                       </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {p.barcodes && Array.isArray(p.barcodes) && p.barcodes.length > 0 && (
-        <div className="bg-white rounded-2xl shadow p-6">
-          <h2 className="text-xl font-semibold mb-4 flex items-center">
-            <Barcode className="h-5 w-5 mr-2" />
-            Barcodes ({p.barcodes.length})
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Barcode</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Tag</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Purchase Price</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Supplier</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Purchase Date</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Primary</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {p.barcodes.map((barcode: any) => (
-                  <tr key={barcode.id}>
-                    <td className="px-4 py-3 text-sm font-mono font-medium">{barcode.barcode}</td>
-                    <td className="px-4 py-3 text-sm">
-                      <Badge variant={
-                        barcode.tag === 'new' ? 'success' : 
-                        barcode.tag === 'returned' ? 'info' : 
-                        barcode.tag === 'sold' ? 'default' : 
-                        'default'
-                      }>
-                        {barcode.tag_display || barcode.tag}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-sm">₹{barcode.purchase_price || '-'}</td>
-                    <td className="px-4 py-3 text-sm">{barcode.supplier_name || '-'}</td>
-                    <td className="px-4 py-3 text-sm">{barcode.purchase_date || '-'}</td>
-                    <td className="px-4 py-3 text-sm">
-                      {barcode.is_primary && (
-                        <Badge variant="info">Primary</Badge>
-                      )}
                     </td>
                   </tr>
                 ))}

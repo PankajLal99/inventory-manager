@@ -77,7 +77,31 @@ export default function CreditNoteReplacement() {
     retry: false,
   });
 
-  // Find invoice by barcode/SKU or invoice number
+  // Helper to apply invoice result (used by search and barcode scan)
+  const applyInvoiceResult = (foundInvoice: Invoice, searchBarcode: string) => {
+    setInvoice(foundInvoice);
+    setSearchError(null);
+    setSearchValue('');
+    const initialSelected: Record<number, number> = {};
+    foundInvoice.items.forEach((item: InvoiceItem) => {
+      const itemBarcode = item.barcode_value?.toUpperCase() || '';
+      const itemSku = item.product_sku?.toUpperCase() || '';
+      const searchUpper = searchBarcode.toUpperCase();
+      if (itemBarcode === searchUpper || itemSku === searchUpper) {
+        initialSelected[item.id] = Math.min(1, item.available_quantity);
+      } else {
+        initialSelected[item.id] = 0;
+      }
+    });
+    setSelectedItems(initialSelected);
+    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+    foundInvoice.items.forEach((item: InvoiceItem) => {
+      initialTags[item.id] = 'unknown';
+    });
+    setItemTags(initialTags);
+  };
+
+  // Find invoice by barcode/SKU or invoice number (fetches only - no side effects on success)
   const findInvoiceQuery = useQuery({
     queryKey: ['find-invoice', searchValue],
     queryFn: async () => {
@@ -91,38 +115,18 @@ export default function CreditNoteReplacement() {
           invoice_number: isInvoiceNumber ? searchValue.trim() : undefined,
         });
         if (response.data?.invoice) {
-          setInvoice(response.data.invoice);
-          setSearchError(null);
-
-          // Backend returns only matching barcode/SKU line items when found by barcode/SKU
-          const initialSelected: Record<number, number> = {};
-          const searchBarcode = searchValue.trim().toUpperCase();
-
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            const itemBarcode = item.barcode_value?.toUpperCase() || '';
-            const itemSku = item.product_sku?.toUpperCase() || '';
-
-            if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
-              initialSelected[item.id] = Math.min(1, item.available_quantity);
-            } else {
-              initialSelected[item.id] = 0;
-            }
-          });
-          setSelectedItems(initialSelected);
-
-          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            initialTags[item.id] = 'unknown';
-          });
-          setItemTags(initialTags);
-
           return response.data;
         }
         return null;
       } catch (error: any) {
-        const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to find invoice';
+        const status = error?.response?.status;
+        const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
+        const errorMsg = status === 404 || serverMsg?.toLowerCase().includes('no invoice')
+          ? 'Barcode not sold or not in this invoice'
+          : serverMsg || 'Failed to find invoice';
         setSearchError(errorMsg);
-        setInvoice(null);
+        setSearchValue(''); // Clear input so user can scan another barcode
+        // Don't clear existing invoice/cart on search error - preserve user's selection
         return null;
       }
     },
@@ -159,13 +163,63 @@ export default function CreditNoteReplacement() {
     },
   });
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!searchValue.trim()) {
       setSearchError('Please enter a barcode, SKU, or invoice number');
       return;
     }
     setShowInvoiceDropdown(false);
-    findInvoiceQuery.refetch();
+    const { data } = await findInvoiceQuery.refetch();
+    if (!data?.invoice) return;
+
+    const foundInvoice = data.invoice as Invoice;
+    const matchingItems = foundInvoice.items as InvoiceItem[];
+
+    // If we have an invoice loaded and found a different one, confirm before switching
+    if (invoice && foundInvoice.id !== invoice.id) {
+      const switchConfirmed = window.confirm(
+        `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+      );
+      if (!switchConfirmed) return;
+      applyInvoiceResult(foundInvoice, searchValue.trim());
+      showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or generate credit note.`, 'success');
+      return;
+    }
+
+    // Same invoice - merge new items and add/increment (keep adding items when scanning)
+    if (invoice && foundInvoice.id === invoice.id) {
+      setInvoice((prev) => {
+        if (!prev) return prev;
+        const existingIds = new Set(prev.items.map((i) => i.id));
+        const newItems = matchingItems.filter((item) => !existingIds.has(item.id));
+        const updatedItems = newItems.length > 0 ? [...prev.items, ...newItems] : prev.items;
+        return { ...prev, items: updatedItems };
+      });
+      setSelectedItems((prev) => {
+        const next = { ...prev };
+        for (const item of matchingItems) {
+          const current = next[item.id] || 0;
+          const maxQty = item.available_quantity;
+          next[item.id] = Math.min(current + 1, maxQty);
+        }
+        return next;
+      });
+      setItemTags((prev) => {
+        const next = { ...prev };
+        for (const item of matchingItems) {
+          if (next[item.id] === undefined) next[item.id] = 'unknown';
+        }
+        return next;
+      });
+      setSearchError(null);
+      setSearchValue('');
+      showToast(`Added ${matchingItems.length} item(s) to credit note`, 'success');
+      return;
+    }
+
+    // No invoice loaded - first search, load invoice
+    applyInvoiceResult(foundInvoice, searchValue.trim());
+    showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or generate credit note.`, 'success');
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
@@ -187,14 +241,113 @@ export default function CreditNoteReplacement() {
     setItemTags(initialTags);
   };
 
-  const handleBarcodeScan = (barcode: string) => {
-    setSearchValue(barcode);
-    setShowScanner(false);
-    setTimeout(() => {
-      if (barcode.trim()) {
-        findInvoiceQuery.refetch();
+  const handleBarcodeScan = async (barcode: string) => {
+    if (!barcode.trim()) return;
+
+    try {
+      const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(barcode.trim()) && barcode.trim().length >= 3;
+      const response = await posApi.replacement.findInvoiceByBarcode({
+        barcode: isInvoiceNumber ? undefined : barcode.trim(),
+        sku: isInvoiceNumber ? undefined : barcode.trim(),
+        invoice_number: isInvoiceNumber ? barcode.trim() : undefined,
+      });
+
+      const data = response.data;
+      if (!data?.invoice) return;
+
+      const foundInvoice = data.invoice as Invoice;
+      const matchingItems = foundInvoice.items as InvoiceItem[];
+
+      // If we already have an invoice loaded, check if this barcode belongs to the same invoice
+      if (invoice) {
+        if (foundInvoice.id !== invoice.id) {
+          const switchConfirmed = window.confirm(
+            `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+          );
+          if (!switchConfirmed) return;
+
+          // User confirmed - switch to the new invoice
+          setInvoice(foundInvoice);
+          setSearchError(null);
+          setSearchValue('');
+          const initialSelected: Record<number, number> = {};
+          matchingItems.forEach((item: InvoiceItem) => {
+            initialSelected[item.id] = Math.min(1, item.available_quantity);
+          });
+          setSelectedItems(initialSelected);
+          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+          matchingItems.forEach((item: InvoiceItem) => {
+            initialTags[item.id] = 'unknown';
+          });
+          setItemTags(initialTags);
+          showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or generate credit note.`, 'success');
+          return;
+        }
+
+        // Same invoice - merge new items and add/increment
+        setInvoice((prev) => {
+          if (!prev) return prev;
+          const existingIds = new Set(prev.items.map((i) => i.id));
+          const newItems = matchingItems.filter((item) => !existingIds.has(item.id));
+          const itemsToAdd = newItems;
+          const updatedItems =
+            itemsToAdd.length > 0 ? [...prev.items, ...itemsToAdd] : prev.items;
+
+          return { ...prev, items: updatedItems };
+        });
+
+        setSelectedItems((prev) => {
+          const next = { ...prev };
+          for (const item of matchingItems) {
+            const current = next[item.id] || 0;
+            const maxQty = item.available_quantity;
+            next[item.id] = Math.min(current + 1, maxQty);
+          }
+          return next;
+        });
+
+        setItemTags((prev) => {
+          const next = { ...prev };
+          for (const item of matchingItems) {
+            if (next[item.id] === undefined) next[item.id] = 'unknown';
+          }
+          return next;
+        });
+
+        showToast(`Added ${matchingItems.length} item(s) to credit note`, 'success');
+        setSearchValue('');
+        // Keep scanner open for continued scanning
+        return;
       }
-    }, 100);
+
+      // No invoice loaded - first scan, load invoice and select matching items
+      setInvoice(foundInvoice);
+      setSearchError(null);
+      setSearchValue('');
+
+      const initialSelected: Record<number, number> = {};
+      matchingItems.forEach((item: InvoiceItem) => {
+        initialSelected[item.id] = Math.min(1, item.available_quantity);
+      });
+      setSelectedItems(initialSelected);
+
+      const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+      matchingItems.forEach((item: InvoiceItem) => {
+        initialTags[item.id] = 'unknown';
+      });
+      setItemTags(initialTags);
+
+      showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or generate credit note.`, 'success');
+      // Keep scanner open so user can scan more items
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
+      const message = status === 404 || serverMsg?.toLowerCase().includes('no invoice')
+        ? 'Barcode not sold or not in this invoice'
+        : serverMsg || 'Barcode not sold or not in this invoice';
+      showToast(message, 'error');
+      setSearchValue(''); // Clear input so user can scan another barcode
+    }
   };
 
   const handleItemToggle = (itemId: number) => {
