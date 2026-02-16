@@ -374,9 +374,8 @@ export default function Search() {
                       if (item.brand_name) parts.push(`Brand: ${item.brand_name}`);
                       // Show Category
                       if (item.category_name) parts.push(`Category: ${item.category_name}`);
-                      // Show Available Qty using standardized utility
                       const stockInfo = getStockInfo(item);
-                      parts.push(`Available: ${stockInfo.displayAvailable}${stockInfo.total > stockInfo.available ? ` / Total: ${stockInfo.displayTotal}` : ''}`);
+                      parts.push(`Available: ${stockInfo.displayAvailable}`);
 
                       return parts.length > 0 ? parts.join(' | ') : 'No details available';
                     }}
@@ -388,11 +387,8 @@ export default function Search() {
                         : (item.purchase_price || null);
                       const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
 
-                      // Get quantity using standardized utility
                       const stockInfo = getStockInfo(item);
                       const quantity = stockInfo.displayAvailable;
-                      // Display total stock if different from available (e.g. some in cart)
-                      const showTotal = stockInfo.total > stockInfo.available;
 
                       return (
                         <div
@@ -438,19 +434,19 @@ export default function Search() {
                                   <table className="min-w-full divide-y divide-gray-100">
                                     <thead className="bg-gray-50">
                                       <tr>
-                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Supplier</th>
-                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Price</th>
-                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider">Shop</th>
-                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider">Whse</th>
+                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Supplier</th>
+                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Whse</th>
+                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Shop</th>
+                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Price</th>
                                       </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-50">
                                       {item.supplier_breakdown.map((s: any, sIdx: number) => (
                                         <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px]">{s.supplier}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium">{s.price}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold">{formatNumber(s.shop_stock)}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold">{formatNumber(s.warehouse_stock)}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px] align-middle">{s.supplier}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_stock, 2)}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_stock, 2)}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -483,10 +479,9 @@ export default function Search() {
                                 </div>
                               )}
                               <div className="text-right">
-                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Avail / Total</div>
+                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Avail</div>
                                 <div className="text-xl font-bold text-blue-600 group-hover:text-blue-700 leading-none">
                                   {quantity}
-                                  {showTotal && <span className="text-sm text-gray-400 ml-1">/ {stockInfo.displayTotal}</span>}
                                 </div>
                               </div>
                               <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
@@ -584,6 +579,7 @@ export default function Search() {
                       if (item.product) parts.push(`Product ID: ${item.product}`);
                       if (item.tag_display) parts.push(`Tag: ${item.tag_display}`);
                       if (item.invoice_number) parts.push(`Invoice: ${item.invoice_number}`);
+                      if (item.invoice_date) parts.push(`Date: ${new Date(item.invoice_date).toLocaleDateString('en-IN')}`);
                       return parts.length > 0 ? parts.join(' | ') : 'No details available';
                     }}
                     getItemBadge={(item) => item.tag_display || item.tag || 'Unknown'}
@@ -618,6 +614,12 @@ export default function Search() {
                                   <div className="flex items-center gap-2">
                                     <span className="text-gray-400 font-medium">Invoice:</span>
                                     <span className="font-semibold text-blue-600">{item.invoice_number}</span>
+                                  </div>
+                                )}
+                                {item.invoice_date && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-400 font-medium">Date:</span>
+                                    <span className="text-gray-700 font-medium">{new Date(item.invoice_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                                   </div>
                                 )}
                                 {item.customer_name && (
@@ -694,7 +696,10 @@ export default function Search() {
                   navigate(`/invoices?${params.toString()}`);
                 }}
                 getItemLabel={(item) => item.invoice_number}
-                getItemSubLabel={(item) => `Customer: ${item.customer_name || 'N/A'} | Total: ₹${item.total || '0.00'}`}
+                getItemSubLabel={(item) => {
+                  const dateStr = item.created_at ? new Date(item.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+                  return `Customer: ${item.customer_name || 'N/A'} | Total: ₹${item.total || '0.00'}${dateStr ? ` | ${dateStr}` : ''}`;
+                }}
                 getItemBadge={(item) => item.status}
               />
 

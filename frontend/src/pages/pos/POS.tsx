@@ -11,6 +11,7 @@ import {
   removeCartTab,
   setActiveTab,
   getUserTabs,
+  getActiveTabId,
   getUsernameFromToken,
   type CartTab,
   type UserCarts
@@ -22,7 +23,7 @@ import Modal from '../../components/ui/Modal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign } from 'lucide-react';
+import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen } from 'lucide-react';
 import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
@@ -80,6 +81,7 @@ export default function POS() {
   const priceInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const isTypingInPriceInput = useRef(false);
   const processingBarcodesRef = useRef<Set<string>>(new Set());
+  const cartTabsRef = useRef<CartTab[]>([]);
 
   // Helper to add item to queue
   const addToQueue = useCallback((barcodes: string[]) => {
@@ -196,6 +198,10 @@ export default function POS() {
   // RetailAdmin, WholesaleAdmin, Retail, Wholesale, Repair → auto-select based on shop_type
   const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
+
+  // UI-only lock: active cart is frozen (no edits); persisted per-tab in localStorage
+  const activeTab = cartTabs.find((t) => t.id === cartId);
+  const isCartLocked = !!activeTab?.locked;
 
   // Check if user is in Retail group or RetailAdmin (both get store selector)
   const isRetailGroup = user?.groups && (user.groups.includes('Retail') || user.groups.includes('RetailAdmin'));
@@ -775,10 +781,13 @@ export default function POS() {
       const processedIds = new Set<number>();
 
       // First, add all backend carts (source of truth) - ONLY FOR CURRENT STORE
+      // Preserve locked from localStorage OR current state (so refresh doesn't clear it)
       for (const cart of backendCarts) {
         // Only include carts that match the current store selection
         const cartStoreId = cart.store || defaultStore.id;
         if (cart.status === 'active' && cartStoreId === currentStoreId) {
+          const localTab = localTabs.find((t: CartTab) => t.id === cart.id);
+          const stateTab = cartTabsRef.current.find((t: CartTab) => t.id === cart.id);
           const cartTab: CartTab = {
             id: cart.id,
             cartNumber: cart.cart_number || `CART-${cart.id}`,
@@ -789,6 +798,7 @@ export default function POS() {
             itemCount: cart.items?.length || 0,
             createdAt: cart.created_at || new Date().toISOString(),
             updatedAt: cart.updated_at || new Date().toISOString(),
+            locked: localTab?.locked ?? stateTab?.locked ?? false,
           };
           mergedTabs.push(cartTab);
           processedIds.add(cart.id);
@@ -812,6 +822,7 @@ export default function POS() {
 
               // Only add if cart matches current store
               if (cartStoreId === currentStoreId) {
+                const stateTab = cartTabsRef.current.find((t: CartTab) => t.id === cart.id);
                 const cartTab: CartTab = {
                   id: cart.id,
                   cartNumber: cart.cart_number || `CART-${cart.id}`,
@@ -822,6 +833,7 @@ export default function POS() {
                   itemCount: cart.items?.length || 0,
                   createdAt: cart.created_at || new Date().toISOString(),
                   updatedAt: cart.updated_at || new Date().toISOString(),
+                  locked: localTab.locked ?? stateTab?.locked ?? false,
                 };
                 mergedTabs.push(cartTab);
                 processedIds.add(localTab.id);
@@ -838,11 +850,12 @@ export default function POS() {
         }
       }
 
-      // 3. Sort tabs by oldest first (by updatedAt, then createdAt) - Chrome style: left to right = oldest to newest
+      // 3. Sort tabs by creation order only (createdAt then id) so order doesn't change when cart is edited
       mergedTabs.sort((a, b) => {
-        const aTime = new Date(a.updatedAt || a.createdAt).getTime();
-        const bTime = new Date(b.updatedAt || b.createdAt).getTime();
-        return aTime - bTime; // Ascending order (oldest first, newest last)
+        const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+        const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+        if (aTime !== bTime) return aTime - bTime;
+        return a.id - b.id;
       });
 
       // 4. Save merged tabs to localStorage
@@ -903,6 +916,11 @@ export default function POS() {
     }
   }, [username, defaultStore, loadCartsFromStorage, activeTabId, cartId, isAdmin, isRetailGroup, selectedStoreId]);
 
+  // Keep ref in sync with cartTabs so sync can preserve locked on refresh
+  useEffect(() => {
+    cartTabsRef.current = cartTabs;
+  }, [cartTabs]);
+
   // Load carts from localStorage when username is available
   useEffect(() => {
     if (username) {
@@ -961,12 +979,13 @@ export default function POS() {
         // Set as active tab in localStorage BEFORE syncing
         setActiveTab(username, newCartId);
 
-        // Reload and sort tabs (oldest first) - Chrome style: left to right = oldest to newest
+        // Reload and sort tabs by creation order (stable - doesn't change when cart is edited)
         const tabs = getUserTabs(username);
         tabs.sort((a, b) => {
-          const aTime = new Date(a.updatedAt || a.createdAt).getTime();
-          const bTime = new Date(b.updatedAt || b.createdAt).getTime();
-          return aTime - bTime; // Ascending order (oldest first, newest last)
+          const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+          const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+          if (aTime !== bTime) return aTime - bTime;
+          return a.id - b.id;
         });
         setCartTabs(tabs);
       }
@@ -1079,7 +1098,13 @@ export default function POS() {
   }, [cartId, defaultStore, username, backendToFrontendInvoiceType]);
 
   const addItemMutation = useMutation({
-    mutationFn: (data: any) => ensureCartAndAddItem(data),
+    mutationFn: (data: any) => {
+      if (isCartLocked) {
+        showToast('Cart is locked. Open a new cart to add items.', 'info');
+        return Promise.reject(new Error('Cart locked'));
+      }
+      return ensureCartAndAddItem(data);
+    },
     onSuccess: async (response: any) => {
       // Get current cartId (may have been created during mutation)
       const currentCartId = response?.data?._cart_id || cartId;
@@ -1146,6 +1171,8 @@ export default function POS() {
       }
     },
     onError: (error: any) => {
+      // Don't show generic error for UI lock (we already show a toast in mutationFn)
+      if (error?.message === 'Cart locked') return;
       const errorMessage = error?.response?.data?.message || error?.response?.data?.error || 'Failed to add product to cart';
       setBarcodeStatus('error');
       setBarcodeMessage(errorMessage);
@@ -1270,9 +1297,10 @@ export default function POS() {
           setActiveTab(username, existingCartId);
           const tabs = getUserTabs(username);
           tabs.sort((a, b) => {
-            const aTime = new Date(a.updatedAt || a.createdAt).getTime();
-            const bTime = new Date(b.updatedAt || b.createdAt).getTime();
-            return aTime - bTime;
+            const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+            const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+            if (aTime !== bTime) return aTime - bTime;
+            return a.id - b.id;
           });
           setCartTabs(tabs);
           setCartId(existingCartId);
@@ -1415,9 +1443,10 @@ export default function POS() {
               setActiveTabId(newCartId);
               const tabs = getUserTabs(username);
               tabs.sort((a, b) => {
-                const aTime = new Date(a.updatedAt || a.createdAt).getTime();
-                const bTime = new Date(b.updatedAt || b.createdAt).getTime();
-                return aTime - bTime; // Ascending order (oldest first, newest last) - Chrome style
+                const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+                const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+                if (aTime !== bTime) return aTime - bTime;
+                return a.id - b.id;
               });
               setCartTabs(tabs);
             }
@@ -1550,14 +1579,30 @@ export default function POS() {
       addCartTab(username, cartTab);
       const tabs = getUserTabs(username);
 
-      // Sort tabs by oldest first - Chrome style: left to right = oldest to newest
-      tabs.sort((a, b) => {
-        const aTime = new Date(a.updatedAt || a.createdAt).getTime();
-        const bTime = new Date(b.updatedAt || b.createdAt).getTime();
-        return aTime - bTime; // Ascending order (oldest first, newest last)
+      // Preserve locked from current state so switching tabs doesn't clear other tabs' lock
+      const currentTabs = cartTabsRef.current;
+      const mergedTabs = tabs.map((t) => {
+        const fromState = currentTabs.find((s) => s.id === t.id);
+        return fromState?.locked === true
+          ? { ...t, locked: true }
+          : fromState?.locked === false
+            ? { ...t, locked: false }
+            : t;
       });
 
-      setCartTabs(tabs);
+      // Sort tabs by creation order only (stable - doesn't change when cart is edited)
+      mergedTabs.sort((a, b) => {
+        const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+        const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+        if (aTime !== bTime) return aTime - bTime;
+        return a.id - b.id;
+      });
+
+      setCartTabs(mergedTabs);
+
+      // Persist merged locked state so it survives refresh and sync
+      const activeId = activeTabId ?? getActiveTabId(username);
+      saveUserCarts({ username, tabs: mergedTabs, activeTabId: activeId });
 
       // Note: Backend is already updated via the mutations (addItem, updateItem, etc.)
       // This just ensures localStorage stays in sync
@@ -2432,8 +2477,8 @@ export default function POS() {
     },
     onNewSale: handleNewSale,
     onTogglePaymentMode: handleToggleInvoiceType,
-    onCheckout: handleCheckoutAndPrintThermal, // F9: Thermal Print checkout
-    onCompleteSale: handleCheckout, // F8: Simple checkout
+    onCheckout: () => { if (!isCartLocked) handleCheckoutAndPrintThermal(); }, // F9: Thermal Print checkout
+    onCompleteSale: () => { if (!isCartLocked) handleCheckout(); }, // F8: Simple checkout
     onDeleteCart: handleDeleteCurrentCart,
     onCancel: () => {
       // Clear search if focused
@@ -2719,10 +2764,12 @@ export default function POS() {
                           onClick={(e) => {
                             e.stopPropagation();
                             e.preventDefault();
+                            if (isCartLocked) return;
                             setSelectedCustomer(null);
                             updateCartMutation.mutate({ customer: null });
                           }}
-                          className="ml-1 p-0.5 rounded hover:bg-blue-200 text-blue-700 hover:text-blue-900 transition-colors flex-shrink-0"
+                          disabled={isCartLocked}
+                          className="ml-1 p-0.5 rounded hover:bg-blue-200 text-blue-700 hover:text-blue-900 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Remove customer"
                           type="button"
                         >
@@ -2734,7 +2781,9 @@ export default function POS() {
                   <Input
                     placeholder={selectedCustomer && !customerSearch ? "" : "Search customer by name or phone..."}
                     value={customerSearch}
+                    disabled={isCartLocked}
                     onChange={(e) => {
+                      if (isCartLocked) return;
                       setCustomerSearch(e.target.value);
                       setCustomerSearchSelectedIndex(-1);
                       // Clear selected customer when user starts typing
@@ -2880,6 +2929,7 @@ export default function POS() {
                 <Select
                   value={invoiceType}
                   onChange={(e) => {
+                    if (isCartLocked) return;
                     const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed';
                     setInvoiceType(newType);
                     // Clear split amounts when switching away from mixed
@@ -2890,7 +2940,7 @@ export default function POS() {
                     updateCartMutation.mutate({ invoice_type: frontendToBackendInvoiceType(newType) });
                   }}
                   className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg hover:border-gray-400 cursor-pointer transition-all"
-                  disabled={isWholesaleGroup}
+                  disabled={isWholesaleGroup || isCartLocked}
                 >
                   <option value="cash">CASH</option>
                   <option value="upi">UPI</option>
@@ -2916,6 +2966,7 @@ export default function POS() {
                         value={repairContactNo}
                         onChange={(e) => setRepairContactNo(e.target.value)}
                         className="w-full text-sm"
+                        disabled={isCartLocked}
                       />
                     </div>
 
@@ -2931,6 +2982,7 @@ export default function POS() {
                         value={repairModelName}
                         onChange={(e) => setRepairModelName(e.target.value)}
                         className="w-full text-sm"
+                        disabled={isCartLocked}
                       />
                     </div>
 
@@ -2948,6 +3000,7 @@ export default function POS() {
                         value={repairBookingAmount}
                         onChange={(e) => setRepairBookingAmount(e.target.value)}
                         className="w-full text-sm"
+                        disabled={isCartLocked}
                       />
                       <p className="text-xs text-gray-500 mt-1">Optional: Enter the booking amount received</p>
                     </div>
@@ -2969,6 +3022,7 @@ export default function POS() {
                           min="0"
                           placeholder="0.00"
                           value={cashAmount}
+                          disabled={isCartLocked}
                           onChange={(e) => {
                             const value = e.target.value;
                             setCashAmount(value);
@@ -2991,6 +3045,7 @@ export default function POS() {
                           min="0"
                           placeholder="0.00"
                           value={upiAmount}
+                          disabled={isCartLocked}
                           onChange={(e) => {
                             const value = e.target.value;
                             setUpiAmount(value);
@@ -3031,7 +3086,13 @@ export default function POS() {
           {/* Product Search Field */}
           <div className="bg-white rounded-2xl shadow p-3 sm:p-4">
             <div>
-              {isSearchTyped && !showScanner && (
+              {isCartLocked && (
+                <div className="flex items-center space-x-2 text-xs mb-2 text-amber-600">
+                  <Lock className="h-4 w-4" />
+                  <span>Cart is locked. Open a new cart from the tabs above to add items.</span>
+                </div>
+              )}
+              {isSearchTyped && !showScanner && !isCartLocked && (
                 <div className="flex items-center space-x-2 text-xs mb-2 text-amber-600">
                   <AlertTriangle className="h-4 w-4" />
                   <span>KINDLY USE BARCODE OR USE CORRECT SKU</span>
@@ -3041,8 +3102,9 @@ export default function POS() {
                 <input
                   ref={barcodeInputRef}
                   type="text"
-                  placeholder="Search products by name, SKU, or scan QR code..."
+                  placeholder={isCartLocked ? 'Cart locked — open a new cart to add items' : 'Search products by name, SKU, or scan QR code...'}
                   value={barcodeInput}
+                  disabled={isCartLocked}
                   autoComplete="off"
                   onChange={(e) => {
                     const newValue = e.target.value;
@@ -3341,7 +3403,7 @@ export default function POS() {
                       }
                     }
                   }}
-                  className={`block w-full pl-10 pr-28 py-2.5 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${barcodeStatus === 'error'
+                  className={`block w-full pl-10 pr-28 py-2.5 border rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${isCartLocked ? 'opacity-60 cursor-not-allowed bg-gray-50' : ''} ${barcodeStatus === 'error'
                     ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
                     : barcodeStatus === 'success'
                       ? 'border-green-500 focus:border-green-500 focus:ring-green-500'
@@ -3779,8 +3841,49 @@ export default function POS() {
 
           <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-4 sm:p-6">
             <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Cart Items</h2>
-              {(cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer ? (
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Cart Items</h2>
+                {isCartLocked && (
+                  <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                    Locked
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {cartId && username && (
+                  isCartLocked ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        updateCartTab(username, cartId, { locked: false });
+                        setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: false } : t)));
+                        showToast('Cart unlocked', 'success');
+                      }}
+                      className="flex items-center gap-1.5 text-amber-600 border-amber-300 hover:bg-amber-50"
+                      title="Unlock cart to edit"
+                    >
+                      <LockOpen className="h-4 w-4" />
+                      <span className="hidden sm:inline">Unlock</span>
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        updateCartTab(username, cartId, { locked: true });
+                        setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: true } : t)));
+                        showToast('Cart locked. Open a new cart to add items.', 'success');
+                      }}
+                      className="flex items-center gap-1.5 text-gray-600 border-gray-300 hover:bg-gray-50"
+                      title="Lock cart (freeze edits; you can open a new cart)"
+                    >
+                      <Lock className="h-4 w-4" />
+                      <span className="hidden sm:inline">Lock</span>
+                    </Button>
+                  )
+                )}
+                {!isCartLocked && ((cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -3808,7 +3911,8 @@ export default function POS() {
                     {clearAllItemsMutation.isPending ? 'Clearing...' : 'Clear All'}
                   </span>
                 </Button>
-              ) : null}
+                )}
+              </div>
             </div>
             {cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0 ? (
               <div className="space-y-3">
@@ -3834,17 +3938,19 @@ export default function POS() {
                               {item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
                             </h3>
                             {/* Edit Product Button */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingProductId(item.product);
-                                setShowProductForm(true);
-                              }}
-                              className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0"
-                              title="Edit Product"
-                            >
-                              <Edit className="h-3.5 w-3.5" />
-                            </button>
+                            {!isCartLocked && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingProductId(item.product);
+                                  setShowProductForm(true);
+                                }}
+                                className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0"
+                                title="Edit Product"
+                              >
+                                <Edit className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                             {/* Show barcode count if available - inline */}
                             {hasBarcodes && (
                               <button
@@ -3868,7 +3974,7 @@ export default function POS() {
                               <div className="flex items-center gap-0.5 bg-gray-50 rounded-md border border-gray-300">
                                 <button
                                   onClick={(e) => handleUpdateQuantity(item, -1, e)}
-                                  disabled={updateItemMutation.isPending || deleteItemMutation.isPending}
+                                  disabled={isCartLocked || updateItemMutation.isPending || deleteItemMutation.isPending}
                                   className="p-1.5 rounded-l-md text-gray-600 hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   title="Decrease quantity"
                                   type="button"
@@ -3880,7 +3986,7 @@ export default function POS() {
                                 </div>
                                 <button
                                   onClick={(e) => handleUpdateQuantity(item, 1, e)}
-                                  disabled={updateItemMutation.isPending}
+                                  disabled={isCartLocked || updateItemMutation.isPending}
                                   className="p-1.5 rounded-r-md text-gray-600 hover:bg-gray-200 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                   title="Increase quantity"
                                   type="button"
@@ -3930,8 +4036,10 @@ export default function POS() {
                                 step="0.01"
                                 min="0"
                                 placeholder="0.00"
+                                readOnly={isCartLocked}
                                 value={editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null ? parseFloat(item.manual_unit_price.toString()).toString() : (item.unit_price && parseFloat(item.unit_price) > 0 ? parseFloat(item.unit_price).toString() : '') || '')}
                                 onChange={(e) => {
+                                  if (isCartLocked) return;
                                   // Mark that user is typing in price input
                                   isTypingInPriceInput.current = true;
 
@@ -4100,7 +4208,7 @@ export default function POS() {
                                   // Mark that user is typing in price input
                                   isTypingInPriceInput.current = true;
                                 }}
-                                className={`w-full pl-6 pr-2 py-1.5 text-xs font-semibold border rounded-md transition-all price-input ${priceErrors[item.id]
+                                className={`w-full pl-6 pr-2 py-1.5 text-xs font-semibold border rounded-md transition-all price-input ${isCartLocked ? 'bg-gray-50 cursor-not-allowed' : ''} ${priceErrors[item.id]
                                   ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200 bg-red-50'
                                   : 'border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white'
                                   }`}
@@ -4131,8 +4239,8 @@ export default function POS() {
                           {/* Delete Button */}
                           <div className="flex-shrink-0">
                             <button
-                              onClick={() => deleteItemMutation.mutate(item.id)}
-                              disabled={deleteItemMutation.isPending}
+                              onClick={() => !isCartLocked && deleteItemMutation.mutate(item.id)}
+                              disabled={isCartLocked || deleteItemMutation.isPending}
                               className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                               title="Remove item"
                             >
@@ -4150,26 +4258,28 @@ export default function POS() {
                               <div key={idx} className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-md px-2 py-1">
                                 <Barcode className="h-3 w-3 text-blue-600" />
                                 <span className="font-mono text-xs font-semibold text-gray-800">{barcode}</span>
-                                <button
-                                  onClick={() => {
-                                    if (cartId) {
-                                      posApi.carts.removeSku(cartId, item.id, barcode)
-                                        .then(() => {
-                                          queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
-                                          queryClient.invalidateQueries({ queryKey: ['products'] });
-                                          queryClient.refetchQueries({ queryKey: ['products'] });
-                                        })
-                                        .catch((error: any) => {
-                                          const errorMessage = error?.response?.data?.error || error?.response?.data?.message || 'Failed to remove SKU';
-                                          showToast(errorMessage, 'error');
-                                        });
-                                    }
-                                  }}
-                                  className="p-0.5 rounded hover:bg-red-100 text-red-500 hover:text-red-700 transition-colors"
-                                  title="Remove SKU"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
+                                {!isCartLocked && (
+                                  <button
+                                    onClick={() => {
+                                      if (cartId) {
+                                        posApi.carts.removeSku(cartId, item.id, barcode)
+                                          .then(() => {
+                                            queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+                                            queryClient.invalidateQueries({ queryKey: ['products'] });
+                                            queryClient.refetchQueries({ queryKey: ['products'] });
+                                          })
+                                          .catch((error: any) => {
+                                            const errorMessage = error?.response?.data?.error || error?.response?.data?.message || 'Failed to remove SKU';
+                                            showToast(errorMessage, 'error');
+                                          });
+                                      }
+                                    }}
+                                    className="p-0.5 rounded hover:bg-red-100 text-red-500 hover:text-red-700 transition-colors"
+                                    title="Remove SKU"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -4280,6 +4390,7 @@ export default function POS() {
                 size="lg"
                 onClick={handleCheckout}
                 disabled={
+                  isCartLocked ||
                   checkoutMutation.isPending ||
                   !selectedCustomer?.id ||
                   !cart?.data?.items ||
@@ -4288,7 +4399,9 @@ export default function POS() {
                   (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
                 }
                 title={
-                  !selectedCustomer?.id
+                  isCartLocked
+                    ? 'Unlock cart to complete order'
+                    : !selectedCustomer?.id
                     ? 'Please select a customer (mandatory)'
                     : invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
                       ? 'Please enter both cash and UPI amounts'
@@ -4307,6 +4420,7 @@ export default function POS() {
                 variant="outline"
                 onClick={handleCheckoutAndPrintThermal}
                 disabled={
+                  isCartLocked ||
                   checkoutAndPrintThermalMutation.isPending ||
                   !selectedCustomer?.id ||
                   !cart?.data?.items ||
@@ -4315,7 +4429,9 @@ export default function POS() {
                   (invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0))
                 }
                 title={
-                  !selectedCustomer?.id
+                  isCartLocked
+                    ? 'Unlock cart to complete order'
+                    : !selectedCustomer?.id
                     ? 'Please select a customer (mandatory)'
                     : invoiceType === 'mixed' && (!cashAmount || !upiAmount || parseFloat(cashAmount) <= 0 || parseFloat(upiAmount) <= 0)
                       ? 'Please enter both cash and UPI amounts'

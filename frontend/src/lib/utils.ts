@@ -30,12 +30,14 @@ export const formatNumber = (num: number | string | undefined | null, decimals: 
 
 /**
  * Standardized product stock information.
- * All quantities are derived from barcode counts; "available to sell" = barcodes with status new or returned only.
+ * Backend is source of truth. Unknown (tag/supplier) does NOT mean warehouse.
+ * - Shop qty / warehouse_stock: from purchase only (no addition/subtraction).
+ * - Available = (barcodes new+returned) - warehouse_qty; if negative, 0.
  */
 export interface ProductStockInfo {
-    /** Stock available to sell: barcode count (new + returned), minus in-cart for tracked products */
+    /** Available to sell: backend computes (new+returned count) - warehouse_qty, min 0 */
     available: number;
-    /** Total non-sold barcode count (new, returned, defective, in-cart, etc.) */
+    /** Total non-sold barcode count */
     total: number;
     isLowStock: boolean;
     isOutOfStock: boolean;
@@ -52,22 +54,15 @@ const isCustomProduct = (product: any): boolean =>
     !!(product?.name && typeof product.name === 'string' && product.name.startsWith('Other -'));
 
 /**
- * Stock quantities are calculated by counting barcodes (backend is source of truth).
+ * Extracts stock information from product (backend is source of truth).
  *
- * - Available to sell = count of barcodes with status 'new' or 'returned' only.
- *   For tracked products, backend subtracts barcodes that are in active carts.
- * - Total stock = backend's stock_quantity (all non-sold barcodes: new, returned,
- *   defective, in-cart, unknown). Use available for "can sell" checks.
+ * - available_quantity (backend): (barcodes new+returned) - warehouse_qty; if negative, 0.
+ * - shop_stock / warehouse_stock: from purchase only (stored numbers, no addition/subtraction).
+ * - stock_quantity: all non-sold barcodes. Unknown does NOT mean warehouse.
  *
- * Extracts and calculates standardized stock information from a product object.
- * Consistent across Products, Search, and POS pages.
- * Custom products are exempt from stock checks and always treated as in stock.
- *
- * @param product The product object containing quantity fields from backend
- * @returns Standardized ProductStockInfo
+ * Stock quantities are displayed as decimals.
  */
 export const getStockInfo = (product: any): ProductStockInfo => {
-    // Custom products are exempt from stock checks — always in stock
     if (isCustomProduct(product)) {
         return {
             available: 0,
@@ -80,13 +75,10 @@ export const getStockInfo = (product: any): ProductStockInfo => {
         };
     }
 
-    // available_quantity (backend): barcode count (new+returned, minus in-cart) capped by shop_stock.
-    // So "available to sell" = only what is in shop; barcode count is source of truth.
     const available = typeof product.available_quantity === 'number'
         ? product.available_quantity
         : parseFloat(product.available_quantity || '0');
 
-    // stock_quantity (backend): count of all non-sold barcodes (new, returned, defective, in-cart, etc.)
     const total = typeof product.stock_quantity === 'number'
         ? product.stock_quantity
         : parseFloat(product.stock_quantity || '0');
@@ -95,9 +87,6 @@ export const getStockInfo = (product: any): ProductStockInfo => {
         ? product.low_stock_threshold
         : parseFloat(product.low_stock_threshold || '0');
 
-    // Business logic for statuses:
-    // 1. Out of stock: No available quantity
-    // 2. Low stock: Available quantity is at or below threshold (if threshold > 0)
     const isOutOfStock = available <= 0;
     const isLowStock = !isOutOfStock && threshold > 0 && available <= threshold;
 
@@ -107,7 +96,7 @@ export const getStockInfo = (product: any): ProductStockInfo => {
         isLowStock,
         isOutOfStock,
         lowStockThreshold: threshold,
-        displayAvailable: formatNumber(available, 0),
-        displayTotal: formatNumber(total, 0),
+        displayAvailable: formatNumber(available, 2),
+        displayTotal: formatNumber(total, 2),
     };
 };

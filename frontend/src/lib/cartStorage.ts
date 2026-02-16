@@ -13,6 +13,8 @@ export interface CartTab {
   itemCount?: number; // Store item count for display
   createdAt: string;
   updatedAt: string;
+  /** UI-only: when true, cart is frozen (no edits); user can open a new cart. */
+  locked?: boolean;
 }
 
 export interface UserCarts {
@@ -96,8 +98,13 @@ export function addCartTab(username: string, cart: CartTab): void {
   // Check if cart already exists
   const existingIndex = userCarts.tabs.findIndex(tab => tab.id === cart.id);
   if (existingIndex >= 0) {
-    // Update existing tab
-    userCarts.tabs[existingIndex] = cart;
+    // Update existing tab but preserve UI-only state (e.g. locked) if not provided
+    const existing = userCarts.tabs[existingIndex];
+    userCarts.tabs[existingIndex] = {
+      ...cart,
+      locked: cart.locked ?? existing.locked,
+      updatedAt: new Date().toISOString(),
+    };
   } else {
     // Add new tab
     userCarts.tabs.push(cart);

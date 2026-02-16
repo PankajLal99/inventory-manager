@@ -100,11 +100,18 @@ def customer_list_create(request):
         # Cache miss - fetch from database
         queryset = Customer.objects.all().order_by('-created_at')
         if search:
-            queryset = queryset.filter(Q(name__icontains=search) | Q(phone__icontains=search))
+            search_clean = search.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(phone__icontains=search) |
+                Q(phone__icontains=search_clean) |
+                Q(email__icontains=search)
+            )
         if customer_group:
             queryset = queryset.filter(customer_group_id=customer_group)
         if exclude_group:
             queryset = queryset.exclude(customer_group_id=exclude_group)
+        queryset = queryset[:100]  # Limit results for search performance
         serializer = CustomerSerializer(queryset, many=True)
         response_data = serializer.data
         

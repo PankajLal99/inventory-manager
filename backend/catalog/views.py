@@ -530,29 +530,22 @@ def product_list_create(request):
 def product_detail(request, pk):
     """Retrieve, update or delete a product"""
     if request.method == 'GET':
-        # Prefetch stock_entries for shop/warehouse in available_quantity
-        product_queryset = Product.objects.prefetch_related(
-            'stock_entries', 'stock_entries__store', 'stock_entries__warehouse'
+        # Prefetch for full ProductSerializer (barcodes, variants, components, stock)
+        product_queryset = Product.objects.select_related('category', 'brand').prefetch_related(
+            'stock_entries', 'stock_entries__store', 'stock_entries__warehouse',
+            'barcodes', 'barcodes__purchase__supplier',
+            'variants', 'components', 'components__component_product',
         )
         product = get_object_or_404(product_queryset, pk=pk)
     else:
         product = get_object_or_404(Product, pk=pk)
     
     if request.method == 'GET':
-        # Try cache first
-        from backend.core.model_cache import get_cached_product, cache_product_data
-        cached_data = get_cached_product(pk)
-        if cached_data:
-            return Response(cached_data)
-        
-        # Cache miss - fetch from database
+        # Always use full ProductSerializer - do NOT use get_cached_product here.
+        # The product cache stores minimal data (no barcodes, variants, components, stock).
+        # Product detail page needs full data; cache is for quick lookups (POS, barcode scan).
         serializer = ProductSerializer(product)
-        response_data = serializer.data
-        
-        # Cache the result
-        cache_product_data(product)
-        
-        return Response(response_data)
+        return Response(serializer.data)
     elif request.method == 'PUT':
         serializer = ProductSerializer(product, data=request.data)
         if serializer.is_valid():
@@ -657,6 +650,94 @@ def product_variants(request, pk):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def product_barcodes_full(request, pk):
+    """Get all barcodes for a product, grouped by tag, with location. For product detail page only."""
+    from backend.pos.models import InvoiceItem
+    product = get_object_or_404(
+        Product.objects.prefetch_related(
+            'barcodes', 'barcodes__purchase', 'barcodes__purchase__store',
+            'barcodes__purchase__warehouse', 'barcodes__purchase__supplier',
+        ),
+        pk=pk
+    )
+    sold_barcode_ids = list(product.barcodes.filter(tag='sold').values_list('id', flat=True))
+    inv_items_by_barcode = {}
+    if sold_barcode_ids:
+        for ii in InvoiceItem.objects.filter(
+            barcode_id__in=sold_barcode_ids
+        ).exclude(invoice__status='void').select_related('invoice', 'invoice__customer'):
+            inv_items_by_barcode[ii.barcode_id] = ii
+    by_tag = {}
+    tag_order = ['new', 'returned', 'in-cart', 'defective', 'unknown', 'sold']
+    for tag in tag_order:
+        by_tag[tag] = []
+    for barcode in product.barcodes.all():
+        tag = barcode.tag or 'unknown'
+        if tag not in by_tag:
+            by_tag[tag] = []
+        location_parts = []
+        if barcode.purchase:
+            if barcode.purchase.store:
+                location_parts.append(barcode.purchase.store.name)
+            if barcode.purchase.warehouse:
+                location_parts.append(barcode.purchase.warehouse.name)
+        location = ', '.join(location_parts) if location_parts else '—'
+        item = {
+            'id': barcode.id,
+            'barcode': barcode.barcode,
+            'short_code': barcode.short_code,
+            'tag': barcode.tag,
+            'tag_display': barcode.get_tag_display(),
+            'purchase_price': float(barcode.get_purchase_price()) if barcode.get_purchase_price() else None,
+            'supplier_name': barcode.purchase.supplier.name if barcode.purchase and barcode.purchase.supplier else None,
+            'purchase_date': barcode.purchase.purchase_date.strftime('%Y-%m-%d') if barcode.purchase else None,
+            'location': location,
+            'is_primary': barcode.is_primary,
+        }
+        if tag == 'sold':
+            inv_item = inv_items_by_barcode.get(barcode.id)
+            if inv_item:
+                item['location'] = f"Invoice {inv_item.invoice.invoice_number}"
+                if inv_item.invoice.customer:
+                    item['location'] += f" ({inv_item.invoice.customer.name})"
+                item['invoice_number'] = inv_item.invoice.invoice_number
+                item['invoice_id'] = inv_item.invoice.id
+                item['customer_name'] = inv_item.invoice.customer.name if inv_item.invoice.customer else 'Walk-in'
+                item['sold_price'] = float(inv_item.line_total / inv_item.quantity) if inv_item.quantity else None
+        by_tag[tag].append(item)
+    return Response({'by_tag': by_tag, 'total': product.barcodes.count()})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def product_invoices(request, pk):
+    """Get invoices that contain this product. For product detail page only."""
+    from backend.pos.models import InvoiceItem, Invoice
+    product = get_object_or_404(Product, pk=pk)
+    invoice_ids = InvoiceItem.objects.filter(product=product).values_list('invoice_id', flat=True).distinct()
+    invoices = Invoice.objects.filter(id__in=invoice_ids).exclude(
+        status='void'
+    ).select_related('store', 'customer').order_by('-created_at')[:50]
+    data = []
+    for inv in invoices:
+        items_for_product = InvoiceItem.objects.filter(invoice=inv, product=product)
+        qty = sum(float(i.quantity) for i in items_for_product)
+        data.append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'status': inv.status,
+            'invoice_type': inv.invoice_type,
+            'total': float(inv.total),
+            'customer_name': inv.customer.name if inv.customer else 'Walk-in',
+            'store_name': inv.store.name if inv.store else None,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'product_quantity': qty,
+        })
+    return Response({'invoices': data})
 
 
 @api_view(['GET', 'POST'])
