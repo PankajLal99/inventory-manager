@@ -205,8 +205,8 @@ class TestDataFactory:
         )
     
     @staticmethod
-    def create_purchase(user, supplier=None, store=None, warehouse=None, purchase_date=None):
-        """Create a test purchase"""
+    def create_purchase(user, supplier=None, store=None, warehouse=None, purchase_date=None, status='draft'):
+        """Create a test purchase (default status='draft'; use status='finalized' for stock to count)."""
         if not supplier:
             supplier = TestDataFactory.create_supplier()
         if not store:
@@ -218,22 +218,32 @@ class TestDataFactory:
             supplier=supplier,
             store=store,
             warehouse=warehouse,
-            purchase_date=purchase_date
+            purchase_date=purchase_date,
+            status=status
         )
     
     @staticmethod
-    def create_purchase_item(purchase, product, quantity=None, unit_price=None, variant=None):
-        """Create a test purchase item"""
+    def create_purchase_item(purchase, product, quantity=None, unit_price=None, variant=None, shop_quantity=None, warehouse_quantity=None):
+        """Create a test purchase item. If shop_quantity/warehouse_quantity omitted, default to quantity split 0/quantity."""
         if quantity is None:
             quantity = Decimal('10.00')
         if unit_price is None:
             unit_price = Decimal('100.00')
+        if shop_quantity is None and warehouse_quantity is None:
+            shop_quantity = quantity
+            warehouse_quantity = Decimal('0.000')
+        elif shop_quantity is None:
+            shop_quantity = quantity - (warehouse_quantity or Decimal('0'))
+        elif warehouse_quantity is None:
+            warehouse_quantity = quantity - (shop_quantity or Decimal('0'))
         return PurchaseItem.objects.create(
             purchase=purchase,
             product=product,
             variant=variant,
             quantity=quantity,
-            unit_price=unit_price
+            unit_price=unit_price,
+            shop_quantity=shop_quantity,
+            warehouse_quantity=warehouse_quantity
         )
     
     @staticmethod

@@ -46,6 +46,9 @@ export default function Purchases() {
   const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
   const [supplierFilterSearch, setSupplierFilterSearch] = useState(''); // For typable filter dropdown
   const [showSupplierFilterDropdown, setShowSupplierFilterDropdown] = useState(false);
+  const [productFilter, setProductFilter] = useState(searchParams.get('product_filter') || '');
+  const [productFilterSearch, setProductFilterSearch] = useState(''); // For typable filter dropdown
+  const [showProductFilterDropdown, setShowProductFilterDropdown] = useState(false);
   const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '');
   const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '');
   const [showForm, setShowForm] = useState(false);
@@ -76,6 +79,7 @@ export default function Purchases() {
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
   const supplierRef = useRef<HTMLDivElement>(null);
   const supplierFilterRef = useRef<HTMLDivElement>(null);
+  const productFilterRef = useRef<HTMLDivElement>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
   const [currentPage, setCurrentPage] = useState(1);
@@ -157,13 +161,39 @@ export default function Purchases() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showForm, showProductDropdown, products, productSearch]);
 
+  // Fetch products for product filter dropdown
+  const { data: productFilterProductsData } = useQuery({
+    queryKey: ['products', 'filter', productFilterSearch],
+    queryFn: async () => {
+      if (!productFilterSearch.trim()) return { results: [] };
+      const response = await productsApi.list({
+        search: productFilterSearch.trim(),
+        tag: 'new',
+        search_mode: 'name_only',
+      });
+      return response.data;
+    },
+    enabled: productFilterSearch.trim().length > 0,
+    retry: false,
+  });
+
+  const productFilterProducts = (() => {
+    if (!productFilterProductsData) return [];
+    if (Array.isArray(productFilterProductsData.results)) return productFilterProductsData.results;
+    if (Array.isArray(productFilterProductsData.data)) return productFilterProductsData.data;
+    if (Array.isArray(productFilterProductsData)) return productFilterProductsData;
+    return [];
+  })();
+
   // Sync URL params with state on mount
   useEffect(() => {
     const urlSupplier = searchParams.get('supplier') || '';
+    const urlProduct = searchParams.get('product_filter') || '';
     const urlDateFrom = searchParams.get('date_from') || '';
     const urlDateTo = searchParams.get('date_to') || '';
 
     if (urlSupplier !== supplierFilter) setSupplierFilter(urlSupplier);
+    if (urlProduct !== productFilter) setProductFilter(urlProduct);
     if (urlDateFrom !== dateFrom) setDateFrom(urlDateFrom);
     if (urlDateTo !== dateTo) setDateTo(urlDateTo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -173,25 +203,27 @@ export default function Purchases() {
   useEffect(() => {
     const params = new URLSearchParams();
     if (supplierFilter) params.set('supplier', supplierFilter);
+    if (productFilter) params.set('product_filter', productFilter);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     setSearchParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supplierFilter, dateFrom, dateTo]);
+  }, [supplierFilter, productFilter, dateFrom, dateTo]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [supplierFilter, dateFrom, dateTo]);
+  }, [supplierFilter, productFilter, dateFrom, dateTo]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['purchases', supplierFilter, dateFrom, dateTo, currentPage],
+    queryKey: ['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage],
     queryFn: async () => {
       const params: any = {
         page: currentPage,
         limit: 15,
       };
       if (supplierFilter) params.supplier = supplierFilter;
+      if (productFilter) params.product = productFilter;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
       const response = await purchasingApi.purchases.list(params);
@@ -233,7 +265,7 @@ export default function Purchases() {
     retry: false,
   });
 
-  // Preserve product ID when it's detected in URL
+  // Preserve product ID when it's detected in URL (product param = add to new purchase, NOT product_filter = filter)
   useEffect(() => {
     if (preSelectedProductId) {
       preservedProductIdRef.current = preSelectedProductId;
@@ -869,10 +901,10 @@ export default function Purchases() {
       await queryClient.cancelQueries({ queryKey: ['purchases'] });
 
       // Snapshot the previous value for rollback
-      const previousData = queryClient.getQueryData(['purchases', supplierFilter, dateFrom, dateTo, currentPage]);
+      const previousData = queryClient.getQueryData(['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage]);
 
       // Optimistically update the cache
-      queryClient.setQueryData(['purchases', supplierFilter, dateFrom, dateTo, currentPage], (old: any) => {
+      queryClient.setQueryData(['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage], (old: any) => {
         if (!old) return old;
 
         // Deep clone and update the specific item
@@ -900,7 +932,7 @@ export default function Purchases() {
     // On error, rollback to previous data
     onError: (error: any, _variables, context: any) => {
       if (context?.previousData) {
-        queryClient.setQueryData(['purchases', supplierFilter, dateFrom, dateTo, currentPage], context.previousData);
+        queryClient.setQueryData(['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage], context.previousData);
       }
       alert(error?.response?.data?.error || 'Failed to update printed status. Please try again.');
     },
@@ -908,7 +940,7 @@ export default function Purchases() {
     onSettled: () => {
       // Mark as stale but don't refetch to preserve optimistic update
       queryClient.invalidateQueries({
-        queryKey: ['purchases', supplierFilter, dateFrom, dateTo, currentPage],
+        queryKey: ['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage],
         refetchType: 'none'
       });
     },
@@ -950,6 +982,9 @@ export default function Purchases() {
       if (supplierFilterRef.current && !supplierFilterRef.current.contains(event.target as Node)) {
         setShowSupplierFilterDropdown(false);
       }
+      if (productFilterRef.current && !productFilterRef.current.contains(event.target as Node)) {
+        setShowProductFilterDropdown(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -986,6 +1021,23 @@ export default function Purchases() {
       setSupplierFilterSearch('');
     }
   }, [supplierFilter, suppliers]);
+
+  // Fetch selected product name for product filter display
+  const { data: selectedProductForFilter } = useQuery({
+    queryKey: ['product', productFilter],
+    queryFn: () => productsApi.get(parseInt(productFilter)),
+    enabled: !!productFilter,
+    retry: false,
+  });
+
+  // Update product filter search when productFilter changes
+  useEffect(() => {
+    if (productFilter && selectedProductForFilter?.data) {
+      setProductFilterSearch(selectedProductForFilter.data.name || '');
+    } else if (!productFilter) {
+      setProductFilterSearch('');
+    }
+  }, [productFilter, selectedProductForFilter?.data?.name]);
 
   // Compute purchases array
   const purchases = useMemo(() => {
@@ -1125,6 +1177,14 @@ export default function Purchases() {
     setShowSupplierFilterDropdown(false);
   };
 
+  // Handle product filter selection
+  const handleProductFilterSelect = (productId: string) => {
+    setProductFilter(productId);
+    const selectedProduct = productFilterProducts.find((p: any) => p.id.toString() === productId);
+    setProductFilterSearch(selectedProduct?.name || '');
+    setShowProductFilterDropdown(false);
+  };
+
   // Early returns must come AFTER all hooks
   if (isLoading) {
     return <LoadingState message="Loading purchases..." />;
@@ -1179,7 +1239,7 @@ export default function Purchases() {
 
       {/* Filters */}
       <Card>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="relative" ref={supplierFilterRef}>
             <div className="relative">
               <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -1220,6 +1280,53 @@ export default function Purchases() {
                     ))
                   ) : (
                     <div className="px-4 py-2 text-gray-500 text-sm">No suppliers found</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="relative" ref={productFilterRef}>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                type="text"
+                value={productFilterSearch}
+                onChange={(e) => {
+                  setProductFilterSearch(e.target.value);
+                  setShowProductFilterDropdown(true);
+                }}
+                onFocus={() => {
+                  setShowProductFilterDropdown(true);
+                }}
+                placeholder="Type to search products..."
+                className="pl-10"
+              />
+              {showProductFilterDropdown && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
+                  <div
+                    onClick={() => {
+                      setProductFilter('');
+                      setProductFilterSearch('');
+                      setShowProductFilterDropdown(false);
+                    }}
+                    className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm"
+                  >
+                    All Products
+                  </div>
+                  {productFilterProducts.length > 0 ? (
+                    productFilterProducts.map((product: any) => (
+                      <div
+                        key={product.id}
+                        onClick={() => handleProductFilterSelect(product.id.toString())}
+                        className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm"
+                      >
+                        {product.name} {product.sku && `(${product.sku})`}
+                      </div>
+                    ))
+                  ) : productFilterSearch.trim() ? (
+                    <div className="px-4 py-2 text-gray-500 text-sm">No products found</div>
+                  ) : (
+                    <div className="px-4 py-2 text-gray-400 text-sm italic">Type to search products</div>
                   )}
                 </div>
               )}

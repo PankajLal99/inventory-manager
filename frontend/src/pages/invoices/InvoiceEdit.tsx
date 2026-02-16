@@ -61,8 +61,10 @@ export default function InvoiceEdit() {
     };
   }, [barcodeInput]);
 
+  // Use 'edit-cart' query key to isolate from POS cart cache and avoid cross-contamination
+  const editCartQueryKey = ['edit-cart', cartId] as const;
   const { data: cartData, isLoading: cartLoading, error: cartError } = useQuery({
-    queryKey: ['cart', cartId],
+    queryKey: editCartQueryKey,
     queryFn: () => posApi.carts.get(cartId!),
     enabled: !!cartId,
     retry: false,
@@ -81,13 +83,13 @@ export default function InvoiceEdit() {
   const updateItemMutation = useMutation({
     mutationFn: ({ itemId, data }: { itemId: number; data: any }) =>
       posApi.carts.updateItem(cartId!, itemId, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cart', cartId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: editCartQueryKey }),
     onError: (e: any) => alert(e?.response?.data?.error || e?.response?.data?.manual_unit_price?.[0] || 'Update failed'),
   });
 
   const deleteItemMutation = useMutation({
     mutationFn: (itemId: number) => posApi.carts.deleteItem(cartId!, itemId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cart', cartId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: editCartQueryKey }),
     onError: (e: any) => alert(e?.response?.data?.error || 'Remove failed'),
   });
 
@@ -159,17 +161,16 @@ export default function InvoiceEdit() {
       }
       return posApi.carts.addItem(cartId!, data);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+    onMutate: () => {
+      // Clear barcode input immediately when add starts so user can scan next item right away
       setBarcodeInput('');
       setIsSearchTyped(false);
       setProductSearchSelectedIndex(-1);
-      setBarcodeStatus('success');
-      setBarcodeMessage('Added');
-      setTimeout(() => {
-        setBarcodeStatus('idle');
-        setBarcodeMessage('');
-      }, 1500);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: editCartQueryKey });
+      setBarcodeStatus('idle');
+      setBarcodeMessage('');
     },
     onError: (e: any) => {
       const errorMsg = e?.response?.data?.error || e?.message || 'Add failed';
@@ -269,7 +270,7 @@ export default function InvoiceEdit() {
   }, 0);
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto p-4 sm:p-6">
+    <div className="space-y-6 max-w-7xl mx-auto p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <Button variant="outline" onClick={() => navigate(`/invoices/${invoiceId}`)}>
@@ -498,11 +499,11 @@ export default function InvoiceEdit() {
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
-                      <div>
+                      <div className="min-w-[180px] max-w-[320px]">
                         <p className="font-medium text-gray-900">{item.product_name}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                           {item.scanned_barcodes && item.scanned_barcodes.length > 0 ? (
-                            <span className="text-[10px] text-gray-500 font-mono bg-gray-50 px-1 border border-gray-100 rounded">
+                            <span className="text-[10px] text-gray-500 font-mono bg-gray-50 px-1.5 py-0.5 border border-gray-100 rounded break-all">
                               BC: {item.scanned_barcodes.join(', ')}
                             </span>
                           ) : (

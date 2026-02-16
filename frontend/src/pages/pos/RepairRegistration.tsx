@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, customersApi, catalogApi } from '../../lib/api';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
 import { auth } from '../../lib/auth';
@@ -43,6 +43,7 @@ export default function RepairRegistration() {
     const [isSearchFocused, setIsSearchFocused] = useState(false);
 
 
+    const queryClient = useQueryClient();
     const user = auth.getUser();
     const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
 
@@ -110,16 +111,24 @@ export default function RepairRegistration() {
         }
     }, [repairGroup, customerGroupFilter, customerSearch]);
 
-    // Customer search
-    const { data: customersResponse } = useQuery({
-        queryKey: ['customers', customerSearch.trim(), customerGroupFilter],
+    // Debounce customer search (300ms) to reduce API calls while typing
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(customerSearch.trim()), 300);
+        return () => clearTimeout(timer);
+    }, [customerSearch]);
+
+    // Customer search - fetch when: user has typed (debounced) OR a group filter is selected
+    const { data: customersResponse, isLoading: customersLoading, isError: customersError } = useQuery({
+        queryKey: ['customers', debouncedSearch, customerGroupFilter],
         queryFn: async () => {
-            const params: any = { search: customerSearch.trim() };
+            const params: Record<string, string> = {};
+            if (debouncedSearch) params.search = debouncedSearch;
             if (customerGroupFilter) params.customer_group = customerGroupFilter;
             const response = await customersApi.list(params);
             return response.data;
         },
-        enabled: customerSearch.trim().length > 0 || !!customerGroupFilter,
+        enabled: debouncedSearch.length > 0 || !!customerGroupFilter,
         select: (data) => {
             if (!data) return data;
             const customers = data.results || data.data || (Array.isArray(data) ? data : []);
@@ -159,6 +168,7 @@ export default function RepairRegistration() {
             setShowCreateCustomerModal(false);
             setNewCustomerName('');
             setNewCustomerPhone('');
+            queryClient.invalidateQueries({ queryKey: ['customers'] }); // Refresh list so new customer appears on next search
             showToast('Customer registered successfully');
         },
         onError: (err: any) => showToast(err.response?.data?.error || 'Failed to create customer', 'error'),
@@ -397,10 +407,20 @@ export default function RepairRegistration() {
                             </div>
                         ) : (
                             <>
-                                {(isSearchFocused || customerSearch) && (customerSearch || customerGroupFilter) && customersResponse && (
+                                {(isSearchFocused || customerSearch) && (customerSearch || customerGroupFilter) && (
                                     <div className="absolute z-50 w-full mt-2 bg-white border border-gray-100 rounded-2xl shadow-2xl p-2 max-h-72 overflow-y-auto animate-in fade-in zoom-in duration-200">
-                                        {(customersResponse.results || customersResponse.data || customersResponse).length > 0 ? (
-                                            (customersResponse.results || customersResponse.data || customersResponse).map((c: any) => (
+                                        {customersLoading ? (
+                                            <div className="p-8 text-center">
+                                                <p className="text-gray-400 font-bold animate-pulse">Searching...</p>
+                                            </div>
+                                        ) : customersError ? (
+                                            <div className="p-8 text-center">
+                                                <p className="text-red-500 font-bold">Failed to load customers. Try again.</p>
+                                            </div>
+                                        ) : (() => {
+                                            const list = customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
+                                            return list && list.length > 0 ? (
+                                            list.map((c: any) => (
                                                 <button
                                                     key={c.id}
                                                     onClick={() => {
@@ -424,12 +444,13 @@ export default function RepairRegistration() {
                                                     </div>
                                                 </button>
                                             ))
-                                        ) : (
-                                            <div className="p-8 text-center">
-                                                <User className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-                                                <p className="text-gray-400 font-bold">No customers found</p>
-                                            </div>
-                                        )}
+                                            ) : (
+                                                <div className="p-8 text-center">
+                                                    <User className="h-10 w-10 text-gray-200 mx-auto mb-3" />
+                                                    <p className="text-gray-400 font-bold">No customers found</p>
+                                                </div>
+                                            );
+                                        })()}
 
                                         {customerSearch && (
                                             <button

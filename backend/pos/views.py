@@ -3638,10 +3638,19 @@ def credit_note_list(request):
 @permission_classes([IsAuthenticated])
 def credit_note_detail(request, pk):
     """Retrieve a credit note with nested return and items."""
+    from django.db.models import Prefetch
     credit_note = get_object_or_404(
         CreditNote.objects.select_related(
             'return_obj', 'return_obj__invoice', 'return_obj__invoice__customer', 'created_by'
-        ).prefetch_related('return_obj__items'),
+        ).prefetch_related(
+            Prefetch(
+                'return_obj__items',
+                queryset=ReturnItem.objects.select_related(
+                    'product', 'product__brand', 'barcode',
+                    'invoice_item', 'invoice_item__product', 'invoice_item__product__brand'
+                )
+            )
+        ),
         pk=pk
     )
     serializer = CreditNoteDetailSerializer(credit_note)
