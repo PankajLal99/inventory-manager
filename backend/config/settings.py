@@ -344,6 +344,10 @@ AZURE_STORAGE_ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY', '')
 # If False and container is public, direct URLs will be used
 AZURE_USE_SAS_TOKENS = os.getenv('AZURE_USE_SAS_TOKENS', 'false').lower() == 'true'
 
+# When True, barcode records are still created on purchase but label generation (Azure + local)
+# is skipped. Use to avoid Azure calls while keeping inventory/barcode counts correct.
+DISABLE_BARCODE_LABEL_GENERATION = os.getenv('DISABLE_BARCODE_LABEL_GENERATION', 'false').lower() == 'true'
+
 # Cache Configuration - OPTIMIZED FOR BEST PERFORMANCE
 # =====================================================
 # 

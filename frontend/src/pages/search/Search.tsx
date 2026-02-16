@@ -374,9 +374,17 @@ export default function Search() {
                       if (item.brand_name) parts.push(`Brand: ${item.brand_name}`);
                       // Show Category
                       if (item.category_name) parts.push(`Category: ${item.category_name}`);
-                      const stockInfo = getStockInfo(item);
-                      parts.push(`Available: ${stockInfo.displayAvailable}`);
-
+                      const breakdown = item.supplier_breakdown || [];
+                      const totalFromTable = breakdown.reduce(
+                        (sum: number, s: any) =>
+                          sum + (Number(s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
+                        0
+                      );
+                      const total =
+                        breakdown.length > 0
+                          ? totalFromTable
+                          : (Number(item.warehouse_stock) || 0) + (Number(item.available_quantity) || 0);
+                      parts.push(`Warehouse + Available: ${formatNumber(total, 2)}`);
                       return parts.length > 0 ? parts.join(' | ') : 'No details available';
                     }}
                     getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
@@ -387,8 +395,20 @@ export default function Search() {
                         : (item.purchase_price || null);
                       const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
 
-                      const stockInfo = getStockInfo(item);
-                      const quantity = stockInfo.displayAvailable;
+                      // Warehouse + Available = sum of (Whse + Shop Qty) from table so total matches the breakdown
+                      const breakdown = item.supplier_breakdown || [];
+                      const totalFromTable = breakdown.reduce(
+                        (sum: number, s: any) =>
+                          sum + (Number(s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
+                        0
+                      );
+                      const warehousePlusAvailable =
+                        breakdown.length > 0
+                          ? formatNumber(totalFromTable, 2)
+                          : formatNumber(
+                              (Number(item.warehouse_stock) || 0) + (Number(item.available_quantity) || 0),
+                              2
+                            );
 
                       return (
                         <div
@@ -436,7 +456,7 @@ export default function Search() {
                                       <tr>
                                         <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Supplier</th>
                                         <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Whse</th>
-                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Shop</th>
+                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Shop Qty</th>
                                         <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Price</th>
                                       </tr>
                                     </thead>
@@ -445,7 +465,7 @@ export default function Search() {
                                         <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
                                           <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px] align-middle">{s.supplier}</td>
                                           <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_stock, 2)}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_stock, 2)}</td>
+                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</td>
                                           <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
                                         </tr>
                                       ))}
@@ -479,9 +499,9 @@ export default function Search() {
                                 </div>
                               )}
                               <div className="text-right">
-                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Avail</div>
-                                <div className="text-xl font-bold text-blue-600 group-hover:text-blue-700 leading-none">
-                                  {quantity}
+                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Warehouse + Available</div>
+                                <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
+                                  {warehousePlusAvailable}
                                 </div>
                               </div>
                               <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />

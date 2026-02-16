@@ -170,7 +170,11 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
     
     Spins off a background thread to handle label generation so the API response isn't delayed.
     Always tries Azure Function first (bulk), falls back to local generation if Azure fails.
+    Skips entirely when DISABLE_BARCODE_LABEL_GENERATION is True (barcodes still created, no Azure/local labels).
     """
+    from django.conf import settings
+    if getattr(settings, 'DISABLE_BARCODE_LABEL_GENERATION', False):
+        return
     import threading
     
     def _generate_labels_task(barcodes_list, prod_name):
@@ -457,7 +461,8 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     selling_price=item_data.get('selling_price', None)
                 )
                 
-                # Always generate barcodes (even in draft)
+                # Always generate barcodes (even in draft). Label generation (Azure/local) is
+                # skipped when DISABLE_BARCODE_LABEL_GENERATION is True in settings.
                 generate_barcodes_for_purchase_item(purchase_item, quantity)
                 
                 # CRITICAL: Only update stock when purchase status is 'finalized'
