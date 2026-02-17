@@ -499,7 +499,11 @@ def cart_detail(request, pk):
                 {'error': 'Permission denied', 'detail': 'You can only delete your own carts'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
+        if getattr(cart, 'locked', False):
+            return Response(
+                {'error': 'Cart is locked.', 'detail': 'Unlock the cart before closing or discarding it.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         # Release all SKUs/barcodes from scanned_barcodes back to available inventory
         # Also restore stock for non-tracked inventory items
         for cart_item in cart.items.all():
@@ -602,7 +606,11 @@ def cart_detail(request, pk):
 def cart_items(request, pk):
     """Add item to cart - prevents duplicate items"""
     cart = get_object_or_404(Cart, pk=pk)
-    
+    if getattr(cart, 'locked', False):
+        return Response(
+            {'error': 'Cart is locked.', 'detail': 'Unlock the cart to add items.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     # Check if this is a custom product (borrowed product not in inventory)
     custom_product_name = request.data.get('custom_product_name')
     if custom_product_name:
@@ -1436,6 +1444,11 @@ def cart_items(request, pk):
 def cart_item_update(request, pk, item_id):
     """Update or delete a cart item"""
     cart = get_object_or_404(Cart, pk=pk)
+    if getattr(cart, 'locked', False):
+        return Response(
+            {'error': 'Cart is locked.', 'detail': 'Unlock the cart to edit items.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     try:
         cart_item = CartItem.objects.get(id=item_id, cart=cart)
     except CartItem.DoesNotExist:
@@ -1791,6 +1804,11 @@ def cart_item_update(request, pk, item_id):
 def cart_item_remove_sku(request, pk, item_id):
     """Remove a specific SKU/barcode from a cart item"""
     cart = get_object_or_404(Cart, pk=pk)
+    if getattr(cart, 'locked', False):
+        return Response(
+            {'error': 'Cart is locked.', 'detail': 'Unlock the cart to edit items.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     try:
         cart_item = CartItem.objects.get(id=item_id, cart=cart)
     except CartItem.DoesNotExist:
