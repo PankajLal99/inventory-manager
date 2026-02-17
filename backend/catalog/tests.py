@@ -3,6 +3,7 @@ from django.test import TransactionTestCase
 from backend.core.test_utils import TestDataFactory, AuthenticatedAPIClient
 from rest_framework import status
 from backend.catalog.models import Product, Barcode
+from backend.catalog.serializers import _get_supplier_breakdown_for_product, ProductSerializer
 
 
 class ProductListStockFromPurchaseTests(TransactionTestCase):
@@ -83,7 +84,7 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(product_data['available_quantity'], 1.0)
 
     def test_supplier_breakdown_from_purchase_not_tag(self):
-        """Supplier breakdown shop_stock/warehouse_stock come from PurchaseItem, not barcode tags."""
+        """Supplier breakdown shop_stock/warehouse_stock from PurchaseItem; shop_barcode_count = shop - sold (here 0 sold)."""
         supp_a = TestDataFactory.create_supplier(name="SupplierA")
         supp_b = TestDataFactory.create_supplier(name="SupplierB")
         p1 = TestDataFactory.create_purchase(user=self.user, supplier=supp_a, status='finalized')
@@ -108,6 +109,9 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(breakdown[supp_a.name]['warehouse_stock'], 4.0)
         self.assertEqual(breakdown[supp_b.name]['shop_stock'], 1.0)
         self.assertEqual(breakdown[supp_b.name]['warehouse_stock'], 4.0)
+        # Shop Qty = shop_barcode_count = max(0, shop_stock - sold); no sold here so equals shop_stock
+        self.assertEqual(breakdown[supp_a.name]['shop_barcode_count'], 6.0)
+        self.assertEqual(breakdown[supp_b.name]['shop_barcode_count'], 1.0)
 
     def test_draft_purchase_excluded_from_shop_warehouse(self):
         """Only finalized purchases contribute to shop_stock and warehouse_stock."""
@@ -124,6 +128,67 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(product_data['shop_stock'], 0.0)
         self.assertEqual(product_data['warehouse_stock'], 0.0)
         self.assertEqual(product_data['available_quantity'], 1.0)  # 1 new - 0 warehouse
+
+    def test_supplier_breakdown_shop_qty_is_shop_minus_sold(self):
+        """Shop Qty (shop_barcode_count) = max(0, purchase shop_quantity - sold barcode count) per supplier."""
+        supp = TestDataFactory.create_supplier(name="SupplierAMS")
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=supp, status='finalized')
+        purchase_item = TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product,
+            quantity=Decimal('20'), shop_quantity=Decimal('20'), warehouse_quantity=Decimal('0')
+        )
+        # Create 12 sold barcodes linked to this purchase so they count under this supplier
+        for i in range(12):
+            b = TestDataFactory.create_barcode(
+                product=self.product,
+                barcode=f"BC-SOLD-{i}-{TestDataFactory.random_string(4)}",
+                tag='sold',
+                purchase_item=purchase_item
+            )
+            b.purchase = purchase
+            b.save()
+        # 8 new barcodes (remaining in shop)
+        for i in range(8):
+            b = TestDataFactory.create_barcode(
+                product=self.product,
+                barcode=f"BC-NEW-{i}-{TestDataFactory.random_string(4)}",
+                tag='new',
+                purchase_item=purchase_item
+            )
+            b.purchase = purchase
+            b.save()
+        breakdown = _get_supplier_breakdown_for_product(self.product)
+        by_supp = {b['supplier']: b for b in breakdown}
+        self.assertIn(supp.name, by_supp)
+        row = by_supp[supp.name]
+        self.assertEqual(row['shop_stock'], 20.0)
+        self.assertEqual(row['warehouse_stock'], 0.0)
+        self.assertEqual(row['shop_barcode_count'], 8.0)  # 20 - 12 sold
+
+    def test_product_serializer_shop_warehouse_tie_to_breakdown(self):
+        """ProductSerializer (detail) shop_stock and warehouse_stock equal sum of breakdown columns."""
+        supp_a = TestDataFactory.create_supplier(name="SupplierA")
+        supp_b = TestDataFactory.create_supplier(name="SupplierB")
+        p1 = TestDataFactory.create_purchase(user=self.user, supplier=supp_a, status='finalized')
+        TestDataFactory.create_purchase_item(
+            purchase=p1, product=self.product,
+            quantity=Decimal('10'), shop_quantity=Decimal('6'), warehouse_quantity=Decimal('4')
+        )
+        p2 = TestDataFactory.create_purchase(user=self.user, supplier=supp_b, status='finalized')
+        TestDataFactory.create_purchase_item(
+            purchase=p2, product=self.product,
+            quantity=Decimal('5'), shop_quantity=Decimal('1'), warehouse_quantity=Decimal('4')
+        )
+        data = ProductSerializer(self.product).data
+        self.assertIn('supplier_breakdown', data)
+        breakdown = data['supplier_breakdown']
+        self.assertEqual(len(breakdown), 2)
+        sum_shop = sum(b['shop_barcode_count'] for b in breakdown)
+        sum_whse = sum(b['warehouse_stock'] for b in breakdown)
+        self.assertEqual(data['shop_stock'], sum_shop)
+        self.assertEqual(data['warehouse_stock'], sum_whse)
+        self.assertEqual(data['shop_stock'], 7)   # 6 + 1 (int from serializer)
+        self.assertEqual(data['warehouse_stock'], 8)  # 4 + 4
 
 
 class ProductQuantityTests(TransactionTestCase):

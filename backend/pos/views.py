@@ -3017,6 +3017,12 @@ def invoice_update(request, pk):
         })
     new_items_for_audit = []
 
+    # Barcode values that remain in the edit cart (will be re-assigned to invoice); do not revert these to 'new'
+    barcodes_staying = set()
+    for ci in cart.items.all():
+        if ci.scanned_barcodes:
+            barcodes_staying.update(ci.scanned_barcodes)
+
     with transaction.atomic():
         for inv_item in list(invoice.items.select_related('barcode').all()):
             # Restore stock when deleting old items (since cart_update will deduct them again)
@@ -3031,7 +3037,8 @@ def invoice_update(request, pk):
                     quantity=F('quantity') + inv_item.quantity
                 )
 
-            if inv_item.barcode:
+            # Only revert to 'new' barcodes that are being removed (not in the edit cart)
+            if inv_item.barcode and inv_item.barcode.barcode not in barcodes_staying:
                 inv_item.barcode.tag = 'new'
                 inv_item.barcode.save(update_fields=['tag'])
             

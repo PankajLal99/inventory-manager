@@ -177,7 +177,7 @@ class ProductSerializer(serializers.ModelSerializer):
     warehouse_stock = serializers.SerializerMethodField()
     stock_bifurcation = serializers.SerializerMethodField()
     price_bifurcation = serializers.SerializerMethodField()
-
+    supplier_breakdown = serializers.SerializerMethodField()
 
     def get_stock_quantity(self, obj):
         """Calculate total stock quantity from barcodes - SUPREME SOURCE OF TRUTH
@@ -304,20 +304,18 @@ class ProductSerializer(serializers.ModelSerializer):
         return float(max(0, available_count))
 
     def get_shop_stock(self, obj):
-        """Quantity in retail shops (store where shop_type != 'warehouse')."""
-        total = Decimal('0.000')
-        for entry in obj.stock_entries.all():
-            if entry.store and entry.store.shop_type != 'warehouse':
-                total += entry.quantity
-        return int(round(float(max(Decimal('0'), total))))
+        """Available in shop from purchase view = sum of (shop_quantity - sold) so it ties to supplier breakdown."""
+        breakdown = _get_supplier_breakdown_for_product(obj)
+        return int(round(sum(b['shop_barcode_count'] for b in breakdown)))
 
     def get_warehouse_stock(self, obj):
-        """Quantity in warehouse."""
-        total = Decimal('0.000')
-        for entry in obj.stock_entries.all():
-            if entry.warehouse or (entry.store and entry.store.shop_type == 'warehouse'):
-                total += entry.quantity
-        return int(round(float(max(Decimal('0'), total))))
+        """Warehouse from purchase view so it ties to supplier breakdown."""
+        breakdown = _get_supplier_breakdown_for_product(obj)
+        return int(round(sum(b['warehouse_stock'] for b in breakdown)))
+
+    def get_supplier_breakdown(self, obj):
+        """Same breakdown as list/search: Whse from purchase, Shop Qty = shop - sold per supplier."""
+        return _get_supplier_breakdown_for_product(obj)
 
     class Meta:
         model = Product
@@ -327,8 +325,79 @@ class ProductSerializer(serializers.ModelSerializer):
             'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
             'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
             'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'shop_stock', 'warehouse_stock',
-            'stock_bifurcation', 'price_bifurcation'
+            'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown'
         ]
+
+
+def _get_supplier_breakdown_for_product(obj):
+    """
+    Shared breakdown by supplier. Warehouse from purchase (PurchaseItem.warehouse_quantity).
+    Shop Qty = in shop only = max(0, purchase shop_quantity - sold barcode count per supplier).
+    """
+    from backend.purchasing.models import PurchaseItem
+    from backend.parties.models import Supplier
+    from django.db.models import Count
+
+    items = PurchaseItem.objects.filter(
+        product=obj,
+        purchase__status='finalized'
+    ).select_related('purchase__supplier').order_by('purchase__supplier_id')
+    breakdown_map = {}
+    for item in items:
+        supplier_name = "Unknown"
+        if item.purchase and item.purchase.supplier:
+            supplier_name = item.purchase.supplier.code or item.purchase.supplier.name
+        if supplier_name not in breakdown_map:
+            breakdown_map[supplier_name] = {
+                'supplier': supplier_name,
+                'shop_stock': 0.0,
+                'warehouse_stock': 0.0,
+                'sold_count': 0,
+                'prices': set(),
+            }
+        breakdown_map[supplier_name]['shop_stock'] += float(item.shop_quantity)
+        breakdown_map[supplier_name]['warehouse_stock'] += float(item.warehouse_quantity)
+        if item.unit_price:
+            breakdown_map[supplier_name]['prices'].add(float(item.unit_price))
+
+    sold_counts = obj.barcodes.filter(
+        tag='sold'
+    ).values('purchase__supplier').annotate(
+        sold_count=Count('id')
+    )
+    supplier_ids = [r['purchase__supplier'] for r in sold_counts if r['purchase__supplier'] is not None]
+    supplier_name_by_id = {}
+    if supplier_ids:
+        for s in Supplier.objects.filter(id__in=supplier_ids).only('id', 'code', 'name'):
+            supplier_name_by_id[s.id] = s.code or s.name
+    for r in sold_counts:
+        sid = r['purchase__supplier']
+        supplier_name = supplier_name_by_id.get(sid, "Unknown") if sid is not None else "Unknown"
+        if supplier_name not in breakdown_map:
+            breakdown_map[supplier_name] = {
+                'supplier': supplier_name,
+                'shop_stock': 0.0,
+                'warehouse_stock': 0.0,
+                'sold_count': 0,
+                'prices': set(),
+            }
+        breakdown_map[supplier_name]['sold_count'] += r['sold_count']
+
+    breakdown = []
+    for supplier, data in breakdown_map.items():
+        shop_qty = max(0.0, data['shop_stock'] - data['sold_count'])
+        if data['shop_stock'] == 0 and data['warehouse_stock'] == 0 and shop_qty == 0:
+            continue
+        prices = sorted(list(data['prices'])) if data['prices'] else [0]
+        price_str = "/".join([f"₹{p:g}" for p in prices])
+        breakdown.append({
+            'supplier': supplier,
+            'price': price_str,
+            'shop_stock': data['shop_stock'],
+            'warehouse_stock': data['warehouse_stock'],
+            'shop_barcode_count': shop_qty,
+        })
+    return sorted(breakdown, key=lambda x: x['shop_barcode_count'] + x['warehouse_stock'], reverse=True)
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -583,76 +652,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ", ".join(parts)
 
     def get_supplier_breakdown(self, obj):
-        """
-        Breakdown by supplier. Warehouse from purchase (PurchaseItem.warehouse_quantity).
-        Shop Qty = in shop only = max(0, purchase shop_quantity - sold barcode count per supplier).
-        """
-        from backend.purchasing.models import PurchaseItem
-        from backend.parties.models import Supplier
-        from django.db.models import Count
-
-        items = PurchaseItem.objects.filter(
-            product=obj,
-            purchase__status='finalized'
-        ).select_related('purchase__supplier').order_by('purchase__supplier_id')
-        breakdown_map = {}
-        for item in items:
-            supplier_name = "Unknown"
-            if item.purchase and item.purchase.supplier:
-                supplier_name = item.purchase.supplier.code or item.purchase.supplier.name
-            if supplier_name not in breakdown_map:
-                breakdown_map[supplier_name] = {
-                    'supplier': supplier_name,
-                    'shop_stock': 0.0,
-                    'warehouse_stock': 0.0,
-                    'sold_count': 0,
-                    'prices': set(),
-                }
-            breakdown_map[supplier_name]['shop_stock'] += float(item.shop_quantity)
-            breakdown_map[supplier_name]['warehouse_stock'] += float(item.warehouse_quantity)
-            if item.unit_price:
-                breakdown_map[supplier_name]['prices'].add(float(item.unit_price))
-
-        # Per-supplier sold barcode count (one aggregation)
-        sold_counts = obj.barcodes.filter(
-            tag='sold'
-        ).values('purchase__supplier').annotate(
-            sold_count=Count('id')
-        )
-        supplier_ids = [r['purchase__supplier'] for r in sold_counts if r['purchase__supplier'] is not None]
-        supplier_name_by_id = {}
-        if supplier_ids:
-            for s in Supplier.objects.filter(id__in=supplier_ids).only('id', 'code', 'name'):
-                supplier_name_by_id[s.id] = s.code or s.name
-        for r in sold_counts:
-            sid = r['purchase__supplier']
-            supplier_name = supplier_name_by_id.get(sid, "Unknown") if sid is not None else "Unknown"
-            if supplier_name not in breakdown_map:
-                breakdown_map[supplier_name] = {
-                    'supplier': supplier_name,
-                    'shop_stock': 0.0,
-                    'warehouse_stock': 0.0,
-                    'sold_count': 0,
-                    'prices': set(),
-                }
-            breakdown_map[supplier_name]['sold_count'] += r['sold_count']
-
-        breakdown = []
-        for supplier, data in breakdown_map.items():
-            # Shop Qty = in shop only = max(0, shop_quantity - sold from this supplier)
-            shop_qty = max(0.0, data['shop_stock'] - data['sold_count'])
-            if data['shop_stock'] == 0 and data['warehouse_stock'] == 0 and shop_qty == 0:
-                continue
-            prices = sorted(list(data['prices'])) if data['prices'] else [0]
-            price_str = "/".join([f"₹{p:g}" for p in prices])
-            breakdown.append({
-                'supplier': supplier,
-                'price': price_str,
-                'shop_stock': data['shop_stock'],
-                'warehouse_stock': data['warehouse_stock'],
-                'shop_barcode_count': shop_qty,  # Shop Qty = in shop only (shop - sold)
-            })
-        return sorted(breakdown, key=lambda x: x['shop_barcode_count'] + x['warehouse_stock'], reverse=True)
+        return _get_supplier_breakdown_for_product(obj)
 
     class Meta:
         model = Product

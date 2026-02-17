@@ -19,7 +19,7 @@ import {
   Barcode as BarcodeIcon,
   Camera,
 } from 'lucide-react';
-import { formatNumber, getStockInfo } from '../../lib/utils';
+import { formatNumber } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
