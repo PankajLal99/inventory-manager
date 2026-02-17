@@ -798,7 +798,7 @@ export default function POS() {
             itemCount: cart.items?.length || 0,
             createdAt: cart.created_at || new Date().toISOString(),
             updatedAt: cart.updated_at || new Date().toISOString(),
-            locked: localTab?.locked ?? stateTab?.locked ?? false,
+            locked: cart.locked ?? localTab?.locked ?? stateTab?.locked ?? false,
           };
           mergedTabs.push(cartTab);
           processedIds.add(cart.id);
@@ -833,7 +833,7 @@ export default function POS() {
                   itemCount: cart.items?.length || 0,
                   createdAt: cart.created_at || new Date().toISOString(),
                   updatedAt: cart.updated_at || new Date().toISOString(),
-                  locked: localTab.locked ?? stateTab?.locked ?? false,
+                  locked: cart.locked ?? localTab.locked ?? stateTab?.locked ?? false,
                 };
                 mergedTabs.push(cartTab);
                 processedIds.add(localTab.id);
@@ -921,6 +921,17 @@ export default function POS() {
     cartTabsRef.current = cartTabs;
   }, [cartTabs]);
 
+  // When cart detail loads, sync locked from backend so it's correct on any device/browser
+  useEffect(() => {
+    if (!cartId || !username || !cart?.data || typeof (cart.data as any).locked !== 'boolean') return;
+    const backendLocked = (cart.data as any).locked;
+    const currentTab = cartTabs.find((t) => t.id === cartId);
+    if (currentTab && currentTab.locked !== backendLocked) {
+      updateCartTab(username, cartId, { locked: backendLocked });
+      setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: backendLocked } : t)));
+    }
+  }, [cartId, username, cart?.data, cartTabs]);
+
   // Load carts from localStorage when username is available
   useEffect(() => {
     if (username) {
@@ -1002,6 +1013,24 @@ export default function POS() {
     },
     onError: (_error: any) => {
       // Don't show alert for auto-creation, only for manual creation
+    },
+  });
+
+  const lockCartMutation = useMutation({
+    mutationFn: ({ cartId: id, locked }: { cartId: number; locked: boolean }) =>
+      posApi.carts.update(id, { locked }),
+    onSuccess: (_, { cartId: id, locked }) => {
+      if (username) {
+        updateCartTab(username, id, { locked });
+        setCartTabs((prev) => prev.map((t) => (t.id === id ? { ...t, locked } : t)));
+      }
+      queryClient.invalidateQueries({ queryKey: ['cart', id] });
+      queryClient.invalidateQueries({ queryKey: ['pos/carts'] });
+      showToast(locked ? 'Cart locked. Open a new cart to add items.' : 'Cart unlocked', 'success');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Failed to update lock';
+      showToast(typeof msg === 'string' ? msg : JSON.stringify(msg), 'error');
     },
   });
 
@@ -1609,9 +1638,9 @@ export default function POS() {
     }
   }, [cart?.data, username, cartId, defaultStore]);
 
-  // Generate smart tab name - short and memorable
+  // Generate smart tab name - short and memorable (more space in tab = allow longer label)
   const getTabDisplayName = (tab: CartTab, _index: number, _allTabs: CartTab[]): string => {
-    const maxLength = 20; // Maximum characters for tab name
+    const maxLength = 32; // Maximum characters for tab name before trimming
 
     // Get invoice type abbreviation (all caps)
     const invoiceTypeAbbr: Record<string, string> = {
@@ -1625,8 +1654,8 @@ export default function POS() {
     // Use customer name if available (from tab or active cart data)
     const customerName = tab.customerName || (tab.id === cartId ? cart?.data?.customer_name : null);
     if (customerName) {
-      const shortName = customerName.length > 12
-        ? customerName.substring(0, 12) + '...'
+      const shortName = customerName.length > 20
+        ? customerName.substring(0, 20) + '...'
         : customerName;
       const name = `${shortName} (${typeAbbr})`;
       return name.length > maxLength ? name.substring(0, maxLength - 3) + '...' : name;
@@ -1655,6 +1684,12 @@ export default function POS() {
     e.stopPropagation();
     if (!username) return;
 
+    const tab = cartTabs.find((t) => t.id === tabId);
+    if (tab?.locked) {
+      showToast('Unlock the cart before closing it.', 'info');
+      return;
+    }
+
     // Prevent deletion if this is the last cart tab
     if (cartTabs.length <= 1) {
       showToast('Cannot delete the last cart. At least one cart must always exist.', 'error');
@@ -1679,6 +1714,11 @@ export default function POS() {
   // Handle delete current cart button - optimistic deletion
   const handleDeleteCurrentCart = () => {
     if (!cartId || !username) return;
+
+    if (isCartLocked) {
+      showToast('Unlock the cart before deleting it.', 'info');
+      return;
+    }
 
     // Prevent deletion if this is the last cart tab
     if (cartTabs.length <= 1) {
@@ -2570,6 +2610,12 @@ export default function POS() {
                       return;
                     }
 
+                    // Cannot switch store while current cart is locked (switching would discard the cart)
+                    if (cartId && isCartLocked) {
+                      showToast('Unlock the cart before switching store.', 'info');
+                      return;
+                    }
+
                     // Find the selected store to check its shop_type
                     const selectedStore = filteredStores.find((s: any) => s.id === storeId);
 
@@ -2632,9 +2678,9 @@ export default function POS() {
               <Button
                 variant="outline"
                 onClick={handleDeleteCurrentCart}
-                disabled={isDeletingCart || !cartId || cartTabs.length <= 1}
+                disabled={isDeletingCart || !cartId || cartTabs.length <= 1 || isCartLocked}
                 className="flex items-center gap-1.5 sm:gap-2 text-red-600 border-red-300 hover:bg-red-50 text-xs sm:text-sm"
-                title={cartTabs.length <= 1 ? 'Cannot delete the last cart. At least one cart must always exist.' : 'Delete current cart'}
+                title={isCartLocked ? 'Unlock the cart to delete it.' : cartTabs.length <= 1 ? 'Cannot delete the last cart. At least one cart must always exist.' : 'Delete current cart'}
               >
                 <Trash className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                 <span className="hidden sm:inline">Delete Cart</span>
@@ -2674,7 +2720,7 @@ export default function POS() {
                   onClick={() => handleTabSwitch(tab.id)}
                   className={`
                     flex items-center gap-0.5 sm:gap-2 px-1.5 sm:px-4 py-2 rounded-md cursor-pointer transition-all duration-200
-                    min-w-[60px] sm:min-w-[120px] max-w-[80px] sm:max-w-[200px] flex-shrink-0 relative h-10
+                    min-w-[80px] sm:min-w-[140px] max-w-[140px] sm:max-w-[280px] flex-shrink-0 relative h-10
                     ${isActive
                       ? 'bg-blue-600 text-white shadow-md ring-2 ring-blue-400'
                       : hasItems
@@ -2703,15 +2749,16 @@ export default function POS() {
                   {!hasItems && (
                     <span className="w-4 sm:w-6 flex-shrink-0" aria-hidden="true"></span>
                   )}
-                  {/* Only show close button if there's more than one tab */}
+                  {/* Only show close button if there's more than one tab; disable when tab is locked */}
                   {cartTabs.length > 1 && (
                     <button
                       onClick={(e) => handleTabClose(e, tab.id)}
+                      disabled={tab.locked}
                       className={`
-                        ml-0.5 sm:ml-1 p-0.5 rounded hover:bg-opacity-20 transition-colors flex-shrink-0
-                        ${isActive ? 'hover:bg-white' : 'hover:bg-gray-300'}
+                        ml-0.5 sm:ml-1 p-0.5 rounded transition-colors flex-shrink-0
+                        ${tab.locked ? 'opacity-50 cursor-not-allowed' : isActive ? 'hover:bg-white hover:bg-opacity-20' : 'hover:bg-gray-300'}
                       `}
-                      title="Close tab"
+                      title={tab.locked ? 'Unlock the cart to close this tab.' : 'Close tab'}
                     >
                       <X className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                     </button>
@@ -3855,11 +3902,8 @@ export default function POS() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        updateCartTab(username, cartId, { locked: false });
-                        setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: false } : t)));
-                        showToast('Cart unlocked', 'success');
-                      }}
+                      onClick={() => lockCartMutation.mutate({ cartId, locked: false })}
+                      disabled={lockCartMutation.isPending}
                       className="flex items-center gap-1.5 text-amber-600 border-amber-300 hover:bg-amber-50"
                       title="Unlock cart to edit"
                     >
@@ -3870,11 +3914,8 @@ export default function POS() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        updateCartTab(username, cartId, { locked: true });
-                        setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: true } : t)));
-                        showToast('Cart locked. Open a new cart to add items.', 'success');
-                      }}
+                      onClick={() => lockCartMutation.mutate({ cartId, locked: true })}
+                      disabled={lockCartMutation.isPending}
                       className="flex items-center gap-1.5 text-gray-600 border-gray-300 hover:bg-gray-50"
                       title="Lock cart (freeze edits; you can open a new cart)"
                     >
