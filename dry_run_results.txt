@@ -1,0 +1,1431 @@
+========================================
+   Barcode Cleanup CLI
+========================================
+
+[1/3] Running Basic Barcode Audit...
+✅ Using External Redis Cache (BEST PERFORMANCE)
+--- Barcode Audit Report ---
+
+1. Barcodes marked SOLD but not in any active InvoiceItem: 0
+
+2. Identifying auto-assigned barcodes (not physically scanned):
+   - Invoice INV-20260127-EBF29B91: Product: FOLDER VIVO Y11/Y12/Y15/Y17 TIKTOK PESTING, Barcode: FOLD-20260117-0063, CartScanned: ['FOLD-20260117-0006', 'FOLD-20260117-0031', 'FOLD-20260117-0004', 'FOLD-20260117-0038', 'FOLD-20260117-0032', 'FOLD-20260117-0036', 'FOLD-20260117-0010', 'FOLD-20260117-0001', 'FOLD-20260117-0040', 'FOLD-20260117-0002', 'FOLD-20260117-0003', 'FOLD-20260117-0008', 'FOLD-20260117-0034', 'FOLD-20260117-0037', 'FOLD-20260117-0035', 'FOLD-20260117-0033', 'FOLD-20260117-0009', 'FOLD-20260117-0039', 'FOLD-20260117-0007', 'FOLD-20260117-0005']
+   - Invoice INV-20260128-56A75FBF: Product: FRAME REALME C53, Barcode: FRAM-20260120-0001-28, CartScanned: []
+   - Invoice INV-20260128-97835853: Product: FOLDER OPPO A57 NEW/C35 PESTING, Barcode: FOLD-20260129-0307, CartScanned: ['FOLD-20260127-0039', 'FOLD-20260127-0031', 'FOLD-20260127-0040', 'FOLD-20260127-0049', 'FOLD-20260127-0035', 'FOLD-20260127-0036', 'FOLD-20260127-0045', 'FOLD-20260127-0038', 'FOLD-20260127-0032', 'FOLD-20260127-0043', 'FOLD-20260127-0050', 'FOLD-20260127-0041', 'FOLD-20260127-0047', 'FOLD-20260127-0034', 'FOLD-20260127-0046', 'FOLD-20260127-0037', 'FOLD-20260127-0033', 'FOLD-20260127-0042', 'FOLD-20260127-0048', 'FOLD-20260127-0044']
+   - Invoice INV-20260202-7B934763: Product: FOLDER REALME 5/C3 PESTING, Barcode: FOLD-20260117-0003-2, CartScanned: ['FOLD-20260129-0233', 'FOLD-20260129-0240', 'FOLD-20260129-0235', 'FOLD-20260129-0238', 'FOLD-20260129-0237', 'FOLD-20260129-0239', 'FOLD-20260129-0231', 'FOLD-20260129-0232', 'FOLD-20260129-0234', 'FOLD-20260129-0236']
+   - Invoice INV-20260202-7B934763: Product: FOLDER VIVO V15 PESTING, Barcode: VIVO-20260122-0005, CartScanned: ['VIVO-20260122-0010']
+   - Invoice INV-20260202-7B934763: Product: FOLDER OPPO A57 NEW/C35 PESTING, Barcode: FOLD-20260127-0081-1, CartScanned: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+   - Invoice INV-20260202-7B934763: Product: FOLDER REALME 6/RM7/RM8 5G PESTING, Barcode: FOLD-20260113-0001-3, CartScanned: ['FOLD-20260113-0005-3', 'FOLD-20260113-0004-3']
+   - Invoice INV-20260202-89B4BF76: Product: FOLDER REALME 5/C3 PESTING, Barcode: FOLD-20260127-0042-6, CartScanned: ['FOLD-20260129-0233', 'FOLD-20260129-0240', 'FOLD-20260129-0235', 'FOLD-20260129-0238', 'FOLD-20260129-0237', 'FOLD-20260129-0239', 'FOLD-20260129-0231', 'FOLD-20260129-0232', 'FOLD-20260129-0234', 'FOLD-20260129-0236']
+   - Invoice INV-20260202-89B4BF76: Product: FOLDER VIVO V15 PESTING, Barcode: VIVO-20260122-0006, CartScanned: ['VIVO-20260122-0010']
+   - Invoice INV-20260202-89B4BF76: Product: FOLDER OPPO A57 NEW/C35 PESTING, Barcode: FOLD-20260127-0082-1, CartScanned: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+   - Invoice INV-20260202-89B4BF76: Product: FOLDER REALME 6/RM7/RM8 5G PESTING, Barcode: FOLD-20260113-0002-3, CartScanned: ['FOLD-20260113-0005-3', 'FOLD-20260113-0004-3']
+   - Invoice INV-20260202-54972082: Product: FOLDER REALME 5/C3 PESTING, Barcode: FOLD-20260127-0043-6, CartScanned: ['FOLD-20260129-0233', 'FOLD-20260129-0240', 'FOLD-20260129-0235', 'FOLD-20260129-0238', 'FOLD-20260129-0237', 'FOLD-20260129-0239', 'FOLD-20260129-0231', 'FOLD-20260129-0232', 'FOLD-20260129-0234', 'FOLD-20260129-0236']
+   - Invoice INV-20260202-54972082: Product: FOLDER VIVO V15 PESTING, Barcode: VIVO-20260122-0007, CartScanned: ['VIVO-20260122-0010']
+   - Invoice INV-20260202-54972082: Product: FOLDER OPPO A57 NEW/C35 PESTING, Barcode: FOLD-20260127-0083-1, CartScanned: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+   - Invoice INV-20260202-54972082: Product: FOLDER REALME 6/RM7/RM8 5G PESTING, Barcode: FOLD-20260113-0003-3, CartScanned: ['FOLD-20260113-0005-3', 'FOLD-20260113-0004-3']
+   - Invoice INV-20260202-E3468011: Product: FOLDER REALME 5/C3 PESTING, Barcode: FOLD-20260127-0044-6, CartScanned: ['FOLD-20260129-0233', 'FOLD-20260129-0240', 'FOLD-20260129-0235', 'FOLD-20260129-0238', 'FOLD-20260129-0237', 'FOLD-20260129-0239', 'FOLD-20260129-0231', 'FOLD-20260129-0232', 'FOLD-20260129-0234', 'FOLD-20260129-0236']
+
+Total Auto-assigned barcodes found: 16
+Total Invoices affected: 7
+
+3. Scanned barcodes that are NOT in the final invoice:
+   - Cart: CART-20260127-C8C9B1DA, Barcode: FOLD-20260117-0006, Invoice: INV-20260127-EBF29B91
+   - Cart: CART-20260127-34E07F58, Barcode: FOLD-20260127-0039, Invoice: INV-20260128-97835853
+   - Cart: CART-20260130-E78FBF63, Barcode: OCA-20260115-0004, Invoice: INV-20260130-B7B11A25
+   - Cart: CART-20260130-8FD769B3, Barcode: FOLD-20260127-0058-1, Invoice: INV-20260130-7A4C5ADF
+   - Cart: CART-20260131-B31DCE07, Barcode: BTP-20260129-0004-42, Invoice: INV-20260131-953ECC15
+   - Cart: CART-20260131-787BA456, Barcode: FOLD-20260117-0039-1, Invoice: INV-20260131-89556465
+   - Cart: CART-20260202-EE313AA6, Barcode: BTP-20260127-0003-2, Invoice: INV-20260202-0BB7C4DF
+   - Cart: CART-20260202-17652C41, Barcode: FOLD-20260129-0013-9, Invoice: INV-20260202-17161181
+   - Cart: CART-20260203-993B61AB, Barcode: BTP-20260126-0024-7, Invoice: INV-20260203-E0DAEAA0
+   - Cart: CART-20260202-B10C037E, Barcode: FOLD-20260120-0013-6, Invoice: INV-20260203-0789D63A
+   - Cart: CART-20260203-FCDFD18A, Barcode: FOLD-20260117-0017-1, Invoice: INV-20260203-D3C6569E
+   - Cart: CART-20260203-C255B6F7, Barcode: BTP-20260124-0028-7, Invoice: INV-20260203-973739A7
+   - Cart: CART-20260203-875E24DF, Barcode: FOLD-20260127-0058-3, Invoice: INV-20260203-FABEF21C
+   - Cart: CART-20260203-3C64CBEA, Barcode: BTP-20260130-0078, Invoice: INV-20260203-785AA5E2
+   - Cart: CART-20260203-9147C45E, Barcode: BTP-20260126-0030-7, Invoice: INV-20260203-044AA9C1
+   - Cart: CART-20260204-6529E76F, Barcode: FOLD-20260120-0022-4, Invoice: INV-20260204-AE1BCFE5
+
+Total Scanned barcodes 'lost' during checkout: 16
+
+[2/3] Running Deep Audit Investigation...
+✅ Using External Redis Cache (BEST PERFORMANCE)
+--- Deep Audit Investigation ---
+
+1. Hunting for 'Zombie' In-Cart Barcodes...
+   - Found 1 barcodes stuck in 'in-cart' state with no active session.
+     - FOLD-20260131-0694 (Product FOLDER VIVO Y20/Y21/Y22/Y33S/Y52S PESTING)
+
+2. Scanning for Double-Sale Anomalies...
+   - Found 83 potential Double-Sale anomalies (multiple sales without recorded returns).
+     - Barcode FOLD-20260129-0110-1: Sold 2 times (Refs: ['INV-20260204-8351F336', 'INV-20260204-9BECC6DD'])
+     - Barcode FOLD-20260129-0105-1: Sold 2 times (Refs: ['INV-20260204-8351F336', 'INV-20260204-9BECC6DD'])
+     - Barcode FOLD-20260129-0103-1: Sold 2 times (Refs: ['INV-20260204-8351F336', 'INV-20260204-9BECC6DD'])
+     - Barcode BTP-20260126-0003-35: Sold 2 times (Refs: ['INV-20260202-88CA88FA', 'INV-20260128-B209D804'])
+     - Barcode FOLD-20260131-0588: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0586: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0585: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0580: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0589: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0582: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0581: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0583: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0587: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode FOLD-20260131-0584: Sold 2 times (Refs: ['INV-20260202-E6F006D8', 'INV-20260202-BB84E14C'])
+     - Barcode BTP-20260128-0001-67: Sold 2 times (Refs: ['INV-20260202-5F51370E', 'INV-20260131-6C9EE7BB'])
+     - Barcode ASIT-20260127-0008: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0006: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0013: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0012: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0014: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0007: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0001: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0003: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0002: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0017: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0110: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0015: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0079: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0109: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0108: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0112: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0103: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0087: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0085: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0086: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0084: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0097: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0080: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0096: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0077: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0088: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0082: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0076: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0083: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0081: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0100: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0099: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0078: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0075: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0091: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0095: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0090: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0105: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0092: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0093: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0094: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0098: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0106: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0111: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0005: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode ASIT-20260127-0102: Sold 2 times (Refs: ['INV-20260131-6C9EE7BB', 'INV-20260131-00266B1F'])
+     - Barcode BTP-20260126-0005-44: Sold 2 times (Refs: ['INV-20260131-77B7EA43', 'INV-20260127-B5AD8214'])
+     - Barcode FOLD-20251209-0013: Sold 2 times (Refs: ['INV-20260130-8A3A0C5C', 'INV-20260124-1972F4F3'])
+     - Barcode IPHO-20251223-0008: Sold 2 times (Refs: ['INV-20260130-96336C0D', 'INV-20260129-B5BD24FC'])
+     - Barcode BTP-20260127-0025: Sold 2 times (Refs: ['INV-20260129-A35F11E9', 'INV-20260129-B38667A4'])
+     - Barcode BTP-20260127-0024: Sold 2 times (Refs: ['INV-20260129-A35F11E9', 'INV-20260129-B38667A4'])
+     - Barcode IPHO-20251223-0006: Sold 2 times (Refs: ['INV-20260129-A35F11E9', 'INV-20260129-B38667A4'])
+     - Barcode IPHO-20251223-0005: Sold 2 times (Refs: ['INV-20260129-A35F11E9', 'INV-20260129-B38667A4'])
+     - Barcode IPHO-20251223-0003: Sold 2 times (Refs: ['INV-20260129-A35F11E9', 'INV-20260129-B38667A4'])
+     - Barcode FOLD-20260113-0146: Sold 2 times (Refs: ['INV-20260127-EC1C9108', 'INV-20260127-DB5B7D89'])
+     - Barcode FOLD-20260120-0001-7: Sold 2 times (Refs: ['INV-20260126-74C569FE', 'INV-20260126-31B2422A'])
+     - Barcode FOLD-20260120-0001-4: Sold 2 times (Refs: ['INV-20260126-74C569FE', 'INV-20260126-31B2422A'])
+     - Barcode FOLD-20260120-0016-1: Sold 3 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-31B2422A', 'INV-20260126-098D0DA6'])
+     - Barcode FOLD-20260120-0017-1: Sold 2 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-098D0DA6'])
+     - Barcode FOLD-20260120-0015-1: Sold 2 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-098D0DA6'])
+     - Barcode FOLD-20260120-0014-1: Sold 2 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-098D0DA6'])
+     - Barcode FOLD-20260120-0018-1: Sold 3 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-098D0DA6', 'INV-20260126-31B2422A'])
+     - Barcode FOLD-20260113-0148: Sold 2 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-098D0DA6'])
+     - Barcode FOLD-20260113-0144: Sold 2 times (Refs: ['INV-20260126-D95A9BE6', 'INV-20260126-098D0DA6'])
+     - Barcode TOUC-20260115-0068-2: Sold 3 times (Refs: ['INV-20260120-BC21A3A4', 'INV-20260120-6DEF9BA8', 'INV-20260120-A0BB0AA1'])
+     - Barcode OCA-20260115-0020-101: Sold 3 times (Refs: ['INV-20260120-BC21A3A4', 'INV-20260120-F4154ED0', 'INV-20260120-A0BB0AA1'])
+     - Barcode T700-20260115-0036: Sold 3 times (Refs: ['INV-20260120-BC21A3A4', 'INV-20260120-ADAAE9BF', 'INV-20260120-A0BB0AA1'])
+     - Barcode E800-20260115-0209: Sold 3 times (Refs: ['INV-20260120-BC21A3A4', 'INV-20260120-ADAAE9BF', 'INV-20260120-A0BB0AA1'])
+
+3. Checking State vs. Last Action Match...
+     - Mismatch: FOLD-20260131-0233. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0229. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0228. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0227. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0226. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0225. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0224. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0223. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0222. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0221. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260202-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260202-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0220. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0219. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0218. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0217. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0216. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0215. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0214. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0213. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0212. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0211. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0170. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0169. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0168. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0167. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0166. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0165. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0164. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0163. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0162. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0161. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0130. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0129. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0128. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0127. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0126. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0125. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0124. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0123. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0122. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0121. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0053. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0052. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0051. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0110. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0108. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0107. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0106. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0105. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0100. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0099. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0098. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0097. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0096. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0095. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0094. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0093. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0092. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0091. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0050. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0049. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0048. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260131-0043. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260130-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260131-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260131-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0013-6. Last action was 'replacement_return', but tag is 'unknown'.
+     - Mismatch: BTP-20260130-0078. Last action was 'replacement_return', but tag is 'unknown'.
+     - Mismatch: BTP-20260130-0098. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260130-0087. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260130-0082. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260130-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0013. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0180. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0179. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0178. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0177. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0176. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0175. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0174. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0173. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0172. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0171. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0170. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0169. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0168. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0167. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0166. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0165. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0164. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0163. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0162. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0161. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0160. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0159. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0158. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0147. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0146. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0145. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0144. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0143. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0142. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0141. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0140. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0139. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0138. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0127. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0126. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0125. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0124. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0123. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0122. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0121. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0120. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0119. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0108. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0107. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0106. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0105. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0104. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0103. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0102. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0101. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0100. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0099. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0098. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0097. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0096. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0095. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0094. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0093. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0092. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0091. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0073. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0070. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0069. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0068. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0067. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0066. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0065. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0064. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0063. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0062. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0061. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0060. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0059. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0058. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0057. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0056. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0055. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0054. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0053. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0052. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260129-0051. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0117. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0113. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0086. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0065. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0064. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0053. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0051. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260129-0049. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260129-0046. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260129-0032. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260129-0029. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260129-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0047. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0028-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0027-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0026-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0024-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0023-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0005-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0004-4. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: BTP-20260129-0002-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0001-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0014-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0011-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0003-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0002-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0001-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0018-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0016-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0013-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0011-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0007-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0005-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0002-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0027-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0023-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0022-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0020-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0018-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0017-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0016-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0012-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0011-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0007-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0004-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0004. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: BTP-20260129-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260129-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0054. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0053. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0050. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0048. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0047. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0042. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0040. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0039. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0038. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0037. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0020-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0017-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0013-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0012-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0015-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0010-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0016-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0014-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0012-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0007-5. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0008-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0007-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0005-5. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0004-5. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002-6. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0001-6. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002-5. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0001-5. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0009-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0001-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0036. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0035. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0033. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0032. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0030. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0029. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0006-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0005-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0004-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0003-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260128-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0120. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0119. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0117. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0115. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0114. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0099. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0098. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0097. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0096. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0095. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0094. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0093. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0092. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0091. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0090. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0089. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0088. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0087. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0086. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0085. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0084. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0083. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0082. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0081. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0030-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0029-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0028-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0027-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0026-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0023-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0022-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0021-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0008-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0007-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0006-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0005-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0004-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0003-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0001-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0029. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0025. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0010-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0009-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0008-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0007-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0006-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0005-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0004-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0003-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0002-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0001-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0018-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0017-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0016-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0015-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0013-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0012-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0011-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0010-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0009-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0008-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0007-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0005-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0004-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0161. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260127-0058. Last action was 'replacement_return', but tag is 'sold'.
+     - Mismatch: FOLD-20260127-0039. Last action was 'invoice_create', but tag is 'defective'.
+     - Mismatch: BTP-20260127-0080. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0060. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0052. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0051. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0041. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260127-0003. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: BTP-20260127-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0065. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0064. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0063. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0062. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0061. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0041. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0040. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0039. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0038. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0037. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0036. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0023-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0021-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0020-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0034. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0033. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0032. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0031. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0030. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: BTP-20260126-0029. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0025. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0024. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: BTP-20260126-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0019-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0015-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0014-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0013-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0012-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0015-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0013-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0011-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0010-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0010-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0008-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0007-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0006-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0005-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0003-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0011-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0004-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0003-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0002-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0001-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0009-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0006-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0004-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0051. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0049. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0044. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0043. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260126-0042. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0028-7. Last action was 'replacement_return', but tag is 'unknown'.
+     - Mismatch: FOLD-20260118-0030. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0029. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0025. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260117-0039-1. Last action was 'replacement_return', but tag is 'defective'.
+     - Mismatch: FOLD-20260117-0039. Last action was 'replacement_return', but tag is 'sold'.
+     - Mismatch: FOLD-20260117-0017. Last action was 'replacement_return', but tag is 'sold'.
+     - Mismatch: FOLD-20260117-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0001-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0004-3. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0012-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0010-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0003-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0022-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0021-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0020-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0019-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0018-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0017-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0015-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0013-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0012-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0011-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0009-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0004-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0001-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0046. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0035. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0030. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0028. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: BTP-20260124-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0025. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260124-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0017-2. Last action was 'invoice_create', but tag is 'in-cart'.
+     - Mismatch: FOLD-20251225-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20251225-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20251225-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0070. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0069. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0068. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0067. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0066. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0065. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0064. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0063. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0062. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0061. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260118-0033. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0001-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0050. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0049. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0048. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0047. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0046. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0045. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0044. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0043. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0042. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0041. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0040. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0039. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0038. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260116-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0050. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0049. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0048. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0047. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0046. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0039. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0031. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260120-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0029. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTA-20260123-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FOLD-20260113-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0004-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0002-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0001-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0016-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0015-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0014-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0013-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0011-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0008-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0001-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0042. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0041. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0036. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0032. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260123-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: REAL-20260121-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: REAL-20260121-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: REAL-20260121-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0027. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0026. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0024. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0020. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0019. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0018. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0017. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0016. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0015. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0014. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0013. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0012. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0011. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: VIVO-20260121-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0009-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0008-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0028. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0007-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0006-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0005-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0004-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260122-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: IPHO-20251224-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: IPHO-20251224-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0010-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0009-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0008-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0007-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0006-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0005-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0004-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0003-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0002-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0004. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: BTP-20260120-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0042-4. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0060-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0059-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0058-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0057-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0056-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0055-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0054-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0053-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0080-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0079-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0078-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0077-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0076-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0075-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0074-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0073-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0072-1. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0052-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0051-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0050-2. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0013-13. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0012-13. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0011-13. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0010-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0009-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0008-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0007-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0006-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0005-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0004-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0003-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0002-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0001-17. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0013-10. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0012-10. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0011-10. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0010-13. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0009-13. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0008-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0007-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0006-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0005-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0004-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0003-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0002-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0001-14. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0006-12. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0005-12. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0004-12. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0003-12. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0002-12. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0001-12. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0081. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0080. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0079. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0078. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0077. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0076. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0075. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0074. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0073. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0072. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0060. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0059. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0058. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0057. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0056. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0055. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0054. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0053. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0052. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0051. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0050. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0042. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0010. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0009. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0008. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0007. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0004. Last action was 'invoice_create', but tag is 'defective'.
+     - Mismatch: OCA-20260115-0003. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: OCA-20260115-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260115-0068. Last action was 'replacement_return', but tag is 'new'.
+     - Mismatch: FALC-20260115-0023. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FALC-20260115-0022. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FALC-20260115-0021. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FALC-20260115-0006. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FALC-20260115-0005. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FALC-20260115-0002. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: FALC-20260115-0001. Last action was 'invoice_create', but tag is 'new'.
+     - Mismatch: TOUC-20260114-0050. Last action was 'invoice_create', but tag is 'new'.
+   - Total state-audit mismatches found in sample: 818
+
+4. Hunting for Substitution Mistakes (Scanned vs. Sold)...
+     [!] MISTAKE in Invoice INV-20260202-E3468011:
+         - System SOLD: FOLD-20260127-0044-6
+         - You SCANNED: ['FOLD-20260129-0239', 'FOLD-20260129-0240', 'FOLD-20260129-0231', 'FOLD-20260129-0235', 'FOLD-20260129-0236', 'FOLD-20260129-0234', 'FOLD-20260129-0237', 'FOLD-20260129-0238', 'FOLD-20260129-0233', 'FOLD-20260129-0232']
+         - Result: System 'stole' Barcode FOLD-20260127-0044-6 from stock.
+     [!] MISTAKE in Invoice INV-20260202-54972082:
+         - System SOLD: FOLD-20260127-0043-6
+         - You SCANNED: ['FOLD-20260129-0239', 'FOLD-20260129-0240', 'FOLD-20260129-0231', 'FOLD-20260129-0235', 'FOLD-20260129-0236', 'FOLD-20260129-0234', 'FOLD-20260129-0237', 'FOLD-20260129-0238', 'FOLD-20260129-0233', 'FOLD-20260129-0232']
+         - Result: System 'stole' Barcode FOLD-20260127-0043-6 from stock.
+     [!] MISTAKE in Invoice INV-20260202-54972082:
+         - System SOLD: VIVO-20260122-0007
+         - You SCANNED: ['VIVO-20260122-0010']
+         - Result: System 'stole' Barcode VIVO-20260122-0007 from stock.
+     [!] MISTAKE in Invoice INV-20260202-54972082:
+         - System SOLD: FOLD-20260127-0083-1
+         - You SCANNED: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+         - Result: System 'stole' Barcode FOLD-20260127-0083-1 from stock.
+     [!] MISTAKE in Invoice INV-20260202-54972082:
+         - System SOLD: FOLD-20260113-0003-3
+         - You SCANNED: ['FOLD-20260113-0004-3', 'FOLD-20260113-0005-3']
+         - Result: System 'stole' Barcode FOLD-20260113-0003-3 from stock.
+     [!] MISTAKE in Invoice INV-20260202-89B4BF76:
+         - System SOLD: FOLD-20260127-0042-6
+         - You SCANNED: ['FOLD-20260129-0239', 'FOLD-20260129-0240', 'FOLD-20260129-0231', 'FOLD-20260129-0235', 'FOLD-20260129-0236', 'FOLD-20260129-0234', 'FOLD-20260129-0237', 'FOLD-20260129-0238', 'FOLD-20260129-0233', 'FOLD-20260129-0232']
+         - Result: System 'stole' Barcode FOLD-20260127-0042-6 from stock.
+     [!] MISTAKE in Invoice INV-20260202-89B4BF76:
+         - System SOLD: VIVO-20260122-0006
+         - You SCANNED: ['VIVO-20260122-0010']
+         - Result: System 'stole' Barcode VIVO-20260122-0006 from stock.
+     [!] MISTAKE in Invoice INV-20260202-89B4BF76:
+         - System SOLD: FOLD-20260127-0082-1
+         - You SCANNED: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+         - Result: System 'stole' Barcode FOLD-20260127-0082-1 from stock.
+     [!] MISTAKE in Invoice INV-20260202-89B4BF76:
+         - System SOLD: FOLD-20260113-0002-3
+         - You SCANNED: ['FOLD-20260113-0004-3', 'FOLD-20260113-0005-3']
+         - Result: System 'stole' Barcode FOLD-20260113-0002-3 from stock.
+     [!] MISTAKE in Invoice INV-20260202-7B934763:
+         - System SOLD: FOLD-20260117-0003-2
+         - You SCANNED: ['FOLD-20260129-0239', 'FOLD-20260129-0240', 'FOLD-20260129-0231', 'FOLD-20260129-0235', 'FOLD-20260129-0236', 'FOLD-20260129-0234', 'FOLD-20260129-0237', 'FOLD-20260129-0238', 'FOLD-20260129-0233', 'FOLD-20260129-0232']
+         - Result: System 'stole' Barcode FOLD-20260117-0003-2 from stock.
+     [!] MISTAKE in Invoice INV-20260202-7B934763:
+         - System SOLD: VIVO-20260122-0005
+         - You SCANNED: ['VIVO-20260122-0010']
+         - Result: System 'stole' Barcode VIVO-20260122-0005 from stock.
+     [!] MISTAKE in Invoice INV-20260202-7B934763:
+         - System SOLD: FOLD-20260127-0081-1
+         - You SCANNED: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+         - Result: System 'stole' Barcode FOLD-20260127-0081-1 from stock.
+     [!] MISTAKE in Invoice INV-20260202-7B934763:
+         - System SOLD: FOLD-20260113-0001-3
+         - You SCANNED: ['FOLD-20260113-0004-3', 'FOLD-20260113-0005-3']
+         - Result: System 'stole' Barcode FOLD-20260113-0001-3 from stock.
+     [!] MISTAKE in Invoice INV-20260128-97835853:
+         - System SOLD: FOLD-20260129-0307
+         - You SCANNED: ['FOLD-20260127-0042', 'FOLD-20260127-0043', 'FOLD-20260127-0047', 'FOLD-20260127-0045', 'FOLD-20260127-0044', 'FOLD-20260127-0049', 'FOLD-20260127-0038', 'FOLD-20260127-0034', 'FOLD-20260127-0050', 'FOLD-20260127-0040', 'FOLD-20260127-0039', 'FOLD-20260127-0037', 'FOLD-20260127-0036', 'FOLD-20260127-0048', 'FOLD-20260127-0032', 'FOLD-20260127-0041', 'FOLD-20260127-0031', 'FOLD-20260127-0033', 'FOLD-20260127-0046', 'FOLD-20260127-0035']
+         - Result: System 'stole' Barcode FOLD-20260129-0307 from stock.
+     [!] MISTAKE in Invoice INV-20260127-EBF29B91:
+         - System SOLD: FOLD-20260117-0063
+         - You SCANNED: ['FOLD-20260117-0002', 'FOLD-20260117-0038', 'FOLD-20260117-0001', 'FOLD-20260117-0040', 'FOLD-20260117-0035', 'FOLD-20260117-0033', 'FOLD-20260117-0032', 'FOLD-20260117-0005', 'FOLD-20260117-0009', 'FOLD-20260117-0031', 'FOLD-20260117-0037', 'FOLD-20260117-0006', 'FOLD-20260117-0003', 'FOLD-20260117-0008', 'FOLD-20260117-0010', 'FOLD-20260117-0034', 'FOLD-20260117-0039', 'FOLD-20260117-0004', 'FOLD-20260117-0007', 'FOLD-20260117-0036']
+         - Result: System 'stole' Barcode FOLD-20260117-0063 from stock.
+   - Total substitution mistakes identified: 15
+
+[3/3] Running DRY RUN Healing & Repairs...
+✅ Using External Redis Cache (BEST PERFORMANCE)
+--- Enhanced Barcode Status Healer (Dry Run: True) ---
+
+[!] ALERT: Invoice INV-20260204-8351F336 has a PRODUCT MISMATCH.
+    - Description: The physical products scanned do not match the digital entries on this invoice.
+--- DIAGNOSTIC for INV-20260204-8351F336 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2243: 3, 256: 2, 2534: 2, 2488: 1, 56: 10}
+    [DIGITAL RECORD] : Invoice currently shows IDs: {2243: 3}
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260129-0103-1', 'FOLD-20260129-0105-1', 'FOLD-20260129-0110-1']
+      - Use Barcodes: ['FOLD-20260127-0070-3', 'FOLD-20260127-0061-3']
+      - Use Barcodes: ['FOLD-20260113-0024-2', 'FOLD-20260113-0030-2']
+      - Use Barcodes: ['FOLD-20260127-0025-1']
+      - Use Barcodes: ['FOLD-20260131-0218-1', 'FOLD-20260131-0219-1', 'FOLD-20260131-0220-1', 'FOLD-20260131-0211-1', 'FOLD-20260131-0212-1', 'FOLD-20260131-0217-1', 'FOLD-20260131-0216-1', 'FOLD-20260131-0215-1', 'FOLD-20260131-0214-1', 'FOLD-20260131-0213-1']
+
+[WARNING] DUPLICATE CART DETECTED: Invoice INV-20260204-9BECC6DD shares Cart 917 with INV-20260204-8351F336.
+    - Action: Skipping this invoice to prevent duplicate inventory deduction.
+
+[!] ALERT: Invoice INV-20260204-AE1BCFE5 has a PRODUCT MISMATCH.
+    - Description: The physical products scanned do not match the digital entries on this invoice.
+--- DIAGNOSTIC for INV-20260204-AE1BCFE5 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2497: 20, 70: 5, 2535: 2, 2566: 1, 201: 1, 230: 5, 2611: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: {2497: 20, 70: 5, 2535: 2, 2566: 1, 201: 1, 230: 5}
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260131-0366', 'FOLD-20260131-0367', 'FOLD-20260131-0368', 'FOLD-20260131-0369', 'FOLD-20260131-0370', 'FOLD-20260131-0361', 'FOLD-20260131-0362', 'FOLD-20260131-0363', 'FOLD-20260131-0364', 'FOLD-20260131-0365', 'FOLD-20260131-0461', 'FOLD-20260131-0463', 'FOLD-20260131-0468', 'FOLD-20260131-0462', 'FOLD-20260131-0464', 'FOLD-20260131-0466', 'FOLD-20260131-0470', 'FOLD-20260131-0465', 'FOLD-20260131-0467', 'FOLD-20260131-0469']
+      - Use Barcodes: ['FOLD-20260120-0012-2', 'FOLD-20260120-0013-2', 'FOLD-20260120-0014-2', 'FOLD-20260120-0019-2', 'FOLD-20260120-0020-2']
+      - Use Barcodes: ['FOLD-20260113-0029-3', 'FOLD-20260113-0028-3']
+      - Use Barcodes: ['FOLD-20260129-0002-11']
+      - Use Barcodes: ['FOLD-20260127-0016-9']
+      - Use Barcodes: ['FOLD-20260131-0147-1', 'FOLD-20260131-0148-1', 'FOLD-20260131-0141-1', 'FOLD-20260131-0142-1', 'FOLD-20260131-0143-1']
+      - Use Barcodes: ['FOLD-20260120-0022-4']
+
+[!] ALERT: Invoice INV-20260203-044AA9C1 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-044AA9C1 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {411: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['BTP-20260126-0030-7']
+
+[!] ALERT: Invoice INV-20260203-785AA5E2 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-785AA5E2 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {778: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['BTP-20260130-0078']
+
+[!] ALERT: Invoice INV-20260203-FABEF21C is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-FABEF21C ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {256: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260127-0058-3']
+
+[!] ALERT: Invoice INV-20260203-973739A7 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-973739A7 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {662: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['BTP-20260124-0028-7']
+
+[!] ALERT: Invoice INV-20260203-D3C6569E is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-D3C6569E ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2230: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260117-0017-1']
+
+[!] ALERT: Invoice INV-20260203-0789D63A is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-0789D63A ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2611: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260120-0013-6']
+
+[!] ALERT: Invoice INV-20260203-E0DAEAA0 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260203-E0DAEAA0 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {410: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['BTP-20260126-0024-7']
+
+[!] ALERT: Invoice INV-20260202-17161181 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260202-17161181 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2567: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260129-0013-9']
+
+[!] ALERT: Invoice INV-20260202-0BB7C4DF is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260202-0BB7C4DF ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2456: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['BTP-20260127-0003-2']
+
+[!] ALERT: Invoice INV-20260202-E3468011 has a PRODUCT MISMATCH.
+    - Description: The physical products scanned do not match the digital entries on this invoice.
+--- DIAGNOSTIC for INV-20260202-E3468011 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {1876: 1, 2214: 3, 2534: 2, 57: 10}
+    [DIGITAL RECORD] : Invoice currently shows IDs: {57: 1}
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['VIVO-20260122-0010']
+      - Use Barcodes: ['FOLD-20260127-0105', 'FOLD-20260127-0104', 'FOLD-20260127-0103']
+      - Use Barcodes: ['FOLD-20260113-0005-3', 'FOLD-20260113-0004-3']
+      - Use Barcodes: ['FOLD-20260129-0238', 'FOLD-20260129-0239', 'FOLD-20260129-0240', 'FOLD-20260129-0237', 'FOLD-20260129-0235', 'FOLD-20260129-0236', 'FOLD-20260129-0234', 'FOLD-20260129-0231', 'FOLD-20260129-0232', 'FOLD-20260129-0233']
+
+[WARNING] DUPLICATE CART DETECTED: Invoice INV-20260202-54972082 shares Cart 738 with INV-20260202-E3468011.
+    - Action: Skipping this invoice to prevent duplicate inventory deduction.
+
+[WARNING] DUPLICATE CART DETECTED: Invoice INV-20260202-89B4BF76 shares Cart 738 with INV-20260202-E3468011.
+    - Action: Skipping this invoice to prevent duplicate inventory deduction.
+
+[WARNING] DUPLICATE CART DETECTED: Invoice INV-20260202-7B934763 shares Cart 738 with INV-20260202-E3468011.
+    - Action: Skipping this invoice to prevent duplicate inventory deduction.
+
+[WARNING] DUPLICATE CART DETECTED: Invoice INV-20260202-978AEF39 shares Cart 738 with INV-20260202-E3468011.
+    - Action: Skipping this invoice to prevent duplicate inventory deduction.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0102 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0005 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0111 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0106 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0098 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0094 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0093 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0092 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0105 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0090 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0095 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0091 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0075 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0078 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0099 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0100 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0081 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0083 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0076 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0082 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0088 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0077 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0096 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0080 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0097 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0084 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0086 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0085 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0087 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0103 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0112 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0108 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0109 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0079 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0015 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0110 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0017 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0002 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0003 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0001 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0007 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0014 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0012 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0013 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0006 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] STATUS ERROR: Barcode ASIT-20260127-0008 on Invoice INV-20260131-00266B1F is marked 'new'.
+    - Description: This item was sold, but its tag escaped the 'sold' status transition.
+    [PROPOSAL]: Force tag change to 'sold'.
+
+[!] ALERT: Invoice INV-20260131-89556465 has a PRODUCT MISMATCH.
+    - Description: The physical products scanned do not match the digital entries on this invoice.
+--- DIAGNOSTIC for INV-20260131-89556465 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {2214: 1, 2228: 1, 2212: 2, 2230: 2, 2243: 10}
+    [DIGITAL RECORD] : Invoice currently shows IDs: {2214: 1, 2228: 1, 2212: 2, 2230: 1, 2243: 10}
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260129-0302']
+      - Use Barcodes: ['FOLD-20260109-0019']
+      - Use Barcodes: ['FOLD-20260113-0005-1', 'FOLD-20260113-0004-1']
+      - Use Barcodes: ['FOLD-20260117-0033-1', 'FOLD-20260117-0039-1']
+      - Use Barcodes: ['FOLD-20260118-0022-1', 'FOLD-20260118-0021-1', 'FOLD-20260118-0023-1', 'FOLD-20260118-0024-1', 'FOLD-20260118-0025-1', 'FOLD-20260118-0026-1', 'FOLD-20260118-0027-1', 'FOLD-20260118-0028-1', 'FOLD-20260118-0029-1', 'FOLD-20260118-0030-1']
+
+[!] ALERT: Invoice INV-20260131-953ECC15 has a PRODUCT MISMATCH.
+    - Description: The physical products scanned do not match the digital entries on this invoice.
+--- DIAGNOSTIC for INV-20260131-953ECC15 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {56: 1, 70: 1, 604: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: {56: 1, 70: 1}
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260118-0086']
+      - Use Barcodes: ['FOLD-20260120-0030-1']
+      - Use Barcodes: ['BTP-20260129-0004-42']
+
+[!] ALERT: Invoice INV-20260130-DF884944 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260130-DF884944 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {1071: 13, 1014: 13, 1695: 30, 1072: 8, 1111: 6, 1074: 11}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['OCA-20260115-0013-104', 'OCA-20260115-0012-104', 'OCA-20260115-0011-104', 'OCA-20260115-0009-139', 'OCA-20260115-0008-140', 'OCA-20260115-0007-140', 'OCA-20260115-0006-140', 'OCA-20260115-0005-140', 'OCA-20260115-0004-140', 'OCA-20260115-0003-140', 'OCA-20260115-0002-140', 'OCA-20260115-0001-140', 'OCA-20260115-0010-139']
+      - Use Barcodes: ['OCA-20260115-0013-133', 'OCA-20260115-0012-133', 'OCA-20260115-0011-133', 'OCA-20260115-0010-175', 'OCA-20260115-0009-175', 'OCA-20260115-0008-176', 'OCA-20260115-0007-176', 'OCA-20260115-0006-176', 'OCA-20260115-0005-176', 'OCA-20260115-0004-176', 'OCA-20260115-0003-176', 'OCA-20260115-0002-176', 'OCA-20260115-0001-176']
+      - Use Barcodes: ['TOUC-20260114-0270', 'TOUC-20260114-0269', 'TOUC-20260114-0268', 'TOUC-20260114-0267', 'TOUC-20260114-0266', 'TOUC-20260114-0265', 'TOUC-20260114-0264', 'TOUC-20260114-0263', 'TOUC-20260114-0262', 'TOUC-20260114-0261', 'TOUC-20260114-0260', 'TOUC-20260114-0259', 'TOUC-20260114-0258', 'TOUC-20260114-0257', 'TOUC-20260114-0256', 'TOUC-20260114-0255', 'TOUC-20260114-0254', 'TOUC-20260114-0253', 'TOUC-20260114-0252', 'TOUC-20260114-0251', 'TOUC-20260114-0250', 'TOUC-20260114-0249', 'TOUC-20260114-0248', 'TOUC-20260114-0247', 'TOUC-20260114-0246', 'TOUC-20260114-0245', 'TOUC-20260114-0243', 'TOUC-20260114-0242', 'TOUC-20260114-0241', 'TOUC-20260114-0244']
+      - Use Barcodes: ['OCA-20260116-0074', 'OCA-20260116-0075', 'OCA-20260116-0081', 'OCA-20260116-0080', 'OCA-20260116-0079', 'OCA-20260116-0078', 'OCA-20260116-0077', 'OCA-20260116-0076']
+      - Use Barcodes: ['OCA-20260115-0006-122', 'OCA-20260115-0005-122', 'OCA-20260115-0004-122', 'OCA-20260115-0003-122', 'OCA-20260115-0002-122', 'OCA-20260115-0001-122']
+      - Use Barcodes: ['OCA-20260115-0060-22', 'OCA-20260115-0059-22', 'OCA-20260115-0058-23', 'OCA-20260115-0057-23', 'OCA-20260115-0056-23', 'OCA-20260115-0055-24', 'OCA-20260115-0054-24', 'OCA-20260115-0053-24', 'OCA-20260115-0052-24', 'OCA-20260115-0051-24', 'OCA-20260115-0050-29']
+
+[WARNING] DUPLICATE CART DETECTED: Invoice INV-20260130-BB7F99B6 shares Cart 615 with INV-20260130-DF884944.
+    - Action: Skipping this invoice to prevent duplicate inventory deduction.
+
+[!] ALERT: Invoice INV-20260130-7A4C5ADF has a PRODUCT MISMATCH.
+    - Description: The physical products scanned do not match the digital entries on this invoice.
+--- DIAGNOSTIC for INV-20260130-7A4C5ADF ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {230: 5, 70: 5, 2212: 2, 2231: 3, 2506: 10}
+    [DIGITAL RECORD] : Invoice currently shows IDs: {230: 4, 70: 5, 2212: 2, 2231: 3, 2506: 10}
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['FOLD-20260127-0057-1', 'FOLD-20260127-0058-1', 'FOLD-20260127-0059-1', 'FOLD-20260127-0060-1', 'FOLD-20260127-0053-1']
+      - Use Barcodes: ['FOLD-20260120-0038-1', 'FOLD-20260120-0032-1', 'FOLD-20260120-0031-1', 'FOLD-20260120-0039-1', 'FOLD-20260120-0040-1']
+      - Use Barcodes: ['FOLD-20260118-0051', 'FOLD-20260118-0059']
+      - Use Barcodes: ['FOLD-20260118-0009-2', 'FOLD-20260118-0001-2', 'FOLD-20260118-0002-2']
+      - Use Barcodes: ['FOLD-20260127-0037-10', 'FOLD-20260127-0038-10', 'FOLD-20260127-0039-10', 'FOLD-20260127-0040-10', 'FOLD-20260127-0036-10', 'FOLD-20260127-0041-8', 'FOLD-20260127-0035-10', 'FOLD-20260127-0034-10', 'FOLD-20260127-0033-10', 'FOLD-20260127-0032-10']
+
+[!] ALERT: Invoice INV-20260130-B7B11A25 is effectively EMPTY despite a completed cart.
+    - Description: The system session finished, but no items were saved to the invoice.
+--- DIAGNOSTIC for INV-20260130-B7B11A25 ---
+    [PHYSICAL REALITY]: Scanned beeps for Product IDs: {1610: 1}
+    [DIGITAL RECORD] : Invoice currently shows IDs: EMPTY
+    [PROPOSAL]: Reconstruct digital records to perfectly match beeps.
+      - Use Barcodes: ['OCA-20260115-0004']
+
+============================================================
+   FINAL INTEGRITY SUMMARY REPORT
+============================================================
+Total Transactions Analyzed: 563
+Mismatches Identified     : 17
+  - Empty Invoices Found  : 11
+  - Product Discrepancies : 6
+------------------------------------------------------------
+STATUS: REPORT ONLY. No changes made. Run with '--apply' to fix.
+============================================================
+✅ Using External Redis Cache (BEST PERFORMANCE)
+--- Barcode Repair Process (Dry Run: True) ---
+
+1. Found 0 barcodes marked SOLD without active InvoiceItem.
+
+2. Identifying and repairing auto-assigned barcodes:
+   - Invoice INV-20260127-EBF29B91: SWAPPING auto-assigned FOLD-20260117-0063 with scanned FOLD-20260117-0006
+   - Invoice INV-20260128-56A75FBF: REVERTING auto-assigned FRAM-20260120-0001-28 and unlinking (no scan found)
+   - Invoice INV-20260128-97835853: SWAPPING auto-assigned FOLD-20260129-0307 with scanned FOLD-20260127-0039
+   - Invoice INV-20260202-7B934763: SWAPPING auto-assigned FOLD-20260117-0003-2 with scanned FOLD-20260129-0238
+   - Invoice INV-20260202-7B934763: SWAPPING auto-assigned VIVO-20260122-0005 with scanned VIVO-20260122-0010
+   - Invoice INV-20260202-7B934763: SWAPPING auto-assigned FOLD-20260127-0081-1 with scanned FOLD-20260127-0105
+   - Invoice INV-20260202-7B934763: SWAPPING auto-assigned FOLD-20260113-0001-3 with scanned FOLD-20260113-0005-3
+
+Total swaps performed: 6
+Total unlinks performed: 1
+
+NOTE: This was a DRY RUN. No changes were made to the database.
+
+========================================
+   Cleanup Process Finished
+========================================
