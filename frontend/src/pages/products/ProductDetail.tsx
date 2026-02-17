@@ -210,6 +210,36 @@ export default function ProductDetail() {
         </div>
       </div>
 
+      {/* Supplier breakdown: Whse + Shop Qty (shop - sold) per supplier */}
+      {p.supplier_breakdown && Array.isArray(p.supplier_breakdown) && p.supplier_breakdown.length > 0 && (
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h2 className="text-xl font-semibold mb-4">Inventory by supplier</h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Supplier</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Whse</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-blue-600 uppercase tracking-wider">Shop Qty</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {p.supplier_breakdown.map((s: any, idx: number) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{s.supplier}</td>
+                    <td className="px-4 py-3 text-sm text-right text-gray-600">{Number(s.warehouse_stock).toLocaleString()}</td>
+                    <td className="px-4 py-3 text-sm text-right font-medium text-blue-600">{(s.shop_barcode_count ?? s.shop_stock).toLocaleString()}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{s.price}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">Shop Qty = allocated to shop from purchase minus sold from that supplier.</p>
+        </div>
+      )}
+
       {/* Barcodes - grouped by tag, collapsible */}
       {barcodesFull?.data?.total > 0 && (
         <div className="bg-white rounded-2xl shadow p-6">
