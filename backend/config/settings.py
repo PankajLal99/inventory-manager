@@ -126,14 +126,14 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME', 'postgres'),
-            'USER': os.getenv('DB_USER', 'postgres'),
+            'NAME': os.getenv('DB_NAME', 'posdb'),
+            'USER': os.getenv('DB_USER', 'posuser'),
             'PASSWORD': os.getenv('DB_PASSWORD', ''),
-            'HOST': os.getenv('DB_HOST', 'its.cinbnrzrjurt.ap-south-1.rds.amazonaws.com'),
+            'HOST': os.getenv('DB_HOST', '127.0.0.1'),
             'PORT': os.getenv('DB_PORT', '5432'),
             'OPTIONS': {
                 # Try without SSL first, or set to 'require' if SSL is required
-                'sslmode': os.getenv('DB_SSLMODE', 'require'),
+                'sslmode': os.getenv('DB_SSLMODE', 'disable'),
                 # Connection timeout
                 'connect_timeout': 10,
             },
