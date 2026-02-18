@@ -562,132 +562,122 @@ export default function Search() {
                 getItemSubLabel={(item) => `SKU: ${item.sku}`}
               />
 
+              {/* Barcodes: show all matching barcodes with current status; if sold, show invoice detail */}
               <ResultSection
                 title="Barcodes"
                 icon={BarcodeIcon}
-                items={data.barcodes.filter((item) => item.tag === 'new' || item.tag === 'returned')}
+                items={data.barcodes || []}
                 onItemClick={(item) => {
-                  if (item.product) {
+                  if (item.invoice_id) {
+                    navigate(`/invoices/${item.invoice_id}`);
+                  } else if (item.product) {
                     navigate(`/products/${item.product}`);
                   }
                 }}
-                getItemLabel={(item) => item.barcode}
-                getItemSubLabel={(item) => item.product ? `Product ID: ${item.product}` : 'No product'}
-              />
-
-              {/* Sold Barcodes - barcodes with tags other than 'new' and 'returned' */}
-              {(() => {
-                const soldBarcodes = (data.barcodes || []).filter(
-                  (item) => item.tag && item.tag !== 'new' && item.tag !== 'returned'
-                );
-
-                return (
-                  <ResultSection
-                    title="Sold Barcodes"
-                    icon={BarcodeIcon}
-                    items={soldBarcodes}
-                    onItemClick={(item) => {
+                getItemLabel={(item) => item.barcode || item.short_code || 'N/A'}
+                getItemSubLabel={(item) => {
+                  const parts = [];
+                  parts.push(`Status: ${item.tag_display || item.tag || 'Unknown'}`);
+                  if (item.invoice_number) parts.push(`Invoice: ${item.invoice_number}`);
+                  if (item.product) parts.push(`Product ID: ${item.product}`);
+                  return parts.join(' | ');
+                }}
+                getItemBadge={(item) => item.tag_display || item.tag || 'Unknown'}
+                customRender={(item, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => {
                       if (item.invoice_id) {
                         navigate(`/invoices/${item.invoice_id}`);
                       } else if (item.product) {
                         navigate(`/products/${item.product}`);
                       }
                     }}
-                    getItemLabel={(item) => item.barcode || item.short_code || 'N/A'}
-                    getItemSubLabel={(item) => {
-                      const parts = [];
-                      if (item.product) parts.push(`Product ID: ${item.product}`);
-                      if (item.tag_display) parts.push(`Tag: ${item.tag_display}`);
-                      if (item.invoice_number) parts.push(`Invoice: ${item.invoice_number}`);
-                      if (item.invoice_date) parts.push(`Date: ${new Date(item.invoice_date).toLocaleDateString('en-IN')}`);
-                      return parts.length > 0 ? parts.join(' | ') : 'No details available';
-                    }}
-                    getItemBadge={(item) => item.tag_display || item.tag || 'Unknown'}
-                    customRender={(item, idx) => {
-                      return (
-                        <div
-                          key={idx}
-                          onClick={() => {
-                            if (item.invoice_id) {
-                              navigate(`/invoices/${item.invoice_id}`);
-                            } else if (item.product) {
-                              navigate(`/products/${item.product}`);
-                            }
-                          }}
-                          className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
-                        >
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-2">
-                                <h3 className="font-medium text-gray-900 group-hover:text-blue-600">
-                                  {item.barcode || item.short_code || 'N/A'}
-                                </h3>
-                                {item.tag_display && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {item.tag_display}
-                                  </Badge>
-                                )}
+                    className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <h3 className="font-medium text-gray-900 group-hover:text-blue-600">
+                            {item.barcode || item.short_code || 'N/A'}
+                          </h3>
+                          <Badge
+                            variant="outline"
+                            className={`text-xs ${
+                              item.tag === 'sold'
+                                ? 'border-amber-200 text-amber-700 bg-amber-50'
+                                : item.tag === 'defective'
+                                  ? 'border-red-200 text-red-700 bg-red-50'
+                                  : item.tag === 'new'
+                                    ? 'border-green-200 text-green-700 bg-green-50'
+                                    : item.tag === 'returned'
+                                      ? 'border-blue-200 text-blue-700 bg-blue-50'
+                                      : 'border-gray-200 text-gray-700'
+                            }`}
+                          >
+                            {item.tag_display || item.tag || 'Unknown'}
+                          </Badge>
+                        </div>
+                        {/* Invoice details when sold */}
+                        {item.tag === 'sold' && (item.invoice_number || item.invoice_id) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-4 text-sm mt-3">
+                            {item.invoice_number && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium">Invoice:</span>
+                                <span className="font-semibold text-blue-600">{item.invoice_number}</span>
                               </div>
-
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-4 text-sm mt-3">
-                                {item.invoice_number && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-gray-400 font-medium">Invoice:</span>
-                                    <span className="font-semibold text-blue-600">{item.invoice_number}</span>
-                                  </div>
-                                )}
-                                {item.invoice_date && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-gray-400 font-medium">Date:</span>
-                                    <span className="text-gray-700 font-medium">{new Date(item.invoice_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                                  </div>
-                                )}
-                                {item.customer_name && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-gray-400 font-medium whitespace-nowrap">Customer:</span>
-                                    <span className="text-gray-700 font-medium truncate">{item.customer_name}</span>
-                                  </div>
-                                )}
-                                {item.invoice_type_display && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-gray-400 font-medium whitespace-nowrap">Payment:</span>
-                                    <span className="text-gray-700 font-medium">{item.invoice_type_display}</span>
-                                  </div>
-                                )}
-                                {item.product && (
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-gray-400 font-medium whitespace-nowrap">Product ID:</span>
-                                    <span className="text-gray-600">{item.product}</span>
-                                  </div>
-                                )}
+                            )}
+                            {item.invoice_date && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium">Date:</span>
+                                <span className="text-gray-700 font-medium">
+                                  {new Date(item.invoice_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                </span>
                               </div>
-                            </div>
-                            <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
-                              {item.sold_price !== null && item.sold_price !== undefined && (
-                                <div className="text-right">
-                                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Sold Price</div>
-                                  <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
-                                    ₹{formatNumber(item.sold_price)}
-                                  </div>
-                                </div>
-                              )}
-                              {item.sold_quantity !== null && item.sold_quantity !== undefined && (
-                                <div className="text-right">
-                                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Qty</div>
-                                  <div className="text-lg font-bold text-gray-700 leading-none">
-                                    {formatNumber(item.sold_quantity)}
-                                  </div>
-                                </div>
-                              )}
-                              <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
+                            )}
+                            {item.customer_name && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium whitespace-nowrap">Customer:</span>
+                                <span className="text-gray-700 font-medium truncate">{item.customer_name}</span>
+                              </div>
+                            )}
+                            {item.invoice_type_display && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium whitespace-nowrap">Payment:</span>
+                                <span className="text-gray-700 font-medium">{item.invoice_type_display}</span>
+                              </div>
+                            )}
+                            {item.product && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium whitespace-nowrap">Product ID:</span>
+                                <span className="text-gray-600">{item.product}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {/* Non-sold: show status only (defective, fresh/new, returned, etc.) */}
+                        {item.tag !== 'sold' && item.tag_display && (
+                          <p className="text-sm text-gray-600 mt-1">
+                            Current status: {item.tag_display}
+                            {item.product && ` · Product ID: ${item.product}`}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
+                        {item.tag === 'sold' && item.sold_price != null && (
+                          <div className="text-right">
+                            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Sold Price</div>
+                            <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
+                              ₹{formatNumber(item.sold_price)}
                             </div>
                           </div>
-                        </div>
-                      );
-                    }}
-                  />
-                );
-              })()}
+                        )}
+                        <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              />
 
               <ResultSection
                 title="Customers"
