@@ -404,15 +404,17 @@ def global_search(request):
             variants = ProductVariant.objects.filter(Q(sku__icontains=query))[:20]
         add_to_results('variants', variants, ProductVariantSerializer)
     
-    # Search Barcodes - exact match for barcode value and tag
+    # Search Barcodes - exact match for barcode/short_code; optionally by tag (barcode_status)
     if search_type in ['all', 'barcode', 'barcode_status']:
-        query_upper = query.upper()
-        barcode_q = Q(barcode__iexact=query_upper)
+        query_clean = query.strip()
+        # Exact match on barcode or short_code (no partial/icontains)
+        barcode_q = Q(barcode=query_clean) | Q(short_code=query_clean)
         if search_type == 'barcode_status':
-            # Also search by tag (exact match, e.g. "sold", "new", "returned")
-            barcode_q |= Q(tag__iexact=query.lower())
-            
-        barcodes = Barcode.objects.filter(barcode_q).prefetch_related('invoice_items__invoice')[:20]
+            # Also search by tag (exact match, e.g. "sold", "new", "defective", "returned")
+            barcode_q |= Q(tag__iexact=query_clean.lower())
+        barcodes = Barcode.objects.filter(barcode_q).select_related('product').prefetch_related(
+            'invoice_items__invoice', 'invoice_items__invoice__customer'
+        )[:20]
         add_to_results('barcodes', barcodes, BarcodeSerializer)
     
     # Search Customers
