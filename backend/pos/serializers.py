@@ -99,6 +99,25 @@ class CartSerializer(serializers.ModelSerializer):
         fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'locked', 'items']
 
 
+class CartOverviewSerializer(serializers.ModelSerializer):
+    """Read-only serializer for active carts overview: user, locked, items."""
+    items = CartItemSerializer(many=True, read_only=True)
+    created_by_username = serializers.SerializerMethodField()
+    store_name = serializers.CharField(source='store.name', read_only=True)
+    customer_name = serializers.CharField(source='customer.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Cart
+        fields = [
+            'id', 'cart_number', 'store', 'store_name', 'status', 'locked',
+            'created_by', 'created_by_username', 'customer', 'customer_name',
+            'created_at', 'updated_at', 'items',
+        ]
+
+    def get_created_by_username(self, obj):
+        return obj.created_by.username if obj.created_by else None
+
+
 class InvoiceItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_sku = serializers.CharField(source='product.sku', read_only=True)

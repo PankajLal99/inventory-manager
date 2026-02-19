@@ -9,7 +9,7 @@ import BarcodeScanner from '../../components/BarcodeScanner';
 import Card from '../../components/ui/Card';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { Search, Camera, AlertTriangle, Plus, Minus, FileText, ArrowLeft, Receipt } from 'lucide-react';
+import { Search, Camera, AlertTriangle, Plus, Minus, FileText, ArrowLeft, Receipt, ListOrdered, X } from 'lucide-react';
 
 interface InvoiceItem {
   id: number;
@@ -48,6 +48,17 @@ export default function CreditNoteReplacement() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showInvoiceDropdown, setShowInvoiceDropdown] = useState(false);
   const [notes, setNotes] = useState('');
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkInput, setBulkInput] = useState('');
+  const [bulkCheckResult, setBulkCheckResult] = useState<{
+    valid: boolean;
+    error?: string;
+    customers?: Array<{ id: number; name: string }>;
+    processable?: Array<{ barcode: string; invoice_id: number; invoice_number: string; item_id: number; product_name: string; customer_name: string }>;
+    skipped?: Array<{ barcode: string; reason: 'not_found' | 'not_sold' | 'different_customer'; current_tag?: string | null }>;
+  } | null>(null);
+  const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
+  const [bulkApplyLoading, setBulkApplyLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -420,6 +431,88 @@ export default function CreditNoteReplacement() {
     });
   };
 
+  // Parse barcodes from pasted text (line or space separated)
+  const parseBulkBarcodes = (text: string): string[] => {
+    const raw = text.replace(/\r\n/g, '\n').split(/[\n\s]+/).map((s) => s.trim()).filter(Boolean);
+    return [...new Set(raw)];
+  };
+
+  const handleBulkCheck = async () => {
+    const barcodes = parseBulkBarcodes(bulkInput);
+    if (barcodes.length === 0) {
+      showToast('Paste at least one barcode (line or space separated)', 'info');
+      return;
+    }
+    setBulkCheckLoading(true);
+    setBulkCheckResult(null);
+    try {
+      const response = await posApi.replacement.bulkBarcodesCheck(barcodes);
+      setBulkCheckResult(response.data);
+      const skippedCount = response.data.skipped?.length ?? 0;
+      const processableCount = response.data.processable?.length ?? 0;
+      if (response.data.valid) {
+        showToast(
+          processableCount > 0
+            ? `${processableCount} barcode(s) will be marked returned.${skippedCount > 0 ? ` ${skippedCount} skipped (no action).` : ''}`
+            : 'No barcodes could be processed. Check skipped list.',
+          skippedCount > 0 ? 'info' : 'success'
+        );
+      } else {
+        showToast(
+          skippedCount > 0
+            ? `No action on ${skippedCount} barcode(s). See "Not resolved" below.`
+            : 'No barcodes could be processed.',
+          'error'
+        );
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Failed to check barcodes';
+      showToast(msg, 'error');
+      setBulkCheckResult(null);
+    } finally {
+      setBulkCheckLoading(false);
+    }
+  };
+
+  const handleBulkMarkReturned = async () => {
+    const processable = bulkCheckResult?.processable ?? [];
+    if (!bulkCheckResult?.valid || processable.length === 0) return;
+    setBulkApplyLoading(true);
+    const byInvoice = new Map<number, typeof processable>();
+    for (const row of processable) {
+      const list = byInvoice.get(row.invoice_id) || [];
+      list.push(row);
+      byInvoice.set(row.invoice_id, list);
+    }
+    let done = 0;
+    try {
+      for (const [invoiceId, items] of byInvoice) {
+        const items_to_replace = items.map((b) => ({
+          item_id: b.item_id,
+          quantity: 1,
+          status: 'returned' as const,
+        }));
+        await posApi.replacement.creditNote(invoiceId, {
+          items_to_replace,
+          notes: notes || 'Bulk return',
+        });
+        done += items.length;
+      }
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-notes'] });
+      showToast(`Marked ${done} barcode(s) as returned across ${byInvoice.size} invoice(s).`, 'success');
+      setShowBulkModal(false);
+      setBulkInput('');
+      setBulkCheckResult(null);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || 'Failed to mark as returned';
+      showToast(msg, 'error');
+    } finally {
+      setBulkApplyLoading(false);
+    }
+  };
+
   const handleReset = () => {
     setSearchValue('');
     setInvoice(null);
@@ -554,6 +647,18 @@ export default function CreditNoteReplacement() {
               >
                 <Search className="h-4 w-4 mr-2" />
                 Search
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowBulkModal(true);
+                  setBulkCheckResult(null);
+                  setBulkInput('');
+                }}
+                className="whitespace-nowrap"
+              >
+                <ListOrdered className="h-4 w-4 mr-2" />
+                Bulk update
               </Button>
             </div>
             {searchError && (
@@ -799,6 +904,101 @@ export default function CreditNoteReplacement() {
           )}
         </div>
       </Card>
+
+      {/* Bulk update modal */}
+      {showBulkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-lg font-semibold text-gray-900">Bulk update – mark barcodes as returned</h2>
+              <button
+                type="button"
+                onClick={() => !bulkApplyLoading && setShowBulkModal(false)}
+                className="p-1 rounded hover:bg-gray-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-4">
+              <p className="text-sm text-gray-600">
+                Paste barcodes below (one per line or space separated). All must belong to a single customer.
+              </p>
+              <textarea
+                value={bulkInput}
+                onChange={(e) => setBulkInput(e.target.value)}
+                placeholder="Paste barcodes here..."
+                className="w-full h-40 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                disabled={bulkApplyLoading}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  onClick={handleBulkCheck}
+                  disabled={bulkCheckLoading || bulkApplyLoading || parseBulkBarcodes(bulkInput).length === 0}
+                >
+                  {bulkCheckLoading ? 'Checking...' : 'Check status'}
+                </Button>
+                {bulkCheckResult?.valid && (
+                  <Button
+                    variant="primary"
+                    onClick={handleBulkMarkReturned}
+                    disabled={bulkApplyLoading}
+                  >
+                    {bulkApplyLoading ? 'Applying...' : 'Mark as returned'}
+                  </Button>
+                )}
+              </div>
+              {bulkCheckResult && (
+                <div className="border rounded-lg p-3 bg-gray-50 text-sm space-y-3">
+                  {(bulkCheckResult.processable?.length ?? 0) > 0 && (
+                    <>
+                      <p className="font-medium text-green-700">
+                        ✓ {(bulkCheckResult.processable ?? []).length} barcode(s) will be marked returned
+                        {bulkCheckResult.customers?.length ? (
+                          <span className="ml-1">(customer: {bulkCheckResult.customers[0]?.name ?? 'N/A'})</span>
+                        ) : null}
+                      </p>
+                      <p className="text-gray-600">
+                        Invoices: {[...new Set(bulkCheckResult.processable?.map((b) => b.invoice_number) || [])].join(', ')}
+                      </p>
+                    </>
+                  )}
+                  {(bulkCheckResult.skipped?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="font-medium text-amber-800 mb-1">
+                        No action taken ({(bulkCheckResult.skipped ?? []).length}):
+                      </p>
+                      <ul className="list-disc list-inside text-gray-700 space-y-0.5 max-h-32 overflow-y-auto">
+                        {(bulkCheckResult.skipped ?? []).map((s) => {
+                          const tagLabel = s.current_tag ? (s.current_tag === 'new' ? 'fresh' : s.current_tag === 'in-cart' ? 'in cart' : s.current_tag) : null;
+                          const statusText = tagLabel
+                            ? tagLabel
+                            : s.reason === 'not_found'
+                              ? 'not found'
+                              : s.reason === 'not_sold'
+                                ? 'not sold'
+                                : 'different customer';
+                          return (
+                            <li key={s.barcode}>
+                              <span className="font-mono">{s.barcode}</span>
+                              <span className="text-amber-700 ml-1">
+                                ({statusText})
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                  {!bulkCheckResult.valid && (bulkCheckResult.processable?.length ?? 0) === 0 && (
+                    <p className="font-medium text-red-700">No barcodes could be processed. All were skipped (see above).</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast Container */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />

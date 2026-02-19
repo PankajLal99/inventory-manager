@@ -35,6 +35,7 @@ import {
   Wrench,
   Receipt,
   Keyboard,
+  ClipboardList,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -279,6 +280,7 @@ export default function Layout() {
       title: 'Administration',
       items: [
         // { path: '/stores', icon: Store, label: 'Stores', showFor: 'admin' }, // Hidden for now
+        { path: '/active-carts', icon: ClipboardList, label: 'Active Carts', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
         { path: '/vendors', icon: Users, label: 'Vendors', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/reports', icon: BarChart3, label: 'Reports', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/history', icon: History, label: 'History', showFor: 'admin' },

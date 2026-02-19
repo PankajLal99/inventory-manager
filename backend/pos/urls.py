@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     pos_session_list_create, pos_session_detail, pos_session_close,
+    active_carts_overview,
     cart_list_create, cart_detail, cart_items, cart_item_update, cart_item_remove_sku,
     cart_hold, cart_unhold, cart_checkout,
     invoice_list_create, invoice_detail, invoice_payments, invoice_void,
@@ -9,7 +10,7 @@ from .views import (
     credit_note_list, credit_note_detail,
     replacement_check, replacement_create, replacement_update_tag,
     replacement_replace, replacement_return, replacement_defective,
-    find_invoice_by_barcode, process_replacement, search_invoices_by_number,
+    find_invoice_by_barcode, bulk_barcodes_check, process_replacement, search_invoices_by_number,
     replacement_credit_note,
     repair_invoices_list, find_repair_invoice_by_barcode, update_repair_status, generate_repair_label
 )
@@ -22,6 +23,7 @@ urlpatterns = [
     
     # Cart endpoints
     path('pos/carts/', cart_list_create, name='cart-list-create'),
+    path('pos/carts/overview/', active_carts_overview, name='active-carts-overview'),
     path('pos/carts/<int:pk>/', cart_detail, name='cart-detail'),
     path('pos/carts/<int:pk>/items/', cart_items, name='cart-items'),
     path('pos/carts/<int:pk>/items/<int:item_id>/', cart_item_update, name='cart-item-update'),
@@ -62,6 +64,7 @@ urlpatterns = [
     path('pos/replacement/return/', replacement_return, name='replacement-return'),
     path('pos/replacement/defective/', replacement_defective, name='replacement-defective'),
     path('pos/replacement/find-invoice/', find_invoice_by_barcode, name='find-invoice-by-barcode'),
+    path('pos/replacement/bulk-barcodes-check/', bulk_barcodes_check, name='bulk-barcodes-check'),
     path('pos/replacement/search-invoices/', search_invoices_by_number, name='search-invoices-by-number'),
     path('pos/replacement/<int:invoice_id>/process/', process_replacement, name='process-replacement'),
     path('pos/replacement/<int:invoice_id>/credit-note/', replacement_credit_note, name='replacement-credit-note'),
