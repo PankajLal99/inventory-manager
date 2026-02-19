@@ -6,9 +6,9 @@ from decimal import Decimal
 import uuid
 from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
-from backend.parties.models import Supplier
+from backend.parties.models import Supplier, Customer
 from backend.purchasing.models import Purchase, PurchaseItem
-from backend.pos.models import Cart, CartItem, Invoice
+from backend.pos.models import Cart, CartItem, Invoice, InvoiceItem
 from backend.core.models import AuditLog
 from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
@@ -992,3 +992,330 @@ class CartBarcodeConsistencyTests(APITestCase):
 
         cart_item = CartItem.objects.get(cart=self.cart, product=self.product)
         self.assertEqual(cart_item.scanned_barcodes, [self.full_barcode])
+
+
+class BulkBarcodesCheckTests(APITestCase):
+    """Tests for bulk barcodes check (replacement credit note): all barcode types and skip cases."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'bulkuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Bulk Store', shop_type='retail')
+        self.category = Category.objects.create(name='Bulk Category')
+        self.product = Product.objects.create(
+            name='Bulk Product',
+            category=self.category,
+            product_type='simple',
+            track_inventory=True,
+        )
+        self.customer_a = Customer.objects.create(name='Customer A', phone='1111111111')
+        self.customer_b = Customer.objects.create(name='Customer B', phone='2222222222')
+
+        # Helper to create a completed invoice (paid, cash) with one item for a barcode
+        def make_invoice(inv_number, customer, barcode, barcode_tag='sold'):
+            b = Barcode.objects.create(
+                product=self.product,
+                barcode=f'BC-{inv_number}-{uuid.uuid4().hex[:6]}',
+                short_code=f'SC-{inv_number}' if inv_number else None,
+                tag=barcode_tag,
+            )
+            inv = Invoice.objects.create(
+                invoice_number=inv_number or f'INV-{uuid.uuid4().hex[:8]}',
+                store=self.store,
+                customer=customer,
+                status='paid',
+                invoice_type='cash',
+                subtotal=Decimal('100.00'),
+                total=Decimal('100.00'),
+                paid_amount=Decimal('100.00'),
+                due_amount=Decimal('0.00'),
+                created_by=self.user,
+            )
+            InvoiceItem.objects.create(
+                invoice=inv,
+                product=self.product,
+                barcode=b,
+                quantity=Decimal('1.000'),
+                unit_price=Decimal('100.00'),
+                line_total=Decimal('100.00'),
+            )
+            return b
+
+        # Sold to customer A (processable)
+        self.sold_a1 = make_invoice('INV-BULK-A1', self.customer_a, None, 'sold')
+        self.sold_a2 = make_invoice('INV-BULK-A2', self.customer_a, None, 'sold')
+        # Sold to customer B (different_customer when mixed with A)
+        self.sold_b1 = make_invoice('INV-BULK-B1', self.customer_b, None, 'sold')
+        # Not sold: on completed invoice but tag new/returned/defective/unknown/in-cart
+        self.barcode_new = make_invoice('INV-BULK-NEW', self.customer_a, None, 'new')
+        self.barcode_returned = make_invoice('INV-BULK-RET', self.customer_a, None, 'returned')
+        self.barcode_defective = make_invoice('INV-BULK-DEF', self.customer_a, None, 'defective')
+        self.barcode_unknown = make_invoice('INV-BULK-UNK', self.customer_a, None, 'unknown')
+        self.barcode_incart = make_invoice('INV-BULK-CART', self.customer_a, None, 'in-cart')
+
+        # One with short_code for lookup test
+        self.barcode_sold_short = Barcode.objects.create(
+            product=self.product,
+            barcode='LONG-BARCODE-WITH-SHORT',
+            short_code='SHORT-001',
+            tag='sold',
+        )
+        inv_short = Invoice.objects.create(
+            invoice_number='INV-BULK-SHORT',
+            store=self.store,
+            customer=self.customer_a,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('50.00'),
+            total=Decimal('50.00'),
+            paid_amount=Decimal('50.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=inv_short,
+            product=self.product,
+            barcode=self.barcode_sold_short,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('50.00'),
+            line_total=Decimal('50.00'),
+        )
+
+    def _url(self):
+        return reverse('bulk-barcodes-check')
+
+    def test_barcodes_required(self):
+        """Missing barcodes key returns 400."""
+        response = self.client.post(self._url(), {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('barcodes', response.data.get('error', ''))
+
+    def test_empty_barcodes_list(self):
+        """Empty list returns valid=False, error no_barcodes."""
+        response = self.client.post(self._url(), {'barcodes': []}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['valid'])
+        self.assertEqual(response.data.get('error'), 'no_barcodes')
+
+    def test_barcodes_string_input(self):
+        """Accept string input: split by newlines and spaces."""
+        response = self.client.post(
+            self._url(),
+            {'barcodes': f'{self.sold_a1.barcode}\n{self.sold_a2.barcode}  {self.sold_a1.barcode}'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        # Dedupe: sold_a1 twice + sold_a2 -> 2 processable
+        self.assertEqual(len(response.data['processable']), 2)
+        self.assertEqual(len(response.data['skipped']), 0)
+
+    def test_not_found_skipped(self):
+        """Barcode that does not exist on any invoice item is skipped as not_found."""
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [self.sold_a1.barcode, 'DOES-NOT-EXIST-ANYWHERE', self.sold_a2.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 2)
+        self.assertEqual(len(response.data['skipped']), 1)
+        skip = response.data['skipped'][0]
+        self.assertEqual(skip['barcode'], 'DOES-NOT-EXIST-ANYWHERE')
+        self.assertEqual(skip['reason'], 'not_found')
+
+    def test_not_sold_tags_skipped(self):
+        """Barcodes with tag new, returned, defective, unknown, in-cart are skipped as not_sold."""
+        barcodes = [
+            self.barcode_new.barcode,
+            self.barcode_returned.barcode,
+            self.barcode_defective.barcode,
+            self.barcode_unknown.barcode,
+            self.barcode_incart.barcode,
+        ]
+        response = self.client.post(self._url(), {'barcodes': barcodes}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 0)
+        self.assertEqual(len(response.data['skipped']), 5)
+        reasons = {s['reason'] for s in response.data['skipped']}
+        self.assertEqual(reasons, {'not_sold'})
+
+    def test_all_sold_single_customer_processable(self):
+        """All barcodes sold and same customer -> valid, all processable, none skipped."""
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [self.sold_a1.barcode, self.sold_a2.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 2)
+        self.assertEqual(len(response.data['skipped']), 0)
+        self.assertEqual(len(response.data['customers']), 1)
+        self.assertEqual(response.data['customers'][0]['name'], 'Customer A')
+
+    def test_sold_two_customers_largest_group_processable(self):
+        """Sold barcodes from two customers -> largest group processable, rest skipped as different_customer."""
+        # A has 2, B has 1 -> A is chosen
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [self.sold_a1.barcode, self.sold_a2.barcode, self.sold_b1.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 2)
+        processable_barcodes = {p['barcode'] for p in response.data['processable']}
+        self.assertEqual(processable_barcodes, {self.sold_a1.barcode, self.sold_a2.barcode})
+        self.assertEqual(len(response.data['skipped']), 1)
+        self.assertEqual(response.data['skipped'][0]['barcode'], self.sold_b1.barcode)
+        self.assertEqual(response.data['skipped'][0]['reason'], 'different_customer')
+
+    def test_sold_two_customers_tie_picks_one_group(self):
+        """When two customers have same count, one group is chosen (deterministic by id)."""
+        sold_b2 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'BC-B2-{uuid.uuid4().hex[:6]}',
+            tag='sold',
+        )
+        inv_b2 = Invoice.objects.create(
+            invoice_number=f'INV-B2-{uuid.uuid4().hex[:6]}',
+            store=self.store,
+            customer=self.customer_b,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=inv_b2,
+            product=self.product,
+            barcode=sold_b2,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [self.sold_a1.barcode, self.sold_b1.barcode, sold_b2.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 2)  # one customer has 2
+        self.assertEqual(len(response.data['skipped']), 1)
+
+    def test_mixed_not_found_not_sold_sold_same_customer(self):
+        """Mix: not_found, not_sold, and sold same customer -> processable = sold, skipped = rest."""
+        response = self.client.post(
+            self._url(),
+            {
+                'barcodes': [
+                    'NOT-FOUND',
+                    self.barcode_new.barcode,
+                    self.sold_a1.barcode,
+                    self.sold_a2.barcode,
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 2)
+        self.assertEqual(len(response.data['skipped']), 2)
+        reasons = {s['reason'] for s in response.data['skipped']}
+        self.assertIn('not_found', reasons)
+        self.assertIn('not_sold', reasons)
+
+    def test_lookup_by_short_code(self):
+        """Barcode can be resolved by short_code when provided in input."""
+        response = self.client.post(
+            self._url(),
+            {'barcodes': ['SHORT-001']},  # short_code of barcode_sold_short
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 1)
+        self.assertEqual(response.data['processable'][0]['barcode'], 'SHORT-001')
+        self.assertEqual(response.data['processable'][0]['invoice_number'], 'INV-BULK-SHORT')
+
+    def test_draft_invoice_excluded(self):
+        """Barcodes on draft or pending invoice are not found (excluded from qs)."""
+        b_draft = Barcode.objects.create(
+            product=self.product,
+            barcode=f'BC-DRAFT-{uuid.uuid4().hex[:6]}',
+            tag='sold',
+        )
+        inv_draft = Invoice.objects.create(
+            invoice_number=f'INV-DRAFT-{uuid.uuid4().hex[:6]}',
+            store=self.store,
+            customer=self.customer_a,
+            status='draft',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('0.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=inv_draft,
+            product=self.product,
+            barcode=b_draft,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [b_draft.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 0)
+        self.assertEqual(len(response.data['skipped']), 1)
+        self.assertEqual(response.data['skipped'][0]['reason'], 'not_found')
+
+    def test_void_invoice_excluded(self):
+        """Barcodes on void invoice are not found."""
+        b_void = Barcode.objects.create(
+            product=self.product,
+            barcode=f'BC-VOID-{uuid.uuid4().hex[:6]}',
+            tag='sold',
+        )
+        inv_void = Invoice.objects.create(
+            invoice_number=f'INV-VOID-{uuid.uuid4().hex[:6]}',
+            store=self.store,
+            customer=self.customer_a,
+            status='void',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=inv_void,
+            product=self.product,
+            barcode=b_void,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [b_void.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['valid'])
+        self.assertEqual(len(response.data['skipped']), 1)
+        self.assertEqual(response.data['skipped'][0]['reason'], 'not_found')

@@ -11,6 +11,7 @@ import ProductDetail from './pages/products/ProductDetail';
 import POS from './pages/pos/POS';
 import POSRepair from './pages/pos/POSRepair';
 import RepairRegistration from './pages/pos/RepairRegistration';
+import ActiveCartsOverview from './pages/pos/ActiveCartsOverview';
 import Customers from './pages/customers/Customers';
 import PersonalCustomers from './pages/customers/PersonalCustomers';
 import Purchases from './pages/purchases/Purchases';
@@ -95,6 +96,7 @@ function App() {
                 <Route path="products" element={<Products />} />
                 <Route path="products/:id" element={<ProductDetail />} />
                 <Route path="pos" element={<POS />} />
+                <Route path="active-carts" element={<ActiveCartsOverview />} />
                 <Route path="pos-repair" element={<POSRepair />} />
                 <Route path="pos-repair-new" element={<RepairRegistration />} />
                 <Route path="customers" element={<Customers />} />

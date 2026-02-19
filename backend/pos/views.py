@@ -8,13 +8,14 @@ from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
+from collections import Counter
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair
 from backend.catalog.models import Barcode, Product, ProductVariant
 from backend.inventory.models import Stock
 from backend.core.utils import create_audit_log
 from .serializers import (
-    POSSessionSerializer, CartSerializer, CartItemSerializer, InvoiceSerializer,
+    POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
     InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer
 )
 from backend.catalog.label_generator import generate_label_image
@@ -414,6 +415,25 @@ def pos_session_close(request, pk):
 
 
 # Cart views
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def active_carts_overview(request):
+    """List all active and held carts (read-only overview): which user, locked, items. No edits."""
+    carts = Cart.objects.filter(
+        status__in=['active', 'held']
+    ).exclude(
+        cart_number__startswith='EDIT-'
+    ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__variant').order_by('-updated_at')
+    store_id = request.query_params.get('store')
+    if store_id:
+        try:
+            carts = carts.filter(store_id=int(store_id))
+        except ValueError:
+            pass
+    serializer = CartOverviewSerializer(carts, many=True)
+    return Response(serializer.data)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def cart_list_create(request):
@@ -4934,6 +4954,132 @@ def find_invoice_by_barcode(request):
         return Response({
             'error': f'Error finding invoice: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bulk_barcodes_check(request):
+    """Check bulk barcodes for credit note: resolve each to sold invoice item, ensure single customer.
+    Returns status per barcode and valid=True only if all found, all sold, and exactly one customer."""
+    barcodes_raw = request.data.get('barcodes')
+    if barcodes_raw is None:
+        return Response({'error': 'barcodes array is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if isinstance(barcodes_raw, str):
+        # Allow string: split by newlines and spaces
+        barcodes_raw = [s.strip() for s in barcodes_raw.replace('\r\n', '\n').split() if s.strip()]
+    if not isinstance(barcodes_raw, list):
+        return Response({'error': 'barcodes must be a list or a string'}, status=status.HTTP_400_BAD_REQUEST)
+    # Dedupe and trim
+    seen = set()
+    barcode_strings = []
+    for b in barcodes_raw:
+        val = (b or '').strip()
+        if val and val not in seen:
+            seen.add(val)
+            barcode_strings.append(val)
+
+    if not barcode_strings:
+        return Response({
+            'valid': False,
+            'error': 'no_barcodes',
+            'customers': [],
+            'processable': [],
+            'skipped': [],
+        })
+
+    # Exclude void/draft/pending - only completed invoices eligible for replacement
+    invoice_items_qs = InvoiceItem.objects.filter(
+        Q(barcode__barcode__isnull=False) | Q(barcode__short_code__isnull=False)
+    ).exclude(
+        invoice__status='void'
+    ).exclude(
+        invoice__status='draft'
+    ).exclude(
+        invoice__invoice_type='pending'
+    ).select_related('invoice', 'product', 'barcode', 'invoice__customer')
+
+    results = []  # sold items with customer info
+    not_found = []  # barcode strings with no eligible invoice item
+    invalid_tag = []  # list of {'barcode': str, 'tag': str} for not-sold
+    customer_names = {}
+
+    for barcode_str in barcode_strings:
+        item = invoice_items_qs.filter(
+            Q(barcode__barcode__iexact=barcode_str) | Q(barcode__short_code__iexact=barcode_str)
+        ).order_by('-invoice__created_at').first()
+
+        if not item:
+            not_found.append(barcode_str)
+            continue
+
+        barcode_obj = item.barcode
+        tag = barcode_obj.tag if barcode_obj else None
+        if tag != 'sold':
+            invalid_tag.append({'barcode': barcode_str, 'tag': tag or 'unknown'})
+            continue
+
+        cust = item.invoice.customer
+        cust_id = cust.id if cust else None
+        cust_name = cust.name if cust else (getattr(cust, 'name', None) or 'N/A')
+        if cust_id:
+            customer_names[cust_id] = cust_name
+
+        results.append({
+            'barcode': barcode_str,
+            'tag': tag,
+            'invoice_id': item.invoice_id,
+            'invoice_number': item.invoice.invoice_number,
+            'item_id': item.id,
+            'product_name': item.product.name if item.product else 'N/A',
+            'customer_id': cust_id,
+            'customer_name': cust_name,
+        })
+
+    # Build skipped list: not_found (with current_tag if barcode exists in DB), not_sold, different_customer
+    skipped = []
+    for b in not_found:
+        # Resolve current tag when barcode exists in system (e.g. fresh, in-cart) but not on eligible invoice
+        barcode_in_db = Barcode.objects.filter(
+            Q(barcode__iexact=b) | Q(short_code__iexact=b)
+        ).values_list('tag', flat=True).first()
+        skipped.append({
+            'barcode': b,
+            'reason': 'not_found',
+            'current_tag': barcode_in_db,
+        })
+    for entry in invalid_tag:
+        skipped.append({
+            'barcode': entry['barcode'],
+            'reason': 'not_sold',
+            'current_tag': entry['tag'],
+        })
+
+    # Among sold (results), pick largest single-customer group as processable; rest go to skipped (different_customer)
+    if results:
+        cust_counts = Counter(r['customer_id'] for r in results)
+        # Use largest group; if tie, pick first by id
+        chosen_cust_id = max(cust_counts.keys(), key=lambda c: (cust_counts[c], c))
+        processable = [r for r in results if r['customer_id'] == chosen_cust_id]
+        for r in results:
+            if r['customer_id'] != chosen_cust_id:
+                skipped.append({
+                    'barcode': r['barcode'],
+                    'reason': 'different_customer',
+                    'current_tag': r.get('tag', 'sold'),
+                })
+    else:
+        processable = []
+
+    valid = len(processable) > 0
+    customers_list = [{'id': cid, 'name': customer_names.get(cid, 'N/A')} for cid in sorted(customer_names.keys())]
+
+    return Response({
+        'valid': valid,
+        'error': None if valid else 'none_processable',
+        'customers': customers_list,
+        'processable': processable,
+        'skipped': skipped,
+    })
 
 
 @api_view(['POST'])

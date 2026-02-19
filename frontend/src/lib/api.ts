@@ -172,6 +172,7 @@ export const posApi = {
     get: (id: number) => api.get(`/pos/carts/${id}/`),
     getActive: () => api.get('/pos/carts/?active=true&single=true'), // Backward compatible
     getAllActive: () => api.get('/pos/carts/?active=true'), // Get all active carts
+    getOverview: (params?: { store?: number }) => api.get('/pos/carts/overview/', { params }), // Active/held carts by user (read-only)
     update: (id: number, data: any) => api.patch(`/pos/carts/${id}/`, data),
     delete: (id: number) => api.delete(`/pos/carts/${id}/`),
     addItem: (id: number, data: any) => api.post(`/pos/carts/${id}/items/`, data),
@@ -215,6 +216,7 @@ export const posApi = {
     return: (data: any) => api.post('/pos/replacement/return/', data),
     defective: (data: any) => api.post('/pos/replacement/defective/', data),
     findInvoiceByBarcode: (data: any) => api.post('/pos/replacement/find-invoice/', data),
+    bulkBarcodesCheck: (barcodes: string[]) => api.post('/pos/replacement/bulk-barcodes-check/', { barcodes }),
     searchInvoices: (search: string) => api.get('/pos/replacement/search-invoices/', { params: { search } }),
     processReplacement: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/process/`, data),
     creditNote: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/credit-note/`, data),
