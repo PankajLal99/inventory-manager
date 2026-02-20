@@ -23,7 +23,7 @@ import Modal from '../../components/ui/Modal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen } from 'lucide-react';
+import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
 import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
@@ -66,6 +66,8 @@ export default function POS() {
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  // Toggle to show/hide purchase price in cart (default on = visible, blue)
+  const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Barcode Queue Types and State
   interface QueueItem {
     id: string;
@@ -3924,6 +3926,18 @@ export default function POS() {
                     </Button>
                   )
                 )}
+                {/* Toggle: show/hide purchase price in cart items (on = blue, prices visible) */}
+                <button
+                  type="button"
+                  onClick={() => setShowPurchasePrice((p) => !p)}
+                  title={showPurchasePrice ? 'Hide purchase prices' : 'Show purchase prices'}
+                  className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
+                    ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
+                    : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
+                    }`}
+                >
+                  {showPurchasePrice ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                </button>
                 {!isCartLocked && ((cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer) && (
                 <Button
                   variant="outline"
@@ -4040,7 +4054,7 @@ export default function POS() {
                                 <span className="text-xs font-semibold text-gray-700">Qty: {formatNumber(item.quantity, 3)}</span>
                               </div>
                             )}
-                            {/* Display selling price or purchase price */}
+                            {/* Display selling price or purchase price (purchase price hidden when eye toggle is off) */}
                             {(() => {
                               const sellingPrice = item.product_selling_price && parseFloat(item.product_selling_price) > 0
                                 ? parseFloat(item.product_selling_price)
@@ -4048,9 +4062,18 @@ export default function POS() {
                               const purchasePrice = item.product_purchase_price && parseFloat(item.product_purchase_price) > 0
                                 ? parseFloat(item.product_purchase_price)
                                 : null;
+                              const isPurchasePrice = sellingPrice === null && purchasePrice !== null;
                               const displayPrice = sellingPrice !== null ? sellingPrice : purchasePrice;
 
                               if (displayPrice !== null) {
+                                // Selling price: always show. Purchase price: only when showPurchasePrice is on
+                                if (isPurchasePrice && !showPurchasePrice) {
+                                  return (
+                                    <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="Purchase price hidden">
+                                      <span className="text-xs font-medium text-gray-400">•••</span>
+                                    </div>
+                                  );
+                                }
                                 return (
                                   <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={sellingPrice !== null ? "Selling Price" : "Purchase Price"}>
                                     <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPrice)}</span>

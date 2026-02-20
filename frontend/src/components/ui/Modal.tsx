@@ -6,7 +6,7 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl' | 'wide';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'xl-plus' | 'wide';
   closeOnBackdropClick?: boolean;
 }
 
@@ -25,6 +25,7 @@ export default function Modal({
     md: 'sm:max-w-lg',
     lg: 'sm:max-w-2xl',
     xl: 'sm:max-w-4xl',
+    'xl-plus': 'sm:max-w-[78.4rem]', // ~40% wider than xl (4xl = 56rem)
     wide: 'sm:max-w-[70%]', // 70% width on desktop, full width on mobile
   };
 

@@ -59,6 +59,7 @@ export default function CreditNoteReplacement() {
   } | null>(null);
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkApplyLoading, setBulkApplyLoading] = useState(false);
+  const [bulkReturnTag, setBulkReturnTag] = useState<'returned' | 'defective' | 'unknown'>('returned');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -490,7 +491,7 @@ export default function CreditNoteReplacement() {
         const items_to_replace = items.map((b) => ({
           item_id: b.item_id,
           quantity: 1,
-          status: 'returned' as const,
+          status: bulkReturnTag,
         }));
         await posApi.replacement.creditNote(invoiceId, {
           items_to_replace,
@@ -501,10 +502,11 @@ export default function CreditNoteReplacement() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['credit-notes'] });
-      showToast(`Marked ${done} barcode(s) as returned across ${byInvoice.size} invoice(s).`, 'success');
+      showToast(`Marked ${done} barcode(s) as ${bulkReturnTag} across ${byInvoice.size} invoice(s).`, 'success');
       setShowBulkModal(false);
       setBulkInput('');
       setBulkCheckResult(null);
+      setBulkReturnTag('returned');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.response?.data?.message || 'Failed to mark as returned';
       showToast(msg, 'error');
@@ -653,6 +655,7 @@ export default function CreditNoteReplacement() {
                 onClick={() => {
                   setShowBulkModal(true);
                   setBulkCheckResult(null);
+                  setBulkReturnTag('returned');
                   setBulkInput('');
                 }}
                 className="whitespace-nowrap"
@@ -909,12 +912,47 @@ export default function CreditNoteReplacement() {
       {showBulkModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-lg font-semibold text-gray-900">Bulk update – mark barcodes as returned</h2>
+            <div className="flex items-center justify-between p-4 border-b gap-3">
+              <h2 className="text-lg font-semibold text-gray-900">Bulk update – mark barcodes</h2>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => setBulkReturnTag('returned')}
+                  disabled={bulkApplyLoading}
+                  className={`w-5 h-5 rounded-full bg-green-500 border-2 transition-all hover:scale-110 disabled:opacity-50 ${bulkReturnTag === 'returned'
+                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-green-200'
+                    : 'border-transparent opacity-30 hover:opacity-60'
+                  }`}
+                  title="Returned (Good condition)"
+                />
+                <button
+                  type="button"
+                  onClick={() => setBulkReturnTag('defective')}
+                  disabled={bulkApplyLoading}
+                  className={`w-5 h-5 rounded-full bg-red-500 border-2 transition-all hover:scale-110 disabled:opacity-50 ${bulkReturnTag === 'defective'
+                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-red-200'
+                    : 'border-transparent opacity-30 hover:opacity-60'
+                  }`}
+                  title="Defective"
+                />
+                <button
+                  type="button"
+                  onClick={() => setBulkReturnTag('unknown')}
+                  disabled={bulkApplyLoading}
+                  className={`w-5 h-5 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 disabled:opacity-50 ${bulkReturnTag === 'unknown'
+                    ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
+                    : 'border-transparent opacity-30 hover:opacity-60'
+                  }`}
+                  title="Unknown"
+                />
+                <span className="text-xs font-bold text-gray-500 capitalize min-w-[52px] hidden sm:inline">
+                  {bulkReturnTag}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => !bulkApplyLoading && setShowBulkModal(false)}
-                className="p-1 rounded hover:bg-gray-100"
+                className="p-1 rounded hover:bg-gray-100 shrink-0"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -944,7 +982,7 @@ export default function CreditNoteReplacement() {
                     onClick={handleBulkMarkReturned}
                     disabled={bulkApplyLoading}
                   >
-                    {bulkApplyLoading ? 'Applying...' : 'Mark as returned'}
+                    {bulkApplyLoading ? 'Applying...' : `Mark as ${bulkReturnTag}`}
                   </Button>
                 )}
               </div>
@@ -953,7 +991,7 @@ export default function CreditNoteReplacement() {
                   {(bulkCheckResult.processable?.length ?? 0) > 0 && (
                     <>
                       <p className="font-medium text-green-700">
-                        ✓ {(bulkCheckResult.processable ?? []).length} barcode(s) will be marked returned
+                        ✓ {(bulkCheckResult.processable ?? []).length} barcode(s) will be marked as <span className="capitalize">{bulkReturnTag}</span>
                         {bulkCheckResult.customers?.length ? (
                           <span className="ml-1">(customer: {bulkCheckResult.customers[0]?.name ?? 'N/A'})</span>
                         ) : null}

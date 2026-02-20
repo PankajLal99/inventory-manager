@@ -44,9 +44,18 @@ def repair_invoices_list(request):
     if repair_barcode:
         queryset = queryset.filter(repair__barcode__icontains=repair_barcode)
     
-    # Search by invoice number
+    # Search by invoice number, customer name, repair contact, model, or barcode
+    search = request.query_params.get('search', None)
     invoice_number = request.query_params.get('invoice_number', None)
-    if invoice_number:
+    if search:
+        queryset = queryset.filter(
+            Q(invoice_number__icontains=search)
+            | Q(customer__name__icontains=search)
+            | Q(repair__contact_no__icontains=search)
+            | Q(repair__model_name__icontains=search)
+            | Q(repair__barcode__icontains=search)
+        )
+    elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
     
     # Pagination
@@ -2224,7 +2233,9 @@ def invoice_list_create(request):
         if date:
             queryset = queryset.filter(created_at__date=date)
         if search:
-            queryset = queryset.filter(invoice_number__icontains=search)
+            queryset = queryset.filter(
+                Q(invoice_number__icontains=search) | Q(customer__name__icontains=search)
+            )
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
         if date_to:
@@ -2242,6 +2253,9 @@ def invoice_list_create(request):
         # Only exclude if not explicitly filtering by defective type
         if invoice_type_filter != 'defective':
             queryset = queryset.exclude(invoice_type='defective')
+
+        # Exclude credit invoices from main invoice list (credit is a status; also exclude legacy invoice_type='credit')
+        queryset = queryset.exclude(status='credit').exclude(invoice_type='credit')
 
         queryset = queryset.order_by('-created_at')
         

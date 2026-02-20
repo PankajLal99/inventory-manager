@@ -3,7 +3,8 @@ import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
-import { Wrench, Clock, CheckCircle, Truck, FileText, AlertTriangle } from 'lucide-react';
+import { Wrench, Clock, CheckCircle, Truck, FileText, AlertTriangle, User, IndianRupee } from 'lucide-react';
+import { formatNumber } from '../../lib/utils';
 
 interface RepairStatusModalProps {
   isOpen: boolean;
@@ -13,6 +14,8 @@ interface RepairStatusModalProps {
   currentStatus: 'received' | 'work_in_progress' | 'done' | 'delivered';
   invoiceStatus?: 'draft' | 'paid' | 'partial' | 'credit' | 'void';
   isLoading?: boolean;
+  customerName?: string | null;
+  bookingAmount?: string | null;
 }
 
 const STATUS_OPTIONS = [
@@ -44,6 +47,8 @@ export default function RepairStatusModal({
   currentStatus,
   invoiceStatus,
   isLoading = false,
+  customerName,
+  bookingAmount,
 }: RepairStatusModalProps) {
   const [selectedStatus, setSelectedStatus] = useState<string>(currentStatus);
 
@@ -88,15 +93,43 @@ export default function RepairStatusModal({
           </div>
         </div>
 
-        {/* Invoice Number (Read-only) */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            <FileText className="h-4 w-4 inline mr-1.5" />
-            Invoice Number
-          </label>
-          <div className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">
-            {invoiceNumber}
+        {/* Repair / Invoice details */}
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              <FileText className="h-4 w-4 inline mr-1.5" />
+              Invoice Number
+            </label>
+            <div className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">
+              {invoiceNumber}
+            </div>
           </div>
+          {(customerName != null || bookingAmount != null) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {customerName != null && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    <User className="h-4 w-4 inline mr-1.5" />
+                    Customer
+                  </label>
+                  <div className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">
+                    {customerName || 'Walk-in Customer'}
+                  </div>
+                </div>
+              )}
+              {bookingAmount != null && (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    <IndianRupee className="h-4 w-4 inline mr-1.5" />
+                    Booking Amount
+                  </label>
+                  <div className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">
+                    {bookingAmount ? `₹${formatNumber(bookingAmount)}` : 'N/A'}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Current Status */}
