@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, Fragment, useMemo } from 'react';
+import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { formatNumber } from '../../lib/utils';
@@ -32,6 +32,8 @@ import {
   ChevronDown,
   ChevronUp,
   Pencil,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 export default function InvoiceDetail() {
@@ -75,6 +77,30 @@ export default function InvoiceDetail() {
   const [selectedInvoiceType, setSelectedInvoiceType] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const [debouncedCustomerSearch, setDebouncedCustomerSearch] = useState('');
+  const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+  // Toggle to show/hide purchase price in checkout modal (default on = visible, blue)
+  const [showPurchasePrice, setShowPurchasePrice] = useState(true);
+
+  // Debounce customer search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedCustomerSearch(customerSearchQuery.trim()), 250);
+    return () => clearTimeout(t);
+  }, [customerSearchQuery]);
+
+  // Close customer dropdown when clicking outside
+  useEffect(() => {
+    if (!editingCustomer || !customerDropdownOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target as Node)) {
+        setCustomerDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [editingCustomer, customerDropdownOpen]);
 
   const { data: invoice, isLoading, error } = useQuery({
     queryKey: ['invoice', invoiceId],
@@ -96,8 +122,12 @@ export default function InvoiceDetail() {
   const customer = customerData?.data || customerData;
 
   const { data: customersList } = useQuery({
-    queryKey: ['customers-list'],
-    queryFn: () => customersApi.list({ page_size: 500 }),
+    queryKey: ['customers-list', debouncedCustomerSearch],
+    queryFn: () =>
+      customersApi.list({
+        page_size: 100,
+        ...(debouncedCustomerSearch ? { search: debouncedCustomerSearch } : {}),
+      }),
     enabled: editingCustomer,
   });
   const customers = (customersList?.data?.results ?? customersList?.data ?? []) as any[];
@@ -1756,6 +1786,8 @@ export default function InvoiceDetail() {
                     <button
                       onClick={() => {
                         setSelectedCustomerId(inv.customer ?? null);
+                        setCustomerSearchQuery(inv.customer_name || 'Walk-in (no customer)');
+                        setCustomerDropdownOpen(true);
                         setEditingCustomer(true);
                       }}
                       className="p-1 rounded hover:bg-gray-100 transition-colors"
@@ -1766,46 +1798,84 @@ export default function InvoiceDetail() {
                   )}
                 </dt>
                 {editingCustomer ? (
-                  <div className="flex items-center gap-2">
-                    <Select
-                      value={selectedCustomerId ?? ''}
-                      onChange={(e) => setSelectedCustomerId(e.target.value ? parseInt(e.target.value) : null)}
-                      className="flex-1 text-sm"
-                    >
-                      <option value="">Walk-in (no customer)</option>
-                      {customers.map((c: any) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                          {c.phone ? ` – ${c.phone}` : ''}
-                        </option>
-                      ))}
-                    </Select>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        const newId = selectedCustomerId ?? null;
-                        const currentId = inv.customer ?? null;
-                        if (newId !== currentId) {
-                          updateInvoiceMutation.mutate({ customer: newId });
-                        } else {
+                  <div className="flex flex-col gap-2 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="relative flex-1 min-w-[200px]" ref={customerDropdownRef}>
+                        <Input
+                          type="text"
+                          placeholder="Type to search customers..."
+                          value={customerSearchQuery}
+                          onChange={(e) => {
+                            setCustomerSearchQuery(e.target.value);
+                            setCustomerDropdownOpen(true);
+                          }}
+                          onFocus={() => setCustomerDropdownOpen(true)}
+                          className="text-sm w-full"
+                          autoComplete="off"
+                        />
+                        {customerDropdownOpen && (
+                          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 max-h-56 overflow-y-auto">
+                            <button
+                              type="button"
+                              className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 border-b border-gray-100 ${selectedCustomerId === null ? 'bg-blue-50 font-medium' : ''}`}
+                              onClick={() => {
+                                setSelectedCustomerId(null);
+                                setCustomerSearchQuery('Walk-in (no customer)');
+                                setCustomerDropdownOpen(false);
+                              }}
+                            >
+                              Walk-in (no customer)
+                            </button>
+                            {customers.map((c: any) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 border-b border-gray-100 last:border-0 ${selectedCustomerId === c.id ? 'bg-blue-50 font-medium' : ''}`}
+                                onClick={() => {
+                                  setSelectedCustomerId(c.id);
+                                  setCustomerSearchQuery(c.name + (c.phone ? ` – ${c.phone}` : ''));
+                                  setCustomerDropdownOpen(false);
+                                }}
+                              >
+                                {c.name}
+                                {c.phone ? ` – ${c.phone}` : ''}
+                              </button>
+                            ))}
+                            {customers.length === 0 && debouncedCustomerSearch && (
+                              <div className="px-3 py-4 text-sm text-gray-500 text-center">No customers found</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const newId = selectedCustomerId ?? null;
+                          const currentId = inv.customer ?? null;
+                          if (newId !== currentId) {
+                            updateInvoiceMutation.mutate({ customer: newId });
+                          } else {
+                            setEditingCustomer(false);
+                          }
+                        }}
+                        disabled={updateInvoiceMutation.isPending}
+                      >
+                        {updateInvoiceMutation.isPending ? 'Saving...' : 'Save'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
                           setEditingCustomer(false);
-                        }
-                      }}
-                      disabled={updateInvoiceMutation.isPending}
-                    >
-                      {updateInvoiceMutation.isPending ? 'Saving...' : 'Save'}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setEditingCustomer(false);
-                        setSelectedCustomerId(inv.customer ?? null);
-                      }}
-                      disabled={updateInvoiceMutation.isPending}
-                    >
-                      Cancel
-                    </Button>
+                          setSelectedCustomerId(inv.customer ?? null);
+                          setCustomerSearchQuery('');
+                          setCustomerDropdownOpen(false);
+                        }}
+                        disabled={updateInvoiceMutation.isPending}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                   </div>
                 ) : (
                   <dd className="text-sm text-gray-900">{inv.customer_name || 'Walk-in'}</dd>
@@ -2398,9 +2468,24 @@ export default function InvoiceDetail() {
             setCheckoutUpiAmount('');
           }}
           title="Checkout Invoice"
-          size="xl"
+          size="xl-plus"
+          closeOnBackdropClick={false}
         >
           <div className="space-y-6">
+            {/* Show/hide purchase price toggle - same as POS */}
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setShowPurchasePrice((p) => !p)}
+                title={showPurchasePrice ? 'Hide purchase prices' : 'Show purchase prices'}
+                className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
+                  ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
+                  : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
+                }`}
+              >
+                {showPurchasePrice ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </button>
+            </div>
             {/* Invoice Type Selection */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <label className="block text-sm font-semibold text-gray-900 mb-3">
@@ -2757,10 +2842,12 @@ export default function InvoiceDetail() {
                                   </td>
                                   <td className="px-4 py-4 text-right">
                                     <span className="text-sm text-gray-900">
-                                      ₹{(() => {
+                                      {(() => {
                                         const sp = parseFloat(firstItem.product_selling_price || '0');
                                         const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                        return formatNumber(sp > 0 ? sp : pp);
+                                        const isPurchasePrice = sp <= 0 && pp > 0;
+                                        if (isPurchasePrice && !showPurchasePrice) return '•••';
+                                        return `₹${formatNumber(sp > 0 ? sp : pp)}`;
                                       })()}
                                     </span>
                                   </td>
@@ -2965,10 +3052,12 @@ export default function InvoiceDetail() {
                                       </td>
                                       <td className="px-4 py-3 text-right">
                                         <span className="text-xs text-gray-600">
-                                          ₹{(() => {
+                                          {(() => {
                                             const sp = parseFloat(item.product_selling_price || '0');
                                             const pp = parseFloat(item.product_purchase_price || '0');
-                                            return formatNumber(sp > 0 ? sp : pp);
+                                            const isPurchasePrice = sp <= 0 && pp > 0;
+                                            if (isPurchasePrice && !showPurchasePrice) return '•••';
+                                            return `₹${formatNumber(sp > 0 ? sp : pp)}`;
                                           })()}
                                         </span>
                                       </td>
@@ -3098,10 +3187,12 @@ export default function InvoiceDetail() {
                                   <div className="text-right">
                                     <span className="text-xs text-gray-500 block">Purchase Price</span>
                                     <span className="text-sm font-medium text-gray-900">
-                                      ₹{(() => {
+                                      {(() => {
                                         const sp = parseFloat(firstItem.product_selling_price || '0');
                                         const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                        return formatNumber(sp > 0 ? sp : pp);
+                                        const isPurchasePrice = sp <= 0 && pp > 0;
+                                        if (isPurchasePrice && !showPurchasePrice) return '•••';
+                                        return `₹${formatNumber(sp > 0 ? sp : pp)}`;
                                       })()}
                                     </span>
                                   </div>

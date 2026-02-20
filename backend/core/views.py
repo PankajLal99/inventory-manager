@@ -407,8 +407,10 @@ def global_search(request):
     # Search Barcodes - exact match for barcode/short_code; optionally by tag (barcode_status)
     if search_type in ['all', 'barcode', 'barcode_status']:
         query_clean = query.strip()
+        # Barcodes are stored in capitals; normalize so scanner/machine input matches
+        query_upper = query_clean.upper()
         # Exact match on barcode or short_code (no partial/icontains)
-        barcode_q = Q(barcode=query_clean) | Q(short_code=query_clean)
+        barcode_q = Q(barcode=query_upper) | Q(short_code=query_upper)
         if search_type == 'barcode_status':
             # Also search by tag (exact match, e.g. "sold", "new", "defective", "returned")
             barcode_q |= Q(tag__iexact=query_clean.lower())

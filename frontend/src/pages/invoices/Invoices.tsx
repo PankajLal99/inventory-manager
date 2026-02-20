@@ -125,7 +125,7 @@ export default function Invoices() {
   const currentStore = stores.find((s: any) => s.id === selectedStoreId);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id, currentPage],
+    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id, currentPage, search],
     queryFn: () => posApi.invoices.list({
       invoice_type: invoiceTypeFilter || undefined,
       date_from: dateFrom || undefined,
@@ -133,6 +133,7 @@ export default function Invoices() {
       store: defaultStore?.id || undefined,
       page: currentPage,
       limit: 50,
+      search: search.trim() || undefined,
     }),
     enabled: !!defaultStore,
     placeholderData: keepPreviousData,
@@ -141,7 +142,7 @@ export default function Invoices() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id]);
+  }, [invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id, search]);
 
   const invoices: Invoice[] = data?.data?.results || data?.data?.results || data?.data || [];
   const paginationInfo = data?.data && typeof data.data === 'object' && 'count' in data.data ? {
@@ -152,17 +153,10 @@ export default function Invoices() {
   } : null;
 
   // Filter out defective invoices (they should only appear in defective move-outs page)
-  const filteredInvoices = invoices
-    .filter((invoice) => invoice.invoice_type !== 'defective')
-    .filter((invoice) => {
-      if (!search) return true;
-      const searchLower = search.toLowerCase();
-      return (
-        invoice.invoice_number.toLowerCase().includes(searchLower) ||
-        invoice.customer_name?.toLowerCase().includes(searchLower) ||
-        invoice.total.toLowerCase().includes(searchLower)
-      );
-    });
+  // Search is applied server-side (invoice_number + customer_name)
+  const filteredInvoices = invoices.filter(
+    (invoice) => invoice.invoice_type !== 'defective'
+  );
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);

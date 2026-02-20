@@ -139,7 +139,7 @@ export default function Repairs() {
         params.store = defaultStore.id;
       }
       if (search.trim()) {
-        params.invoice_number = search.trim();
+        params.search = search.trim();
       }
       if (barcodeSearch.trim()) {
         params.repair_barcode = barcodeSearch.trim();
@@ -286,18 +286,8 @@ export default function Repairs() {
   } : null;
 
 
-  // Filter by search
-  const filteredRepairs = repairInvoices.filter((invoice) => {
-    if (!search) return true;
-    const searchLower = search.toLowerCase();
-    return (
-      invoice.invoice_number.toLowerCase().includes(searchLower) ||
-      invoice.customer_name?.toLowerCase().includes(searchLower) ||
-      invoice.repair?.contact_no?.toLowerCase().includes(searchLower) ||
-      invoice.repair?.model_name?.toLowerCase().includes(searchLower) ||
-      invoice.repair?.barcode?.toLowerCase().includes(searchLower)
-    );
-  });
+  // Search is applied server-side (invoice_number + customer_name)
+  const filteredRepairs = repairInvoices;
 
   const repairGroupInvoices = filteredRepairs.filter(inv => inv.customer_group_name === 'REPAIR');
   const otherGroupInvoices = filteredRepairs.filter(inv => inv.customer_group_name !== 'REPAIR');
@@ -869,6 +859,8 @@ export default function Repairs() {
           currentStatus={selectedInvoice.repair.status}
           invoiceStatus={selectedInvoice.status}
           isLoading={updateStatusMutation.isPending}
+          customerName={selectedInvoice.customer_name}
+          bookingAmount={selectedInvoice.repair.booking_amount}
         />
       )}
 

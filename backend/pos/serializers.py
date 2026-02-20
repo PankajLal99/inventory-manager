@@ -189,7 +189,11 @@ class InvoiceSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
 
-    customer = serializers.PrimaryKeyRelatedField(queryset=Invoice._meta.get_field('customer').related_model.objects.all(), required=True)
+    customer = serializers.PrimaryKeyRelatedField(
+        queryset=Invoice._meta.get_field('customer').related_model.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = Invoice
