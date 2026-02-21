@@ -13,6 +13,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
     cart = serializers.PrimaryKeyRelatedField(read_only=True)
     scanned_barcodes = serializers.JSONField(required=False, allow_null=True)
+    scanned_barcodes_display = serializers.SerializerMethodField()
 
     def get_product_brand_name(self, obj):
         """Get product brand name"""
@@ -22,8 +23,28 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CartItem
-        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'discount_amount', 'tax_amount', 'scanned_barcodes']
-    
+        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
+
+    def get_scanned_barcodes_display(self, obj):
+        """Return display labels (short_code or barcode) for each scanned barcode for UI."""
+        from backend.catalog.models import Barcode
+        if not obj.scanned_barcodes:
+            return []
+        result = []
+        for barcode_str in obj.scanned_barcodes:
+            if not barcode_str:
+                result.append('')
+                continue
+            try:
+                barcode_obj = Barcode.objects.filter(barcode=barcode_str).first()
+                if barcode_obj:
+                    result.append(barcode_obj.short_code or barcode_obj.barcode)
+                else:
+                    result.append(barcode_str)
+            except Exception:
+                result.append(barcode_str)
+        return result
+
     def get_product_purchase_price(self, obj):
         """Get purchase price - use barcode-specific price if available"""
         from backend.catalog.models import Barcode
@@ -126,9 +147,15 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
     product_selling_price = serializers.SerializerMethodField()
     product_can_go_below_purchase_price = serializers.BooleanField(source='product.can_go_below_purchase_price', read_only=True)
     product_track_inventory = serializers.BooleanField(source='product.track_inventory', read_only=True)
-    barcode_value = serializers.CharField(source='barcode.barcode', read_only=True)
+    barcode_value = serializers.SerializerMethodField()  # Display: short_code or barcode for UI
     barcode_id = serializers.IntegerField(source='barcode.id', read_only=True)
     available_quantity = serializers.SerializerMethodField()
+
+    def get_barcode_value(self, obj):
+        """Return short_code when available for display, else full barcode."""
+        if obj.barcode:
+            return obj.barcode.short_code or obj.barcode.barcode
+        return None
 
     def get_available_quantity(self, obj):
         """Calculate available quantity for replacement (quantity - replaced_quantity)"""
@@ -235,10 +262,10 @@ class ReturnItemSerializer(serializers.ModelSerializer):
         return None
 
     def get_barcode_value(self, obj):
-        if obj.barcode:
-            return obj.barcode.barcode
-        if obj.invoice_item and obj.invoice_item.barcode:
-            return obj.invoice_item.barcode.barcode
+        """Return short_code when available for display, else full barcode."""
+        barcode_obj = obj.barcode or (obj.invoice_item.barcode if obj.invoice_item else None)
+        if barcode_obj:
+            return barcode_obj.short_code or barcode_obj.barcode
         return None
 
 

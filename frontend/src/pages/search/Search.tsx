@@ -574,7 +574,7 @@ export default function Search() {
                     navigate(`/products/${item.product}`);
                   }
                 }}
-                getItemLabel={(item) => item.barcode || item.short_code || 'N/A'}
+                getItemLabel={(item) => item.short_code || item.barcode || 'N/A'}
                 getItemSubLabel={(item) => {
                   const parts = [];
                   parts.push(`Status: ${item.tag_display || item.tag || 'Unknown'}`);
@@ -599,7 +599,7 @@ export default function Search() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-2">
                           <h3 className="font-medium text-gray-900 group-hover:text-blue-600">
-                            {item.barcode || item.short_code || 'N/A'}
+                            {item.short_code || item.barcode || 'N/A'}
                           </h3>
                           <Badge
                             variant="outline"

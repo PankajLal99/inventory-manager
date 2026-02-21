@@ -993,6 +993,61 @@ class CartBarcodeConsistencyTests(APITestCase):
         cart_item = CartItem.objects.get(cart=self.cart, product=self.product)
         self.assertEqual(cart_item.scanned_barcodes, [self.full_barcode])
 
+    def test_cart_item_serializer_includes_scanned_barcodes_display(self):
+        """Cart item API includes scanned_barcodes_display (short_code or barcode) for UI."""
+        self.barcode.short_code = 'SC-DISPLAY'
+        self.barcode.save(update_fields=['short_code'])
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': Decimal('100.00'),
+            'barcode': self.full_barcode,
+        }
+        self.client.post(url, data, format='json')
+        cart_url = reverse('cart-detail', kwargs={'pk': self.cart.id})
+        resp = self.client.get(cart_url)
+        self.assertEqual(resp.status_code, 200)
+        items = resp.data.get('items', [])
+        self.assertGreater(len(items), 0)
+        item = items[0]
+        self.assertIn('scanned_barcodes', item)
+        self.assertIn('scanned_barcodes_display', item)
+        self.assertEqual(item['scanned_barcodes'], [self.full_barcode])
+        self.assertEqual(item['scanned_barcodes_display'], ['SC-DISPLAY'])
+
+    def test_invoice_item_barcode_value_prefers_short_code_for_display(self):
+        """Invoice item API barcode_value returns short_code when available (for UI display)."""
+        self.barcode.short_code = 'SC-INV'
+        self.barcode.save(update_fields=['short_code'])
+        customer = Customer.objects.create(name='Cust Display', phone='9999999999')
+        inv = Invoice.objects.create(
+            invoice_number='INV-DISP',
+            store=self.store,
+            customer=customer,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=inv,
+            product=self.product,
+            barcode=self.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        inv_url = reverse('invoice-detail', kwargs={'pk': inv.id})
+        resp = self.client.get(inv_url)
+        self.assertEqual(resp.status_code, 200)
+        items = resp.data.get('items', [])
+        self.assertGreater(len(items), 0)
+        self.assertEqual(items[0]['barcode_value'], 'SC-INV')
+
 
 class BulkBarcodesCheckTests(APITestCase):
     """Tests for bulk barcodes check (replacement credit note): all barcode types and skip cases."""

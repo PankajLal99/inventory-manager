@@ -318,6 +318,7 @@ export default function POS() {
     status?: string;
     message: string;
     barcode: string;
+    short_code?: string;
   } | null>(null);
 
   // Helper function to check if barcode is already in cart
@@ -469,6 +470,7 @@ export default function POS() {
               status: response.data.barcode_status,
               message: statusMessage,
               barcode: response.data.matched_barcode || trimmedBarcodeInput,
+              short_code: response.data.matched_barcode || undefined,
             });
             return { isUnavailable: true, tag: barcodeTag, product: response.data };
           } else if (barcodeTag && barcodeAvailable) {
@@ -3591,9 +3593,9 @@ export default function POS() {
                             <div className="flex-1">
                               <p className={`text-sm font-medium ${styles.titleColor}`}>{getTagTitle(tag)}</p>
                               <p className={`text-xs ${styles.textColor} mt-1`}>{searchedBarcodeStatus.message}</p>
-                              {searchedBarcodeStatus.barcode && (
+                              {(searchedBarcodeStatus.short_code || searchedBarcodeStatus.barcode) && (
                                 <p className={`text-xs ${styles.textColor} mt-1 opacity-75`}>
-                                  SKU: {searchedBarcodeStatus.barcode}
+                                  SKU: {searchedBarcodeStatus.short_code || searchedBarcodeStatus.barcode}
                                 </p>
                               )}
                             </div>
@@ -3930,7 +3932,7 @@ export default function POS() {
                 <button
                   type="button"
                   onClick={() => setShowPurchasePrice((p) => !p)}
-                  title={showPurchasePrice ? 'Hide purchase prices' : 'Show purchase prices'}
+                  title={showPurchasePrice ? 'Hide reference prices (selling/purchase)' : 'Show reference prices'}
                   className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
                     ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
                     : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
@@ -3978,6 +3980,7 @@ export default function POS() {
                     ? parseFloat(editingPrice) || 0
                     : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
                   const scannedBarcodes = item.scanned_barcodes || [];
+                  const scannedBarcodesDisplay = item.scanned_barcodes_display || scannedBarcodes;
                   const hasBarcodes = scannedBarcodes.length > 0;
                   const isBarcodesExpanded = expandedBarcodes[item.id] || false;
                   const lineTotal = effectivePrice * (parseInt(item.quantity || '0') || 0);
@@ -4054,33 +4057,33 @@ export default function POS() {
                                 <span className="text-xs font-semibold text-gray-700">Qty: {formatNumber(item.quantity, 3)}</span>
                               </div>
                             )}
-                            {/* Display selling price or purchase price (purchase price hidden when eye toggle is off) */}
+                            {/* Show selling price if available, else fallback to purchase price. Eye off = hide that value (•••) for both. No price = show —. */}
                             {(() => {
-                              const sellingPrice = item.product_selling_price && parseFloat(item.product_selling_price) > 0
-                                ? parseFloat(item.product_selling_price)
-                                : null;
-                              const purchasePrice = item.product_purchase_price && parseFloat(item.product_purchase_price) > 0
-                                ? parseFloat(item.product_purchase_price)
-                                : null;
-                              const isPurchasePrice = sellingPrice === null && purchasePrice !== null;
-                              const displayPrice = sellingPrice !== null ? sellingPrice : purchasePrice;
+                              const rawSelling = item.product_selling_price != null ? parseFloat(String(item.product_selling_price)) : NaN;
+                              const rawPurchase = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : NaN;
+                              const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
+                              const hasValidPurchasePrice = !Number.isNaN(rawPurchase) && rawPurchase > 0;
+                              const displayPrice = hasValidSellingPrice ? rawSelling : (hasValidPurchasePrice ? rawPurchase : null);
 
                               if (displayPrice !== null) {
-                                // Selling price: always show. Purchase price: only when showPurchasePrice is on
-                                if (isPurchasePrice && !showPurchasePrice) {
+                                if (!showPurchasePrice) {
                                   return (
-                                    <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="Purchase price hidden">
+                                    <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="Price hidden">
                                       <span className="text-xs font-medium text-gray-400">•••</span>
                                     </div>
                                   );
                                 }
                                 return (
-                                  <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={sellingPrice !== null ? "Selling Price" : "Purchase Price"}>
+                                  <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={hasValidSellingPrice ? 'Selling Price' : 'Purchase Price'}>
                                     <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPrice)}</span>
                                   </div>
                                 );
                               }
-                              return null;
+                              return (
+                                <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="No selling or purchase price set for this item">
+                                  <span className="text-xs font-medium text-gray-400">—</span>
+                                </div>
+                              );
                             })()}
                           </div>
                         </div>
@@ -4321,7 +4324,7 @@ export default function POS() {
                             {scannedBarcodes.map((barcode: string, idx: number) => (
                               <div key={idx} className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-md px-2 py-1">
                                 <Barcode className="h-3 w-3 text-blue-600" />
-                                <span className="font-mono text-xs font-semibold text-gray-800">{barcode}</span>
+                                <span className="font-mono text-xs font-semibold text-gray-800">{scannedBarcodesDisplay[idx] ?? barcode}</span>
                                 {!isCartLocked && (
                                   <button
                                     onClick={() => {

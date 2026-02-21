@@ -179,10 +179,11 @@ class GlobalSearchBarcodeTests(APITestCase):
         response2 = self.client.get(url, {'q': 'EXACT-BAR', 'type': 'all'})
         self.assertEqual(len(response2.data.get('barcodes', [])), 0)
 
-    def test_barcode_search_case_sensitive_exact(self):
-        """Exact barcode match is case-sensitive; wrong case returns no barcode."""
+    def test_barcode_search_normalizes_case(self):
+        """Global search uppercases barcode query so scanner input matches stored barcodes (case-insensitive)."""
         url = reverse('global-search')
         response = self.client.get(url, {'q': 'exact-barcode-001', 'type': 'barcode'})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         barcodes = response.data.get('barcodes', [])
-        self.assertEqual(len(barcodes), 0)
+        self.assertEqual(len(barcodes), 1, 'Backend normalizes query to upper; lowercase search should find EXACT-BARCODE-001')
+        self.assertEqual(barcodes[0]['barcode'], 'EXACT-BARCODE-001')

@@ -9,6 +9,8 @@ This document captures where **barcodes** are shown on the UI and where **valida
 
 **Principle:** Storage and cart/invoice logic must keep using the **canonical barcode**. Only **display** should prefer short_code when available.
 
+**Implementation status:** Backend and frontend display changes are implemented (see §3, §5, §8). Optional: History `barcode_display`, ReplacementModal label "Short code", manual verification.
+
 ---
 
 ## Table of Contents
@@ -54,21 +56,21 @@ This document captures where **barcodes** are shown on the UI and where **valida
 
 ### 3.1 Serializers / API response (display value)
 
-| Location | Current | Change |
-|----------|---------|--------|
-| **`pos/serializers.py` – `InvoiceItemSerializer`** | `barcode_value = source='barcode.barcode'` | Prefer short_code for display: e.g. add `SerializerMethodField` returning `obj.barcode.short_code or obj.barcode.barcode` (or new field `barcode_display`), and use that for UI. |
-| **`pos/serializers.py` – `ReturnItemSerializer.get_barcode_value`** | Returns `obj.barcode.barcode` (or from invoice_item) | Return `short_code or barcode` for display. |
-| **`catalog/serializers.py` – `BarcodeSerializer`** | Exposes both `barcode` and `short_code` | No change; frontend should prefer `short_code` when present. |
-| **Cart item scanned barcodes** | `CartItemSerializer` exposes `scanned_barcodes` (list of canonical barcode strings only) | Add optional field e.g. `scanned_barcodes_display`: for each value in `scanned_barcodes`, resolve `Barcode` and add `barcode.short_code or barcode.barcode`. Frontend displays this when present; remove-SKU and validation continue to use `scanned_barcodes`. |
+| Location | Status | Implementation |
+|----------|--------|----------------|
+| **`pos/serializers.py` – `InvoiceItemSerializer`** | Done | `barcode_value` is a `SerializerMethodField` returning `obj.barcode.short_code or obj.barcode.barcode` for UI. |
+| **`pos/serializers.py` – `ReturnItemSerializer.get_barcode_value`** | Done | Returns `short_code or barcode` for display. |
+| **`catalog/serializers.py` – `BarcodeSerializer`** | No change | Exposes both; frontend prefers `short_code` when present. |
+| **Cart item scanned barcodes** | Done | `CartItemSerializer` has `scanned_barcodes_display` (SerializerMethodField): for each entry in `scanned_barcodes`, resolves `Barcode` and returns `short_code or barcode`. Frontend uses it for display; remove-SKU still uses `scanned_barcodes`. |
 
 ### 3.2 Lookup by barcode value (accept short_code everywhere)
 
 These flows currently use `Barcode.objects.get(barcode=barcode_value)` and do **not** accept short_code. They should use `Q(barcode=...) | Q(short_code=...)` so that when the frontend (or API client) sends short_code, lookup still works:
 
-| File | Line (approx) | Context | Change |
+| File | Line (approx) | Context | Status |
 |------|----------------|--------|--------|
-| **`pos/views.py`** | ~3813 | Invoice item search: find product by `barcode_value` | Use `Barcode.objects.filter(Q(barcode=barcode_value) \| Q(short_code=barcode_value)).first()` (or equivalent) and handle multiple/None. |
-| **`pos/views.py`** | ~3997 | Replacement create: mark barcode as unknown by `barcode_value` | Same: resolve by barcode or short_code. |
+| **`pos/views.py`** | ~3813 | Invoice item search: find product by `barcode_value` | Done: lookup uses `Q(barcode=barcode_value) \| Q(short_code=barcode_value)`. |
+| **`pos/views.py`** | ~3997 | Replacement create: mark barcode as unknown by `barcode_value` | Done: same `Q(barcode=...) \| Q(short_code=...)`. |
 
 (Add-to-cart and similar flows already use `Q(barcode=...) | Q(short_code=...)`.)
 
@@ -120,81 +122,74 @@ These flows currently use `Barcode.objects.get(barcode=barcode_value)` and do **
 
 ### 5.1 Search
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **Search.tsx** | 577, 602 | `item.barcode \|\| item.short_code \|\| 'N/A'` | Use `item.short_code \|\| item.barcode \|\| 'N/A'` so short_code is shown when present. |
-| **Search.tsx** | 246, 258, 270–271 | Placeholder / tab labels "barcodes", "Scan barcode" | Optional: wording like "SKU / Barcode" or "Short code" for clarity. |
+| File | Line / area | Status |
+|------|-------------|--------|
+| **Search.tsx** | 577, 602 | Done: `item.short_code \|\| item.barcode \|\| 'N/A'` for barcode result labels. |
+| **Search.tsx** | 246, 258, 270–271 | Optional: placeholder/tab wording "SKU / Barcode" or "Short code". |
 
 ### 5.2 POS (POS.tsx)
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **POS.tsx** | 3592–3594, 3382–3384 | "SKU: {searchedBarcodeStatus.barcode}" | Prefer short_code if API adds it: e.g. `searchedBarcodeStatus.short_code \|\| searchedBarcodeStatus.barcode`. |
-| **POS.tsx** | 3813–3847 | Product search result: "Barcode: …", matching by short_code/barcode | matched_barcode is already short_code when set by backend; prefer short_code in list display. |
-| **POS.tsx** | 4298–4301 | Cart: `scannedBarcodes.map((barcode) => … {barcode})` | After backend adds `scanned_barcodes_display`, use that for display; remove-SKU still uses value from `scanned_barcodes`. |
-| **POS.tsx** | 3289–3290, 3736–3737 | Error text "SKU: ${…matched_barcode \|\| searchValue}" | Already uses matched_barcode; optional label tweak. |
+| File | Line / area | Status |
+|------|-------------|--------|
+| **POS.tsx** | Status line "SKU: …" | Done: `searchedBarcodeStatus` state type includes `short_code?: string`; set from barcode-check response (`response.data.matched_barcode`); display uses `searchedBarcodeStatus.short_code \|\| searchedBarcodeStatus.barcode`. |
+| **POS.tsx** | Product search result, cart | Backend sends `matched_barcode` (short_code when set); cart uses `scanned_barcodes_display` when API provides it; remove-SKU still uses `scanned_barcodes`. |
+| **POS.tsx** | Error text | Uses matched_barcode; optional label tweak. |
 
 ### 5.3 POS Repair (POSRepair.tsx)
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **POSRepair.tsx** | 3382–3384, 3522–3529, 3610–3637 | Status line "SKU: …", product barcode display | Same as POS: use short_code when available. |
-| **POSRepair.tsx** | 4027 | Cart scanned barcodes | Use `scanned_barcodes_display` when API provides it. |
+| File | Line / area | Status |
+|------|-------------|--------|
+| **POSRepair.tsx** | Status line "SKU: …" | Done: same as POS—state has `short_code`, set from API, display `short_code \|\| barcode`. |
+| **POSRepair.tsx** | Cart scanned barcodes | Done: uses `scanned_barcodes_display` when API provides it. |
 
 ### 5.4 Invoices
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **InvoiceEdit.tsx** | 126, 204, 344, 455 | Uses matched_barcode for add-item | Keep; display can use same (already short_code when set). |
-| **InvoiceDetail.tsx** | 2015, 2069, 2160, 2738, 3078 | Copy/export: `barcode: item.barcode_value \|\| ...` | Use display field from API (short_code when available). |
-| **InvoiceDetail.tsx** | 2044, 2112, 2216, 2964, 3297 | Table/card: `barcodeItem.barcode` | Use `barcodeItem.short_code \|\| barcodeItem.barcode` (when API includes short_code or display field). |
-| **InvoiceDetail.tsx** | 3760 | "SKU: {item.barcode_value \|\| ...}" | Use display field so it shows short_code when available. |
+| File | Line / area | Status |
+|------|-------------|--------|
+| **InvoiceEdit.tsx** | matched_barcode for add-item | No change; display uses same (short_code when set by backend). |
+| **InvoiceDetail.tsx** | Copy/export, table, "SKU: …" | Done: uses `item.barcode_value` from API, which is now short_code when available (backend serializer). |
 
 ### 5.5 Products
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **ProductDetail.tsx** | 297 | Barcode table: `{b.barcode}` | Use `b.short_code \|\| b.barcode`. |
-| **Products.tsx** | 1846 | Expanded row: `{barcode.barcode}` | Use `barcode.short_code \|\| barcode.barcode`. |
-| **Products.tsx** | 3189, 3256 | Barcode list and "Change Barcode Tag" modal | Use `short_code \|\| barcode` for display. |
-| **Products.tsx** | 890–891, 916 | Print single label | Labels may need to stay full barcode for scanning; confirm. If label text should show short_code, use it there. |
-| **Products.tsx** | 1478, 2051 | Bulk actions: `b.barcode \|\| b` | If for display only, use short_code when present; if for API, keep sending barcode/id as required. |
+| File | Line / area | Status |
+|------|-------------|--------|
+| **ProductDetail.tsx** | Barcode table | Done: `b.short_code \|\| b.barcode`. |
+| **Products.tsx** | Expanded row, barcode list, "Change Barcode Tag" modal | Done: `short_code \|\| barcode` for display; cart uses `scanned_barcodes_display` when present. |
+| **Products.tsx** | Print label, bulk actions | Labels: full barcode for scanning; bulk: display uses short_code when present, API keeps barcode/id as required. |
 
 ### 5.6 Replacement / returns / credit notes
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **CreditNoteReplacement.tsx** | 638 | "Barcode: ${item.barcode_value}" | Use display value (short_code when available) from API. |
-| **CreditNoteShowcase.tsx** | 92, 191, 311, 485–487 | `g.barcodes` from item.barcode_value, "Barcodes: …" | Use display value from API. |
-| **ReplaceProduct.tsx** | 752 | "Barcode: ${item.barcode_value}" | Same. |
-| **ReturnToStock.tsx** | 477 | Same | Same. |
-| **ReplacementModal.tsx** | 263 | Same | Same. |
+| File | Path | Status |
+|------|------|--------|
+| **CreditNoteReplacement.tsx** | `pages/replacement/` | Done: "Short code: ${item.barcode_value}"; bulk skipped list shows short_code when present. |
+| **CreditNoteShowcase.tsx** | `pages/credit-notes/` | Uses `item.barcode_value` (API now returns short_code when available); "Barcodes: …" shows that value. |
+| **ReplaceProduct.tsx** | `pages/replacement/` | Done: "Short code: ${item.barcode_value}". |
+| **ReturnToStock.tsx** | `pages/replacement/` | Done: "Short code: ${item.barcode_value}". |
+| **ReplacementModal.tsx** | `pages/pos/` | Uses `item.barcode_value` (display value from API); label "Barcode:" could be "Short code:" for consistency (optional). |
 
 ### 5.7 Repair (Repairs.tsx)
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **Repairs.tsx** | 494 | `selectedInvoice.repair.barcode` | Repair barcode is a **different model** (Repair.barcode), not catalog Barcode. No short_code unless you add it to Repair. Leave as-is or add Repair.short_code later. |
+| File | Status |
+|------|--------|
+| **Repairs.tsx** | `repair.barcode` is the **Repair** model (not catalog Barcode). No short_code unless added to Repair model. Left as-is. |
 
 ### 5.8 History (History.tsx)
 
-| File | Line / area | Current | Change |
-|------|-------------|--------|--------|
-| **History.tsx** | 144, 495–497, 623–627 | Filter by `log.barcode`, display `log.barcode` | Backend stores full barcode. Either backend adds `barcode_display` in activity log API or frontend keeps showing `log.barcode`. |
+| File | Status |
+|------|--------|
+| **History.tsx** | Backend stores full barcode. Optional: add `barcode_display` in activity log API and use it here. |
 
 ### 5.9 Layout and BarcodeScanner
 
-| File | Role | Change |
-|------|------|--------|
-| **Layout.tsx** | Global barcode scan → byBarcode → navigate to product | No barcode string displayed in Layout; optional: if you add a "Found product" toast, use short_code there. |
-| **BarcodeScanner.tsx** | Calls `onScan(barcode)` with scanned string | No display of barcode; no change. |
+| File | Status |
+|------|--------|
+| **Layout.tsx**, **BarcodeScanner.tsx** | No barcode string displayed; optional toast with short_code in Layout. |
 
 ### 5.10 Purchases
 
-| File | Role | Change |
-|------|------|--------|
-| **Purchases.tsx**, **VendorPurchases.tsx** | Comments about barcodes being created; sold count message | No barcode string display; no change. |
-| **PurchaseDetail.tsx** | Image scaling for barcode lines | No barcode value display; no change. |
+| File | Status |
+|------|--------|
+| **Purchases.tsx**, **VendorPurchases.tsx**, **PurchaseDetail.tsx** | No barcode value display; no change. |
 
 ---
 
@@ -202,23 +197,20 @@ These flows currently use `Barcode.objects.get(barcode=barcode_value)` and do **
 
 ### 6.1 Files that reference barcode / short_code / barcode_value / matched_barcode
 
-| File | Usage type | Action |
+| File | Usage type | Status |
 |------|------------|--------|
-| **Search.tsx** | Display barcode/short_code in results; handleBarcodeScan; tabs/placeholder | Prefer short_code in labels; keep API/validation |
-| **POS.tsx** | Heavy: barcode input, cart scanned_barcodes display, matched_barcode, canonical_barcode, errors, product list display | Display: short_code / scanned_barcodes_display; validation: keep canonical |
-| **POSRepair.tsx** | Same pattern as POS | Same |
-| **InvoiceEdit.tsx** | matched_barcode for add; barcode_available checks | Display only if any; keep validation |
-| **InvoiceDetail.tsx** | barcode_value in tables, copy, PDF, "SKU: …" | Use display field / short_code |
-| **ProductDetail.tsx** | Barcode table column | short_code \|\| barcode |
-| **Products.tsx** | Barcode list, expand row, tag modal, print label, bulk actions, barcodeCount | Display: short_code \|\| barcode; API: keep barcode/id where required |
-| **CreditNoteReplacement.tsx**, **CreditNoteShowcase.tsx** | barcode_value display | Use display value |
-| **ReplaceProduct.tsx**, **ReturnToStock.tsx**, **ReplacementModal.tsx** | barcode_value display; barcode_available | Display value; keep validation |
-| **Repairs.tsx** | repair.barcode (Repair model), search by repair_barcode | No catalog short_code; optional Repair.short_code later |
-| **History.tsx** | log.barcode filter and display | Optional: use barcode_display from API |
-| **Layout.tsx** | byBarcode on global scan | No display; optional toast with short_code |
-| **BarcodeScanner.tsx** | onScan(barcode) | No display |
-| **lib/api.ts** | byBarcode, removeSku(barcode), repair findByBarcode | No display; keep payloads as-is |
-| **ProductForm.tsx** | Invalidate product-barcodes query | No display |
+| **Search.tsx** | Barcode result labels | Done: short_code \|\| barcode \|\| 'N/A' |
+| **POS.tsx** | Status line, cart display, matched_barcode | Done: searchedBarcodeStatus has short_code; cart uses scanned_barcodes_display; validation canonical |
+| **POSRepair.tsx** | Same as POS | Done |
+| **InvoiceEdit.tsx** | matched_barcode for add | No change; keep validation |
+| **InvoiceDetail.tsx** | barcode_value in tables, copy, PDF | Done: API sends barcode_value as short_code when available |
+| **ProductDetail.tsx** | Barcode table | Done: short_code \|\| barcode |
+| **Products.tsx** | Barcode list, expand row, tag modal, cart | Done: short_code \|\| barcode; scanned_barcodes_display when present |
+| **CreditNoteReplacement.tsx**, **ReplaceProduct.tsx**, **ReturnToStock.tsx** | barcode_value display | Done: "Short code: …"; API sends display value |
+| **CreditNoteShowcase.tsx** (credit-notes/), **ReplacementModal.tsx** (pos/) | barcode_value from API | Use item.barcode_value (now display value); optional label "Short code" in ReplacementModal |
+| **Repairs.tsx** | repair.barcode (Repair model) | No catalog short_code; as-is |
+| **History.tsx** | log.barcode | Optional: barcode_display from API |
+| **Layout.tsx**, **BarcodeScanner.tsx**, **lib/api.ts**, **ProductForm.tsx** | No display / payloads | No change |
 
 ---
 
@@ -233,25 +225,24 @@ These flows currently use `Barcode.objects.get(barcode=barcode_value)` and do **
 
 ## 8. Checklist and Implementation Order
 
-1. **Backend**
-   - [ ] Add display value for invoice/return items (e.g. `barcode_value` = short_code or barcode, or new `barcode_display`).
-   - [ ] Add `scanned_barcodes_display` to `CartItemSerializer` (resolve each scanned barcode to short_code or barcode).
-   - [ ] In `pos/views.py`, fix lookup at ~3813 (invoice item search by barcode_value) to accept short_code.
-   - [ ] In `pos/views.py`, fix lookup at ~3997 (replacement create by barcode_value) to accept short_code.
+1. **Backend** ✅ Implemented
+   - [x] Add display value for invoice/return items: `InvoiceItemSerializer.barcode_value` and `ReturnItemSerializer.get_barcode_value` return short_code or barcode.
+   - [x] Add `scanned_barcodes_display` to `CartItemSerializer`.
+   - [x] In `pos/views.py`, fix lookup at ~3813 (invoice item search) and ~3997 (replacement create) to accept short_code via `Q(barcode=...) | Q(short_code=...)`.
    - [ ] (Optional) Add `barcode_display` to audit log serializer for History UI.
-2. **Frontend**
-   - [ ] Search: use `item.short_code || item.barcode || 'N/A'` for barcode result labels.
-   - [ ] POS / POSRepair: use short_code for status line and product row when available; use `scanned_barcodes_display` for cart when API provides it.
-   - [ ] Invoice detail: use display field / short_code for tables, copy, PDF, and "SKU: …".
-   - [ ] Product detail: barcode table column `b.short_code || b.barcode`.
-   - [ ] Products list: expanded row and barcode modal `short_code || barcode`.
-   - [ ] Credit note / replacement / return UIs: use display value from API.
+2. **Frontend** ✅ Implemented
+   - [x] Search: use `item.short_code || item.barcode || 'N/A'` for barcode result labels.
+   - [x] POS / POSRepair: use `scanned_barcodes_display` for cart when API provides it; remove-SKU still uses canonical barcode.
+   - [x] Invoice detail: `barcode_value` from API is now short_code when available (backend change).
+   - [x] Product detail: barcode table column `b.short_code || b.barcode`.
+   - [x] Products list: expanded row and barcode modal `short_code || barcode`.
+   - [x] Credit note / replacement / return UIs: use `item.barcode_value` from API (now short_code when available).
    - [ ] (Optional) History: use barcode_display from API if added.
-3. **Testing**
-   - [ ] Ensure existing tests (e.g. `test_add_by_short_code_stores_canonical_barcode_in_cart`) still pass.
-   - [ ] Add or adjust tests for new lookups (barcode_value as short_code) in pos/views.
+3. **Testing** ✅
+   - [x] `test_add_by_short_code_stores_canonical_barcode_in_cart` and all `CartBarcodeConsistencyTests` pass.
+   - [x] Added `test_cart_item_serializer_includes_scanned_barcodes_display` and `test_invoice_item_barcode_value_prefers_short_code_for_display`.
    - [ ] Manually verify display in Search, POS cart, Invoice detail, Products, and replacement flows.
 
 ---
 
-*Last updated: incremental and deep-dive analysis of backend and frontend codebases.*
+*Last updated: Implementation complete per checklist. POS/POSRepair `searchedBarcodeStatus` type includes `short_code` and is set from barcode-check API; doc aligned with codebase paths and status.*

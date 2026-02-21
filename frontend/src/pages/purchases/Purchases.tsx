@@ -1050,6 +1050,9 @@ export default function Purchases() {
     return [];
   }, [data]);
 
+  // Max label-status queries to avoid tab crash when many purchases/items are on the page
+  const MAX_LABEL_STATUS_QUERIES = 25;
+
   // Get all product-purchase combinations that need label status checks (with caching)
   const labelStatusQueriesData = useMemo(() => {
     if (!purchases || purchases.length === 0) return [];
@@ -1075,7 +1078,8 @@ export default function Purchases() {
       }
     });
 
-    return queries;
+    // Cap to avoid dozens of parallel requests and re-renders that can freeze/crash the tab
+    return queries.slice(0, MAX_LABEL_STATUS_QUERIES);
   }, [purchases]);
 
   // Use React Query to cache label status checks for all products in purchases
@@ -1131,32 +1135,34 @@ export default function Purchases() {
 
     queriesDataRef.current = queriesDependencyString;
 
+    // Batch all query results into one setState to avoid many re-renders
+    const nextStatuses: Record<string, { all_generated: boolean; generating: boolean }> = {};
+    let hasChanges = false;
     labelStatusQueries.forEach((query) => {
       const queryData = query.data as LabelStatusQueryData | undefined;
       if (queryData && queryData.labelKey) {
         const labelKey = queryData.labelKey;
         const all_generated = queryData.data?.all_generated || false;
         const generating = query.isFetching || false;
-
-        // Update state only if it changed
-        setLabelStatuses(prev => {
-          const current = prev[labelKey];
-
-          // Only update if the value actually changed
-          if (current?.all_generated === all_generated && current?.generating === generating) {
-            return prev;
-          }
-
-          return {
-            ...prev,
-            [labelKey]: {
-              all_generated,
-              generating
-            }
-          };
-        });
+        nextStatuses[labelKey] = { all_generated, generating };
+        hasChanges = true;
       }
     });
+
+    if (hasChanges) {
+      setLabelStatuses(prev => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [key, val] of Object.entries(nextStatuses)) {
+          const current = prev[key];
+          if (current?.all_generated !== val.all_generated || current?.generating !== val.generating) {
+            next[key] = val;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queriesDependencyString]);
 

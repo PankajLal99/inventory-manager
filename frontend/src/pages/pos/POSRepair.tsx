@@ -298,6 +298,7 @@ export default function POS() {
     status?: string;
     message: string;
     barcode: string;
+    short_code?: string;
   } | null>(null);
 
   // Helper function to check if barcode is already in cart
@@ -449,6 +450,7 @@ export default function POS() {
               status: response.data.barcode_status,
               message: statusMessage,
               barcode: response.data.matched_barcode || trimmedBarcodeInput,
+              short_code: response.data.matched_barcode || undefined,
             });
             return { isUnavailable: true, tag: barcodeTag, product: response.data };
           } else if (barcodeTag && barcodeAvailable) {
@@ -3379,9 +3381,9 @@ export default function POS() {
                             <div className="flex-1">
                               <p className={`text-sm font-medium ${styles.titleColor}`}>{getTagTitle(tag)}</p>
                               <p className={`text-xs ${styles.textColor} mt-1`}>{searchedBarcodeStatus.message}</p>
-                              {searchedBarcodeStatus.barcode && (
+                              {(searchedBarcodeStatus.short_code || searchedBarcodeStatus.barcode) && (
                                 <p className={`text-xs ${styles.textColor} mt-1 opacity-75`}>
-                                  SKU: {searchedBarcodeStatus.barcode}
+                                  SKU: {searchedBarcodeStatus.short_code || searchedBarcodeStatus.barcode}
                                 </p>
                               )}
                             </div>
@@ -3718,6 +3720,7 @@ export default function POS() {
                     ? parseFloat(editingPrice) || 0
                     : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
                   const scannedBarcodes = item.scanned_barcodes || [];
+                  const scannedBarcodesDisplay = item.scanned_barcodes_display || scannedBarcodes;
                   const hasBarcodes = scannedBarcodes.length > 0;
                   const isBarcodesExpanded = expandedBarcodes[item.id] || false;
                   const lineTotal = effectivePrice * (parseInt(item.quantity || '0') || 0);
@@ -4027,7 +4030,7 @@ export default function POS() {
                             {scannedBarcodes.map((barcode: string, idx: number) => (
                               <div key={idx} className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-md px-2 py-1">
                                 <Barcode className="h-3 w-3 text-blue-600" />
-                                <span className="font-mono text-xs font-semibold text-gray-800">{barcode}</span>
+                                <span className="font-mono text-xs font-semibold text-gray-800">{scannedBarcodesDisplay[idx] ?? barcode}</span>
                                 <button
                                   onClick={() => {
                                     if (cartId) {

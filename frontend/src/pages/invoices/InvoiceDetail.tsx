@@ -2523,7 +2523,7 @@ export default function InvoiceDetail() {
               <button
                 type="button"
                 onClick={() => setShowPurchasePrice((p) => !p)}
-                title={showPurchasePrice ? 'Hide purchase prices' : 'Show purchase prices'}
+                title={showPurchasePrice ? 'Hide reference prices (selling/purchase)' : 'Show reference prices'}
                 className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
                   ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
                   : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
@@ -2639,7 +2639,7 @@ export default function InvoiceDetail() {
                   <div className="relative flex-1 min-w-0">
                     <Input
                       type="text"
-                      placeholder="Search products by name, SKU, or scan barcode..."
+                      placeholder="Search by name, SKU, or scan barcode / short code..."
                       value={barcodeInput}
                       autoComplete="off"
                       onChange={(e) => {
@@ -2781,8 +2781,10 @@ export default function InvoiceDetail() {
                                     } `}
                                 >
                                   <div className="font-medium text-gray-900">{product.name}</div>
-                                  {product.sku && (
-                                    <div className="text-xs text-gray-500 mt-1">SKU: {product.sku}</div>
+                                  {(product.matched_barcode || product.sku) && (
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      {product.matched_barcode ? `Short code: ${product.matched_barcode}` : `SKU: ${product.sku}`}
+                                    </div>
                                   )}
                                 </button>
                               );
@@ -2889,11 +2891,12 @@ export default function InvoiceDetail() {
                                   <td className="px-4 py-4 text-right">
                                     <span className="text-sm text-gray-900">
                                       {(() => {
-                                        const sp = parseFloat(firstItem.product_selling_price || '0');
-                                        const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                        const isPurchasePrice = sp <= 0 && pp > 0;
-                                        if (isPurchasePrice && !showPurchasePrice) return '•••';
-                                        return `₹${formatNumber(sp > 0 ? sp : pp)}`;
+                                        const rawSelling = firstItem.product_selling_price != null ? parseFloat(String(firstItem.product_selling_price)) : NaN;
+                                        const rawPurchase = firstItem.product_purchase_price != null ? parseFloat(String(firstItem.product_purchase_price)) : NaN;
+                                        const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
+                                        const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
+                                        if (!Number.isNaN(displayVal) && !showPurchasePrice) return '•••';
+                                        return Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`;
                                       })()}
                                     </span>
                                   </td>
@@ -3099,11 +3102,12 @@ export default function InvoiceDetail() {
                                       <td className="px-4 py-3 text-right">
                                         <span className="text-xs text-gray-600">
                                           {(() => {
-                                            const sp = parseFloat(item.product_selling_price || '0');
-                                            const pp = parseFloat(item.product_purchase_price || '0');
-                                            const isPurchasePrice = sp <= 0 && pp > 0;
-                                            if (isPurchasePrice && !showPurchasePrice) return '•••';
-                                            return `₹${formatNumber(sp > 0 ? sp : pp)}`;
+                                            const rawSelling = item.product_selling_price != null ? parseFloat(String(item.product_selling_price)) : NaN;
+                                            const rawPurchase = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : NaN;
+                                            const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
+                                            const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
+                                            if (!Number.isNaN(displayVal) && !showPurchasePrice) return '•••';
+                                            return Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`;
                                           })()}
                                         </span>
                                       </td>
@@ -3234,11 +3238,12 @@ export default function InvoiceDetail() {
                                     <span className="text-xs text-gray-500 block">Purchase Price</span>
                                     <span className="text-sm font-medium text-gray-900">
                                       {(() => {
-                                        const sp = parseFloat(firstItem.product_selling_price || '0');
-                                        const pp = parseFloat(firstItem.product_purchase_price || '0');
-                                        const isPurchasePrice = sp <= 0 && pp > 0;
-                                        if (isPurchasePrice && !showPurchasePrice) return '•••';
-                                        return `₹${formatNumber(sp > 0 ? sp : pp)}`;
+                                        const rawSelling = firstItem.product_selling_price != null ? parseFloat(String(firstItem.product_selling_price)) : NaN;
+                                        const rawPurchase = firstItem.product_purchase_price != null ? parseFloat(String(firstItem.product_purchase_price)) : NaN;
+                                        const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
+                                        const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
+                                        if (!Number.isNaN(displayVal) && !showPurchasePrice) return '•••';
+                                        return Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`;
                                       })()}
                                     </span>
                                   </div>
@@ -3926,7 +3931,7 @@ export default function InvoiceDetail() {
               <div className="flex gap-2">
                 <Input
                   type="text"
-                  placeholder="Scan barcode or enter SKU..."
+                  placeholder="Scan barcode / short code or enter SKU..."
                   value={barcodeInput}
                   onChange={(e) => setBarcodeInput(e.target.value)}
                   onKeyDown={(e) => {

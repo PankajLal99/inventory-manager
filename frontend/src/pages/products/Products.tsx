@@ -1843,7 +1843,7 @@ export default function Products() {
                           <td className="px-6 py-3">
                             <div className="flex items-center gap-2 pl-8">
                               <Barcode className="h-3.5 w-3.5 text-gray-400" />
-                              <span className="text-xs font-mono text-gray-700">{barcode.barcode}</span>
+                              <span className="text-xs font-mono text-gray-700">{barcode.short_code || barcode.barcode}</span>
                               {barcode.tag && (
                                 <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${barcode.tag === 'unknown' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
                                   barcode.tag === 'returned' ? 'bg-purple-100 text-purple-700 border-purple-200' :
@@ -3186,7 +3186,7 @@ function ViewSKUsModal({ product, tagFilter, onClose, onPrintLabel, onPrintAllLa
                       <Barcode className="h-5 w-5 text-gray-400" />
                       <div className="flex-1">
                         <div className="text-sm font-medium text-gray-900">SKU</div>
-                        <div className="text-sm text-gray-700 font-mono">{barcode.barcode}</div>
+                        <div className="text-sm text-gray-700 font-mono">{barcode.short_code || barcode.barcode}</div>
                         {barcode.tag && (
                           <div className="mt-1">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${getTagBadgeColor(barcode.tag)}`}>
@@ -3253,7 +3253,7 @@ function ViewSKUsModal({ product, tagFilter, onClose, onPrintLabel, onPrintAllLa
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Barcode</label>
               <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm font-mono">
-                {selectedBarcodeForTagChange.barcode}
+                {selectedBarcodeForTagChange.short_code || selectedBarcodeForTagChange.barcode}
               </div>
             </div>
             <div>
