@@ -251,6 +251,9 @@ export const customersApi = {
     entries: {
       list: (params?: any) => api.get('/ledger/entries/', { params }),
       create: (data: any) => api.post('/ledger/entries/', data),
+      get: (id: number) => api.get(`/ledger/entries/${id}/`),
+      update: (id: number, data: any) => api.patch(`/ledger/entries/${id}/`, data),
+      delete: (id: number) => api.delete(`/ledger/entries/${id}/`),
     },
     summary: (params?: any) => api.get('/ledger/summary/', { params }),
     customerDetail: (customerId: number, params?: any) => api.get(`/ledger/customers/${customerId}/`, { params }),
@@ -266,6 +269,9 @@ export const customersApi = {
     entries: {
       list: (params?: any) => api.get('/personal-ledger/entries/', { params }),
       create: (data: any) => api.post('/personal-ledger/entries/', data),
+      get: (id: number) => api.get(`/personal-ledger/entries/${id}/`),
+      update: (id: number, data: any) => api.patch(`/personal-ledger/entries/${id}/`, data),
+      delete: (id: number) => api.delete(`/personal-ledger/entries/${id}/`),
     },
     summary: (params?: any) => api.get('/personal-ledger/summary/', { params }),
     customerDetail: (customerId: number, params?: any) => api.get(`/personal-ledger/customers/${customerId}/`, { params }),
@@ -281,6 +287,9 @@ export const customersApi = {
     entries: {
       list: (params?: any) => api.get('/internal-ledger/entries/', { params }),
       create: (data: any) => api.post('/internal-ledger/entries/', data),
+      get: (id: number) => api.get(`/internal-ledger/entries/${id}/`),
+      update: (id: number, data: any) => api.patch(`/internal-ledger/entries/${id}/`, data),
+      delete: (id: number) => api.delete(`/internal-ledger/entries/${id}/`),
     },
     summary: (params?: any) => api.get('/internal-ledger/summary/', { params }),
     customerDetail: (customerId: number, params?: any) => api.get(`/internal-ledger/customers/${customerId}/`, { params }),

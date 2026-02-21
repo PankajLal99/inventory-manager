@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
@@ -34,7 +34,10 @@ import {
   Pencil,
   Eye,
   EyeOff,
+  Wrench,
+  AlertTriangle,
 } from 'lucide-react';
+import RepairStatusModal from '../repair/RepairStatusModal';
 
 export default function InvoiceDetail() {
   const user = auth.getUser();
@@ -45,10 +48,12 @@ export default function InvoiceDetail() {
     !userGroups.includes('WholesaleAdmin');
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const invoiceId = parseInt(id || '0');
   const queryClient = useQueryClient();
   const [showEditModal, setShowEditModal] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [showRepairStatusModal, setShowRepairStatusModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'upi' | 'card' | 'bank_transfer' | 'credit' | 'other'>('cash');
@@ -83,6 +88,8 @@ export default function InvoiceDetail() {
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   // Toggle to show/hide purchase price in checkout modal (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
+  // Repair status in checkout modal (when invoice is repair)
+  const [checkoutRepairStatus, setCheckoutRepairStatus] = useState<string>('');
 
   // Debounce customer search input
   useEffect(() => {
@@ -248,6 +255,20 @@ export default function InvoiceDetail() {
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || 'Failed to delete item');
+    },
+  });
+
+  const updateRepairStatusMutation = useMutation({
+    mutationFn: (data: { repair_status: string }) =>
+      posApi.repair.updateStatus(invoiceId, data),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+      setShowRepairStatusModal(false);
+      alert('Repair status updated successfully.');
+    },
+    onError: (error: any) => {
+      alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to update repair status');
     },
   });
 
@@ -440,6 +461,31 @@ export default function InvoiceDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoice?.data?.items?.length, showCheckoutModal]); // Only run when item count changes or modal opens
 
+  // When navigating from Repairs with ?openCheckout=1: open checkout modal (if draft) or repair status modal (if repair, non-draft)
+  useEffect(() => {
+    const inv = invoice?.data;
+    if (!inv) return;
+    if (searchParams.get('openCheckout') !== '1') return;
+    const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
+    if (isPending) {
+      handleCheckout();
+    } else if (inv.repair) {
+      setShowRepairStatusModal(true);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('openCheckout');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice?.data, searchParams]);
+
+  // Sync repair status dropdown in checkout modal when modal opens or invoice repair status changes
+  useEffect(() => {
+    const inv = invoice?.data;
+    if (showCheckoutModal && inv?.repair) {
+      setCheckoutRepairStatus(inv.repair.status);
+    }
+  }, [showCheckoutModal, invoice?.data?.repair?.status]);
+
   // Early returns after all hooks
   if (isLoading) {
     return <LoadingState message="Loading invoice details..." />;
@@ -567,8 +613,8 @@ export default function InvoiceDetail() {
     });
   };
 
-  // Edit invoice (cart): show for non-void, hide for invoice_type pending
-  const canEditItems = inv.status !== 'void' && inv.invoice_type !== 'pending';
+  // Edit invoice (cart): show for non-void
+  const canEditItems = inv.status !== 'void';
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
 
@@ -1645,7 +1691,7 @@ export default function InvoiceDetail() {
 
               {/* Secondary Actions */}
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
-                {/* Edit invoice (items via cart) - not shown for invoice_type pending */}
+                {/* Edit invoice (items via cart) */}
                 {canEditItems && (
                   <Button
                     variant="outline"
@@ -3512,6 +3558,67 @@ export default function InvoiceDetail() {
               return null;
             })()}
 
+            {/* Update Repair Status (when invoice is repair) */}
+            {inv?.repair && (
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-purple-900 flex items-center gap-2">
+                  <Wrench className="h-4 w-4" />
+                  Update Repair Status
+                </h4>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Current</label>
+                    <Badge className={
+                      inv.repair.status === 'received' ? 'bg-blue-100 text-blue-800' :
+                      inv.repair.status === 'work_in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                      inv.repair.status === 'done' ? 'bg-green-100 text-green-800' :
+                      'bg-gray-100 text-gray-800'
+                    }>
+                      {inv.repair.status === 'received' ? 'Received' : inv.repair.status === 'work_in_progress' ? 'In Progress' : inv.repair.status === 'done' ? 'Completed' : 'Delivered'}
+                    </Badge>
+                  </div>
+                  <div className="flex-1 min-w-[160px]">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">New Status</label>
+                    <Select
+                      value={checkoutRepairStatus || inv.repair.status}
+                      onChange={(e) => setCheckoutRepairStatus(e.target.value)}
+                      className="w-full"
+                    >
+                      <option value="received">Received</option>
+                      <option value="work_in_progress">In Progress</option>
+                      <option value="done">Completed</option>
+                      <option value="delivered">Delivered</option>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      const newStatus = checkoutRepairStatus || inv.repair.status;
+                      if (newStatus && newStatus !== inv.repair.status) {
+                        updateRepairStatusMutation.mutate({ repair_status: newStatus });
+                      }
+                    }}
+                    disabled={
+                      updateRepairStatusMutation.isPending ||
+                      !checkoutRepairStatus ||
+                      (checkoutRepairStatus || inv.repair.status) === inv.repair.status ||
+                      (checkoutRepairStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial')
+                    }
+                  >
+                    {updateRepairStatusMutation.isPending ? 'Updating...' : 'Update Status'}
+                  </Button>
+                </div>
+                {(checkoutRepairStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial') && (
+                  <div className="text-xs text-red-600 flex items-center gap-1">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    <span>Invoice must be Paid, Credit, or Partially Paid before marking repair as Completed.</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t border-gray-200">
               <Button
@@ -3594,6 +3701,21 @@ export default function InvoiceDetail() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Repair Status Modal (when opened from Repairs page for non-draft repair invoice) */}
+      {invoice?.data?.repair && (
+        <RepairStatusModal
+          isOpen={showRepairStatusModal}
+          onClose={() => setShowRepairStatusModal(false)}
+          onUpdate={(status) => updateRepairStatusMutation.mutate({ repair_status: status })}
+          invoiceNumber={invoice.data.invoice_number}
+          currentStatus={invoice.data.repair.status}
+          invoiceStatus={invoice.data.status}
+          isLoading={updateRepairStatusMutation.isPending}
+          customerName={invoice.data.customer_name}
+          bookingAmount={invoice.data.repair.booking_amount}
+        />
       )}
 
       {/* Payment Modal */}

@@ -1,8 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { customersApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { auth } from '../../lib/auth';
+import { formatAmountINR } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
@@ -10,7 +11,7 @@ import Modal from '../../components/ui/Modal';
 import { toast } from '../../lib/toast';
 import {
   ArrowLeft, FileText, FileSpreadsheet, FileText as FileTextIcon,
-  Printer, Filter, X, Calendar, Search, Plus, Minus
+  Printer, Filter, X, Calendar, Search, Plus, Minus, Pencil, Trash2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -35,7 +36,17 @@ export default function InternalLedgerDetail() {
     description: '',
     date: new Date().toISOString().split('T')[0]
   });
+  const [editingEntry, setEditingEntry] = useState<any>(null);
+  const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
+  const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
+  const [user, setUser] = useState<any>(null);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const loadUser = async () => { try { await auth.loadUser(); setUser(auth.getUser()); } catch (e) {} };
+    loadUser();
+  }, []);
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
 
   const { data: customerData } = useQuery({
     queryKey: ['internal-customer', customerId],
@@ -72,6 +83,31 @@ export default function InternalLedgerDetail() {
     onError: (error: any) => {
       toast(error?.response?.data?.error || 'Failed to create shop boys ledger entry', 'error');
     },
+  });
+
+  const updateEntryMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: any }) => customersApi.internalLedger.entries.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-customer-detail', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['internal-customer', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
+      setEditingEntry(null);
+      setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' });
+      toast('Entry updated successfully', 'success');
+    },
+    onError: (error: any) => { toast(error?.response?.data?.error || 'Failed to update entry', 'error'); },
+  });
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: (id: number) => customersApi.internalLedger.entries.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-customer-detail', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['internal-customer', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
+      setDeletingEntryId(null);
+      toast('Entry removed successfully', 'success');
+    },
+    onError: (error: any) => { toast(error?.response?.data?.error || 'Failed to remove entry', 'error'); setDeletingEntryId(null); },
   });
 
   const handleCreateEntry = (type: 'credit' | 'debit') => {
@@ -130,9 +166,9 @@ export default function InternalLedgerDetail() {
       'Date': new Date(entry.created_at).toLocaleDateString(),
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
-      'Debit': entry.entry_type === 'debit' ? formatNumber(entry.amount || 0) : '-',
-      'Credit': entry.entry_type === 'credit' ? formatNumber(entry.amount || 0) : '-',
-      'Balance': formatNumber(entry.running_balance || 0),
+      'Debit': entry.entry_type === 'debit' ? formatAmountINR(entry.amount || 0) : '-',
+      'Credit': entry.entry_type === 'credit' ? formatAmountINR(entry.amount || 0) : '-',
+      'Balance': formatAmountINR(entry.running_balance || 0),
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
@@ -169,7 +205,7 @@ export default function InternalLedgerDetail() {
     // Add final balance
     doc.setFontSize(12);
     doc.text(
-      `Current Balance: ₹${formatNumber(finalBalance)}`,
+      `Current Balance: ₹${formatAmountINR(finalBalance)}`,
       14,
       50
     );
@@ -179,9 +215,9 @@ export default function InternalLedgerDetail() {
       new Date(entry.created_at).toLocaleDateString(),
       entry.entry_type.toUpperCase(),
       entry.description || '-',
-      entry.entry_type === 'debit' ? `₹${formatNumber(entry.amount || 0)}` : '-',
-      entry.entry_type === 'credit' ? `₹${formatNumber(entry.amount || 0)}` : '-',
-      `₹${formatNumber(entry.running_balance || 0)}`,
+      entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-',
+      entry.entry_type === 'credit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-',
+      `₹${formatAmountINR(entry.running_balance || 0)}`,
     ]);
 
     (doc as any).autoTable({
@@ -233,7 +269,7 @@ export default function InternalLedgerDetail() {
             <p><strong>Total Entries:</strong> ${filteredEntries.length}</p>
           </div>
           <div class="balance ${parseFloat(finalBalance) >= 0 ? 'positive' : 'negative'}">
-            Current Balance: ₹${formatNumber(finalBalance)}
+            Current Balance: ₹${formatAmountINR(finalBalance)}
           </div>
           <table>
             <thead>
@@ -252,9 +288,9 @@ export default function InternalLedgerDetail() {
                   <td>${new Date(entry.created_at).toLocaleDateString()}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
-                  <td class="debit">${entry.entry_type === 'debit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}</td>
-                  <td class="credit">${entry.entry_type === 'credit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}</td>
-                  <td>₹${formatNumber(entry.running_balance || 0)}</td>
+                  <td class="debit">${entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}</td>
+                  <td class="credit">${entry.entry_type === 'credit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}</td>
+                  <td>₹${formatAmountINR(entry.running_balance || 0)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -309,7 +345,7 @@ export default function InternalLedgerDetail() {
             <p className="text-sm text-gray-600">Current Balance</p>
             <p className={`text-3xl font-bold mt-1 ${parseFloat(finalBalance) >= 0 ? 'text-green-600' : 'text-red-600'
               }`}>
-              ₹{formatNumber(finalBalance)}
+              ₹{formatAmountINR(finalBalance)}
             </p>
           </div>
           <div className="flex gap-2">
@@ -452,6 +488,7 @@ export default function InternalLedgerDetail() {
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Debit</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Credit</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Balance</th>
+                  {isAdmin && <th className="text-right py-3 px-4 font-semibold text-gray-700">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -474,14 +511,22 @@ export default function InternalLedgerDetail() {
                     </td>
                     <td className="py-3 px-4 text-gray-700">{entry.description || '-'}</td>
                     <td className="py-3 px-4 text-right text-red-600 font-medium">
-                      {entry.entry_type === 'debit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}
+                      {entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}
                     </td>
                     <td className="py-3 px-4 text-right text-green-600 font-medium">
-                      {entry.entry_type === 'credit' ? `₹${formatNumber(entry.amount || 0)}` : '-'}
+                      {entry.entry_type === 'credit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}
                     </td>
                     <td className="py-3 px-4 text-right font-semibold text-gray-900">
-                      ₹{formatNumber(entry.running_balance || 0)}
+                      ₹{formatAmountINR(entry.running_balance || 0)}
                     </td>
+                    {isAdmin && (
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -501,6 +546,23 @@ export default function InternalLedgerDetail() {
         )}
       </div>
 
+      {/* Edit Entry Modal (Admin only) */}
+      <Modal isOpen={!!editingEntry} onClose={() => { setEditingEntry(null); setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' }); }} title="Edit Entry">
+        {editingEntry && (
+          <form onSubmit={(e) => { e.preventDefault(); if (!editEntryData.amount || parseFloat(editEntryData.amount) <= 0) { toast('Please enter a valid amount', 'error'); return; } updateEntryMutation.mutate({ id: editingEntry.id, data: { entry_type: editEntryData.entryType, amount: parseFloat(editEntryData.amount), description: (editEntryData.description || '').trim(), created_at: editEntryData.date ? new Date(editEntryData.date).toISOString() : undefined } }); }} className="space-y-4">
+            <div><label className="block text-sm font-medium text-gray-700 mb-2">Date</label><Input type="date" value={editEntryData.date} onChange={(e) => setEditEntryData({ ...editEntryData, date: e.target.value })} required /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-2">Entry Type</label><Select value={editEntryData.entryType} onChange={(e) => setEditEntryData({ ...editEntryData, entryType: e.target.value as 'credit' | 'debit' })}><option value="credit">Credit</option><option value="debit">Debit</option></Select></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-2">Amount</label><Input type="number" step="0.01" value={editEntryData.amount} onChange={(e) => setEditEntryData({ ...editEntryData, amount: e.target.value })} required /></div>
+            <div><label className="block text-sm font-medium text-gray-700 mb-2">Description</label><textarea className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows={3} value={editEntryData.description} onChange={(e) => setEditEntryData({ ...editEntryData, description: e.target.value })} /></div>
+            <div className="flex gap-2 justify-end"><Button type="button" variant="outline" onClick={() => { setEditingEntry(null); setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' }); }}>Cancel</Button><Button type="submit" disabled={updateEntryMutation.isPending}>{updateEntryMutation.isPending ? 'Saving...' : 'Save'}</Button></div>
+          </form>
+        )}
+      </Modal>
+      {/* Delete Entry Confirmation (Admin only) */}
+      <Modal isOpen={deletingEntryId !== null} onClose={() => setDeletingEntryId(null)} title="Remove entry?">
+        <p className="text-gray-600 mb-4">This will remove the entry and adjust the balance. This cannot be undone.</p>
+        <div className="flex gap-2 justify-end"><Button variant="outline" onClick={() => setDeletingEntryId(null)}>Cancel</Button><Button className="bg-red-600 hover:bg-red-700" disabled={deleteEntryMutation.isPending} onClick={() => deletingEntryId !== null && deleteEntryMutation.mutate(deletingEntryId)}>{deleteEntryMutation.isPending ? 'Removing...' : 'Remove'}</Button></div>
+      </Modal>
       {/* Entry Form Modal */}
       <Modal
         isOpen={showEntryForm}
