@@ -2514,7 +2514,7 @@ export default function InvoiceDetail() {
             setCheckoutUpiAmount('');
           }}
           title="Checkout Invoice"
-          size="xl-plus"
+          size="xl-wide"
           closeOnBackdropClick={false}
         >
           <div className="space-y-6">
