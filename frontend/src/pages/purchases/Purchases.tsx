@@ -54,6 +54,7 @@ export default function Purchases() {
   const [showForm, setShowForm] = useState(false);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState<number | null>(null);
+  const [editingPurchaseStatus, setEditingPurchaseStatus] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     supplier: '',
     purchase_date: new Date().toISOString().split('T')[0],
@@ -81,6 +82,7 @@ export default function Purchases() {
   const supplierFilterRef = useRef<HTMLDivElement>(null);
   const productFilterRef = useRef<HTMLDivElement>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
+  const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
@@ -399,24 +401,47 @@ export default function Purchases() {
 
   const createMutation = useMutation({
     mutationFn: (data: any) => purchasingApi.purchases.create(data),
-    onSuccess: async (response) => {
+    onSuccess: async (response, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
-      setShowForm(false);
 
-      // Get the created purchase to extract product IDs from response
       const createdPurchase = response?.data || response;
-      const items = createdPurchase?.items || purchaseItems;
+      const isDraft = createdPurchase?.status === 'draft' || variables?.status === 'draft';
 
-      // Auto-generate labels for all products in the background (async, non-blocking)
-      if (items.length > 0) {
-        // Get purchase ID from response
-        const purchaseId = createdPurchase?.id ? parseInt(createdPurchase.id) : undefined;
-        // Wait a bit for barcodes to be fully created in backend
-        setTimeout(() => {
-          autoGenerateLabels(items, purchaseId);
-        }, 1000);
+      if (isDraft) {
+        // Stay in form in edit mode so user can continue editing the draft
+        setEditingPurchase(createdPurchase.id);
+        setEditingPurchaseStatus('draft');
+        setFormData({
+          supplier: createdPurchase.supplier?.toString() || createdPurchase.supplier_id?.toString() || '',
+          purchase_date: createdPurchase.purchase_date || formData.purchase_date,
+          bill_number: createdPurchase.bill_number || '',
+          notes: createdPurchase.notes || '',
+        });
+        const items = (createdPurchase?.items || []).map((item: any) => ({
+          id: item.id,
+          product: item.product,
+          variant: item.variant || null,
+          product_name: item.product_name,
+          product_sku: item.product_sku,
+          variant_name: item.variant_name || null,
+          variant_sku: item.variant_sku || null,
+          quantity: formatNumber(item.quantity, 3, false),
+          unit_price: formatNumber(item.unit_price, 2, false),
+          selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
+          line_total: item.line_total,
+          sold_count: item.sold_count || 0,
+        }));
+        setPurchaseItems(items);
+        setSupplierSearch(createdPurchase.supplier_name || '');
+        return;
       }
 
+      setShowForm(false);
+      const items = createdPurchase?.items || purchaseItems;
+      if (items.length > 0) {
+        const purchaseId = createdPurchase?.id ? parseInt(createdPurchase.id) : undefined;
+        setTimeout(() => autoGenerateLabels(items, purchaseId), 1000);
+      }
       resetForm();
     },
     onError: (error: any) => {
@@ -426,25 +451,25 @@ export default function Purchases() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: any }) => purchasingApi.purchases.update(id, data),
-    onSuccess: async (response) => {
+    onSuccess: async (response, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
-      setShowForm(false);
-      setEditingPurchase(null);
 
-      // Get the updated purchase to extract product IDs from response
       const updatedPurchase = response?.data || response;
-      const items = updatedPurchase?.items || purchaseItems;
+      const isDraft = updatedPurchase?.status === 'draft' || variables?.data?.status === 'draft';
 
-      // Auto-generate labels for all products in the background (async, non-blocking)
-      if (items.length > 0) {
-        // Get purchase ID from response
-        const purchaseId = updatedPurchase?.id ? parseInt(updatedPurchase.id) : undefined;
-        // Wait a bit for barcodes to be fully created/updated in backend
-        setTimeout(() => {
-          autoGenerateLabels(items, purchaseId);
-        }, 1000);
+      if (isDraft) {
+        // Stay in form so user can continue editing the draft
+        return;
       }
 
+      setShowForm(false);
+      setEditingPurchase(null);
+      setEditingPurchaseStatus(null);
+      const items = updatedPurchase?.items || purchaseItems;
+      if (items.length > 0) {
+        const purchaseId = updatedPurchase?.id ? parseInt(updatedPurchase.id) : undefined;
+        setTimeout(() => autoGenerateLabels(items, purchaseId), 1000);
+      }
       resetForm();
     },
     onError: (error: any) => {
@@ -507,8 +532,9 @@ export default function Purchases() {
     setSupplierSearch('');
     setSupplierFilterInput('');
     setShowSupplierDropdown(false);
-    setEditingPurchase(null); // Clear editing state
-    addedProductForIdRef.current = null; // Reset added product flag
+    setEditingPurchase(null);
+    setEditingPurchaseStatus(null);
+    addedProductForIdRef.current = null;
   };
 
   const handleEdit = async (purchase: any) => {
@@ -529,6 +555,7 @@ export default function Purchases() {
       const fullPurchase = response.data;
 
       setEditingPurchase(fullPurchase.id);
+      setEditingPurchaseStatus(fullPurchase.status || null);
       setFormData({
         supplier: fullPurchase.supplier?.toString() || fullPurchase.supplier_id?.toString() || '',
         purchase_date: fullPurchase.purchase_date || new Date().toISOString().split('T')[0],
@@ -536,24 +563,49 @@ export default function Purchases() {
         notes: fullPurchase.notes || '',
       });
 
-      // Convert items to form format, including variants and sold counts
-      const items = (fullPurchase.items || []).map((item: any) => ({
-        id: item.id,
-        product: item.product,
-        variant: item.variant || null, // Include variant (can be null)
-        product_name: item.product_name,
-        product_sku: item.product_sku,
-        variant_name: item.variant_name || null,
-        variant_sku: item.variant_sku || null,
-        quantity: formatNumber(item.quantity, 3, false),
-        unit_price: formatNumber(item.unit_price, 2, false),
-        selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
-        line_total: item.line_total,
-        sold_count: item.sold_count || 0, // Include sold count from backend for validation
-      }));
+      // Convert items to form format; for draft, show empty string for 0 qty/price (placeholders)
+      const isDraft = fullPurchase.status === 'draft';
+      const items = (fullPurchase.items || []).map((item: any) => {
+        const qty = item.quantity != null ? Number(item.quantity) : 0;
+        const price = item.unit_price != null ? Number(item.unit_price) : 0;
+        return {
+          id: item.id,
+          product: item.product,
+          variant: item.variant || null,
+          product_name: item.product_name,
+          product_sku: item.product_sku,
+          variant_name: item.variant_name || null,
+          variant_sku: item.variant_sku || null,
+          quantity: isDraft && qty === 0 ? '' : formatNumber(item.quantity, 3, false),
+          unit_price: isDraft && price === 0 ? '' : formatNumber(item.unit_price, 2, false),
+          selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
+          line_total: item.line_total,
+          sold_count: item.sold_count || 0,
+        };
+      });
 
       setPurchaseItems(items);
       setShowForm(true);
+
+      // Auto-uncheck "Printed" for all items of this purchase while editing (update list cache)
+      queryClient.setQueryData(
+        ['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage],
+        (old: any) => {
+          if (!old) return old;
+          const updated = JSON.parse(JSON.stringify(old));
+          const results = updated.data?.results || updated.results || [];
+          for (const p of results) {
+            if (p.id === fullPurchase.id && p.items) {
+              for (const item of p.items) {
+                item.printed = false;
+                item.printed_at = null;
+              }
+              break;
+            }
+          }
+          return updated;
+        }
+      );
     } catch (error: any) {
       console.error('Error fetching purchase details:', error);
       alert(error?.response?.data?.message || 'Failed to load purchase details. Please try again.');
@@ -759,12 +811,79 @@ export default function Purchases() {
     if (formData.notes) submitData.notes = formData.notes;
 
     if (editingPurchase) {
+      if (editingPurchaseStatus === 'draft') {
+        submitData.status = 'finalized'; // Finalize when saving from draft
+      }
+      updateMutation.mutate({ id: editingPurchase, data: submitData });
+    } else {
+      submitData.status = 'finalized'; // New purchase save = create as finalized
+      createMutation.mutate(submitData);
+    }
+  };
+
+  const handleSaveDraft = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (createMutation.isPending || updateMutation.isPending) return;
+
+    let supplierId = formData.supplier;
+    if (!supplierId && supplierSearch.trim()) {
+      const matchingSupplier = suppliers.find((supplier: any) =>
+        supplier.name.toLowerCase() === supplierSearch.trim().toLowerCase()
+      );
+      if (matchingSupplier) {
+        supplierId = matchingSupplier.id.toString();
+        setFormData((prev) => ({ ...prev, supplier: supplierId }));
+      } else {
+        alert('Please select a valid supplier from the dropdown or create a new one.');
+        return;
+      }
+    }
+    if (!supplierId) {
+      alert('Please select a supplier.');
+      return;
+    }
+
+    // For draft: send ALL items so placeholders (no qty/price yet) are saved and reappear on edit
+    if (editingPurchase) {
+      for (const item of purchaseItems) {
+        const quantity = parseInt(item.quantity) || 0;
+        const soldCount = (item as any).sold_count || 0;
+        if (quantity < soldCount) {
+          const variantText = (item as any).variant_name ? ` (${(item as any).variant_name})` : '';
+          alert(
+            `Cannot set quantity for "${item.product_name || 'product'}${variantText}" below ${soldCount} (already sold).`
+          );
+          return;
+        }
+      }
+    }
+
+    const submitData: any = {
+      supplier: parseInt(supplierId),
+      purchase_date: formData.purchase_date,
+      status: 'draft',
+      items: purchaseItems.map((item) => {
+        const itemData: any = {
+          product: item.product,
+          quantity: parseInt(item.quantity) || 0,
+          unit_price: parseFloat(String(item.unit_price).trim() || '0') || 0,
+        };
+        if (item.variant) itemData.variant = item.variant;
+        if (item.selling_price && String(item.selling_price).trim() !== '') {
+          itemData.selling_price = parseFloat(item.selling_price) || null;
+        }
+        return itemData;
+      }),
+    };
+    if (formData.bill_number) submitData.bill_number = formData.bill_number;
+    if (formData.notes) submitData.notes = formData.notes;
+
+    if (editingPurchase) {
       updateMutation.mutate({ id: editingPurchase, data: submitData });
     } else {
       createMutation.mutate(submitData);
     }
   };
-
 
   const formatDate = (dateString: string) => {
     if (!dateString) return '-';
@@ -855,16 +974,39 @@ export default function Purchases() {
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
       } else {
-        alert('No labels found for this purchase. Please generate labels first.');
+        alert('No labels found for this purchase. Generate labels from the purchase detail page or backend.');
       }
     } catch (error: any) {
       alert(error?.response?.data?.error || 'Failed to print labels. Please try again.');
     }
   };
 
-  const handleGenerateLabels = (productId: number, purchaseId?: number) => {
-    setGeneratingLabelsFor(productId);
-    generateLabelsMutation.mutate({ productId, purchaseId });
+  const handleCheckLabelStatus = async (productId: number, purchaseId: number) => {
+    setCheckingStatusFor(productId);
+    const labelKey = `${productId} `;
+    try {
+      const response = await productsApi.labelsStatus(productId, purchaseId);
+      const data = response.data || {};
+      const allGenerated = data.all_generated || false;
+      const total = data.total_barcodes ?? 0;
+      const generated = data.generated_labels ?? 0;
+      queryClient.setQueryData(['label-status', productId, purchaseId], { productId, purchaseId, data, error: null });
+      setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: false } }));
+      if (total > 0) {
+        alert(`Status: ${generated} of ${total} label(s) generated.${allGenerated ? ' All ready to print.' : ''}`);
+      } else {
+        alert('No labels generated yet. Generate labels from the purchase detail page or backend.');
+      }
+    } catch (error: any) {
+      setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: false } }));
+      if (error?.response?.status === 404) {
+        alert('No labels for this product yet. Generate labels from the purchase detail page or backend.');
+      } else {
+        alert(error?.response?.data?.error || 'Failed to check label status.');
+      }
+    } finally {
+      setCheckingStatusFor(null);
+    }
   };
 
   const regenerateLabelsMutation = useMutation({
@@ -1053,33 +1195,31 @@ export default function Purchases() {
   // Max label-status queries to avoid tab crash when many purchases/items are on the page
   const MAX_LABEL_STATUS_QUERIES = 25;
 
-  // Get all product-purchase combinations that need label status checks (with caching)
+  // Load all items; prioritize unprinted (they get status first), then printed, cap at MAX
   const labelStatusQueriesData = useMemo(() => {
     if (!purchases || purchases.length === 0) return [];
 
-    const queries: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
     const seenKeys = new Set<string>();
+    const unprinted: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
+    const printed: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
 
     purchases.forEach((purchase: any) => {
       if (purchase.items && purchase.items.length > 0) {
         purchase.items.forEach((item: any) => {
           const productId = item.product;
-          if (productId && item.product_track_inventory) {
-            const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
-            const labelKey = `${productId} `;
-
-            // Only add if we haven't seen this product yet (avoid duplicates)
-            if (!seenKeys.has(labelKey)) {
-              seenKeys.add(labelKey);
-              queries.push({ productId, purchaseId, labelKey });
-            }
-          }
+          if (!productId || !item.product_track_inventory) return;
+          const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
+          const labelKey = `${productId} `;
+          if (seenKeys.has(labelKey)) return;
+          seenKeys.add(labelKey);
+          const entry = { productId, purchaseId, labelKey };
+          if (item.printed) printed.push(entry);
+          else unprinted.push(entry);
         });
       }
     });
 
-    // Cap to avoid dozens of parallel requests and re-renders that can freeze/crash the tab
-    return queries.slice(0, MAX_LABEL_STATUS_QUERIES);
+    return [...unprinted, ...printed].slice(0, MAX_LABEL_STATUS_QUERIES);
   }, [purchases]);
 
   // Use React Query to cache label status checks for all products in purchases
@@ -1519,10 +1659,12 @@ export default function Purchases() {
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           {trackInventory ? (
-                                            <div className="flex items-center justify-center">
+                                            <div className="flex items-center justify-center flex-wrap gap-1.5">
                                               {(() => {
                                                 const isGenerating = generatingLabelsFor === productId || labelStatus.generating;
-                                                const allGenerated = labelStatus.all_generated;
+                                                const isChecking = checkingStatusFor === productId;
+                                                const alreadyPrinted = item.printed;
+                                                const allGenerated = alreadyPrinted || labelStatus.all_generated;
 
                                                 if (isGenerating) {
                                                   return (
@@ -1547,10 +1689,10 @@ export default function Purchases() {
                                                         size="sm"
                                                         onClick={() => handlePrintLabels(productId, purchase.id)}
                                                         className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                                        title="Print Labels"
+                                                        title="Get barcodes and open print dialog"
                                                       >
                                                         <Printer className="h-3.5 w-3.5" />
-                                                        <span className="hidden sm:inline">Print Labels</span>
+                                                        <span className="hidden sm:inline">Print</span>
                                                       </Button>
                                                       <Button
                                                         variant="outline"
@@ -1566,16 +1708,33 @@ export default function Purchases() {
                                                 }
 
                                                 return (
-                                                  <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => handleGenerateLabels(productId, purchase.id)}
-                                                    className="flex items-center gap-1.5 text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300"
-                                                    title="Generate Labels"
-                                                  >
-                                                    <Printer className="h-3.5 w-3.5" />
-                                                    <span className="hidden sm:inline">Generate Labels</span>
-                                                  </Button>
+                                                  <div className="flex items-center gap-1.5">
+                                                    <Button
+                                                      variant="outline"
+                                                      size="sm"
+                                                      onClick={() => handleCheckLabelStatus(productId, purchase.id)}
+                                                      disabled={isChecking}
+                                                      className="flex items-center gap-1.5 text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
+                                                      title="Check label status via API"
+                                                    >
+                                                      {isChecking ? (
+                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                      ) : (
+                                                        <FileText className="h-3.5 w-3.5" />
+                                                      )}
+                                                      <span className="hidden sm:inline">{isChecking ? 'Checking...' : 'Check status'}</span>
+                                                    </Button>
+                                                    <Button
+                                                      variant="outline"
+                                                      size="sm"
+                                                      onClick={() => handlePrintLabels(productId, purchase.id)}
+                                                      className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
+                                                      title="Get barcodes and open print dialog"
+                                                    >
+                                                      <Printer className="h-3.5 w-3.5" />
+                                                      <span className="hidden sm:inline">Get barcodes & Print</span>
+                                                    </Button>
+                                                  </div>
                                                 );
                                               })()}
                                             </div>
@@ -1761,7 +1920,9 @@ export default function Purchases() {
                                   <div className="flex items-center justify-center">
                                     {(() => {
                                       const isGenerating = generatingLabelsFor === productId || labelStatus.generating;
-                                      const allGenerated = labelStatus.all_generated;
+                                      const isChecking = checkingStatusFor === productId;
+                                      const alreadyPrinted = item.printed;
+                                      const allGenerated = alreadyPrinted || labelStatus.all_generated;
 
                                       if (isGenerating) {
                                         return (
@@ -1786,10 +1947,10 @@ export default function Purchases() {
                                               size="sm"
                                               onClick={() => handlePrintLabels(productId, purchase.id)}
                                               className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                              title="Print Labels"
+                                              title="Get barcodes and open print dialog"
                                             >
                                               <Printer className="h-3.5 w-3.5" />
-                                              <span>Print Labels</span>
+                                              <span>Get barcodes & Print</span>
                                             </Button>
                                             <Button
                                               variant="outline"
@@ -1806,16 +1967,33 @@ export default function Purchases() {
                                       }
 
                                       return (
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => handleGenerateLabels(productId, purchase.id)}
-                                          className="flex items-center gap-1.5 w-full text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100 hover:border-blue-300"
-                                          title="Generate Labels"
-                                        >
-                                          <Printer className="h-3.5 w-3.5" />
-                                          <span>Generate Labels</span>
-                                        </Button>
+                                        <div className="flex flex-col gap-2">
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleCheckLabelStatus(productId, purchase.id)}
+                                            disabled={isChecking}
+                                            className="flex items-center gap-1.5 w-full text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
+                                            title="Check label status via API"
+                                          >
+                                            {isChecking ? (
+                                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                            ) : (
+                                              <FileText className="h-3.5 w-3.5" />
+                                            )}
+                                            <span>{isChecking ? 'Checking...' : 'Check status'}</span>
+                                          </Button>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handlePrintLabels(productId, purchase.id)}
+                                            className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
+                                            title="Get barcodes and open print dialog"
+                                          >
+                                            <Printer className="h-3.5 w-3.5" />
+                                            <span>Get barcodes & Print</span>
+                                          </Button>
+                                        </div>
                                       );
                                     })()}
                                   </div>
@@ -2295,15 +2473,34 @@ export default function Purchases() {
               />
             </div>
 
-            <div className="flex justify-end space-x-3 pt-4">
+            <div className="flex justify-end flex-wrap gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => { setShowForm(false); resetForm(); }}>
                 Cancel
               </Button>
+              {(editingPurchaseStatus === 'draft' || !editingPurchase) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleSaveDraft}
+                  disabled={createMutation.isPending || updateMutation.isPending || !formData.supplier}
+                >
+                  {(createMutation.isPending || updateMutation.isPending) ? 'Saving...' : 'Save as draft'}
+                </Button>
+              )}
               <Button
                 type="submit"
-                disabled={createMutation.isPending || updateMutation.isPending || purchaseItems.length === 0}
+                disabled={
+                  createMutation.isPending ||
+                  updateMutation.isPending ||
+                  purchaseItems.length === 0 ||
+                  (!formData.supplier && !supplierSearch.trim())
+                }
               >
-                {(createMutation.isPending || updateMutation.isPending) ? 'Saving...' : 'Save Purchase'}
+                {(createMutation.isPending || updateMutation.isPending)
+                  ? 'Saving...'
+                  : editingPurchaseStatus === 'draft'
+                    ? 'Finalize purchase'
+                    : 'Save Purchase'}
               </Button>
             </div>
           </form>

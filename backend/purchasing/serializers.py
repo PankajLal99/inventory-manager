@@ -424,13 +424,14 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 product_id = item_data.get('product')
                 variant_id = item_data.get('variant')
                 quantity = Decimal(str(item_data.get('quantity', 0)))
-                
-                # Validate quantity is positive
-                if quantity <= 0:
+                # Draft can have placeholder lines with quantity 0 (user will fill later)
+                if quantity <= 0 and purchase.status != 'draft':
                     raise serializers.ValidationError({
                         'items': f'Quantity must be greater than 0. Got {quantity}.'
                     })
-                
+                if quantity < 0:
+                    quantity = Decimal('0')
+
                 # Validate product is required
                 if not product_id:
                     raise serializers.ValidationError('Product is required for purchase item')
@@ -455,16 +456,13 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     product=product,
                     variant=variant,
                     quantity=quantity,
-                    shop_quantity=quantity,  # Initially all units are in shop
+                    shop_quantity=quantity,  # 0 for draft placeholders
                     warehouse_quantity=Decimal('0.000'),
-                    unit_price=item_data.get('unit_price', 0),
+                    unit_price=item_data.get('unit_price', 0) or 0,
                     selling_price=item_data.get('selling_price', None)
                 )
-                
-                # Always generate barcodes (even in draft). Label generation (Azure/local) is
-                # skipped when DISABLE_BARCODE_LABEL_GENERATION is True in settings.
+                # Generate barcodes only when quantity > 0 (no-op for 0)
                 generate_barcodes_for_purchase_item(purchase_item, quantity)
-                
                 # CRITICAL: Only update stock when purchase status is 'finalized'
                 # Stock should NEVER be affected for draft purchases
                 # Double-check status before updating stock
@@ -917,13 +915,14 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 product_id = item_data.get('product')
                 variant_id = item_data.get('variant')
                 quantity = Decimal(str(item_data.get('quantity', 0)))
-                
-                # Validate quantity is positive
-                if quantity <= 0:
+                # Draft can have placeholder lines with quantity 0
+                if quantity <= 0 and new_status != 'draft':
                     raise serializers.ValidationError({
                         'items': f'Quantity must be greater than 0. Got {quantity}.'
                     })
-                
+                if quantity < 0:
+                    quantity = Decimal('0')
+
                 # Validate product is required
                 if not product_id:
                     raise serializers.ValidationError('Product is required for purchase item')
