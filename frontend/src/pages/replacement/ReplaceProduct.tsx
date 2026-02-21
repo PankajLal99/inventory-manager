@@ -253,7 +253,7 @@ export default function ReplaceProduct() {
 
   const handleSearch = () => {
     if (!searchValue.trim()) {
-      setSearchError('Please enter a barcode, SKU, or invoice number');
+      setSearchError('Please enter a barcode / short code, SKU, or invoice number');
       return;
     }
     setShowInvoiceDropdown(false);
@@ -613,7 +613,7 @@ export default function ReplaceProduct() {
                       setShowInvoiceDropdown(false);
                     }
                   }}
-                  placeholder="Enter barcode, SKU, or invoice number"
+                  placeholder="Enter barcode / short code, SKU, or invoice number"
                   className="pl-10 pr-24"
                 />
                 {/* Invoice Search Dropdown */}
@@ -749,7 +749,7 @@ export default function ReplaceProduct() {
                               <div className="font-medium text-gray-900">{item.product_name}</div>
                               <div className="text-sm text-gray-600 mt-1">
                                 SKU: {item.product_sku}
-                                {item.barcode_value && ` | Barcode: ${item.barcode_value}`}
+                                {item.barcode_value && ` | Short code: ${item.barcode_value}`}
                               </div>
                               <div className="text-sm text-gray-500 mt-1">
                                 Sold: {item.quantity} | Available: {item.available_quantity}
@@ -852,7 +852,7 @@ export default function ReplaceProduct() {
                                   value={productSearch[item.id] || ''}
                                   onChange={(e) => handleProductSearchChange(item.id, e.target.value)}
                                   onKeyDown={(e) => handleProductSearchKeyDown(item.id, e)}
-                                  placeholder="Search by name, SKU, or scan barcode..."
+                                  placeholder="Search by name, SKU, or scan barcode / short code..."
                                   className="w-full pr-32"
                                 />
                                 <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
@@ -1094,7 +1094,7 @@ export default function ReplaceProduct() {
           {!invoice && !findInvoiceQuery.isFetching && !searchError && (
             <div className="text-center py-12 text-gray-500 border-t pt-8">
               <Search className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-              <p className="text-gray-600">Enter a barcode, SKU, or invoice number to find the invoice</p>
+              <p className="text-gray-600">Enter a barcode / short code, SKU, or invoice number to find the invoice</p>
               <p className="text-sm text-gray-500 mt-2">Or use the camera icon to scan a QR code</p>
             </div>
           )}

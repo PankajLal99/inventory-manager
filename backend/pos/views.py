@@ -3809,12 +3809,12 @@ def replacement_check(request):
         barcode_obj = None
         
         if barcode_value:
-            try:
-                barcode_obj = Barcode.objects.get(barcode=barcode_value)
+            barcode_obj = Barcode.objects.filter(
+                Q(barcode=barcode_value) | Q(short_code=barcode_value)
+            ).select_related('product').first()
+            if barcode_obj:
                 product = barcode_obj.product
-            except Barcode.DoesNotExist:
-                pass
-        
+
         # Search for invoice items by SKU first (even if product not found in catalog)
         # This is the key: search invoice items directly by SKU or by barcode
         invoice_items_by_sku = None
@@ -3992,12 +3992,13 @@ def replacement_create(request):
     
     if not barcode_value:
         return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    try:
-        barcode_obj = Barcode.objects.get(barcode=barcode_value)
-    except Barcode.DoesNotExist:
+
+    barcode_obj = Barcode.objects.filter(
+        Q(barcode=barcode_value) | Q(short_code=barcode_value)
+    ).first()
+    if not barcode_obj:
         return Response({'error': 'Barcode not found'}, status=status.HTTP_404_NOT_FOUND)
-    
+
     # Mark barcode as UNKNOWN - don't update inventory
     old_tag = barcode_obj.tag
     barcode_obj.tag = 'unknown'

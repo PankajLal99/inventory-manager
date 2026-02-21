@@ -294,7 +294,7 @@ export default function ProductDetail() {
                           <tbody className="divide-y divide-gray-50">
                             {items.map((b: any) => (
                               <tr key={b.id} className="hover:bg-gray-50/50">
-                                <td className="px-4 py-2 text-sm font-mono">{b.barcode}</td>
+                                <td className="px-4 py-2 text-sm font-mono">{b.short_code || b.barcode}</td>
                                 <td className="px-4 py-2 text-sm text-gray-600">{b.location}</td>
                                 <td className="px-4 py-2 text-sm">{b.supplier_name || '—'}</td>
                                 <td className="px-4 py-2 text-sm">{b.purchase_date || '—'}</td>

@@ -177,7 +177,7 @@ export default function CreditNoteReplacement() {
 
   const handleSearch = async () => {
     if (!searchValue.trim()) {
-      setSearchError('Please enter a barcode, SKU, or invoice number');
+      setSearchError('Please enter a barcode / short code, SKU, or invoice number');
       return;
     }
     setShowInvoiceDropdown(false);
@@ -609,7 +609,7 @@ export default function CreditNoteReplacement() {
                       setShowInvoiceDropdown(false);
                     }
                   }}
-                  placeholder="Enter barcode, SKU, or invoice number"
+                  placeholder="Enter barcode / short code, SKU, or invoice number"
                   className="pl-10 pr-24"
                 />
                 {/* Invoice Search Dropdown */}
@@ -743,7 +743,7 @@ export default function CreditNoteReplacement() {
                               <div className="font-medium text-gray-900">{item.product_name}</div>
                               <div className="text-sm text-gray-600 mt-1">
                                 SKU: {item.product_sku}
-                                {item.barcode_value && ` | Barcode: ${item.barcode_value}`}
+                                {item.barcode_value && ` | Short code: ${item.barcode_value}`}
                               </div>
                               <div className="text-sm text-gray-500 mt-1">
                                 Sold: {item.quantity} | Available: {item.available_quantity}
@@ -901,7 +901,7 @@ export default function CreditNoteReplacement() {
           {!invoice && !findInvoiceQuery.isFetching && !searchError && (
             <div className="text-center py-12 text-gray-500 border-t pt-8">
               <Search className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-              <p className="text-gray-600">Enter a barcode, SKU, or invoice number to find the invoice</p>
+              <p className="text-gray-600">Enter a barcode / short code, SKU, or invoice number to find the invoice</p>
               <p className="text-sm text-gray-500 mt-2">Or use the camera icon to scan a QR code</p>
             </div>
           )}
@@ -959,12 +959,12 @@ export default function CreditNoteReplacement() {
             </div>
             <div className="p-4 overflow-y-auto flex-1 space-y-4">
               <p className="text-sm text-gray-600">
-                Paste barcodes below (one per line or space separated). All must belong to a single customer.
+                Paste barcodes or short codes below (one per line or space separated). All must belong to a single customer.
               </p>
               <textarea
                 value={bulkInput}
                 onChange={(e) => setBulkInput(e.target.value)}
-                placeholder="Paste barcodes here..."
+                placeholder="Paste barcodes or short codes here..."
                 className="w-full h-40 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
                 disabled={bulkApplyLoading}
               />
@@ -1007,7 +1007,7 @@ export default function CreditNoteReplacement() {
                         No action taken ({(bulkCheckResult.skipped ?? []).length}):
                       </p>
                       <ul className="list-disc list-inside text-gray-700 space-y-0.5 max-h-32 overflow-y-auto">
-                        {(bulkCheckResult.skipped ?? []).map((s) => {
+                        {(bulkCheckResult.skipped ?? []).map((s, idx) => {
                           const tagLabel = s.current_tag ? (s.current_tag === 'new' ? 'fresh' : s.current_tag === 'in-cart' ? 'in cart' : s.current_tag) : null;
                           const statusText = tagLabel
                             ? tagLabel
@@ -1017,8 +1017,8 @@ export default function CreditNoteReplacement() {
                                 ? 'not sold'
                                 : 'different customer';
                           return (
-                            <li key={s.barcode}>
-                              <span className="font-mono">{s.barcode}</span>
+                            <li key={s.barcode || (s as any).short_code || idx}>
+                              <span className="font-mono">{(s as any).short_code ?? s.barcode}</span>
                               <span className="text-amber-700 ml-1">
                                 ({statusText})
                               </span>
