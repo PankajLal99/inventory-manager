@@ -1,9 +1,8 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import RepairStatusModal from './RepairStatusModal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
 import {
@@ -70,10 +69,10 @@ const STATUS_OPTIONS = [
 ];
 
 const STATUS_COLORS: Record<string, string> = {
-  received: 'bg-blue-100 text-blue-800',
-  work_in_progress: 'bg-yellow-100 text-yellow-800',
-  done: 'bg-green-100 text-green-800',
-  delivered: 'bg-gray-100 text-gray-800',
+  received: 'bg-sky-100 text-sky-800 border border-sky-200',
+  work_in_progress: 'bg-amber-100 text-amber-800 border border-amber-200',
+  done: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
+  delivered: 'bg-slate-100 text-slate-700 border border-slate-200',
 };
 
 const STATUS_ICONS: Record<string, any> = {
@@ -85,14 +84,12 @@ const STATUS_ICONS: Record<string, any> = {
 
 export default function Repairs() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedInvoice, setSelectedInvoice] = useState<RepairInvoice | null>(null);
-  const [showStatusModal, setShowStatusModal] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [barcodeSearch, setBarcodeSearch] = useState('');
   const [showScanner, setShowScanner] = useState(false);
@@ -210,46 +207,6 @@ export default function Repairs() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Update repair status mutation
-  const updateStatusMutation = useMutation({
-    mutationFn: async (data: { invoiceId: number; repair_status: string }) => {
-      return await posApi.repair.updateStatus(data.invoiceId, { repair_status: data.repair_status });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
-      showToast('Repair status updated successfully', 'success');
-      setShowStatusModal(false);
-      setSelectedInvoice(null);
-    },
-    onError: (error: any) => {
-      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to update repair status';
-      showToast(errorMsg, 'error');
-    },
-  });
-
-  const handleOpenStatusModal = (invoice: RepairInvoice) => {
-    if (invoice.repair) {
-      setSelectedInvoice(invoice);
-      setShowStatusModal(true);
-    }
-  };
-
-  const handleUpdateStatus = (newStatus: string) => {
-    if (!selectedInvoice?.repair) {
-      showToast('Please select a repair invoice', 'error');
-      return;
-    }
-    updateStatusMutation.mutate({
-      invoiceId: selectedInvoice.id,
-      repair_status: newStatus,
-    });
-  };
-
-  const handleCloseStatusModal = () => {
-    setShowStatusModal(false);
-    setSelectedInvoice(null);
-  };
-
   // Generate and print repair label
   const generateLabelMutation = useMutation({
     mutationFn: async (invoiceId: number) => {
@@ -305,7 +262,7 @@ export default function Repairs() {
   const getStatusBadge = (status: string) => {
     const Icon = STATUS_ICONS[status] || Clock;
     return (
-      <Badge className={STATUS_COLORS[status] || 'bg-gray-100 text-gray-800'}>
+      <Badge className={STATUS_COLORS[status] || 'bg-gray-100 text-gray-800 border border-gray-200'}>
         <Icon className="h-3 w-3 mr-1" />
         {STATUS_OPTIONS.find(s => s.value === status)?.label || status}
       </Badge>
@@ -548,7 +505,7 @@ export default function Repairs() {
                   <div className="pt-3 border-t">
                     <Button
                       variant="primary"
-                      onClick={() => handleOpenStatusModal(selectedInvoice)}
+                      onClick={() => navigate(`/invoices/${selectedInvoice.id}?openCheckout=1`)}
                     >
                       <Edit className="h-4 w-4 mr-2" />
                       Update Status
@@ -709,7 +666,7 @@ export default function Repairs() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (invoice.repair) {
-                                  handleOpenStatusModal(invoice);
+                                  navigate(`/invoices/${invoice.id}?openCheckout=1`);
                                 } else {
                                   showToast('This invoice does not have a repair record', 'error');
                                 }
@@ -814,7 +771,7 @@ export default function Repairs() {
                             onClick={(e) => {
                               e.stopPropagation();
                               if (invoice.repair) {
-                                handleOpenStatusModal(invoice);
+                                navigate(`/invoices/${invoice.id}?openCheckout=1`);
                               } else {
                                 showToast('This invoice does not have a repair record', 'error');
                               }
@@ -849,20 +806,6 @@ export default function Repairs() {
         </div>
       )}
 
-      {/* Status Update Modal */}
-      {selectedInvoice?.repair && (
-        <RepairStatusModal
-          isOpen={showStatusModal}
-          onClose={handleCloseStatusModal}
-          onUpdate={handleUpdateStatus}
-          invoiceNumber={selectedInvoice.invoice_number}
-          currentStatus={selectedInvoice.repair.status}
-          invoiceStatus={selectedInvoice.status}
-          isLoading={updateStatusMutation.isPending}
-          customerName={selectedInvoice.customer_name}
-          bookingAmount={selectedInvoice.repair.booking_amount}
-        />
-      )}
 
       {/* Toast Container */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />

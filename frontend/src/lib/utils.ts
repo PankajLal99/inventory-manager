@@ -29,6 +29,28 @@ export const formatNumber = (num: number | string | undefined | null, decimals: 
 };
 
 /**
+ * Formats a number as INR amount in Indian style (lakhs/crore comma-separated).
+ * e.g. 1234567.89 → "12,34,567.89"
+ * Use with ₹ prefix: ₹{formatAmountINR(amount)}
+ */
+export const formatAmountINR = (num: number | string | undefined | null, decimals: number = 2): string => {
+    if (num === undefined || num === null) return '0';
+    const n = typeof num === 'string' ? parseFloat(num) : num;
+    if (isNaN(n)) return '0';
+    const value = parseFloat(n.toFixed(decimals));
+    return value.toLocaleString('en-IN', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: decimals,
+    });
+};
+
+/**
+ * Whether a main-ledger entry can be edited in-place (pencil). Invoice-linked entries
+ * are edited via the invoice; only entries without an invoice show the edit button.
+ */
+export const canEditLedgerEntry = (entry: { invoice?: number | null }): boolean => !entry.invoice;
+
+/**
  * Standardized product stock information.
  * Backend is source of truth. Unknown (tag/supplier) does NOT mean warehouse.
  * - Shop qty / warehouse_stock: from purchase only (no addition/subtraction).

@@ -15,6 +15,7 @@ A comprehensive Django-based inventory management system with real-time stock tr
 9. [Environment Configuration](#environment-configuration)
 10. [Performance Optimizations](#performance-optimizations)
 11. [Limitations & Future Enhancements](#limitations--future-enhancements)
+12. [Barcode vs Short Code (Display)](#barcode-vs-short-code-display)
 
 ## Architecture
 
@@ -1120,6 +1121,27 @@ npm run dev
 npm run build
 ```
 
+### Testing
+
+- **Backend (API validation)**  
+  Run Django tests for ledger and parties; these validate API contracts, permissions, and balance logic:
+
+  ```bash
+  cd backend
+  python manage.py test backend.parties.tests -v 2 --noinput
+  ```
+
+- **Frontend (unit & behavior)**  
+  Run Vitest for utils (e.g. `formatAmountINR`, `canEditLedgerEntry`) and other frontend logic:
+
+  ```bash
+  cd frontend
+  npm run test:run   # single run
+  npm run test       # watch mode
+  ```
+
+  Backend tests are the source of truth for API behavior; frontend tests cover formatting and UI rules (e.g. when the main ledger shows the edit-entry button).
+
 ## Environment Configuration
 
 Create `.env` file in project root:
@@ -1201,6 +1223,17 @@ JWT_EXPIRATION_HOURS=1
 - GraphQL API
 - Microservices migration
 - Kubernetes deployment
+
+## Barcode vs Short Code (Display)
+
+The system supports both full **barcode** and **short_code** (e.g. `FRAM-0001`) on the `Barcode` model. For UI display, we prefer showing short_code where available while keeping storage and validation on the canonical barcode.
+
+A full analysis of affected backend and frontend code—where barcodes are shown, where validation happens, and what to change to show short_code on the UI—is in **[docs/BARCODE_SHORT_CODE_README.md](docs/BARCODE_SHORT_CODE_README.md)**. It includes:
+
+- Backend: serializers (invoice/return/cart display), lookups that should accept short_code, and audit log
+- Frontend: Search, POS, POS Repair, Invoices, Products, Credit notes, Replacements, History, Layout
+- Validation rules (canonical barcode for cart/invoice; display-only use of short_code)
+- Checklist and recommended implementation order
 
 ---
 

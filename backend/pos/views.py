@@ -3110,7 +3110,12 @@ def invoice_update(request, pk):
             per_unit_discount = cart_item.discount_amount / cart_item.quantity if cart_item.quantity > 0 else Decimal('0.00')
             per_unit_tax = cart_item.tax_amount / cart_item.quantity if cart_item.quantity > 0 else Decimal('0.00')
             unit_line_total = effective_price - per_unit_discount + per_unit_tax
-            if not cart_item.product.track_inventory:
+            # Custom products ("Other - ...") and non-tracked products: no barcode required
+            is_custom_or_non_tracked = (
+                not cart_item.product.track_inventory
+                or (cart_item.product.name and cart_item.product.name.startswith('Other -'))
+            )
+            if is_custom_or_non_tracked:
                 line_total = unit_line_total * cart_item.quantity
                 InvoiceItem.objects.create(
                     invoice=invoice,

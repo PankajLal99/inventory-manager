@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi, purchasingApi } from '../../lib/api';
+import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -11,12 +12,13 @@ import {
   Plus, Minus, FileText, Users, TrendingUp, TrendingDown, 
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search, ArrowUpDown, ArrowUp, ArrowDown,
-  ExternalLink, Clock, UserPlus, Building2
+  ExternalLink, Clock, UserPlus, Building2, Pencil, Trash2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { format } from 'date-fns';
+import { formatAmountINR } from '../../lib/utils';
 
 export default function PersonalLedger() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
@@ -34,19 +36,35 @@ export default function PersonalLedger() {
     address: '',
   });
   
-  // Filters
+  // Filters - default to no date filter so all entries are shown until user selects dates
   const [filters, setFilters] = useState({
-    dateFrom: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
-    dateTo: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+    dateFrom: '',
+    dateTo: '',
     entryType: '',
     customer: '',
     search: '',
   });
   const [showFilters, setShowFilters] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const [editingEntry, setEditingEntry] = useState<any>(null);
+  const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
+  const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
+  const [user, setUser] = useState<any>(null);
   
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        await auth.loadUser();
+        setUser(auth.getUser());
+      } catch (e) {}
+    };
+    loadUser();
+  }, []);
+
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
 
 
   // Fetch personal customers for personal ledger (separate from regular customers)
@@ -139,6 +157,34 @@ export default function PersonalLedger() {
     },
     onError: (error: any) => {
       toast(error?.response?.data?.error || 'Failed to create personal ledger entry', 'error');
+    },
+  });
+
+  const updateEntryMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: any }) => customersApi.personalLedger.entries.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['personal-ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['personal-ledger-entries'] });
+      setEditingEntry(null);
+      setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' });
+      toast('Entry updated successfully', 'success');
+    },
+    onError: (error: any) => {
+      toast(error?.response?.data?.error || 'Failed to update entry', 'error');
+    },
+  });
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: (id: number) => customersApi.personalLedger.entries.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['personal-ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['personal-ledger-entries'] });
+      setDeletingEntryId(null);
+      toast('Entry removed successfully', 'success');
+    },
+    onError: (error: any) => {
+      toast(error?.response?.data?.error || 'Failed to remove entry', 'error');
+      setDeletingEntryId(null);
     },
   });
 
@@ -364,7 +410,7 @@ export default function PersonalLedger() {
       'Group': entry.customer_group_name || '-',
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
-      'Amount': parseFloat(entry.amount || 0).toFixed(2),
+      'Amount': formatAmountINR(entry.amount || 0),
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
@@ -397,7 +443,7 @@ export default function PersonalLedger() {
       entry.customer_group_name || '-',
       entry.entry_type.toUpperCase(),
       entry.description || '-',
-      `₹${parseFloat(entry.amount || 0).toFixed(2)}`,
+      `₹${formatAmountINR(entry.amount || 0)}`,
     ]);
 
     (doc as any).autoTable({
@@ -463,7 +509,7 @@ export default function PersonalLedger() {
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
                   <td class="${entry.entry_type === 'credit' ? 'credit' : 'debit'}">
-                    ${entry.entry_type === 'credit' ? '+' : '-'}₹${parseFloat(entry.amount || 0).toFixed(2)}
+                    ${entry.entry_type === 'credit' ? '+' : '-'}₹${formatAmountINR(entry.amount || 0)}
                   </td>
                 </tr>
               `).join('')}
@@ -480,8 +526,8 @@ export default function PersonalLedger() {
 
   const handleResetFilters = () => {
     setFilters({
-      dateFrom: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
-      dateTo: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
+      dateFrom: '',
+      dateTo: '',
       entryType: '',
       customer: '',
       search: '',
@@ -532,7 +578,7 @@ export default function PersonalLedger() {
             <div>
               <p className="text-sm text-gray-600">Total Credit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{parseFloat(ledgerSummary?.total_credit || '0').toFixed(2)}
+                ₹{formatAmountINR(ledgerSummary?.total_credit || '0')}
               </p>
             </div>
             <TrendingUp className="h-12 w-12 text-green-600" />
@@ -544,7 +590,7 @@ export default function PersonalLedger() {
             <div>
               <p className="text-sm text-gray-600">Total Debit</p>
               <p className="text-2xl font-bold text-gray-900 mt-1">
-                ₹{parseFloat(ledgerSummary?.total_debit || '0').toFixed(2)}
+                ₹{formatAmountINR(ledgerSummary?.total_debit || '0')}
               </p>
             </div>
             <TrendingDown className="h-12 w-12 text-red-600" />
@@ -748,6 +794,11 @@ export default function PersonalLedger() {
                             {getSortIcon('amount')}
                           </div>
                         </th>
+                        {isAdmin && (
+                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Actions
+                          </th>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
@@ -817,10 +868,40 @@ export default function PersonalLedger() {
                                   ? 'bg-green-50 border border-green-200' 
                                   : 'bg-red-50 border border-red-200'
                               }`}>
-                                {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                                {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
                               </span>
                             </div>
                           </td>
+                          {isAdmin && (
+                            <td className="px-6 py-4 whitespace-nowrap text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingEntry(entry);
+                                    setEditEntryData({
+                                      amount: String(entry.amount || ''),
+                                      description: entry.description || '',
+                                      date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '',
+                                      entryType: (entry.entry_type || 'credit') as 'credit' | 'debit',
+                                    });
+                                  }}
+                                  className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Edit entry"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingEntryId(entry.id)}
+                                  className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Remove entry"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -833,22 +914,23 @@ export default function PersonalLedger() {
                           <div className="space-y-1">
                             <div className="text-sm">
                               <span className="text-gray-600">Credit: </span>
-                              <span className="font-bold text-green-700">+₹{totalCredit.toFixed(2)}</span>
+                              <span className="font-bold text-green-700">+₹{formatAmountINR(totalCredit)}</span>
                             </div>
                             <div className="text-sm">
                               <span className="text-gray-600">Debit: </span>
-                              <span className="font-bold text-red-700">-₹{totalDebit.toFixed(2)}</span>
+                              <span className="font-bold text-red-700">-₹{formatAmountINR(totalDebit)}</span>
                             </div>
                             <div className="text-sm pt-1 border-t border-gray-300">
                               <span className="text-gray-700">Net: </span>
                               <span className={`font-bold ${
                                 (totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
                               }`}>
-                                {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                                {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatAmountINR(totalCredit - totalDebit)}
                               </span>
                             </div>
                           </div>
                         </td>
+                        {isAdmin && <td className="px-6 py-4"></td>}
                       </tr>
                     </tfoot>
                     </table>
@@ -865,11 +947,11 @@ export default function PersonalLedger() {
                 <div className="flex items-center gap-4">
                   <div>
                     <span className="text-gray-500">Total Credit: </span>
-                    <span className="font-semibold text-green-700">₹{totalCredit.toFixed(2)}</span>
+                    <span className="font-semibold text-green-700">₹{formatAmountINR(totalCredit)}</span>
                   </div>
                   <div>
                     <span className="text-gray-500">Total Debit: </span>
-                    <span className="font-semibold text-red-700">₹{totalDebit.toFixed(2)}</span>
+                    <span className="font-semibold text-red-700">₹{formatAmountINR(totalDebit)}</span>
                   </div>
                 </div>
               </div>
@@ -942,7 +1024,7 @@ export default function PersonalLedger() {
                     </div>
                   )}
 
-                  {/* Amount and Invoice */}
+                  {/* Amount and Actions */}
                   <div className="flex items-center justify-between pt-3 border-t border-gray-200">
                     <div className={`text-lg font-bold ${
                       entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
@@ -952,9 +1034,37 @@ export default function PersonalLedger() {
                           ? 'bg-green-50 border border-green-200' 
                           : 'bg-red-50 border border-red-200'
                       }`}>
-                        {entry.entry_type === 'credit' ? '+' : '-'}₹{parseFloat(entry.amount || 0).toFixed(2)}
+                        {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
                       </span>
                     </div>
+                    {isAdmin && (
+                      <div className="flex gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingEntry(entry);
+                            setEditEntryData({
+                              amount: String(entry.amount || ''),
+                              description: entry.description || '',
+                              date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '',
+                              entryType: (entry.entry_type || 'credit') as 'credit' | 'debit',
+                            });
+                          }}
+                          className="p-2 text-gray-500 hover:text-blue-600 rounded"
+                          title="Edit"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeletingEntryId(entry.id)}
+                          className="p-2 text-gray-500 hover:text-red-600 rounded"
+                          title="Remove"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -964,18 +1074,18 @@ export default function PersonalLedger() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Total Credit:</span>
-                    <span className="font-semibold text-green-700">₹{totalCredit.toFixed(2)}</span>
+                    <span className="font-semibold text-green-700">₹{formatAmountINR(totalCredit)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">Total Debit:</span>
-                    <span className="font-semibold text-red-700">₹{totalDebit.toFixed(2)}</span>
+                    <span className="font-semibold text-red-700">₹{formatAmountINR(totalDebit)}</span>
                   </div>
                   <div className="pt-2 border-t border-gray-300 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Net:</span>
                     <span className={`text-sm font-bold ${
                       (totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
                     }`}>
-                      {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{(totalCredit - totalDebit).toFixed(2)}
+                      {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatAmountINR(totalCredit - totalDebit)}
                     </span>
                   </div>
                 </div>
@@ -1000,6 +1110,73 @@ export default function PersonalLedger() {
           </div>
         )}
       </div>
+
+      {/* Edit Entry Modal (Admin only) */}
+      <Modal
+        isOpen={!!editingEntry}
+        onClose={() => {
+          setEditingEntry(null);
+          setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' });
+        }}
+        title="Edit Personal Ledger Entry"
+      >
+        {editingEntry && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!editEntryData.amount || parseFloat(editEntryData.amount) <= 0) {
+                toast('Please enter a valid amount', 'error');
+                return;
+              }
+              updateEntryMutation.mutate({
+                id: editingEntry.id,
+                data: {
+                  entry_type: editEntryData.entryType,
+                  amount: parseFloat(editEntryData.amount),
+                  description: (editEntryData.description || '').trim(),
+                  created_at: editEntryData.date ? new Date(editEntryData.date).toISOString() : undefined,
+                },
+              });
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
+              <Input type="date" value={editEntryData.date} onChange={(e) => setEditEntryData({ ...editEntryData, date: e.target.value })} required />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Entry Type</label>
+              <Select value={editEntryData.entryType} onChange={(e) => setEditEntryData({ ...editEntryData, entryType: e.target.value as 'credit' | 'debit' })}>
+                <option value="credit">Credit</option>
+                <option value="debit">Debit</option>
+              </Select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Amount</label>
+              <Input type="number" step="0.01" value={editEntryData.amount} onChange={(e) => setEditEntryData({ ...editEntryData, amount: e.target.value })} required />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+              <textarea className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows={3} value={editEntryData.description} onChange={(e) => setEditEntryData({ ...editEntryData, description: e.target.value })} />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={() => { setEditingEntry(null); setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' }); }}>Cancel</Button>
+              <Button type="submit" disabled={updateEntryMutation.isPending}>{updateEntryMutation.isPending ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Delete Entry Confirmation (Admin only) */}
+      <Modal isOpen={deletingEntryId !== null} onClose={() => setDeletingEntryId(null)} title="Remove entry?">
+        <p className="text-gray-600 mb-4">This will remove the entry and adjust the balance. This cannot be undone.</p>
+        <div className="flex gap-2 justify-end">
+          <Button variant="outline" onClick={() => setDeletingEntryId(null)}>Cancel</Button>
+          <Button className="bg-red-600 hover:bg-red-700" disabled={deleteEntryMutation.isPending} onClick={() => deletingEntryId !== null && deleteEntryMutation.mutate(deletingEntryId)}>
+            {deleteEntryMutation.isPending ? 'Removing...' : 'Remove'}
+          </Button>
+        </div>
+      </Modal>
 
       {/* Entry Form Modal */}
       <Modal
@@ -1330,7 +1507,7 @@ export default function PersonalLedger() {
                             </div>
                             <div className="text-right flex-shrink-0 ml-4">
                               <div className="text-sm font-semibold text-gray-700">
-                                ₹{parseFloat(customer.credit_balance || 0).toFixed(2)}
+                                ₹{formatAmountINR(customer.credit_balance || 0)}
                               </div>
                               <div className="text-xs text-gray-500">Balance</div>
                             </div>

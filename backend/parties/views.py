@@ -328,6 +328,55 @@ def ledger_entry_list_create(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _reverse_ledger_entry_balance(entry):
+    """Reverse the effect of a ledger entry on customer credit_balance."""
+    if entry.customer:
+        if entry.entry_type == 'credit':
+            entry.customer.credit_balance -= entry.amount
+        elif entry.entry_type == 'debit':
+            entry.customer.credit_balance += entry.amount
+        entry.customer.save()
+
+
+def _apply_ledger_entry_balance(entry):
+    """Apply the effect of a ledger entry on customer credit_balance."""
+    if entry.customer:
+        if entry.entry_type == 'credit':
+            entry.customer.credit_balance += entry.amount
+        elif entry.entry_type == 'debit':
+            entry.customer.credit_balance -= entry.amount
+        entry.customer.save()
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def ledger_entry_retrieve_update_destroy(request, entry_id):
+    """Retrieve, update or delete a ledger entry (Admin only)."""
+    if not is_admin_user(request.user):
+        return Response({'error': 'Only Admin users can edit/delete ledger entries'}, status=status.HTTP_403_FORBIDDEN)
+    entry = get_object_or_404(LedgerEntry, pk=entry_id)
+    if request.method == 'GET':
+        serializer = LedgerEntrySerializer(entry)
+        return Response(serializer.data)
+    if request.method == 'PATCH':
+        # Reverse old balance, update, then apply new balance
+        _reverse_ledger_entry_balance(entry)
+        partial_data = request.data
+        allowed = {'entry_type', 'amount', 'description', 'created_at'}
+        update_data = {k: v for k, v in partial_data.items() if k in allowed}
+        serializer = LedgerEntrySerializer(entry, data=update_data, partial=True)
+        if serializer.is_valid():
+            entry = serializer.save()
+            _apply_ledger_entry_balance(entry)
+            return Response(LedgerEntrySerializer(entry).data)
+        _apply_ledger_entry_balance(entry)  # Restore on validation error
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    if request.method == 'DELETE':
+        _reverse_ledger_entry_balance(entry)
+        entry.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def ledger_summary(request):
@@ -547,6 +596,34 @@ def personal_ledger_entry_list_create(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def personal_ledger_entry_retrieve_update_destroy(request, entry_id):
+    """Retrieve, update or delete a personal ledger entry (Admin only)."""
+    if not is_admin_user(request.user):
+        return Response({'error': 'Only Admin users can edit/delete personal ledger entries'}, status=status.HTTP_403_FORBIDDEN)
+    entry = get_object_or_404(PersonalLedgerEntry, pk=entry_id)
+    if request.method == 'GET':
+        serializer = PersonalLedgerEntrySerializer(entry)
+        return Response(serializer.data)
+    if request.method == 'PATCH':
+        _reverse_ledger_entry_balance(entry)
+        partial_data = request.data
+        allowed = {'entry_type', 'amount', 'description', 'created_at'}
+        update_data = {k: v for k, v in partial_data.items() if k in allowed}
+        serializer = PersonalLedgerEntrySerializer(entry, data=update_data, partial=True)
+        if serializer.is_valid():
+            entry = serializer.save()
+            _apply_ledger_entry_balance(entry)
+            return Response(PersonalLedgerEntrySerializer(entry).data)
+        _apply_ledger_entry_balance(entry)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    if request.method == 'DELETE':
+        _reverse_ledger_entry_balance(entry)
+        entry.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_summary(request):
@@ -738,6 +815,34 @@ def internal_ledger_entry_list_create(request):
             
             return Response(InternalLedgerEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
+    """Retrieve, update or delete an internal ledger entry (Admin only)."""
+    if not is_admin_user(request.user):
+        return Response({'error': 'Only Admin users can edit/delete internal ledger entries'}, status=status.HTTP_403_FORBIDDEN)
+    entry = get_object_or_404(InternalLedgerEntry, pk=entry_id)
+    if request.method == 'GET':
+        serializer = InternalLedgerEntrySerializer(entry)
+        return Response(serializer.data)
+    if request.method == 'PATCH':
+        _reverse_ledger_entry_balance(entry)
+        partial_data = request.data
+        allowed = {'entry_type', 'amount', 'description', 'created_at'}
+        update_data = {k: v for k, v in partial_data.items() if k in allowed}
+        serializer = InternalLedgerEntrySerializer(entry, data=update_data, partial=True)
+        if serializer.is_valid():
+            entry = serializer.save()
+            _apply_ledger_entry_balance(entry)
+            return Response(InternalLedgerEntrySerializer(entry).data)
+        _apply_ledger_entry_balance(entry)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    if request.method == 'DELETE':
+        _reverse_ledger_entry_balance(entry)
+        entry.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(['GET'])
