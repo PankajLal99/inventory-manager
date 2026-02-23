@@ -13,7 +13,7 @@ import {
   Store,
   ChevronDown,
 } from 'lucide-react';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, toLocalDateString } from '../../lib/utils';
 
 export default function Reports() {
   const [user, setUser] = useState(auth.getUser());
@@ -82,11 +82,9 @@ export default function Reports() {
   const [dateFrom, setDateFrom] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
-    return date.toISOString().split('T')[0];
+    return toLocalDateString(date);
   });
-  const [dateTo, setDateTo] = useState(() => {
-    return new Date().toISOString().split('T')[0];
-  });
+  const [dateTo, setDateTo] = useState(() => toLocalDateString(new Date()));
   const [year, setYear] = useState(new Date().getFullYear());
   const [activeDateFilter, setActiveDateFilter] = useState<string>('custom');
   const [showStockReports, setShowStockReports] = useState(false);
@@ -166,7 +164,7 @@ export default function Reports() {
   const setDateFilter = (filter: string) => {
     setActiveDateFilter(filter);
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = toLocalDateString(today);
 
     switch (filter) {
       case 'today':
@@ -176,26 +174,26 @@ export default function Reports() {
       case 'yesterday':
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        const yesterdayStr = toLocalDateString(yesterday);
         setDateFrom(yesterdayStr);
         setDateTo(yesterdayStr);
         break;
       case 'last_week':
         const lastWeek = new Date(today);
         lastWeek.setDate(lastWeek.getDate() - 7);
-        setDateFrom(lastWeek.toISOString().split('T')[0]);
+        setDateFrom(toLocalDateString(lastWeek));
         setDateTo(todayStr);
         break;
       case 'last_month':
         const lastMonth = new Date(today);
         lastMonth.setMonth(lastMonth.getMonth() - 1);
-        setDateFrom(lastMonth.toISOString().split('T')[0]);
+        setDateFrom(toLocalDateString(lastMonth));
         setDateTo(todayStr);
         break;
       case 'last_year':
         const lastYear = new Date(today);
         lastYear.setFullYear(lastYear.getFullYear() - 1);
-        setDateFrom(lastYear.toISOString().split('T')[0]);
+        setDateFrom(toLocalDateString(lastYear));
         setDateTo(todayStr);
         break;
       case 'financial_year':
@@ -203,7 +201,7 @@ export default function Reports() {
         const fyStart = currentMonth >= 3
           ? new Date(today.getFullYear(), 3, 1) // April 1
           : new Date(today.getFullYear() - 1, 3, 1);
-        setDateFrom(fyStart.toISOString().split('T')[0]);
+        setDateFrom(toLocalDateString(fyStart));
         setDateTo(todayStr);
         break;
       default:

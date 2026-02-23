@@ -1,19 +1,20 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatAmountINR, canEditLedgerEntry } from '../../lib/utils';
+import { formatAmountINR, canEditLedgerEntry, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import DatePicker from '../../components/ui/DatePicker';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
 import {
   Plus, Minus, FileText, Users, TrendingUp, TrendingDown,
   FileSpreadsheet, FileText as FileTextIcon, Printer,
-  Filter, X, Calendar, Search, ArrowUpDown, ArrowUp, ArrowDown,
-  ExternalLink, Clock, Store, ChevronDown, UserPlus, Receipt, Pencil, Trash2
+  Filter, X, Calendar, Search,
+  ExternalLink, Clock, Store, ChevronDown, ChevronRight, UserPlus, Receipt, Pencil, Trash2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -24,7 +25,7 @@ export default function Ledger() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
-  const [entryData, setEntryData] = useState({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+  const [entryData, setEntryData] = useState({ amount: '', description: '', date: toLocalDateString(new Date()) });
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
   const [user, setUser] = useState<any>(null);
@@ -47,7 +48,11 @@ export default function Ledger() {
   });
   const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(true); // Default enabled
   const [showFilters, setShowFilters] = useState(false);
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const [sortConfig, _setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const [customerFilterOpen, setCustomerFilterOpen] = useState(false);
+  const [customerFilterSearch, setCustomerFilterSearch] = useState('');
+  const customerFilterRef = useRef<HTMLDivElement>(null);
+  const [expandedCustomers, setExpandedCustomers] = useState<Set<number>>(new Set());
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
@@ -109,6 +114,17 @@ export default function Ledger() {
       }
     }
   }, [isAdmin, selectedStoreId, stores]);
+
+  // Close customer filter dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (customerFilterRef.current && !customerFilterRef.current.contains(e.target as Node)) {
+        setCustomerFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Get current selected store for display
   const currentStore = stores.find((s: any) => s.id === selectedStoreId);
@@ -187,7 +203,7 @@ export default function Ledger() {
       queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
       setShowEntryForm(false);
       setSelectedCustomer(null);
-      setEntryData({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+      setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
       toast('Ledger entry created successfully', 'success');
     },
     onError: (error: any) => {
@@ -260,7 +276,7 @@ export default function Ledger() {
       entry_type: entryType,
       amount: parseFloat(entryData.amount),
       description: (entryData.description || '').trim(),
-      created_at: entryData.date ? new Date(entryData.date).toISOString() : undefined,
+      created_at: entryData.date ? dateStringWithCurrentTimeISO(entryData.date) : undefined,
     });
   };
 
@@ -323,30 +339,14 @@ export default function Ledger() {
         if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
       });
+    } else {
+      sorted.sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
     }
 
     return sorted;
   }, [entries, sortConfig]);
-
-  const handleSort = (key: string) => {
-    setSortConfig(prev => {
-      if (prev?.key === key) {
-        return prev.direction === 'asc'
-          ? { key, direction: 'desc' }
-          : null;
-      }
-      return { key, direction: 'asc' };
-    });
-  };
-
-  const getSortIcon = (key: string) => {
-    if (sortConfig?.key !== key) {
-      return <ArrowUpDown className="h-3 w-3 ml-1 text-gray-400" />;
-    }
-    return sortConfig.direction === 'asc'
-      ? <ArrowUp className="h-3 w-3 ml-1 text-blue-600" />
-      : <ArrowDown className="h-3 w-3 ml-1 text-blue-600" />;
-  };
 
   const totalCredit = useMemo(() => {
     return filteredEntries
@@ -359,6 +359,50 @@ export default function Ledger() {
       .filter((e: any) => e.entry_type === 'debit')
       .reduce((sum: number, e: any) => sum + parseFloat(e.amount || 0), 0);
   }, [filteredEntries]);
+
+  // Group entries by customer
+  const groupedByCustomer = useMemo(() => {
+    const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string } } = {};
+    filteredEntries.forEach((entry: any) => {
+      const customerId = entry.customer ? `customer-${entry.customer}` : 'anonymous';
+      const customerName = entry.customer_name || 'Anonymous';
+      if (!grouped[customerId]) {
+        grouped[customerId] = {
+          customer: { id: entry.customer || null, name: customerName },
+          entries: [],
+          totalCredit: 0,
+          totalDebit: 0,
+          netAmount: 0,
+          latestDescription: '',
+        };
+      }
+      grouped[customerId].entries.push(entry);
+      if (entry.entry_type === 'credit') {
+        grouped[customerId].totalCredit += parseFloat(entry.amount || 0);
+      } else {
+        grouped[customerId].totalDebit += parseFloat(entry.amount || 0);
+      }
+    });
+    Object.keys(grouped).forEach(key => {
+      grouped[key].netAmount = grouped[key].totalCredit - grouped[key].totalDebit;
+      const byDate = [...grouped[key].entries].sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      grouped[key].latestDescription = byDate[0]?.description || '';
+      grouped[key].entries = byDate;
+    });
+    return grouped;
+  }, [filteredEntries]);
+
+  const toggleCustomerExpansion = (customerId: number | null) => {
+    if (customerId === null) return;
+    setExpandedCustomers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(customerId)) newSet.delete(customerId);
+      else newSet.add(customerId);
+      return newSet;
+    });
+  };
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({
@@ -681,10 +725,9 @@ export default function Ledger() {
                   <Calendar className="h-4 w-4 inline mr-1" />
                   Date From
                 </label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={filters.dateFrom}
-                  onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
+                  onChange={(date) => setFilters({ ...filters, dateFrom: date })}
                 />
               </div>
               <div>
@@ -692,10 +735,9 @@ export default function Ledger() {
                   <Calendar className="h-4 w-4 inline mr-1" />
                   Date To
                 </label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={filters.dateTo}
-                  onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
+                  onChange={(date) => setFilters({ ...filters, dateTo: date })}
                 />
               </div>
               <div>
@@ -709,19 +751,81 @@ export default function Ledger() {
                   <option value="debit">Debit</option>
                 </Select>
               </div>
-              <div>
-                <Select
-                  label="Customer"
-                  value={filters.customer}
-                  onChange={(e) => setFilters({ ...filters, customer: e.target.value })}
+              <div ref={customerFilterRef} className="relative">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Customer
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomerFilterOpen((o) => !o);
+                    if (!customerFilterOpen) setCustomerFilterSearch('');
+                  }}
+                  className="block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm bg-white text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors flex items-center justify-between"
                 >
-                  <option value="">All Customers</option>
-                  {allCustomersList.map((customer: any) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.name} {customer.phone ? `(${customer.phone})` : ''}
-                    </option>
-                  ))}
-                </Select>
+                  <span className="truncate">
+                    {filters.customer
+                      ? (() => {
+                          const c = allCustomersList.find((x: any) => String(x.id) === filters.customer);
+                          return c ? `${c.name}${c.phone ? ` (${c.phone})` : ''}` : 'All Customers';
+                        })()
+                      : 'All Customers'}
+                  </span>
+                  <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0 ml-2" />
+                </button>
+                {customerFilterOpen && (
+                  <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg max-h-72 flex flex-col">
+                    <div className="p-2 border-b border-gray-100 sticky top-0 bg-white">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="Type to search customer..."
+                          value={customerFilterSearch}
+                          onChange={(e) => setCustomerFilterSearch(e.target.value)}
+                          className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+                    <ul className="overflow-auto py-1 max-h-56">
+                      <li>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFilters({ ...filters, customer: '' });
+                            setCustomerFilterOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${!filters.customer ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                        >
+                          All Customers
+                        </button>
+                      </li>
+                      {allCustomersList
+                        .filter((customer: any) => {
+                          const q = customerFilterSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          const name = (customer.name || '').toLowerCase();
+                          const phone = (customer.phone || '').toLowerCase();
+                          return name.includes(q) || phone.includes(q);
+                        })
+                        .map((customer: any) => (
+                          <li key={customer.id}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFilters({ ...filters, customer: String(customer.id) });
+                                setCustomerFilterOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${filters.customer === String(customer.id) ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                            >
+                              {customer.name} {customer.phone ? `(${customer.phone})` : ''}
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
               </div>
               <div>
                 <Select
@@ -780,7 +884,7 @@ export default function Ledger() {
           </div>
         ) : filteredEntries && filteredEntries.length > 0 ? (
           <>
-            {/* Desktop Table View */}
+            {/* Desktop Table View - Grouped by Customer */}
             <div className="mt-6 hidden md:block">
               <div className="overflow-x-auto rounded-lg border border-gray-200">
                 <div className="inline-block min-w-full align-middle">
@@ -788,49 +892,29 @@ export default function Ledger() {
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gradient-to-r from-gray-50 to-gray-100 sticky top-0 z-10">
                         <tr>
-                          <th
-                            className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                            onClick={() => handleSort('date')}
-                          >
-                            <div className="flex items-center">
-                              <Clock className="h-4 w-4 mr-2 text-gray-500" />
-                              Date
-                              {getSortIcon('date')}
-                            </div>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Customer
                           </th>
-                          <th
-                            className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                            onClick={() => handleSort('customer')}
-                          >
-                            <div className="flex items-center">
-                              <Users className="h-4 w-4 mr-2 text-gray-500" />
-                              Customer
-                              {getSortIcon('customer')}
-                            </div>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Entries
+                          </th>
+                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Net Amount
+                          </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Date
                           </th>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Group
                           </th>
-                          <th
-                            className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                            onClick={() => handleSort('type')}
-                          >
-                            <div className="flex items-center">
-                              Type
-                              {getSortIcon('type')}
-                            </div>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Type
                           </th>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Description
                           </th>
-                          <th
-                            className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors group"
-                            onClick={() => handleSort('amount')}
-                          >
-                            <div className="flex items-center justify-end">
-                              Amount
-                              {getSortIcon('amount')}
-                            </div>
+                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Amount
                           </th>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Invoice
@@ -843,150 +927,137 @@ export default function Ledger() {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {filteredEntries.map((entry: any, index: number) => (
-                          <tr
-                            key={entry.id}
-                            className={`transition-all duration-150 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
-                              } hover:bg-blue-50 hover:shadow-sm`}
-                          >
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="flex flex-col">
-                                <span className="text-sm font-medium text-gray-900">
-                                  {new Date(entry.created_at).toLocaleDateString('en-IN', {
-                                    year: 'numeric',
-                                    month: 'short',
-                                    day: 'numeric'
-                                  })}
-                                </span>
-                                <span className="text-xs text-gray-500">
-                                  {new Date(entry.created_at).toLocaleTimeString('en-IN', {
-                                    hour: '2-digit',
-                                    minute: '2-digit'
-                                  })}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <button
-                                onClick={() => navigate(`/ledger/${entry.customer}`)}
-                                className="group flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                        {Object.values(groupedByCustomer).map((group: any) => {
+                          const isExpanded = group.customer.id !== null && expandedCustomers.has(group.customer.id);
+                          const canExpand = group.customer.id !== null;
+                          return (
+                            <>
+                              <tr
+                                key={`customer-${group.customer.id || 'anonymous'}`}
+                                className="bg-blue-50 hover:bg-blue-100 transition-colors"
+                                style={{ cursor: canExpand ? 'pointer' : 'default' }}
+                                onClick={() => canExpand && toggleCustomerExpansion(group.customer.id)}
                               >
-                                {entry.customer_name || 'Anonymous'}
-                                <ExternalLink className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-                              </button>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className="text-sm text-gray-600">
-                                {entry.customer_group_name || '-'}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
-                                ? 'bg-green-100 text-green-800 border border-green-200'
-                                : 'bg-red-100 text-red-800 border border-red-200'
-                                }`}>
-                                {entry.entry_type === 'credit' ? (
-                                  <TrendingUp className="h-3 w-3 mr-1" />
-                                ) : (
-                                  <TrendingDown className="h-3 w-3 mr-1" />
-                                )}
-                                {entry.entry_type.toUpperCase()}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
-                                {entry.description || <span className="text-gray-400 italic">No description</span>}
-                              </div>
-                            </td>
-                            <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                              }`}>
-                              <div className="flex items-center justify-end">
-                                <span className={`inline-flex items-center px-2 py-1 rounded ${entry.entry_type === 'credit'
-                                  ? 'bg-green-50 border border-green-200'
-                                  : 'bg-red-50 border border-red-200'
-                                  }`}>
-                                  {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              {entry.invoice_number && entry.invoice ? (
-                                <button
-                                  onClick={() => navigate(`/invoices/${entry.invoice}/edit`)}
-                                  className="group inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline transition-colors"
-                                  title="Edit invoice"
-                                >
-                                  <FileText className="h-3 w-3 mr-1" />
-                                  {entry.invoice_number}
-                                  <ExternalLink className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                </button>
-                              ) : entry.invoice_number ? (
-                                <span className="text-sm font-medium text-gray-700">{entry.invoice_number}</span>
-                              ) : (
-                                <span className="text-gray-400 text-sm">-</span>
-                              )}
-                            </td>
-                            {isAdmin && (
-                              <td className="px-6 py-4 whitespace-nowrap text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  {canEditLedgerEntry(entry) && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setEditingEntry(entry);
-                                        setEditEntryData({
-                                          amount: String(entry.amount || ''),
-                                          description: entry.description || '',
-                                          date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '',
-                                          entryType: entry.entry_type || 'credit',
-                                        });
-                                      }}
-                                      className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                      title="Edit entry"
-                                    >
-                                      <Pencil className="h-4 w-4" />
-                                    </button>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <div className="flex items-center gap-2">
+                                    {canExpand ? (isExpanded ? <ChevronDown className="h-4 w-4 text-gray-600" /> : <ChevronRight className="h-4 w-4 text-gray-600" />) : <div className="w-4 h-4" />}
+                                    <Users className="h-4 w-4 text-blue-600" />
+                                    {canExpand ? (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); navigate(`/ledger/${group.customer.id}`); }}
+                                        className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                                      >
+                                        {group.customer.name}
+                                      </button>
+                                    ) : (
+                                      <span className="text-sm font-semibold text-gray-700">{group.customer.name}</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                  <span className="text-sm text-gray-600">
+                                    {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
+                                  </span>
+                                </td>
+                                <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                  <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                                    {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4" />
+                                <td className="px-6 py-4" />
+                                <td className="px-6 py-4" />
+                                <td className="px-6 py-4">
+                                  <div className="text-sm text-gray-700 max-w-xs truncate" title={group.latestDescription || '-'}>
+                                    {group.latestDescription || <span className="text-gray-400 italic">—</span>}
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4" />
+                                <td className="px-6 py-4" />
+                                {isAdmin && <td className="px-6 py-4" />}
+                              </tr>
+                              {isExpanded && group.entries.map((entry: any) => (
+                                <tr key={entry.id} className="bg-gray-50/30 hover:bg-gray-100 transition-colors">
+                                  <td className="px-6 py-3" />
+                                  <td className="px-6 py-3" />
+                                  <td className="px-6 py-3" />
+                                  <td className="px-6 py-3 whitespace-nowrap pl-4">
+                                    <div className="flex flex-col">
+                                      <span className="text-sm font-medium text-gray-900">
+                                        {new Date(entry.created_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}
+                                      </span>
+                                      <span className="text-xs text-gray-500">
+                                        {new Date(entry.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap">
+                                    <span className="text-sm text-gray-600">{entry.customer_group_name || '-'}</span>
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap">
+                                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${entry.entry_type === 'credit' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                                      {entry.entry_type === 'credit' ? <TrendingUp className="h-3 w-3 mr-1" /> : <TrendingDown className="h-3 w-3 mr-1" />}
+                                      {entry.entry_type.toUpperCase()}
+                                    </span>
+                                  </td>
+                                  <td className="px-6 py-3">
+                                    <div className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
+                                      {entry.description || <span className="text-gray-400 italic">No description</span>}
+                                    </div>
+                                  </td>
+                                  <td className={`px-6 py-3 whitespace-nowrap text-right text-sm font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'}`}>
+                                    <span className={`inline-flex items-center px-2 py-1 rounded ${entry.entry_type === 'credit' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                                      {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
+                                    </span>
+                                  </td>
+                                  <td className="px-6 py-3 whitespace-nowrap">
+                                    {entry.invoice_number && entry.invoice ? (
+                                      <button onClick={() => navigate(`/invoices/${entry.invoice}/edit`)} className="group inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline" title="Edit invoice">
+                                        <FileText className="h-3 w-3 mr-1" />
+                                        {entry.invoice_number}
+                                        <ExternalLink className="h-3 w-3 ml-1 opacity-0 group-hover:opacity-100" />
+                                      </button>
+                                    ) : entry.invoice_number ? (
+                                      <span className="text-sm font-medium text-gray-700">{entry.invoice_number}</span>
+                                    ) : (
+                                      <span className="text-gray-400 text-sm">-</span>
+                                    )}
+                                  </td>
+                                  {isAdmin && (
+                                    <td className="px-6 py-3 whitespace-nowrap text-right">
+                                      <div className="flex items-center justify-end gap-1">
+                                        {canEditLedgerEntry(entry) && (
+                                          <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: entry.entry_type || 'credit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
+                                        )}
+                                        <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
+                                      </div>
+                                    </td>
                                   )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setDeletingEntryId(entry.id)}
-                                    className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                    title="Remove entry"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                  </button>
-                                </div>
-                              </td>
-                            )}
-                          </tr>
-                        ))}
+                                </tr>
+                              ))}
+                            </>
+                          );
+                        })}
                       </tbody>
                       <tfoot className="bg-gray-50 border-t-2 border-gray-300">
                         <tr>
-                          <td colSpan={5} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
+                          <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
                             Totals:
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <div className="space-y-1">
-                              <div className="text-sm">
-                                <span className="text-gray-600">Credit: </span>
-                                <span className="font-bold text-green-700">+₹{formatAmountINR(totalCredit)}</span>
-                              </div>
-                              <div className="text-sm">
-                                <span className="text-gray-600">Debit: </span>
-                                <span className="font-bold text-red-700">-₹{formatAmountINR(totalDebit)}</span>
-                              </div>
+                              <div className="text-sm"><span className="text-gray-600">Credit: </span><span className="font-bold text-green-700">+₹{formatAmountINR(totalCredit)}</span></div>
+                              <div className="text-sm"><span className="text-gray-600">Debit: </span><span className="font-bold text-red-700">-₹{formatAmountINR(totalDebit)}</span></div>
                               <div className="text-sm pt-1 border-t border-gray-300">
                                 <span className="text-gray-700">Net: </span>
-                                <span className={`font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
-                                  }`}>
+                                <span className={`font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                                   {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatAmountINR(totalCredit - totalDebit)}
                                 </span>
                               </div>
                             </div>
                           </td>
-                          <td className="px-6 py-4"></td>
-                          {isAdmin && <td className="px-6 py-4"></td>}
+                          <td colSpan={7} className="px-6 py-4" />
+                          {isAdmin && <td className="px-6 py-4" />}
                         </tr>
                       </tfoot>
                     </table>
@@ -995,7 +1066,7 @@ export default function Ledger() {
               </div>
               <div className="mt-4 flex items-center justify-between text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
                 <div>
-                  Showing <strong className="text-gray-900">{filteredEntries.length}</strong> entries
+                  Showing <strong className="text-gray-900">{Object.keys(groupedByCustomer).length}</strong> customers with <strong className="text-gray-900">{filteredEntries.length}</strong> entries
                   {hasActiveFilters && (
                     <span className="ml-2 text-xs text-blue-600">(filtered)</span>
                   )}
@@ -1013,133 +1084,98 @@ export default function Ledger() {
               </div>
             </div>
 
-            {/* Mobile Card View */}
+            {/* Mobile Card View - Grouped by Customer */}
             <div className="mt-6 md:hidden space-y-3">
-              {filteredEntries.map((entry: any) => (
-                <div
-                  key={entry.id}
-                  className="bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow p-4"
-                >
-                  {/* Header: Date and Type Badge */}
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Clock className="h-4 w-4 text-gray-400" />
-                        <span className="text-sm font-medium text-gray-900">
-                          {new Date(entry.created_at).toLocaleDateString('en-IN', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric'
-                          })}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          {new Date(entry.created_at).toLocaleTimeString('en-IN', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </span>
+              {Object.values(groupedByCustomer).map((group: any) => {
+                const isExpanded = group.customer.id !== null && expandedCustomers.has(group.customer.id);
+                const canExpand = group.customer.id !== null;
+                return (
+                  <div key={`customer-${group.customer.id || 'anonymous'}`} className="space-y-2">
+                    <div
+                      className="bg-blue-50 border border-blue-200 rounded-lg shadow-sm hover:shadow-md transition-shadow p-4"
+                      style={{ cursor: canExpand ? 'pointer' : 'default' }}
+                      onClick={() => canExpand && toggleCustomerExpansion(group.customer.id)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-1">
+                          {canExpand ? (isExpanded ? <ChevronDown className="h-5 w-5 text-gray-600" /> : <ChevronRight className="h-5 w-5 text-gray-600" />) : <div className="w-5 h-5" />}
+                          <Users className="h-5 w-5 text-blue-600" />
+                          <div className="flex-1">
+                            {canExpand ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); navigate(`/ledger/${group.customer.id}`); }}
+                                className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                              >
+                                {group.customer.name}
+                              </button>
+                            ) : (
+                              <span className="text-base font-semibold text-gray-700">{group.customer.name}</span>
+                            )}
+                            <p className="text-xs text-gray-600 mt-0.5">
+                              {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
+                            </p>
+                            {group.latestDescription ? (
+                              <p className="text-xs text-gray-600 mt-1 truncate max-w-[200px]" title={group.latestDescription}>
+                                {group.latestDescription}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className={`text-lg font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                          <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                            {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
-                      ? 'bg-green-100 text-green-800 border border-green-200'
-                      : 'bg-red-100 text-red-800 border border-red-200'
-                      }`}>
-                      {entry.entry_type === 'credit' ? (
-                        <TrendingUp className="h-3 w-3 mr-1" />
-                      ) : (
-                        <TrendingDown className="h-3 w-3 mr-1" />
-                      )}
-                      {entry.entry_type.toUpperCase()}
-                    </span>
+                    {isExpanded && group.entries.map((entry: any) => (
+                      <div key={entry.id} className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 ml-6">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Clock className="h-4 w-4 text-gray-400" />
+                              <span className="text-sm font-medium text-gray-900">
+                                {new Date(entry.created_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {new Date(entry.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          </div>
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${entry.entry_type === 'credit' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                            {entry.entry_type === 'credit' ? <TrendingUp className="h-3 w-3 mr-1" /> : <TrendingDown className="h-3 w-3 mr-1" />}
+                            {entry.entry_type.toUpperCase()}
+                          </span>
+                        </div>
+                        {entry.customer_group_name && <p className="text-xs text-gray-500 mb-1">Group: {entry.customer_group_name}</p>}
+                        {entry.description && <p className="text-sm text-gray-700 break-words mb-2">{entry.description}</p>}
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                          <div className={`text-base font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'}`}>
+                            <span className={`inline-flex items-center px-2.5 py-1 rounded ${entry.entry_type === 'credit' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                              {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {entry.invoice_number && entry.invoice ? (
+                              <button onClick={() => navigate(`/invoices/${entry.invoice}/edit`)} className="flex items-center text-xs font-medium text-blue-600 hover:text-blue-800" title="Edit invoice">
+                                <FileText className="h-3 w-3 mr-1" />{entry.invoice_number}<ExternalLink className="h-3 w-3 ml-1" />
+                              </button>
+                            ) : entry.invoice_number ? <span className="text-xs font-medium text-gray-700">{entry.invoice_number}</span> : null}
+                            {isAdmin && (
+                              <>
+                                {canEditLedgerEntry(entry) && (
+                                  <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: entry.entry_type || 'credit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
+                                )}
+                                <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-
-                  {/* Customer and Group */}
-                  <div className="mb-3">
-                    <button
-                      onClick={() => navigate(`/ledger/${entry.customer}`)}
-                      className="flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 mb-1"
-                    >
-                      <Users className="h-3.5 w-3.5 mr-1.5" />
-                      {entry.customer_name || 'Anonymous'}
-                      <ExternalLink className="h-3 w-3 ml-1.5" />
-                    </button>
-                    {entry.customer_group_name && (
-                      <p className="text-xs text-gray-500 ml-5">
-                        Group: {entry.customer_group_name}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Description */}
-                  {entry.description && (
-                    <div className="mb-3">
-                      <p className="text-sm text-gray-700 break-words">
-                        {entry.description}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Amount, Invoice and Actions */}
-                  <div className="flex items-center justify-between pt-3 border-t border-gray-200">
-                    <div className={`text-lg font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                      }`}>
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded ${entry.entry_type === 'credit'
-                        ? 'bg-green-50 border border-green-200'
-                        : 'bg-red-50 border border-red-200'
-                        }`}>
-                        {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {entry.invoice_number && entry.invoice ? (
-                        <button
-                          onClick={() => navigate(`/invoices/${entry.invoice}/edit`)}
-                          className="flex items-center text-xs font-medium text-blue-600 hover:text-blue-800"
-                          title="Edit invoice"
-                        >
-                          <FileText className="h-3 w-3 mr-1" />
-                          {entry.invoice_number}
-                          <ExternalLink className="h-3 w-3 ml-1" />
-                        </button>
-                      ) : entry.invoice_number ? (
-                        <span className="text-xs font-medium text-gray-700">{entry.invoice_number}</span>
-                      ) : null}
-                      {isAdmin && (
-                        <>
-                          {canEditLedgerEntry(entry) && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingEntry(entry);
-                                setEditEntryData({
-                                  amount: String(entry.amount || ''),
-                                  description: entry.description || '',
-                                  date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '',
-                                  entryType: entry.entry_type || 'credit',
-                                });
-                              }}
-                              className="p-2 text-gray-500 hover:text-blue-600 rounded"
-                              title="Edit"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => setDeletingEntryId(entry.id)}
-                            className="p-2 text-gray-500 hover:text-red-600 rounded"
-                            title="Remove"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {/* Mobile Summary */}
+                );
+              })}
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 mt-4">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
@@ -1152,17 +1188,14 @@ export default function Ledger() {
                   </div>
                   <div className="pt-2 border-t border-gray-300 flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">Net:</span>
-                    <span className={`text-sm font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'
-                      }`}>
+                    <span className={`text-sm font-bold ${(totalCredit - totalDebit) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {(totalCredit - totalDebit) >= 0 ? '+' : ''}₹{formatAmountINR(totalCredit - totalDebit)}
                     </span>
                   </div>
                 </div>
                 <div className="mt-3 pt-3 border-t border-gray-300 text-xs text-gray-500 text-center">
-                  Showing <strong className="text-gray-900">{filteredEntries.length}</strong> entries
-                  {hasActiveFilters && (
-                    <span className="ml-1 text-blue-600">(filtered)</span>
-                  )}
+                  Showing <strong className="text-gray-900">{Object.keys(groupedByCustomer).length}</strong> customers with <strong className="text-gray-900">{filteredEntries.length}</strong> entries
+                  {hasActiveFilters && <span className="ml-1 text-blue-600">(filtered)</span>}
                 </div>
               </div>
             </div>
@@ -1203,7 +1236,7 @@ export default function Ledger() {
                   entry_type: editEntryData.entryType,
                   amount: parseFloat(editEntryData.amount),
                   description: (editEntryData.description || '').trim(),
-                  created_at: editEntryData.date ? new Date(editEntryData.date).toISOString() : undefined,
+                  created_at: editEntryData.date ? dateStringWithCurrentTimeISO(editEntryData.date) : undefined,
                 },
               });
             }}
@@ -1211,10 +1244,9 @@ export default function Ledger() {
           >
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Date</label>
-              <Input
-                type="date"
+              <DatePicker
                 value={editEntryData.date}
-                onChange={(e) => setEditEntryData({ ...editEntryData, date: e.target.value })}
+                onChange={(date) => setEditEntryData({ ...editEntryData, date })}
                 required
               />
             </div>
@@ -1293,7 +1325,7 @@ export default function Ledger() {
         onClose={() => {
           setShowEntryForm(false);
           setSelectedCustomer(null);
-          setEntryData({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+          setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
         }}
         title={entryType === 'credit' ? 'Add Credit Entry' : 'Add Debit Entry'}
       >
@@ -1396,10 +1428,9 @@ export default function Ledger() {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Date
             </label>
-            <Input
-              type="date"
+            <DatePicker
               value={entryData.date}
-              onChange={(e) => setEntryData({ ...entryData, date: e.target.value })}
+              onChange={(date) => setEntryData({ ...entryData, date })}
               required
             />
           </div>
@@ -1438,7 +1469,7 @@ export default function Ledger() {
               onClick={() => {
                 setShowEntryForm(false);
                 setSelectedCustomer(null);
-                setEntryData({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+                setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
               }}
             >
               Cancel

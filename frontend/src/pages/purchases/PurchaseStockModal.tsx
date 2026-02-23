@@ -9,7 +9,7 @@ import {
     Calculator
 } from 'lucide-react';
 import { purchasingApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, formatDateOnlyDisplay } from '../../lib/utils';
 
 interface PurchaseItem {
     id: number;
@@ -125,7 +125,7 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                             Stock Distribution
                         </h2>
                         <p className="text-sm text-slate-500 mt-1">
-                            {purchase.purchase_number} • {purchase.supplier_name} • {new Date(purchase.purchase_date).toLocaleDateString()}
+                            {purchase.purchase_number} • {purchase.supplier_name} • {formatDateOnlyDisplay(purchase.purchase_date) || (purchase.purchase_date ? new Date(purchase.purchase_date).toLocaleDateString() : '-')}
                         </p>
                     </div>
                     <button

@@ -20,35 +20,24 @@ export default function Pagination({
 
   const getPageNumbers = () => {
     const pages: (number | string)[] = [];
-    const maxVisible = 5;
+    const firstN = 5;
+    const lastN = 3;
 
-    if (totalPages <= maxVisible) {
-      // Show all pages if total pages is less than max visible
+    if (totalPages <= firstN) {
       for (let i = 1; i <= totalPages; i++) {
         pages.push(i);
       }
     } else {
-      // Always show first page
-      pages.push(1);
-
-      if (currentPage > 3) {
-        pages.push('...');
-      }
-
-      // Show pages around current page
-      const start = Math.max(2, currentPage - 1);
-      const end = Math.min(totalPages - 1, currentPage + 1);
-
-      for (let i = start; i <= end; i++) {
+      // First 5: 1, 2, 3, 4, 5
+      for (let i = 1; i <= firstN; i++) {
         pages.push(i);
       }
-
-      if (currentPage < totalPages - 2) {
+      // Last N (only if not already in first 5 to avoid duplicates)
+      const lastThree = Array.from({ length: lastN }, (_, i) => totalPages - lastN + 1 + i).filter((p) => p > firstN);
+      if (lastThree.length > 0) {
         pages.push('...');
+        lastThree.forEach((p) => pages.push(p));
       }
-
-      // Always show last page
-      pages.push(totalPages);
     }
 
     return pages;

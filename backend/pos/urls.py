@@ -12,7 +12,7 @@ from .views import (
     replacement_replace, replacement_return, replacement_defective,
     find_invoice_by_barcode, bulk_barcodes_check, process_replacement, search_invoices_by_number,
     replacement_credit_note,
-    repair_invoices_list, find_repair_invoice_by_barcode, update_repair_status, generate_repair_label
+    repair_invoices_list, repair_device_models, find_repair_invoice_by_barcode, update_repair_status, generate_repair_label
 )
 
 urlpatterns = [
@@ -71,6 +71,7 @@ urlpatterns = [
     
     # Repair endpoints
     path('pos/repair/invoices/', repair_invoices_list, name='repair-invoices-list'),
+    path('pos/repair/device-models/', repair_device_models, name='repair-device-models'),
     path('pos/repair/invoices/find-by-barcode/', find_repair_invoice_by_barcode, name='find-repair-invoice-by-barcode'),
     path('pos/invoices/<int:pk>/update-repair-status/', update_repair_status, name='update-repair-status'),
     path('pos/invoices/<int:pk>/generate-repair-label/', generate_repair_label, name='generate-repair-label'),

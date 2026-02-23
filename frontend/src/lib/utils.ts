@@ -51,6 +51,68 @@ export const formatAmountINR = (num: number | string | undefined | null, decimal
 export const canEditLedgerEntry = (entry: { invoice?: number | null }): boolean => !entry.invoice;
 
 /**
+ * Returns the calendar date (YYYY-MM-DD) in the user's local timezone.
+ * Use this when displaying a datetime from the API in a date input, so the selected day
+ * doesn't shift by one (UTC vs local).
+ */
+export function toLocalDateString(date: Date | string | null | undefined): string {
+    if (date == null) return '';
+    let d: Date;
+    if (typeof date === 'string') {
+        // Parse YYYY-MM-DD as local date to avoid UTC-midnight shifting the day
+        const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+            const [, y, m, day] = match.map(Number);
+            d = new Date(y, m - 1, day);
+        } else {
+            d = new Date(date);
+        }
+    } else {
+        d = date;
+    }
+    if (isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/**
+ * Formats a date-only string (YYYY-MM-DD) for display in the user's locale.
+ * Parses as local date so the shown day doesn't shift (e.g. in timezones behind UTC).
+ */
+export function formatDateOnlyDisplay(dateStr: string | null | undefined): string {
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString();
+}
+
+/**
+ * Converts a date-only string (YYYY-MM-DD) to an ISO string for that date at
+ * the current local time. Use when sending created_at for ledger entries so
+ * the entry shows the actual time (e.g. 2:14 PM) instead of midnight.
+ */
+export function dateStringWithCurrentTimeISO(dateStr: string): string {
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const now = new Date();
+    const date = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    return date.toISOString();
+}
+
+/**
+ * Converts a date-only string (YYYY-MM-DD) to an ISO string for midnight on that date
+ * in the user's local timezone. Use when you need a date-only value as datetime (e.g.
+ * backdating with no specific time).
+ */
+export function dateStringToLocalMidnightISO(dateStr: string): string {
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.toISOString();
+}
+
+/**
  * Standardized product stock information.
  * Backend is source of truth. Unknown (tag/supplier) does NOT mean warehouse.
  * - Shop qty / warehouse_stock: from purchase only (no addition/subtraction).

@@ -80,7 +80,7 @@ class LedgerEntry(models.Model):
     
     class Meta:
         db_table = 'ledger_entries'
-        ordering = ['-created_at']
+        ordering = ['-created_at', '-id']
 
 
 class PersonalCustomer(models.Model):
@@ -122,7 +122,7 @@ class PersonalLedgerEntry(models.Model):
     
     class Meta:
         db_table = 'personal_ledger_entries'
-        ordering = ['-created_at']
+        ordering = ['-created_at', '-id']
 
 
 class InternalCustomer(models.Model):
@@ -164,4 +164,4 @@ class InternalLedgerEntry(models.Model):
     
     class Meta:
         db_table = 'internal_ledger_entries'
-        ordering = ['-created_at']
+        ordering = ['-created_at', '-id']

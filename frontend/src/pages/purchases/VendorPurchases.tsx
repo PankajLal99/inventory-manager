@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
+import { toLocalDateString } from '../../lib/utils';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -32,7 +33,7 @@ export default function VendorPurchases() {
   const [showForm, setShowForm] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState<number | null>(null);
   const [formData, setFormData] = useState({
-    purchase_date: new Date().toISOString().split('T')[0],
+    purchase_date: toLocalDateString(new Date()),
     bill_number: '',
     notes: '',
   });
@@ -237,7 +238,7 @@ export default function VendorPurchases() {
 
   const resetForm = () => {
     setFormData({
-      purchase_date: new Date().toISOString().split('T')[0],
+      purchase_date: toLocalDateString(new Date()),
       bill_number: '',
       notes: '',
     });
@@ -254,7 +255,7 @@ export default function VendorPurchases() {
     }
     setEditingPurchase(purchase.id);
     setFormData({
-      purchase_date: purchase.purchase_date || new Date().toISOString().split('T')[0],
+      purchase_date: purchase.purchase_date || toLocalDateString(new Date()),
       bill_number: purchase.bill_number || '',
       notes: purchase.notes || '',
     });
@@ -274,7 +275,7 @@ export default function VendorPurchases() {
   const handleDuplicatePurchase = (purchase: any) => {
     setEditingPurchase(null);
     setFormData({
-      purchase_date: new Date().toISOString().split('T')[0],
+      purchase_date: toLocalDateString(new Date()),
       bill_number: '',
       notes: purchase.notes || '',
     });
@@ -379,12 +380,13 @@ export default function VendorPurchases() {
   };
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+    if (!dateString) return '-';
+    const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const date = match
+      ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+      : new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    return date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
   };
 
   const getStatusBadge = (status: string) => {

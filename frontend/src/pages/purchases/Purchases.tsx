@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, toLocalDateString } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -57,7 +57,7 @@ export default function Purchases() {
   const [editingPurchaseStatus, setEditingPurchaseStatus] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     supplier: '',
-    purchase_date: new Date().toISOString().split('T')[0],
+    purchase_date: toLocalDateString(new Date()),
     bill_number: '',
     notes: '',
   });
@@ -522,7 +522,7 @@ export default function Purchases() {
   const resetForm = () => {
     setFormData({
       supplier: '',
-      purchase_date: new Date().toISOString().split('T')[0],
+      purchase_date: toLocalDateString(new Date()),
       bill_number: '',
       notes: '',
     });
@@ -558,7 +558,7 @@ export default function Purchases() {
       setEditingPurchaseStatus(fullPurchase.status || null);
       setFormData({
         supplier: fullPurchase.supplier?.toString() || fullPurchase.supplier_id?.toString() || '',
-        purchase_date: fullPurchase.purchase_date || new Date().toISOString().split('T')[0],
+        purchase_date: fullPurchase.purchase_date || toLocalDateString(new Date()),
         bill_number: fullPurchase.bill_number || '',
         notes: fullPurchase.notes || '',
       });
@@ -888,7 +888,14 @@ export default function Purchases() {
   const formatDate = (dateString: string) => {
     if (!dateString) return '-';
     try {
-      const date = new Date(dateString);
+      let date: Date;
+      const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const [, y, m, d] = match.map(Number);
+        date = new Date(y, m - 1, d);
+      } else {
+        date = new Date(dateString);
+      }
       if (isNaN(date.getTime())) return dateString;
       const day = String(date.getDate()).padStart(2, '0');
       const month = String(date.getMonth() + 1).padStart(2, '0');

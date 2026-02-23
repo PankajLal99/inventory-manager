@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import F, Q, Sum
+from django.db.models.functions import TruncDate
 from django.conf import settings
 from decimal import Decimal, InvalidOperation
 from collections import Counter
@@ -76,6 +77,18 @@ def repair_invoices_list(request):
         'page_size': limit,
         'total_pages': paginator.num_pages,
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def repair_device_models(request):
+    """Return distinct device model names from Repair records, optionally filtered by search."""
+    search = (request.query_params.get('search') or '').strip()
+    qs = Repair.objects.all().order_by('model_name')
+    if search:
+        qs = qs.filter(model_name__icontains=search)
+    models = list(qs.values_list('model_name', flat=True).distinct()[:50])
+    return Response({'models': models})
 
 
 @api_view(['GET'])
@@ -2258,24 +2271,28 @@ def invoice_list_create(request):
         queryset = queryset.exclude(status='credit').exclude(invoice_type='credit')
 
         queryset = queryset.order_by('-created_at')
-        
-        # Pagination: limit 50 per page
-        from django.core.paginator import Paginator
-        page = int(request.query_params.get('page', 1))
-        limit = int(request.query_params.get('limit', 50))
-        
-        paginator = Paginator(queryset, limit)
-        page_obj = paginator.get_page(page)
-        
-        serializer = InvoiceSerializer(page_obj, many=True)
+
+        # Date-based pagination: each page = one day. Page 1 = most recent day (today or last day with invoices).
+        page = max(1, int(request.query_params.get('page', 1)))
+        dates_qs = queryset.annotate(day=TruncDate('created_at')).values_list('day', flat=True).distinct().order_by('-day')
+        dates_list = list(dates_qs)
+        total_pages = len(dates_list) or 1
+        page = min(page, total_pages)
+        page_date = None
+        if dates_list and 1 <= page <= len(dates_list):
+            page_date = dates_list[page - 1]
+            queryset = queryset.filter(created_at__date=page_date)
+
+        serializer = InvoiceSerializer(queryset, many=True)
         return Response({
             'results': serializer.data,
-            'count': paginator.count,
-            'next': page_obj.next_page_number() if page_obj.has_next() else None,
-            'previous': page_obj.previous_page_number() if page_obj.has_previous() else None,
+            'count': len(serializer.data),
+            'next': page + 1 if page < total_pages else None,
+            'previous': page - 1 if page > 1 else None,
             'page': page,
-            'page_size': limit,
-            'total_pages': paginator.num_pages,
+            'page_size': None,
+            'total_pages': total_pages,
+            'page_date': page_date.isoformat() if page_date else None,
         })
     else:  # POST
         serializer = InvoiceSerializer(data=request.data)

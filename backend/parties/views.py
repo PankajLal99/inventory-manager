@@ -77,6 +77,13 @@ def customer_group_detail(request, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _set_no_cache_headers(response):
+    """Set headers so the response is not stored in browser disk or memory cache."""
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+
+
 # Customer views
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
@@ -94,7 +101,7 @@ def customer_list_create(request):
         cached_data = cache.get(cache_key)
         if cached_data:
             response = Response(cached_data)
-            response['Cache-Control'] = 'private, max-age=300, stale-while-revalidate=600'
+            _set_no_cache_headers(response)
             return response
         
         # Cache miss - fetch from database
@@ -119,15 +126,15 @@ def customer_list_create(request):
         cache.set(cache_key, response_data, CUSTOMER_LIST_CACHE_TTL)
         
         response = Response(response_data)
-        # Add cache headers for browser-level caching
-        response['Cache-Control'] = 'private, max-age=300, stale-while-revalidate=600'
+        _set_no_cache_headers(response)
         return response
     else:
         serializer = CustomerSerializer(data=request.data)
         if serializer.is_valid():
             customer = serializer.save()
+            from backend.core.model_cache import invalidate_customer_cache
+            invalidate_customer_cache(customer)  # clears list cache so new customer appears
             # Ledger account is auto-created implicitly through the model relationship
-            # No explicit creation needed as LedgerEntry can have null customer for anonymous entries
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -157,15 +164,21 @@ def customer_detail(request, pk):
         serializer = CustomerSerializer(customer, data=request.data)
         if serializer.is_valid():
             serializer.save()
+            from backend.core.model_cache import invalidate_customer_cache
+            invalidate_customer_cache(customer)  # clears detail + list cache
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     elif request.method == 'PATCH':
         serializer = CustomerSerializer(customer, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            from backend.core.model_cache import invalidate_customer_cache
+            invalidate_customer_cache(customer)  # clears detail + list cache
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE
+        from backend.core.model_cache import invalidate_customer_cache
+        invalidate_customer_cache(customer)
         customer.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
