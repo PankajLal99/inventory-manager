@@ -258,6 +258,11 @@ export const customersApi = {
     },
     summary: (params?: any) => api.get('/ledger/summary/', { params }),
     customerDetail: (customerId: number, params?: any) => api.get(`/ledger/customers/${customerId}/`, { params }),
+    invoiceItemsByCategory: (customerId: number, params?: { store?: number; categories?: number[]; date_from?: string; date_to?: string }) => {
+      const p: any = { ...params };
+      if (p.categories?.length) p.categories = p.categories.join(',');
+      return api.get(`/ledger/customers/${customerId}/invoice-items-by-category/`, { params: p });
+    },
   },
   personalCustomers: {
     list: (params?: any) => api.get('/personal-customers/', { params }),

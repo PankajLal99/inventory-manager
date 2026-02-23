@@ -11,7 +11,7 @@ import {
   ChevronRight,
   Package,
 } from 'lucide-react';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getProductNameColor } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -271,7 +271,7 @@ export default function ActiveCartsOverview() {
                                       key={item.id}
                                       className="border-b border-gray-100 last:border-0"
                                     >
-                                      <td className="px-4 py-2">
+                                      <td className="px-4 py-2" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>
                                         {item.product_name}
                                       </td>
                                       <td className="px-4 py-2 font-mono text-gray-600">

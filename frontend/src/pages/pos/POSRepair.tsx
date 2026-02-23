@@ -26,7 +26,7 @@ import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
-import { formatNumber, getStockInfo } from '../../lib/utils';
+import { formatNumber, getStockInfo, getProductNameColor } from '../../lib/utils';
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -3591,7 +3591,8 @@ export default function POS() {
                                   <div className={`font-medium truncate flex items-center gap-2 ${isOutOfStock
                                     ? 'text-gray-500'
                                     : 'text-gray-900 group-hover:text-blue-900'
-                                    }`}>
+                                    }`}
+                                    style={!isOutOfStock && getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
                                     {product.name}
                                     {isOutOfStock && (
                                       <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
@@ -3732,7 +3733,11 @@ export default function POS() {
                         {/* Product Name - Full width on mobile, flex-1 on desktop */}
                         <div className="flex-1 min-w-0 sm:order-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-semibold text-sm text-gray-900 break-words" title={item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}>
+                            <h3
+                              className="font-semibold text-sm text-gray-900 break-words"
+                              title={item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
+                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                            >
                               {item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
                             </h3>
                             {/* Edit Product Button */}
