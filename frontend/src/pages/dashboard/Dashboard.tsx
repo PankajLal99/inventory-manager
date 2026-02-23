@@ -1,22 +1,31 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { reportsApi } from '../../lib/api';
-import { formatNumber, toLocalDateString } from '../../lib/utils';
+import { formatNumber, toLocalDateString, formatDateMMDDYYYY } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   Package, FileText, ShoppingBag, Calendar,
   DollarSign, CreditCard, Wallet, TrendingUp, TrendingDown, Wrench, Store, Clock,
-  BarChart3, Box, RefreshCw, ArrowUp, ArrowDown
+  BarChart3, Box, RefreshCw, ArrowUp, ArrowDown, Lock
 } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+
+const PIN_LENGTH = 6;
+const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(auth.getUser());
   const [dateFrom, setDateFrom] = useState(toLocalDateString(new Date()));
   const [dateTo, setDateTo] = useState(toLocalDateString(new Date()));
+
+  // 6-digit PIN lock; always locked when entering dashboard (auto-lock when leaving)
+  const [unlocked, setUnlocked] = useState(false);
+  const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
+  const [pinError, setPinError] = useState('');
+  const pinInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     if (!user) {
@@ -26,14 +35,7 @@ export default function Dashboard() {
     }
   }, [user]);
 
-  // Check if user can access dashboard
-  const canAccessDashboard = user?.can_access_dashboard !== false;
-
-  if (user && !canAccessDashboard) {
-    return <Navigate to="/" replace />;
-  }
-
-  // Fetch dashboard KPIs
+  // Fetch dashboard KPIs (must run unconditionally for Rules of Hooks; enabled only when unlocked)
   const { data: kpisData, isLoading: kpisLoading } = useQuery({
     queryKey: ['dashboard-kpis', dateFrom, dateTo],
     queryFn: async () => {
@@ -43,10 +45,94 @@ export default function Dashboard() {
       });
       return response.data;
     },
+    enabled: unlocked,
     retry: false,
   });
 
+  // PIN entry handlers
+  const handlePinChange = (index: number, value: string) => {
+    if (value.length > 1) {
+      const digits = value.replace(/\D/g, '').slice(0, PIN_LENGTH).split('');
+      const next = [...pinDigits];
+      digits.forEach((d, i) => { if (index + i < PIN_LENGTH) next[index + i] = d; });
+      setPinDigits(next);
+      setPinError('');
+      const nextFocus = Math.min(index + digits.length, PIN_LENGTH - 1);
+      pinInputRefs.current[nextFocus]?.focus();
+      if (next.every(Boolean)) verifyPin(next.join(''));
+      return;
+    }
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const next = [...pinDigits];
+    next[index] = digit;
+    setPinDigits(next);
+    setPinError('');
+    if (digit && index < PIN_LENGTH - 1) pinInputRefs.current[index + 1]?.focus();
+    if (next.every(Boolean)) verifyPin(next.join(''));
+  };
 
+  const handlePinKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !pinDigits[index] && index > 0) {
+      pinInputRefs.current[index - 1]?.focus();
+      const next = [...pinDigits];
+      next[index - 1] = '';
+      setPinDigits(next);
+    }
+  };
+
+  const verifyPin = (pin: string) => {
+    if (pin === DASHBOARD_PIN) {
+      setUnlocked(true);
+      setPinError('');
+    } else {
+      setPinError('Wrong PIN');
+      setPinDigits(Array(PIN_LENGTH).fill(''));
+      pinInputRefs.current[0]?.focus();
+    }
+  };
+
+  // Check if user can access dashboard
+  const canAccessDashboard = user?.can_access_dashboard !== false;
+
+  if (user && !canAccessDashboard) {
+    return <Navigate to="/" replace />;
+  }
+
+  // Show 6-digit PIN screen before dashboard content (auto-locks when user navigates away)
+  if (!unlocked) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-gray-200 p-8">
+          <div className="flex flex-col items-center">
+            <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mb-6">
+              <Lock className="h-7 w-7 text-gray-600" />
+            </div>
+            <h2 className="text-xl font-semibold text-gray-900 mb-1">Dashboard locked</h2>
+            <p className="text-sm text-gray-500 mb-6">Enter 6-digit PIN</p>
+            <div className="flex gap-2 justify-center mb-2 flex-wrap max-w-[340px] sm:max-w-[400px]">
+              {Array.from({ length: PIN_LENGTH }, (_, i) => (
+                <input
+                  key={i}
+                  ref={(el) => { pinInputRefs.current[i] = el; }}
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={6}
+                  autoComplete="one-time-code"
+                  value={pinDigits[i]}
+                  onChange={(e) => handlePinChange(i, e.target.value)}
+                  onKeyDown={(e) => handlePinKeyDown(i, e)}
+                  className="w-14 h-14 sm:w-16 sm:h-16 text-center text-lg font-semibold border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 border-gray-300"
+                />
+              ))}
+            </div>
+            {pinError && (
+              <p className="text-sm text-red-600 font-medium mt-2">{pinError}</p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Calculate custom month period (10th to 10th)
   const getCustomMonthPeriod = () => {
@@ -66,14 +152,7 @@ export default function Dashboard() {
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 10);
     }
 
-    const formatMonthDay = (date: Date) => {
-      return date.toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-      });
-    };
-
-    return `${formatMonthDay(startDate)} - ${formatMonthDay(endDate)}`;
+    return `${formatDateMMDDYYYY(startDate)} - ${formatDateMMDDYYYY(endDate)}`;
   };
 
   const kpis = kpisData?.kpis || {};
@@ -151,7 +230,7 @@ export default function Dashboard() {
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <Calendar className="h-3 w-3" />
-              {new Date().toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' })}
+              {formatDateMMDDYYYY(new Date())}
             </p>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">

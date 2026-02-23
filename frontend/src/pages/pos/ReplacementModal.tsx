@@ -5,6 +5,7 @@ import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import { Search, AlertTriangle, Package, Plus, Minus } from 'lucide-react';
+import { getProductNameColor } from '../../lib/utils';
 
 interface ReplacementModalProps {
   isOpen: boolean;
@@ -257,7 +258,7 @@ export default function ReplacementModal({ isOpen, onClose, onSuccess }: Replace
                               className="w-4 h-4 text-blue-600 rounded"
                             />
                             <div>
-                              <div className="font-medium">{item.product_name}</div>
+                              <div className="font-medium" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name}</div>
                               <div className="text-sm text-gray-600">
                                 SKU: {item.product_sku}
                                 {item.barcode_value && ` | Barcode: ${item.barcode_value}`}

@@ -1,3 +1,21 @@
+/** Red for product names containing "NON PESTING" */
+export const PRODUCT_NAME_COLOR_NON_PESTING = '#be1129';
+
+/** Green for product names containing "PESTING" (and not "NON PESTING") */
+export const PRODUCT_NAME_COLOR_PESTING = '#418f28';
+
+/**
+ * Returns the display color for a product name based on PESTING / NON PESTING.
+ * Check "NON PESTING" first so names containing both get red.
+ */
+export function getProductNameColor(name: string | null | undefined): string | undefined {
+  if (name == null || typeof name !== 'string') return undefined;
+  const upper = name.toUpperCase();
+  if (upper.includes('NON PESTING')) return PRODUCT_NAME_COLOR_NON_PESTING;
+  if (upper.includes('PESTING')) return PRODUCT_NAME_COLOR_PESTING;
+  return undefined;
+}
+
 /**
  * Formats a number for display, stripping unnecessary trailing zeros (e.g., .00)
  * and adding comma separators for thousands.
@@ -45,6 +63,17 @@ export const formatAmountINR = (num: number | string | undefined | null, decimal
 };
 
 /**
+ * Formats an amount for use in input fields (e.g. edit modal).
+ * Strips unnecessary trailing zeros so whole numbers show as "100" not "100.00".
+ */
+export function amountForInput(value: number | string | undefined | null): string {
+  if (value === undefined || value === null || value === '') return '';
+  const n = typeof value === 'string' ? parseFloat(value) : value;
+  if (isNaN(n)) return '';
+  return n % 1 === 0 ? String(Math.round(n)) : String(n);
+}
+
+/**
  * Whether a main-ledger entry can be edited in-place (pencil). Invoice-linked entries
  * are edited via the invoice; only entries without an invoice show the edit button.
  */
@@ -75,6 +104,31 @@ export function toLocalDateString(date: Date | string | null | undefined): strin
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+}
+
+/**
+ * Formats a date for display as MM/DD/YYYY (mm dd yyyy).
+ * Accepts Date or YYYY-MM-DD string. Parses as local date.
+ */
+export function formatDateMMDDYYYY(date: Date | string | null | undefined): string {
+  if (date == null) return '';
+  let d: Date;
+  if (typeof date === 'string') {
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      const [, y, m, day] = match.map(Number);
+      d = new Date(y, m - 1, day);
+    } else {
+      d = new Date(date);
+    }
+  } else {
+    d = date;
+  }
+  if (isNaN(d.getTime())) return '';
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
 }
 
 /**

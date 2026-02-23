@@ -75,20 +75,48 @@ export default function Customers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, statusFilter, customerGroupFilter]);
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['customers', search],
+  // Fetch customer groups for dropdown (and to get REPAIR group id for exclusion)
+  const { data: customerGroupsData } = useQuery({
+    queryKey: ['customer-groups'],
     queryFn: async () => {
-      const response = await customersApi.list({ search });
+      const response = await customersApi.groups.list();
+      return response.data;
+    },
+    retry: false,
+  });
+
+  const repairGroupId = useMemo(() => {
+    const groups = (() => {
+      if (!customerGroupsData) return [];
+      if (Array.isArray(customerGroupsData.results)) return customerGroupsData.results;
+      if (Array.isArray(customerGroupsData.data)) return customerGroupsData.data;
+      if (Array.isArray(customerGroupsData)) return customerGroupsData;
+      return [];
+    })();
+    const repair = groups.find((g: any) => (g.name || '').toUpperCase() === 'REPAIR');
+    return repair?.id ?? null;
+  }, [customerGroupsData]);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['customers', search, repairGroupId],
+    queryFn: async () => {
+      const params: Record<string, string | number> = { search };
+      if (repairGroupId != null) params.exclude_group = repairGroupId;
+      const response = await customersApi.list(params);
       return response.data;
     },
     retry: false,
     placeholderData: keepPreviousData,
   });
 
-  // Client-side filtering
+  // Client-side filtering (also exclude REPAIR group customers)
   const filteredCustomers = useMemo(() => {
     if (!data) return [];
     let allCustomers = Array.isArray(data) ? data : (data.results || data.data || []);
+
+    // Never show customers in the REPAIR group on this page
+    const groupName = (c: any) => (c.customer_group_name || c.customer_group?.name || '').trim().toUpperCase();
+    allCustomers = allCustomers.filter((c: any) => groupName(c) !== 'REPAIR');
 
     if (statusFilter) {
       const isActive = statusFilter === 'true';
@@ -104,16 +132,6 @@ export default function Customers() {
 
     return allCustomers;
   }, [data, statusFilter, customerGroupFilter]);
-
-  // Fetch customer groups for dropdown
-  const { data: customerGroupsData } = useQuery({
-    queryKey: ['customer-groups'],
-    queryFn: async () => {
-      const response = await customersApi.groups.list();
-      return response.data;
-    },
-    retry: false,
-  });
 
   // Fetch existing customers for name search in modal
   const { data: existingCustomersData } = useQuery({

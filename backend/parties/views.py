@@ -488,6 +488,72 @@ def ledger_customer_detail(request, customer_id):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def ledger_customer_invoice_items_by_category(request, customer_id):
+    """Get count of invoice items (products sold) by category for a ledger customer (Admin only).
+    Query params: store (optional), categories (optional comma-separated category ids),
+    date_from (optional YYYY-MM-DD), date_to (optional YYYY-MM-DD).
+    When categories are provided, returns total_count and by_category for those categories only."""
+    if not is_admin_user(request.user):
+        return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+    from backend.pos.models import InvoiceItem
+
+    customer = get_object_or_404(Customer, pk=customer_id)
+    store_id = request.query_params.get('store', None)
+    categories_param = request.query_params.get('categories', None)
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    category_ids = None
+    if categories_param:
+        try:
+            category_ids = [int(x.strip()) for x in categories_param.split(',') if x.strip()]
+        except ValueError:
+            pass
+
+    # Invoice items for this customer's invoices (exclude void)
+    qs = InvoiceItem.objects.filter(
+        invoice__customer=customer
+    ).exclude(
+        invoice__status='void'
+    ).select_related('product', 'product__category')
+
+    if store_id:
+        qs = qs.filter(invoice__store_id=store_id)
+
+    if date_from:
+        qs = qs.filter(invoice__created_at__date__gte=date_from)
+    if date_to:
+        qs = qs.filter(invoice__created_at__date__lte=date_to)
+
+    if category_ids is not None and len(category_ids) > 0:
+        qs = qs.filter(product__category_id__in=category_ids)
+
+    # Total count = sum of quantities
+    total_result = qs.aggregate(total=Sum('quantity'))
+    total_count = int(total_result['total'] or 0)
+
+    # By category: group by category
+    by_category_qs = qs.values('product__category_id', 'product__category__name').annotate(
+        count=Sum('quantity')
+    ).order_by('product__category__name')
+
+    by_category = []
+    for row in by_category_qs:
+        cat_id = row['product__category_id']
+        cat_name = row['product__category__name'] or 'Uncategorized'
+        by_category.append({
+            'id': cat_id,
+            'name': cat_name,
+            'count': int(row['count'] or 0),
+        })
+
+    return Response({
+        'total_count': total_count,
+        'by_category': by_category,
+    })
+
+
 # Personal Customer views
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
@@ -560,7 +626,6 @@ def personal_ledger_entry_list_create(request):
             queryset = queryset.filter(customer_id=customer_id)
         # Skip customer_group_id filter as personal customers don't have groups
         if date_from or date_to:
-            from django.db.models import Q
             # Build date filter: include entries with None created_at OR entries within date range
             date_filter = Q()
             if date_from and date_to:

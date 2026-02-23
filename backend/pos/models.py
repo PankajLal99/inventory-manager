@@ -137,6 +137,8 @@ class Repair(models.Model):
         ('work_in_progress', 'Work in Progress'),
         ('done', 'Done'),
         ('delivered', 'Delivered'),
+        ('not_repaired', 'Not Repaired'),
+        ('cancelled', 'Cancelled'),
     ]
 
     invoice = models.OneToOneField(Invoice, on_delete=models.CASCADE, related_name='repair', unique=True)

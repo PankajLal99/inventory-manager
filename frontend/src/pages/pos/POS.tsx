@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
-import { formatNumber, getStockInfo } from '../../lib/utils';
+import { formatNumber, getStockInfo, getProductNameColor } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   loadUserCarts,
@@ -131,15 +131,15 @@ export default function POS() {
   // Get user info to check if Admin
   const [user, setUser] = useState<any>(null);
 
-  // Toast helper function
+  // Toast helper function (auto-hide in 2 sec)
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Math.random().toString(36).substring(7);
-    setToasts((prev) => [...prev, { id, message, type }]);
+    setToasts((prev) => [...prev, { id, message, type, duration: 2000 }]);
   };
 
-  const removeToast = (id: string) => {
+  const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
+  }, []);
 
   // Get username helper
   const getCurrentUsername = useCallback((): string | null => {
@@ -3803,7 +3803,8 @@ export default function POS() {
                                   <div className={`font-medium truncate flex items-center gap-2 ${isOutOfStock
                                     ? 'text-gray-500'
                                     : 'text-gray-900 group-hover:text-blue-900'
-                                    }`}>
+                                    }`}
+                                    style={!isOutOfStock && getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
                                     {product.name}
                                     {isOutOfStock && (
                                       <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
@@ -3992,7 +3993,11 @@ export default function POS() {
                         {/* Product Name - Full width on mobile, flex-1 on desktop */}
                         <div className="flex-1 min-w-0 sm:order-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-semibold text-sm text-gray-900 break-words" title={item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}>
+                            <h3
+                              className="font-semibold text-sm text-gray-900 break-words"
+                              title={item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
+                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                            >
                               {item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
                             </h3>
                             {/* Edit Product Button */}
