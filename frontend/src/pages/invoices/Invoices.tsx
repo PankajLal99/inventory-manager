@@ -86,62 +86,79 @@ export default function Invoices() {
     return [];
   })();
 
-  // Check if user is Admin (only Admin group gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
-    (user?.groups && user.groups.includes('Admin'));
+  // Only if group name contains "Admin" (Admin, RetailAdmin, WholesaleAdmin) → show all stores. Else → store selector like POS.
+  const groupContainsAdmin = (user?.groups || []).some((g: string) => String(g).includes('Admin'));
 
   // Check if user can see KPI stats (hide from Retail and Repair groups)
   const canSeeKPIStats = (() => {
     const userGroups = user?.groups || [];
-    // Hide from Retail and Repair groups only
     if (userGroups.includes('Retail') || userGroups.includes('Repair')) {
       return false;
     }
-    // Show to everyone else (Admin, RetailAdmin, WholesaleAdmin, Wholesale, etc.)
     return true;
   })();
 
-  // Determine the active store:
-  // - For Admin: Use selectedStoreId if set, otherwise first active store
-  // - For others: Auto-select first active store (filtered by backend)
-  const defaultStore = (() => {
-    if (isAdmin && selectedStoreId) {
-      return stores.find((s: any) => s.id === selectedStoreId) || stores.find((s: any) => s.is_active) || stores[0];
-    }
-    return stores.find((s: any) => s.is_active) || stores[0];
-  })();
+  // When group contains Admin: no store filter (all). Else: use selected store or first active store.
+  const defaultStore = groupContainsAdmin
+    ? null
+    : (stores.find((s: any) => s.id === selectedStoreId) || stores.find((s: any) => s.is_active) || stores[0]) ?? null;
 
-  // Update selectedStoreId when stores load and Admin hasn't selected one yet
+  // For non-Admin groups: set selectedStoreId to first store when stores load
   useEffect(() => {
-    if (isAdmin && !selectedStoreId && stores.length > 0) {
-      const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
-      if (firstActiveStore) {
-        setSelectedStoreId(firstActiveStore.id);
-      }
+    if (!groupContainsAdmin && !selectedStoreId && stores.length > 0) {
+      const first = stores.find((s: any) => s.is_active) || stores[0];
+      if (first) setSelectedStoreId(first.id);
     }
-  }, [isAdmin, selectedStoreId, stores]);
+  }, [groupContainsAdmin, selectedStoreId, stores]);
 
-  // Get current selected store for display
   const currentStore = stores.find((s: any) => s.id === selectedStoreId);
 
+  // Today's date in YYYY-MM-DD for KPI summary
+  const todayStr = (() => {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  })();
+
+  // Fetch today's invoices for KPI stats only (independent of table filters)
+  const { data: todayData } = useQuery({
+    queryKey: ['invoices', 'today', todayStr, defaultStore?.id ?? 'all'],
+    queryFn: () => posApi.invoices.list({
+      date_from: todayStr,
+      date_to: todayStr,
+      store: defaultStore?.id ?? undefined,
+      page: 1,
+      page_size: 500,
+    }),
+    enabled: canSeeKPIStats && (groupContainsAdmin ? true : !!defaultStore),
+  });
+
+  const todayInvoices: Invoice[] = (() => {
+    const raw = todayData?.data;
+    if (!raw || typeof raw !== 'object') return [];
+    if (Array.isArray((raw as any).results)) return (raw as any).results;
+    if (Array.isArray((raw as any).data)) return (raw as any).data;
+    if (Array.isArray(raw)) return raw;
+    return [];
+  })().filter((inv: Invoice) => inv.invoice_type !== 'defective');
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id, currentPage, search],
+    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', currentPage, search],
     queryFn: () => posApi.invoices.list({
       invoice_type: invoiceTypeFilter || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
-      store: defaultStore?.id || undefined,
+      store: defaultStore?.id ?? undefined,
       page: currentPage,
       search: search.trim() || undefined,
     }),
-    enabled: !!defaultStore,
+    enabled: groupContainsAdmin ? true : !!defaultStore,
     placeholderData: keepPreviousData,
   });
 
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id, search]);
+  }, [invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', search]);
 
   const invoices: Invoice[] = data?.data?.results || data?.data?.results || data?.data || [];
   const rawData = data?.data && typeof data.data === 'object' ? data.data : null;
@@ -171,12 +188,12 @@ export default function Invoices() {
   };
 
 
-  const totalRevenue = filteredInvoices
+  // KPI: today's summary only
+  const totalRevenue = todayInvoices
     .filter(inv => inv.status === 'paid')
     .reduce((sum, inv) => sum + parseFloat(inv.total || '0'), 0);
-
-  const totalInvoices = filteredInvoices.length;
-  const paidInvoices = filteredInvoices.filter(inv => inv.status === 'paid').length;
+  const totalInvoices = todayInvoices.length;
+  const paidInvoices = todayInvoices.filter(inv => inv.status === 'paid').length;
 
   if (isLoading) {
     return <LoadingState message="Loading invoices..." />;
@@ -191,7 +208,7 @@ export default function Invoices() {
     );
   }
 
-  if (!defaultStore && stores.length === 0) {
+  if (!groupContainsAdmin && stores.length === 0) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-center">
@@ -208,11 +225,11 @@ export default function Invoices() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <PageHeader
           title="Invoices"
-          subtitle="View and manage all invoices"
+          subtitle={groupContainsAdmin ? 'View and manage all invoices (all stores)' : 'View and manage all invoices'}
           icon={FileText}
         />
-        {/* Store Selector for Admin users */}
-        {isAdmin && stores.length > 0 && (
+        {/* Store selector for non-Admin groups (Retail, Repair, Wholesale, etc.) - like POS */}
+        {!groupContainsAdmin && stores.length > 0 && (
           <div className="w-full sm:w-auto">
             <div className="relative group">
               <div className="flex items-center gap-2 sm:gap-3 bg-white border-2 border-blue-200 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm hover:shadow-md hover:border-blue-400 transition-all duration-200 cursor-pointer">
@@ -247,13 +264,15 @@ export default function Invoices() {
         )}
       </div>
 
-      {/* Stats Cards - Hidden from Retail and Repair groups */}
+      {/* Stats Cards - Today's summary only; hidden from Retail and Repair groups */}
       {canSeeKPIStats && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Total Revenue</p>
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-gray-500">Today&apos;s summary</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Total Revenue</p>
                 <p className="text-2xl font-bold text-gray-900 mt-1">
                   ₹{formatNumber(totalRevenue)}
                 </p>
@@ -285,6 +304,7 @@ export default function Invoices() {
               </div>
             </div>
           </Card>
+          </div>
         </div>
       )}
 

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getProductNameColor } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -1250,10 +1250,12 @@ export default function InvoiceDetail() {
           const productDisplay = group.brand
             ? `${group.name} (${group.brand})`
             : group.name;
+          const productColor = getProductNameColor(group.name);
+          const productColorStyle = productColor ? ` color: ${productColor};` : '';
 
           return `
                         <tr style="border-bottom: 1px solid #eee;">
-                          <td style="border-bottom: 1px solid #eee;">${productDisplay}</td>
+                          <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}</td>
                           <td class="text-center" style="border-bottom: 1px solid #eee;">${formatNumber(group.totalQuantity, 3)}</td>
                           <td class="text-right" style="border-bottom: 1px solid #eee;">${formatNumber(avgUnitPrice, 2)}</td>
                           <td class="text-center" style="border-bottom: 1px solid #eee;">PCS</td>
@@ -1539,10 +1541,12 @@ export default function InvoiceDetail() {
             : group.name;
           // Truncate for thermal printer (max 20 chars)
           const displayText = productDisplay.substring(0, 20);
+          const productColor = getProductNameColor(group.name);
+          const productColorStyle = productColor ? ` style="color: ${productColor};"` : '';
 
           return `
                     <tr>
-                      <td>${displayText}</td>
+                      <td${productColorStyle}>${displayText}</td>
                       <td class="text-right">${group.totalQuantity}</td>
                       <td class="text-right">₹${formatNumber(group.avgPrice)}</td>
                       <td class="text-right">₹${formatNumber(group.totalAmount)}</td>
@@ -2136,7 +2140,7 @@ export default function InvoiceDetail() {
                         <>
                           <TableRow key={groupKey}>
                             <TableCell>
-                              <span className="font-medium text-gray-900">{group.productName}</span>
+                              <span className="font-medium text-gray-900" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>{group.productName}</span>
                             </TableCell>
                             <TableCell>
                               <button
@@ -2154,7 +2158,7 @@ export default function InvoiceDetail() {
                           {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => (
                             <TableRow key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50">
                               <TableCell className="pl-12">
-                                <span className="text-xs text-gray-500">↳ {group.productName}</span>
+                                <span className="text-xs text-gray-500" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>↳ {group.productName}</span>
                               </TableCell>
                               <TableCell>
                                 <span className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</span>
@@ -2190,7 +2194,7 @@ export default function InvoiceDetail() {
                         <>
                           <TableRow key={groupKey}>
                             <TableCell>
-                              <span className="font-medium text-gray-900">{group.productName}</span>
+                              <span className="font-medium text-gray-900" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>{group.productName}</span>
                             </TableCell>
                             <TableCell>
                               <button
@@ -2222,7 +2226,7 @@ export default function InvoiceDetail() {
                             return (
                               <TableRow key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50">
                                 <TableCell className="pl-12">
-                                  <span className="text-xs text-gray-500">↳ {group.productName}</span>
+                                  <span className="text-xs text-gray-500" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>↳ {group.productName}</span>
                                 </TableCell>
                                 <TableCell>
                                   <span className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</span>
@@ -2283,7 +2287,7 @@ export default function InvoiceDetail() {
                     <div className="p-4">
                       <div className="flex justify-between items-start">
                         <div className="flex-1 min-w-0 pr-3">
-                          <h4 className="font-semibold text-gray-900 text-base mb-1">{group.productName}</h4>
+                          <h4 className="font-semibold text-gray-900 text-base mb-1" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>{group.productName}</h4>
                           <button
                             onClick={() => setExpandedInvoiceItems({ ...expandedInvoiceItems, [groupKey]: !isExpanded })}
                             className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-900 font-mono mt-1"
@@ -2780,7 +2784,7 @@ export default function InvoiceDetail() {
                                   className={`w-full text-left px - 4 py - 3 hover: bg - gray - 50 transition - colors ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''
                                     } `}
                                 >
-                                  <div className="font-medium text-gray-900">{product.name}</div>
+                                  <div className="font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</div>
                                   {(product.matched_barcode || product.sku) && (
                                     <div className="text-xs text-gray-500 mt-1">
                                       {product.matched_barcode ? `Short code: ${product.matched_barcode}` : `SKU: ${product.sku}`}
@@ -3974,7 +3978,7 @@ export default function InvoiceDetail() {
                       <div key={item.id} className="border border-gray-200 rounded-lg p-4">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
-                            <h5 className="font-semibold text-gray-900">{item.product_name || '-'}</h5>
+                            <h5 className="font-semibold text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</h5>
                             <p className="text-sm text-gray-600">SKU: {item.barcode_value || item.product_sku || 'N/A'}</p>
                             <div className="mt-2 space-y-2">
                               {isEditingPrice ? (

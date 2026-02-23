@@ -53,19 +53,32 @@ interface RepairInvoice {
     id: number;
     contact_no: string;
     model_name: string;
+    description?: string;
     booking_amount?: string;
-    status: 'received' | 'work_in_progress' | 'done' | 'delivered';
+    status: 'received' | 'work_in_progress' | 'done' | 'delivered' | 'not_repaired' | 'cancelled';
     barcode: string;
     created_at: string;
     updated_at: string;
   };
 }
 
+// Matches backend pos.models.Repair.STATUS_CHOICES
 const STATUS_OPTIONS = [
   { value: 'received', label: 'Received' },
-  { value: 'work_in_progress', label: 'In Progress' },
-  { value: 'done', label: 'Completed' },
+  { value: 'work_in_progress', label: 'Work in Progress' },
+  { value: 'done', label: 'Done' },
   { value: 'delivered', label: 'Delivered' },
+  { value: 'not_repaired', label: 'Not Repaired' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+const STATUS_ORDER: string[] = [
+  'received',
+  'work_in_progress',
+  'done',
+  'delivered',
+  'not_repaired',
+  'cancelled',
 ];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -73,6 +86,8 @@ const STATUS_COLORS: Record<string, string> = {
   work_in_progress: 'bg-amber-100 text-amber-800 border border-amber-200',
   done: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
   delivered: 'bg-slate-100 text-slate-700 border border-slate-200',
+  not_repaired: 'bg-orange-100 text-orange-800 border border-orange-200',
+  cancelled: 'bg-red-100 text-red-800 border border-red-200',
 };
 
 const STATUS_ICONS: Record<string, any> = {
@@ -80,6 +95,18 @@ const STATUS_ICONS: Record<string, any> = {
   work_in_progress: Wrench,
   done: CheckCircle,
   delivered: Truck,
+  not_repaired: AlertTriangle,
+  cancelled: X,
+};
+
+const STATUS_BAR_CLASS: Record<string, string> = {
+  received: 'bg-sky-600',
+  work_in_progress: 'bg-amber-600',
+  done: 'bg-emerald-600',
+  delivered: 'bg-slate-600',
+  not_repaired: 'bg-orange-600',
+  cancelled: 'bg-red-600',
+  other: 'bg-gray-400',
 };
 
 export default function Repairs() {
@@ -246,8 +273,19 @@ export default function Repairs() {
   // Search is applied server-side (invoice_number + customer_name)
   const filteredRepairs = repairInvoices;
 
-  const repairGroupInvoices = filteredRepairs.filter(inv => inv.customer_group_name === 'REPAIR');
-  const otherGroupInvoices = filteredRepairs.filter(inv => inv.customer_group_name !== 'REPAIR');
+  // Group by repair status (matches backend pos.models.Repair.STATUS_CHOICES)
+  const statusGroups = STATUS_ORDER.map((status) => ({
+    status,
+    label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
+    items: filteredRepairs.filter((inv) => inv.repair?.status === status),
+  }));
+  const otherItems = filteredRepairs.filter(
+    (inv) => !inv.repair || !STATUS_ORDER.includes(inv.repair?.status ?? '')
+  );
+  const groupsWithItems = [
+    ...statusGroups.filter((g) => g.items.length > 0),
+    ...(otherItems.length > 0 ? [{ status: 'other', label: 'Other', items: otherItems }] : []),
+  ];
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -461,10 +499,12 @@ export default function Repairs() {
                       <span className="text-gray-600 block text-xs">Invoice Number</span>
                       <span className="font-medium">{selectedInvoice.invoice_number}</span>
                     </div>
-                    <div>
-                      <span className="text-gray-600 block text-xs">Customer</span>
-                      <span className="font-medium">{selectedInvoice.customer_name || 'N/A'}</span>
-                    </div>
+                    {selectedInvoice.customer_group_name !== 'REPAIR' && (
+                      <div>
+                        <span className="text-gray-600 block text-xs">Customer</span>
+                        <span className="font-medium">{selectedInvoice.customer_name || 'N/A'}</span>
+                      </div>
+                    )}
                     <div>
                       <span className="text-gray-600 block text-xs">Store</span>
                       <span className="font-medium">{selectedInvoice.store_name || 'N/A'}</span>
@@ -577,14 +617,13 @@ export default function Repairs() {
         </Card>
       ) : (
         <div className="space-y-8">
-          {[
-            { title: 'Repair Group Customers', items: repairGroupInvoices },
-            { title: 'Other Group Customers', items: otherGroupInvoices }
-          ].map((group, groupIdx) => group.items.length > 0 && (
-            <div key={groupIdx} className="space-y-4">
+          {groupsWithItems.map((group) => (
+            <div key={group.status} className="space-y-4">
               <div className="flex items-center gap-3 px-2">
-                <div className={`h-8 w-1.5 rounded-full ${groupIdx === 0 ? 'bg-blue-600' : 'bg-gray-400'}`}></div>
-                <h2 className="text-xl font-bold text-gray-900">{group.title}</h2>
+                <div
+                  className={`h-8 w-1.5 rounded-full shrink-0 ${STATUS_BAR_CLASS[group.status] ?? 'bg-gray-400'}`}
+                />
+                <h2 className="text-xl font-bold text-gray-900">{group.label}</h2>
                 <Badge variant="outline" className="ml-2 font-mono">
                   {group.items.length}
                 </Badge>
@@ -592,12 +631,14 @@ export default function Repairs() {
 
               {/* Desktop Table View */}
               <div className="hidden md:block">
-                <Table headers={[
+                <Table compact headers={[
                   { label: 'Invoice #', align: 'left' },
                   { label: 'Date', align: 'left' },
                   { label: 'Customer', align: 'left' },
                   { label: 'Contact', align: 'left' },
                   { label: 'Model', align: 'left' },
+                  { label: 'Booking Amt', align: 'right' },
+                  { label: 'Work Description', align: 'left' },
                   { label: 'Status', align: 'left' },
                   { label: 'Invoice Type', align: 'left' },
                   { label: '', align: 'right' },
@@ -650,6 +691,18 @@ export default function Repairs() {
                             </span>
                           </div>
                         </TableCell>
+                        <TableCell className="text-right">
+                          <span className="text-gray-900 font-medium">
+                            {invoice.repair?.booking_amount != null && invoice.repair.booking_amount !== ''
+                              ? `₹${formatNumber(invoice.repair.booking_amount)}`
+                              : '—'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-gray-600 text-sm line-clamp-2 max-w-[200px]" title={invoice.repair?.description || undefined}>
+                            {invoice.repair?.description || '—'}
+                          </span>
+                        </TableCell>
                         <TableCell>
                           {invoice.repair ? getStatusBadge(invoice.repair.status) : 'N/A'}
                         </TableCell>
@@ -689,7 +742,7 @@ export default function Repairs() {
                               title="Print Repair Barcode Label"
                             >
                               <Printer className="h-4 w-4 flex-shrink-0" />
-                              <span>Print Label</span>
+                              <span></span>
                             </Button>
                             <Button
                               variant="outline"
@@ -701,7 +754,7 @@ export default function Repairs() {
                               className="gap-1.5"
                             >
                               <Eye className="h-4 w-4 flex-shrink-0" />
-                              <span>View</span>
+                              <span></span>
                             </Button>
                           </div>
                         </TableCell>
@@ -758,6 +811,20 @@ export default function Repairs() {
                                 <Package className="h-3.5 w-3.5 text-gray-400" />
                                 <span>{invoice.repair.model_name}</span>
                               </div>
+                              <div className="text-sm text-gray-600 mb-1">
+                                <span className="text-gray-500 font-medium">Booking Amt: </span>
+                                <span className="font-medium text-gray-900">
+                                  {invoice.repair.booking_amount != null && invoice.repair.booking_amount !== ''
+                                    ? `₹${formatNumber(invoice.repair.booking_amount)}`
+                                    : '—'}
+                                </span>
+                              </div>
+                              {invoice.repair.description && (
+                                <div className="text-sm text-gray-600 mb-1">
+                                  <span className="text-gray-500 font-medium">Work: </span>
+                                  <span className="line-clamp-2">{invoice.repair.description}</span>
+                                </div>
+                              )}
                               <div className="mt-2">
                                 {getStatusBadge(invoice.repair.status)}
                               </div>

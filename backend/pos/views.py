@@ -258,7 +258,7 @@ def generate_repair_label(request, pk):
             'vendor_name': f"{customer_name[:20]} | {repair.model_name}" if customer_name else repair.model_name,
             'purchase_date': created_date,
             'serial_number': contact_no[:10] if contact_no else None,
-            'font_size_text':'15',
+            'font_size_text':'18',
             'barcode_type':'repair'
         }]
         
