@@ -3,7 +3,7 @@ import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } f
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { getStockInfo } from '../../lib/utils';
+import { getStockInfo, getProductNameColor } from '../../lib/utils';
 import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, ChevronDown, ChevronRight, Coins, FileText, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Table from '../../components/ui/Table';
@@ -1454,7 +1454,7 @@ export default function Products() {
                         return (
                           <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                              <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
                               {currentTagFilter !== 'defective' && (
                                 <button
                                   onClick={(e) => {
@@ -1472,10 +1472,10 @@ export default function Products() {
                           </td>
                         );
                       case 'SKU':
-                        // Show barcodes instead of product SKU - limit to 2, show "view more" if more exist
+                        // Show short codes only - limit to 2, show "view more" if more exist
                         const barcodes = product.barcodes || [];
                         const barcodeList = Array.isArray(barcodes)
-                          ? barcodes.map((b: any) => b.barcode || b).filter((b: any) => b)
+                          ? barcodes.map((b: any) => b.short_code || b.barcode || b).filter((b: any) => b)
                           : [];
 
                         const maxVisible = 2;
@@ -1829,7 +1829,7 @@ export default function Products() {
                                       <ChevronRight className="h-4 w-4 text-gray-600" />
                                     )}
                                   </button>
-                                  <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                                  <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
                                 </div>
                               </td>
                             );
@@ -1943,7 +1943,7 @@ export default function Products() {
                             className="flex items-start justify-between p-3 bg-gray-50 rounded-lg border border-gray-200"
                           >
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-900 truncate">
+                              <p className="text-sm font-medium text-gray-900 truncate" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
                                 {product.name}
                               </p>
                               {product.sku && (
@@ -2028,7 +2028,7 @@ export default function Products() {
                       return (
                         <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-gray-900">{product.name}</span>
+                            <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
                             {currentTagFilter !== 'defective' && (
                               <button
                                 onClick={(e) => {
@@ -2048,7 +2048,7 @@ export default function Products() {
                     case 'SKU':
                       const barcodes = product.barcodes || [];
                       const barcodeList = Array.isArray(barcodes)
-                        ? barcodes.map((b: any) => b.barcode || b).filter((b: any) => b)
+                        ? barcodes.map((b: any) => b.short_code || b.barcode || b).filter((b: any) => b)
                         : [];
                       const maxVisible = 2;
                       const visibleBarcodes = barcodeList.slice(0, maxVisible);
@@ -2401,7 +2401,7 @@ export default function Products() {
                     <Package className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h4 className="font-semibold text-gray-900 text-base break-words leading-tight">{product.name}</h4>
+                        <h4 className="font-semibold text-gray-900 text-base break-words leading-tight" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</h4>
                         {tagFilter !== 'defective' && (
                           <button
                             onClick={(e) => {
@@ -2698,7 +2698,12 @@ export default function Products() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Product</label>
               <div className="block w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700">
-                {adjustingProduct ? allProducts.find((p: any) => p.id === adjustingProduct)?.name || 'Unknown' : 'Select product'}
+                {adjustingProduct ? (() => {
+                  const p = allProducts.find((p: any) => p.id === adjustingProduct);
+                  const name = p?.name || 'Unknown';
+                  const color = getProductNameColor(name);
+                  return <span style={color ? { color } : undefined}>{name}</span>;
+                })() : 'Select product'}
               </div>
             </div>
             <Input
@@ -3095,11 +3100,11 @@ function ViewSKUsModal({ product, tagFilter, onClose, onPrintLabel, onPrintAllLa
   };
 
   const getAvailableTags = (currentTag: string) => {
-    // Only allow transitions: unknown -> returned/defective, returned/defective -> new
+    // Only allow transitions: unknown -> returned/defective, returned/defective/in-cart -> new
     if (currentTag === 'unknown') {
       return ['returned', 'defective'];
     }
-    if (currentTag === 'returned' || currentTag === 'defective') {
+    if (currentTag === 'returned' || currentTag === 'defective' || currentTag === 'in-cart') {
       return ['new'];
     }
     return []; // No transitions allowed for other tags
@@ -3156,8 +3161,8 @@ function ViewSKUsModal({ product, tagFilter, onClose, onPrintLabel, onPrintAllLa
               </div>
             )}
 
-            {/* Quick action for returned/defective products */}
-            {(tagFilter === 'returned' || tagFilter === 'defective') && barcodes.length > 0 && (
+            {/* Quick action for returned/defective/in-cart products - mark all as fresh */}
+            {(tagFilter === 'returned' || tagFilter === 'defective' || tagFilter === 'in-cart') && barcodes.length > 0 && (
               <div className="flex justify-end mb-4">
                 <Button
                   onClick={() => {

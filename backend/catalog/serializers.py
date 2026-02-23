@@ -31,6 +31,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
 class BarcodeSerializer(serializers.ModelSerializer):
     tag_display = serializers.CharField(source='get_tag_display', read_only=True)
     purchase_price = serializers.SerializerMethodField()
+    selling_price = serializers.SerializerMethodField()
     supplier_name = serializers.SerializerMethodField()
     purchase_date = serializers.SerializerMethodField()
     invoice_number = serializers.SerializerMethodField()
@@ -45,7 +46,7 @@ class BarcodeSerializer(serializers.ModelSerializer):
         model = Barcode
         fields = [
             'id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 
-            'tag', 'tag_display', 'purchase_price', 'supplier_name', 'purchase_date', 
+            'tag', 'tag_display', 'purchase_price', 'selling_price', 'supplier_name', 'purchase_date', 
             'invoice_number', 'invoice_id', 'invoice_date', 'customer_name', 'invoice_type_display',
             'sold_price', 'sold_quantity', 'created_at'
         ]
@@ -76,7 +77,12 @@ class BarcodeSerializer(serializers.ModelSerializer):
     def get_purchase_price(self, obj):
         """Get purchase price for this specific barcode"""
         return float(obj.get_purchase_price())
-    
+
+    def get_selling_price(self, obj):
+        """Get selling price for this barcode (from purchase_item or None)."""
+        val = obj.get_selling_price()
+        return float(val) if val is not None else None
+
     def get_supplier_name(self, obj):
         """Get supplier name from purchase"""
         if obj.purchase and obj.purchase.supplier:
@@ -305,17 +311,17 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_shop_stock(self, obj):
         """Available in shop from purchase view = sum of (shop_quantity - sold) so it ties to supplier breakdown."""
-        breakdown = _get_supplier_breakdown_for_product(obj)
+        breakdown = _get_supplier_breakdown_for_product(obj, filter_shop_only=False)
         return int(round(sum(b['shop_barcode_count'] for b in breakdown)))
 
     def get_warehouse_stock(self, obj):
         """Warehouse from purchase view so it ties to supplier breakdown."""
-        breakdown = _get_supplier_breakdown_for_product(obj)
+        breakdown = _get_supplier_breakdown_for_product(obj, filter_shop_only=False)
         return int(round(sum(b['warehouse_stock'] for b in breakdown)))
 
     def get_supplier_breakdown(self, obj):
-        """Same breakdown as list/search: Whse from purchase, Shop Qty = shop - sold per supplier."""
-        return _get_supplier_breakdown_for_product(obj)
+        """Breakdown for display: only rows with shop stock > 0."""
+        return _get_supplier_breakdown_for_product(obj, filter_shop_only=True)
 
     class Meta:
         model = Product
@@ -329,10 +335,11 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
 
-def _get_supplier_breakdown_for_product(obj):
+def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
     """
     One row per purchase batch (PurchaseItem). Warehouse/Shop from that item; Shop Qty = available
     (new+returned) barcodes for that batch. Ordered by supplier then latest purchase date first.
+    If filter_shop_only=True, only include rows where shop stock (shop_barcode_count) > 0.
     """
     from backend.purchasing.models import PurchaseItem
     from django.db.models import Count
@@ -359,6 +366,9 @@ def _get_supplier_breakdown_for_product(obj):
         shop_allocated = float(item.shop_quantity)
         shop_available = float(available_per_item.get(item.id, 0))
         if shop_allocated == 0 and whse == 0 and shop_available == 0:
+            continue
+        # For display: only show rows where shop stock > 0
+        if filter_shop_only and shop_available <= 0:
             continue
         supplier_name = "Unknown"
         if item.purchase and item.purchase.supplier:
@@ -629,7 +639,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ", ".join(parts)
 
     def get_supplier_breakdown(self, obj):
-        return _get_supplier_breakdown_for_product(obj)
+        return _get_supplier_breakdown_for_product(obj, filter_shop_only=True)
 
     class Meta:
         model = Product

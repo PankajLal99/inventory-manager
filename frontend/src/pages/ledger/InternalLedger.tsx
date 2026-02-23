@@ -14,7 +14,7 @@ import {
   Plus, Minus, FileText, Users, TrendingUp, TrendingDown,
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search,
-  Clock, UserPlus, ChevronDown, ChevronRight, Pencil, Trash2
+  UserPlus
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -47,7 +47,6 @@ export default function InternalLedger() {
   });
   const [showFilters, setShowFilters] = useState(false);
   const [sortConfig, _setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
-  const [expandedCustomers, setExpandedCustomers] = useState<Set<number>>(new Set());
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
@@ -274,51 +273,6 @@ export default function InternalLedger() {
     return sorted;
   }, [entries, sortConfig]);
 
-  // Helper function to check if datetime has meaningful time (not just midnight)
-  // When only a date is provided, it becomes midnight UTC, which shows as 5:30 AM in IST
-  // So we check if the UTC time is exactly 00:00:00 (meaning it was likely just a date)
-  const hasMeaningfulTime = (dateString: string): boolean => {
-    if (!dateString) return false;
-    try {
-      const date = new Date(dateString);
-      // Check UTC time - if it's exactly midnight UTC, it was likely just a date
-      const hours = date.getUTCHours();
-      const minutes = date.getUTCMinutes();
-      const seconds = date.getUTCSeconds();
-      const milliseconds = date.getUTCMilliseconds();
-      // Consider time meaningful if it's not exactly midnight UTC (00:00:00.000)
-      return !(hours === 0 && minutes === 0 && seconds === 0 && milliseconds === 0);
-    } catch {
-      return false;
-    }
-  };
-
-  // Helper function to format date with optional time
-  const formatDateTime = (dateString: string) => {
-    if (!dateString) return { date: '', time: '' };
-    try {
-      const date = new Date(dateString);
-      const dateStr = date.toLocaleDateString('en-IN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-      });
-
-      if (hasMeaningfulTime(dateString)) {
-        const timeStr = date.toLocaleTimeString('en-IN', {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        });
-        return { date: dateStr, time: timeStr };
-      }
-
-      return { date: dateStr, time: '' };
-    } catch {
-      return { date: '', time: '' };
-    }
-  };
-
   const totalCredit = useMemo(() => {
     return filteredEntries
       .filter((e: any) => e.entry_type === 'credit')
@@ -375,18 +329,6 @@ export default function InternalLedger() {
     return grouped;
   }, [filteredEntries]);
 
-  const toggleCustomerExpansion = (customerId: number | null) => {
-    if (customerId === null) return; // Don't expand anonymous entries
-    setExpandedCustomers(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(customerId)) {
-        newSet.delete(customerId);
-      } else {
-        newSet.add(customerId);
-      }
-      return newSet;
-    });
-  };
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({
@@ -595,7 +537,16 @@ export default function InternalLedger() {
       <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4">
           <h2 className="text-xl font-semibold">Shop Boys Ledger Entries</h2>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[140px] max-w-[200px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+              <Input
+                placeholder="Search name, phone, description..."
+                value={filters.search}
+                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                className="pl-9 py-1.5 h-9 text-sm border-gray-300 rounded-lg"
+              />
+            </div>
             <Button
               variant="outline"
               onClick={() => setShowFilters(!showFilters)}
@@ -639,7 +590,7 @@ export default function InternalLedger() {
         {/* Filters Panel */}
         {showFilters && (
           <div className="border-t pt-4 mt-4 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   <Calendar className="h-4 w-4 inline mr-1" />
@@ -685,17 +636,6 @@ export default function InternalLedger() {
                   ))}
                 </Select>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  <Search className="h-4 w-4 inline mr-1" />
-                  Search
-                </label>
-                <Input
-                  placeholder="Search by name, phone, description..."
-                  value={filters.search}
-                  onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                />
-              </div>
             </div>
             <div className="flex justify-end gap-2">
               <Button
@@ -735,142 +675,63 @@ export default function InternalLedger() {
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Entries
                           </th>
-                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
-                            Net Amount
-                          </th>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Latest
                           </th>
                           {isAdmin && <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">Actions</th>}
+                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Net Amount
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {Object.values(groupedByCustomer).map((group: any) => {
-                          const isExpanded = group.customer.id !== null && expandedCustomers.has(group.customer.id);
-                          const canExpand = group.customer.id !== null;
+                          const canNavigate = group.customer.id !== null;
                           return (
-                            <>
-                              {/* Customer Group Row */}
-                              <tr
-                                key={`customer-${group.customer.id || 'anonymous'}`}
-                                className="bg-blue-50 hover:bg-blue-100 transition-colors"
-                                style={{ cursor: canExpand ? 'pointer' : 'default' }}
-                                onClick={() => canExpand && toggleCustomerExpansion(group.customer.id)}
-                              >
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                  <div className="flex items-center gap-2">
-                                    {canExpand ? (
-                                      isExpanded ? (
-                                        <ChevronDown className="h-4 w-4 text-gray-600" />
-                                      ) : (
-                                        <ChevronRight className="h-4 w-4 text-gray-600" />
-                                      )
-                                    ) : (
-                                      <div className="w-4 h-4" />
-                                    )}
-                                    <Users className="h-4 w-4 text-blue-600" />
-                                    {canExpand ? (
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          navigate(`/internal-ledger/${group.customer.id}`);
-                                        }}
-                                        className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
-                                      >
-                                        {group.customer.name}
-                                      </button>
-                                    ) : (
-                                      <span className="text-sm font-semibold text-gray-700">
-                                        {group.customer.name}
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                  <span className="text-sm text-gray-600">
-                                    {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
-                                  </span>
-                                </td>
-                                <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
-                                  }`}>
-                                  <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0
-                                    ? 'bg-green-50 border border-green-200'
-                                    : 'bg-red-50 border border-red-200'
-                                    }`}>
-                                    {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
-                                  </span>
-                                </td>
-                                <td className="px-6 py-4">
-                                  <div className="text-sm text-gray-700 max-w-xs truncate" title={group.latestDescription || '-'}>
-                                    {group.latestDescription || <span className="text-gray-400 italic">—</span>}
-                                  </div>
-                                </td>
-                                {isAdmin && <td className="px-6 py-4"></td>}
-                              </tr>
-                              {/* Expanded Entries */}
-                              {isExpanded && group.entries.map((entry: any) => (
-                                <tr
-                                  key={entry.id}
-                                  className="bg-gray-50/30 hover:bg-gray-100 transition-colors"
-                                >
-                                  <td className="px-6 py-3 whitespace-nowrap pl-12">
-                                    <div className="flex flex-col">
-                                      {(() => {
-                                        const { date, time } = formatDateTime(entry.created_at);
-                                        return (
-                                          <>
-                                            <span className="text-sm font-medium text-gray-900">
-                                              {date}
-                                            </span>
-                                            {time && (
-                                              <span className="text-xs text-gray-500">
-                                                {time}
-                                              </span>
-                                            )}
-                                          </>
-                                        );
-                                      })()}
-                                    </div>
-                                  </td>
-                                  <td className="px-6 py-3 whitespace-nowrap">
-                                    <div className="flex items-center gap-2">
-                                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
-                                        ? 'bg-green-100 text-green-800 border border-green-200'
-                                        : 'bg-red-100 text-red-800 border border-red-200'
-                                        }`}>
-                                        {entry.entry_type === 'credit' ? (
-                                          <TrendingUp className="h-3 w-3 mr-1" />
-                                        ) : (
-                                          <TrendingDown className="h-3 w-3 mr-1" />
-                                        )}
-                                        {entry.entry_type.toUpperCase()}
-                                      </span>
-                                      <span className="text-sm text-gray-700 max-w-xs truncate" title={entry.description || '-'}>
-                                        {entry.description || <span className="text-gray-400 italic">No description</span>}
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className={`px-6 py-3 whitespace-nowrap text-right text-sm font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                                    }`}>
-                                    <span className={`inline-flex items-center px-2 py-1 rounded ${entry.entry_type === 'credit'
-                                      ? 'bg-green-50 border border-green-200'
-                                      : 'bg-red-50 border border-red-200'
-                                      }`}>
-                                      {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
+                            <tr
+                              key={`customer-${group.customer.id || 'anonymous'}`}
+                              className="bg-blue-50 hover:bg-blue-100 transition-colors"
+                            >
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-4 h-4" />
+                                  <Users className="h-4 w-4 text-blue-600" />
+                                  {canNavigate ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => navigate(`/internal-ledger/${group.customer.id}`)}
+                                      className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
+                                    >
+                                      {group.customer.name}
+                                    </button>
+                                  ) : (
+                                    <span className="text-sm font-semibold text-gray-700">
+                                      {group.customer.name}
                                     </span>
-                                  </td>
-                                  <td className="px-6 py-3" />
-                                  {isAdmin && (
-                                    <td className="px-6 py-3 whitespace-nowrap text-right">
-                                      <div className="flex items-center justify-end gap-1">
-                                        <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
-                                        <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
-                                      </div>
-                                    </td>
                                   )}
-                                </tr>
-                              ))}
-                            </>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <span className="text-sm text-gray-600">
+                                  {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="text-sm text-gray-700 max-w-xs truncate" title={group.latestDescription || '-'}>
+                                  {group.latestDescription || <span className="text-gray-400 italic">—</span>}
+                                </div>
+                              </td>
+                              {isAdmin && <td className="px-6 py-4"></td>}
+                              <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
+                                }`}>
+                                <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0
+                                  ? 'bg-green-50 border border-green-200'
+                                  : 'bg-red-50 border border-red-200'
+                                  }`}>
+                                  {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
+                                </span>
+                              </td>
+                            </tr>
                           );
                         })}
                       </tbody>
@@ -879,6 +740,8 @@ export default function InternalLedger() {
                           <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
                             Totals:
                           </td>
+                          <td className="px-6 py-4" />
+                          {isAdmin && <td className="px-6 py-4"></td>}
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <div className="space-y-1">
                               <div className="text-sm">
@@ -898,7 +761,6 @@ export default function InternalLedger() {
                               </div>
                             </div>
                           </td>
-                          {isAdmin && <td className="px-6 py-4"></td>}
                         </tr>
                       </tfoot>
                     </table>
@@ -928,36 +790,20 @@ export default function InternalLedger() {
             {/* Mobile Card View - Grouped by Customer */}
             <div className="mt-6 md:hidden space-y-3">
               {Object.values(groupedByCustomer).map((group: any) => {
-                const isExpanded = group.customer.id !== null && expandedCustomers.has(group.customer.id);
-                const canExpand = group.customer.id !== null;
+                const canNavigate = group.customer.id !== null;
                 return (
-                  <div key={`customer-${group.customer.id || 'anonymous'}`} className="space-y-2">
-                    {/* Customer Group Card */}
-                    <div
-                      className="bg-blue-50 border border-blue-200 rounded-lg shadow-sm hover:shadow-md transition-shadow p-4"
-                      style={{ cursor: canExpand ? 'pointer' : 'default' }}
-                      onClick={() => canExpand && toggleCustomerExpansion(group.customer.id)}
-                    >
+                  <div key={`customer-${group.customer.id || 'anonymous'}`}>
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg shadow-sm hover:shadow-md transition-shadow p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 flex-1">
-                          {canExpand ? (
-                            isExpanded ? (
-                              <ChevronDown className="h-5 w-5 text-gray-600" />
-                            ) : (
-                              <ChevronRight className="h-5 w-5 text-gray-600" />
-                            )
-                          ) : (
-                            <div className="w-5 h-5" />
-                          )}
+                          <div className="w-5 h-5" />
                           <Users className="h-5 w-5 text-blue-600" />
                           <div className="flex-1">
-                            {canExpand ? (
+                            {canNavigate ? (
                               <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate(`/internal-ledger/${group.customer.id}`);
-                                }}
-                                className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                                type="button"
+                                onClick={() => navigate(`/internal-ledger/${group.customer.id}`)}
+                                className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                               >
                                 {group.customer.name}
                               </button>
@@ -987,72 +833,6 @@ export default function InternalLedger() {
                         </div>
                       </div>
                     </div>
-
-                    {/* Expanded Entries */}
-                    {isExpanded && group.entries.map((entry: any) => (
-                      <div
-                        key={entry.id}
-                        className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 ml-6"
-                      >
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Clock className="h-4 w-4 text-gray-400" />
-                              {(() => {
-                                const { date, time } = formatDateTime(entry.created_at);
-                                return (
-                                  <>
-                                    <span className="text-sm font-medium text-gray-900">
-                                      {date}
-                                    </span>
-                                    {time && (
-                                      <span className="text-xs text-gray-500">
-                                        {time}
-                                      </span>
-                                    )}
-                                  </>
-                                );
-                              })()}
-                            </div>
-                          </div>
-                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold shadow-sm ${entry.entry_type === 'credit'
-                            ? 'bg-green-100 text-green-800 border border-green-200'
-                            : 'bg-red-100 text-red-800 border border-red-200'
-                            }`}>
-                            {entry.entry_type === 'credit' ? (
-                              <TrendingUp className="h-3 w-3 mr-1" />
-                            ) : (
-                              <TrendingDown className="h-3 w-3 mr-1" />
-                            )}
-                            {entry.entry_type.toUpperCase()}
-                          </span>
-                        </div>
-                        {entry.description && (
-                          <div className="mb-2">
-                            <p className="text-sm text-gray-700 break-words">
-                              {entry.description}
-                            </p>
-                          </div>
-                        )}
-                        <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-                          <div className={`text-base font-bold ${entry.entry_type === 'credit' ? 'text-green-700' : 'text-red-700'
-                            }`}>
-                            <span className={`inline-flex items-center px-2.5 py-1 rounded ${entry.entry_type === 'credit'
-                              ? 'bg-green-50 border border-green-200'
-                              : 'bg-red-50 border border-red-200'
-                              }`}>
-                              {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
-                            </span>
-                          </div>
-                          {isAdmin && (
-                            <div className="flex gap-1">
-                              <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
-                              <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 );
               })}

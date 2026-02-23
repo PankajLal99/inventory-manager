@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useEffect } from 'react';
 import { customersApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
@@ -12,7 +12,7 @@ import Modal from '../../components/ui/Modal';
 import { toast } from '../../lib/toast';
 import {
   ArrowLeft, FileText, FileSpreadsheet, FileText as FileTextIcon,
-  Printer, Filter, X, Calendar, Search, Plus, Minus, Pencil, Trash2
+  Printer, Filter, X, Calendar, Search, Plus, Minus, Pencil, Trash2, Package
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -40,6 +40,8 @@ export default function LedgerDetail() {
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
+  const [showCategorySelector, setShowCategorySelector] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: customerData } = useQuery({
@@ -121,6 +123,47 @@ export default function LedgerDetail() {
   const customer = customerData?.data;
   const allEntries = ledgerDetail?.data?.entries || [];
   const finalBalance = ledgerDetail?.data?.final_balance || '0.00';
+
+  // Fetch all categories for the selector
+  const { data: categoriesResponse } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => catalogApi.categories.list(),
+    retry: false,
+  });
+
+  const categories = (() => {
+    if (!categoriesResponse) return [];
+    const d = categoriesResponse?.data ?? categoriesResponse;
+    if (Array.isArray(d?.results)) return d.results;
+    if (Array.isArray(d?.data)) return d.data;
+    if (Array.isArray(d)) return d;
+    return [];
+  })();
+
+  // Invoice items count by selected categories (products sold to this customer), respects date filter
+  const { data: itemsByCategoryData } = useQuery({
+    queryKey: ['ledger-invoice-items-by-category', customerId, defaultStore?.id, selectedCategoryIds, filters.dateFrom, filters.dateTo],
+    queryFn: () => {
+      const params: any = {};
+      if (defaultStore?.id) params.store = defaultStore.id;
+      if (selectedCategoryIds.length) params.categories = selectedCategoryIds;
+      if (filters.dateFrom) params.date_from = filters.dateFrom;
+      if (filters.dateTo) params.date_to = filters.dateTo;
+      return customersApi.ledger.invoiceItemsByCategory(parseInt(customerId || '0'), params);
+    },
+    enabled: !!customerId && !!defaultStore && selectedCategoryIds.length > 0,
+    retry: false,
+  });
+
+  const itemsByCategory = itemsByCategoryData?.data;
+  const categoryTotalCount = itemsByCategory?.total_count ?? 0;
+  const categoryBreakdown = itemsByCategory?.by_category ?? [];
+
+  const toggleCategory = (id: number) => {
+    setSelectedCategoryIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
 
   const createEntryMutation = useMutation({
     mutationFn: (data: any) => customersApi.ledger.entries.create(data),
@@ -409,6 +452,75 @@ export default function LedgerDetail() {
         </div>
       </div>
 
+      {/* Invoice items by category - first content block so it's always visible */}
+      <div className="bg-white rounded-2xl shadow p-6 border border-blue-100">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2 text-gray-900">
+            <Package className="h-5 w-5 text-blue-600" />
+            Products sold by category
+          </h2>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowCategorySelector(!showCategorySelector)}
+          >
+            {selectedCategoryIds.length > 0
+              ? `${selectedCategoryIds.length} categor${selectedCategoryIds.length === 1 ? 'y' : 'ies'} selected`
+              : 'Select categories'}
+          </Button>
+        </div>
+        {showCategorySelector && (
+          <div className="border border-gray-200 rounded-lg p-4 mb-4 bg-gray-50">
+            <p className="text-sm text-gray-600 mb-3">Select categories to see total item count sold to this customer:</p>
+            <div className="flex flex-wrap gap-3 max-h-48 overflow-y-auto">
+              {(categories ?? []).map((cat: any) => (
+                <label
+                  key={cat.id}
+                  className="flex items-center gap-2 cursor-pointer text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedCategoryIds.includes(cat.id)}
+                    onChange={() => toggleCategory(cat.id)}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-gray-800">{cat.name}</span>
+                </label>
+              ))}
+              {(!categories || categories.length === 0) && (
+                <p className="text-sm text-gray-500">No categories found.</p>
+              )}
+            </div>
+          </div>
+        )}
+        {selectedCategoryIds.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-lg font-semibold text-gray-900">
+              Total items (selected categories): <span className="text-blue-600">{categoryTotalCount}</span>
+            </p>
+            {(filters.dateFrom || filters.dateTo) && (
+              <p className="text-xs text-gray-500">
+                Based on statement date filter: {filters.dateFrom || '…'} to {filters.dateTo || '…'}
+              </p>
+            )}
+            {categoryBreakdown.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {categoryBreakdown.map((row: { id: number; name: string; count: number }) => (
+                  <span
+                    key={row.id ?? row.name}
+                    className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-blue-50 text-blue-800"
+                  >
+                    {row.name}: {row.count}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">Select one or more categories above to see the count of products sold to this customer in those categories.</p>
+        )}
+      </div>
+
       {/* Balance Summary */}
       <div className="bg-white rounded-2xl shadow p-6">
         <div className="flex items-center justify-between">
@@ -604,7 +716,7 @@ export default function LedgerDetail() {
                     {isAdmin && (
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: amountForInput(entry.amount), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
                           <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
                         </div>
                       </td>

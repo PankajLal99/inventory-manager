@@ -19,7 +19,7 @@ import {
   Barcode as BarcodeIcon,
   Camera,
 } from 'lucide-react';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getProductNameColor } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -420,7 +420,10 @@ export default function Search() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start gap-2 mb-2">
                                 <div className="flex-1 min-w-0">
-                                  <h3 className="font-medium text-gray-900 group-hover:text-blue-600 block sm:inline">
+                                  <h3
+                                    className="font-medium text-gray-900 group-hover:text-blue-600 block sm:inline"
+                                    style={getProductNameColor(item.name) ? { color: getProductNameColor(item.name) } : undefined}
+                                  >
                                     {item.name}
                                   </h3>
                                   {(item.brand_name || item.category_name) && (
@@ -672,6 +675,26 @@ export default function Search() {
                             <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
                               ₹{formatNumber(item.sold_price)}
                             </div>
+                          </div>
+                        )}
+                        {item.tag !== 'sold' && (item.selling_price != null || item.purchase_price != null) && (
+                          <div className="text-right space-y-1">
+                            {item.selling_price != null && item.selling_price > 0 && (
+                              <div>
+                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Selling Price</div>
+                                <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
+                                  ₹{formatNumber(item.selling_price)}
+                                </div>
+                              </div>
+                            )}
+                            {item.purchase_price != null && item.purchase_price > 0 && (
+                              <div>
+                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Purchase Price</div>
+                                <div className="text-base font-semibold text-gray-600 leading-none">
+                                  ₹{formatNumber(item.purchase_price)}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                         <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
