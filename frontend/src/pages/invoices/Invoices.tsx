@@ -132,7 +132,6 @@ export default function Invoices() {
       date_to: dateTo || undefined,
       store: defaultStore?.id || undefined,
       page: currentPage,
-      limit: 50,
       search: search.trim() || undefined,
     }),
     enabled: !!defaultStore,
@@ -145,11 +144,13 @@ export default function Invoices() {
   }, [invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id, search]);
 
   const invoices: Invoice[] = data?.data?.results || data?.data?.results || data?.data || [];
-  const paginationInfo = data?.data && typeof data.data === 'object' && 'count' in data.data ? {
-    totalItems: data.data.count as number,
-    totalPages: data.data.total_pages as number,
-    currentPage: data.data.page as number,
-    pageSize: data.data.page_size as number,
+  const rawData = data?.data && typeof data.data === 'object' ? data.data : null;
+  const pageDate = rawData && 'page_date' in rawData ? (rawData.page_date as string) : null;
+  const paginationInfo = rawData && 'count' in rawData ? {
+    totalItems: rawData.count as number,
+    totalPages: (rawData.total_pages as number) ?? 1,
+    currentPage: (rawData.page as number) ?? 1,
+    pageSize: (rawData.page_size as number) ?? ((rawData.count as number) || 50),
   } : null;
 
   // Filter out defective invoices (they should only appear in defective move-outs page)
@@ -344,6 +345,21 @@ export default function Invoices() {
           <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Repair Service</span>
         </div>
       </div>
+
+      {/* Page date label (date-based pagination: each page = one day) */}
+      {paginationInfo && pageDate && (
+        <p className="text-sm text-gray-600 font-medium">
+          Invoices for{' '}
+          <span className="text-gray-900">
+            {new Date(pageDate).toLocaleDateString('en-IN', {
+              weekday: 'short',
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+            })}
+          </span>
+        </p>
+      )}
 
       {/* Invoices Table */}
       {filteredInvoices.length === 0 ? (

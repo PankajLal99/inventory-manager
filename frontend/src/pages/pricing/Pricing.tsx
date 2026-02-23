@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { pricingApi, customersApi } from '../../lib/api';
+import { toLocalDateString, formatDateOnlyDisplay } from '../../lib/utils';
 import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
@@ -15,7 +16,7 @@ export default function Pricing() {
   const [formData, setFormData] = useState({
     name: '',
     customer_group: '',
-    valid_from: new Date().toISOString().split('T')[0],
+    valid_from: toLocalDateString(new Date()),
     valid_to: '',
     is_active: true,
     // Promotion-specific
@@ -129,7 +130,7 @@ export default function Pricing() {
     setFormData({
       name: '',
       customer_group: '',
-      valid_from: new Date().toISOString().split('T')[0],
+      valid_from: toLocalDateString(new Date()),
       valid_to: '',
       is_active: true,
       promotion_type: 'cart_total',
@@ -144,7 +145,7 @@ export default function Pricing() {
     setFormData({
       name: item.name || '',
       customer_group: item.customer_group?.toString() || '',
-      valid_from: item.valid_from || new Date().toISOString().split('T')[0],
+      valid_from: item.valid_from || toLocalDateString(new Date()),
       valid_to: item.valid_to || '',
       is_active: item.is_active !== false,
       promotion_type: item.promotion_type || 'cart_total',
@@ -285,7 +286,7 @@ export default function Pricing() {
                       </Badge>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {list.valid_from ? new Date(list.valid_from).toLocaleDateString() : '-'}
+                      {list.valid_from ? formatDateOnlyDisplay(list.valid_from) : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {list.valid_to ? new Date(list.valid_to).toLocaleDateString() : '-'}
@@ -363,7 +364,7 @@ export default function Pricing() {
                         </div>
                         <div>
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Valid From</div>
-                          <div className="text-sm text-gray-900">{list.valid_from ? new Date(list.valid_from).toLocaleDateString() : '-'}</div>
+                          <div className="text-sm text-gray-900">{list.valid_from ? formatDateOnlyDisplay(list.valid_from) : '-'}</div>
                         </div>
                         <div className="col-span-2">
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Valid To</div>
@@ -403,7 +404,7 @@ export default function Pricing() {
                         : `₹${promo.discount_value}`}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {promo.valid_from ? new Date(promo.valid_from).toLocaleDateString() : '-'}
+                      {promo.valid_from ? formatDateOnlyDisplay(promo.valid_from) : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {promo.valid_to ? new Date(promo.valid_to).toLocaleDateString() : '-'}
@@ -488,7 +489,7 @@ export default function Pricing() {
                         </div>
                         <div>
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Valid From</div>
-                          <div className="text-sm text-gray-900">{promo.valid_from ? new Date(promo.valid_from).toLocaleDateString() : '-'}</div>
+                          <div className="text-sm text-gray-900">{promo.valid_from ? formatDateOnlyDisplay(promo.valid_from) : '-'}</div>
                         </div>
                         <div>
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Valid To</div>

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { reportsApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, toLocalDateString } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   Package, FileText, ShoppingBag, Calendar,
@@ -15,8 +15,8 @@ import Input from '../../components/ui/Input';
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(auth.getUser());
-  const [dateFrom, setDateFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
+  const [dateFrom, setDateFrom] = useState(toLocalDateString(new Date()));
+  const [dateTo, setDateTo] = useState(toLocalDateString(new Date()));
 
   useEffect(() => {
     if (!user) {
@@ -177,7 +177,7 @@ export default function Dashboard() {
               variant="outline"
               size="sm"
               onClick={() => {
-                const today = new Date().toISOString().split('T')[0];
+                const today = toLocalDateString(new Date());
                 setDateFrom(today);
                 setDateTo(today);
               }}

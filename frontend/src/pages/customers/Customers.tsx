@@ -44,6 +44,7 @@ export default function Customers() {
   });
   const [nameSearchQuery, setNameSearchQuery] = useState('');
   const [debouncedNameSearch, setDebouncedNameSearch] = useState('');
+  const [customerToDelete, setCustomerToDelete] = useState<{ id: number; name: string } | null>(null);
   const queryClient = useQueryClient();
 
   // Debounce name search
@@ -160,8 +161,21 @@ export default function Customers() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => customersApi.delete(id),
-    onSuccess: () => {
+    onSuccess: (_data, deletedId) => {
+      setCustomerToDelete(null);
+      // Optimistically remove the deleted customer from all customer list caches so the UI updates immediately
+      queryClient.setQueriesData({ queryKey: ['customers'] }, (old: any) => {
+        if (!old) return old;
+        const list = Array.isArray(old) ? old : (old.results ?? old.data ?? []);
+        const filtered = list.filter((c: any) => c.id !== deletedId);
+        if (Array.isArray(old)) return filtered;
+        if (old.results) return { ...old, results: filtered };
+        if (old.data) return { ...old, data: filtered };
+        return old;
+      });
       queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['all-customers'] });
+      toast('Customer deleted successfully', 'success');
     },
     onError: (error: any) => {
       toast(error?.response?.data?.message || 'Failed to delete customer', 'error');
@@ -215,9 +229,13 @@ export default function Customers() {
     setShowForm(true);
   };
 
-  const handleDelete = (id: number) => {
-    if (confirm('Are you sure you want to delete this customer?')) {
-      deleteMutation.mutate(id);
+  const handleDeleteClick = (customer: any) => {
+    setCustomerToDelete({ id: customer.id, name: customer.name || 'this customer' });
+  };
+
+  const handleConfirmDelete = () => {
+    if (customerToDelete) {
+      deleteMutation.mutate(customerToDelete.id);
     }
   };
 
@@ -464,7 +482,7 @@ export default function Customers() {
                         <Edit className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => handleDelete(customer.id)}
+                        onClick={() => handleDeleteClick(customer)}
                         className="text-red-600 hover:text-red-900 transition-colors"
                         title="Delete"
                         disabled={deleteMutation.isPending}
@@ -501,7 +519,7 @@ export default function Customers() {
                         <Edit className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => handleDelete(customer.id)}
+                        onClick={() => handleDeleteClick(customer)}
                         className="text-red-600 hover:text-red-900 transition-colors p-2 hover:bg-red-50 rounded-lg"
                         title="Delete"
                         disabled={deleteMutation.isPending}
@@ -744,6 +762,50 @@ export default function Customers() {
               </Button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {customerToDelete && (
+        <Modal
+          isOpen={!!customerToDelete}
+          onClose={() => setCustomerToDelete(null)}
+          title="Delete customer?"
+          size="md"
+        >
+          <div className="space-y-4">
+            <p className="text-gray-700">
+              You are about to delete <strong>{customerToDelete.name}</strong>. This action cannot be undone.
+            </p>
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-900">
+              <p className="font-semibold mb-2">Impact of deleting this customer:</p>
+              <ul className="list-disc list-inside space-y-1">
+                <li>All ledger entries for this customer will be permanently removed</li>
+                <li>Credit balance and transaction history will be lost</li>
+                <li>Invoices already created for this customer will remain, but the customer link may be cleared or show as deleted</li>
+                <li>This customer will no longer appear in customer lists, ledger, or reports</li>
+              </ul>
+            </div>
+            <p className="text-gray-600 text-sm">
+              Consider deactivating the customer instead if you want to keep history but hide them from active lists.
+            </p>
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCustomerToDelete(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={handleConfirmDelete}
+                disabled={deleteMutation.isPending}
+              >
+                {deleteMutation.isPending ? 'Deleting...' : 'Delete customer'}
+              </Button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, toLocalDateString } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -569,12 +569,13 @@ export default function PurchaseDetail() {
 
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+    if (!dateString) return '-';
+    const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const date = match
+      ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+      : new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    return date.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
   };
 
   const handleExportExcel = () => {
@@ -592,7 +593,7 @@ export default function PurchaseDetail() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Purchase Items');
 
-    const fileName = `purchase_${purchase.purchase_number || purchase.id}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    const fileName = `purchase_${purchase.purchase_number || purchase.id}_${toLocalDateString(new Date())}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
@@ -636,7 +637,7 @@ export default function PurchaseDetail() {
     doc.setFontSize(12);
     doc.text(`Total: ₹${formatNumber(purchase.total || 0)}`, 14, finalY + 10);
 
-    const fileName = `purchase_${purchase.purchase_number || purchase.id}_${new Date().toISOString().split('T')[0]}.pdf`;
+    const fileName = `purchase_${purchase.purchase_number || purchase.id}_${toLocalDateString(new Date())}.pdf`;
     doc.save(fileName);
   };
 

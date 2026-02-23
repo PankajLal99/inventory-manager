@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { formatAmountINR } from '../../lib/utils';
+import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi } from '../../lib/api';
@@ -7,6 +7,7 @@ import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import DatePicker from '../../components/ui/DatePicker';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
 import {
@@ -24,7 +25,7 @@ export default function InternalLedger() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
-  const [entryData, setEntryData] = useState({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+  const [entryData, setEntryData] = useState({ amount: '', description: '', date: toLocalDateString(new Date()) });
   const [customerSearch, setCustomerSearch] = useState('');
   const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false);
   const [showCustomerListModal, setShowCustomerListModal] = useState(false);
@@ -127,7 +128,7 @@ export default function InternalLedger() {
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-entries'] });
       setShowEntryForm(false);
       setSelectedCustomer(null);
-      setEntryData({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+      setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
       toast('Shop boys ledger entry created successfully', 'success');
     },
     onError: (error: any) => {
@@ -198,7 +199,7 @@ export default function InternalLedger() {
       entry_type: entryType,
       amount: parseFloat(entryData.amount),
       description: (entryData.description || '').trim(),
-      created_at: entryData.date ? new Date(entryData.date).toISOString() : undefined,
+      created_at: entryData.date ? dateStringWithCurrentTimeISO(entryData.date) : undefined,
     });
   };
 
@@ -264,6 +265,10 @@ export default function InternalLedger() {
         if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
       });
+    } else {
+      sorted.sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
     }
 
     return sorted;
@@ -328,7 +333,7 @@ export default function InternalLedger() {
 
   // Group entries by customer
   const groupedByCustomer = useMemo(() => {
-    const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number } } = {};
+    const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string } } = {};
 
     filteredEntries.forEach((entry: any) => {
       // Use customer ID or 'anonymous' for null/undefined customers
@@ -345,6 +350,7 @@ export default function InternalLedger() {
           totalCredit: 0,
           totalDebit: 0,
           netAmount: 0,
+          latestDescription: '',
         };
       }
 
@@ -356,9 +362,14 @@ export default function InternalLedger() {
       }
     });
 
-    // Calculate net amount for each customer
+    // Calculate net amount and latest description for each customer; sort entries by latest first
     Object.keys(grouped).forEach(key => {
       grouped[key].netAmount = grouped[key].totalCredit - grouped[key].totalDebit;
+      const byDate = [...grouped[key].entries].sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      grouped[key].latestDescription = byDate[0]?.description || '';
+      grouped[key].entries = byDate;
     });
 
     return grouped;
@@ -634,10 +645,9 @@ export default function InternalLedger() {
                   <Calendar className="h-4 w-4 inline mr-1" />
                   Date From
                 </label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={filters.dateFrom}
-                  onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
+                  onChange={(date) => setFilters({ ...filters, dateFrom: date })}
                 />
               </div>
               <div>
@@ -645,10 +655,9 @@ export default function InternalLedger() {
                   <Calendar className="h-4 w-4 inline mr-1" />
                   Date To
                 </label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={filters.dateTo}
-                  onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
+                  onChange={(date) => setFilters({ ...filters, dateTo: date })}
                 />
               </div>
               <div>
@@ -729,6 +738,9 @@ export default function InternalLedger() {
                           <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Net Amount
                           </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Latest
+                          </th>
                           {isAdmin && <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">Actions</th>}
                         </tr>
                       </thead>
@@ -788,6 +800,11 @@ export default function InternalLedger() {
                                     {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
                                   </span>
                                 </td>
+                                <td className="px-6 py-4">
+                                  <div className="text-sm text-gray-700 max-w-xs truncate" title={group.latestDescription || '-'}>
+                                    {group.latestDescription || <span className="text-gray-400 italic">—</span>}
+                                  </div>
+                                </td>
                                 {isAdmin && <td className="px-6 py-4"></td>}
                               </tr>
                               {/* Expanded Entries */}
@@ -842,10 +859,11 @@ export default function InternalLedger() {
                                       {entry.entry_type === 'credit' ? '+' : '-'}₹{formatAmountINR(entry.amount || 0)}
                                     </span>
                                   </td>
+                                  <td className="px-6 py-3" />
                                   {isAdmin && (
                                     <td className="px-6 py-3 whitespace-nowrap text-right">
                                       <div className="flex items-center justify-end gap-1">
-                                        <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
+                                        <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
                                         <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
                                       </div>
                                     </td>
@@ -951,6 +969,11 @@ export default function InternalLedger() {
                             <p className="text-xs text-gray-600 mt-0.5">
                               {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
                             </p>
+                            {group.latestDescription ? (
+                              <p className="text-xs text-gray-600 mt-1 truncate max-w-[200px]" title={group.latestDescription}>
+                                {group.latestDescription}
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                         <div className={`text-lg font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
@@ -1023,7 +1046,7 @@ export default function InternalLedger() {
                           </div>
                           {isAdmin && (
                             <div className="flex gap-1">
-                              <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? new Date(entry.created_at).toISOString().split('T')[0] : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
+                              <button type="button" onClick={() => { setEditingEntry(entry); setEditEntryData({ amount: String(entry.amount || ''), description: entry.description || '', date: entry.created_at ? toLocalDateString(entry.created_at) : '', entryType: (entry.entry_type || 'credit') as 'credit' | 'debit' }); }} className="p-2 text-gray-500 hover:text-blue-600 rounded" title="Edit"><Pencil className="h-4 w-4" /></button>
                               <button type="button" onClick={() => setDeletingEntryId(entry.id)} className="p-2 text-gray-500 hover:text-red-600 rounded" title="Remove"><Trash2 className="h-4 w-4" /></button>
                             </div>
                           )}
@@ -1078,8 +1101,8 @@ export default function InternalLedger() {
       {/* Edit Entry Modal (Admin only) */}
       <Modal isOpen={!!editingEntry} onClose={() => { setEditingEntry(null); setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' }); }} title="Edit Shop Boys Ledger Entry">
         {editingEntry && (
-          <form onSubmit={(e) => { e.preventDefault(); if (!editEntryData.amount || parseFloat(editEntryData.amount) <= 0) { toast('Please enter a valid amount', 'error'); return; } updateEntryMutation.mutate({ id: editingEntry.id, data: { entry_type: editEntryData.entryType, amount: parseFloat(editEntryData.amount), description: (editEntryData.description || '').trim(), created_at: editEntryData.date ? new Date(editEntryData.date).toISOString() : undefined } }); }} className="space-y-4">
-            <div><label className="block text-sm font-medium text-gray-700 mb-2">Date</label><Input type="date" value={editEntryData.date} onChange={(e) => setEditEntryData({ ...editEntryData, date: e.target.value })} required /></div>
+          <form onSubmit={(e) => { e.preventDefault(); if (!editEntryData.amount || parseFloat(editEntryData.amount) <= 0) { toast('Please enter a valid amount', 'error'); return; } updateEntryMutation.mutate({ id: editingEntry.id, data: { entry_type: editEntryData.entryType, amount: parseFloat(editEntryData.amount), description: (editEntryData.description || '').trim(), created_at: editEntryData.date ? dateStringWithCurrentTimeISO(editEntryData.date) : undefined } }); }} className="space-y-4">
+            <div><label className="block text-sm font-medium text-gray-700 mb-2">Date</label><DatePicker value={editEntryData.date} onChange={(date) => setEditEntryData({ ...editEntryData, date })} required /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-2">Entry Type</label><Select value={editEntryData.entryType} onChange={(e) => setEditEntryData({ ...editEntryData, entryType: e.target.value as 'credit' | 'debit' })}><option value="credit">Credit</option><option value="debit">Debit</option></Select></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-2">Amount</label><Input type="number" step="0.01" value={editEntryData.amount} onChange={(e) => setEditEntryData({ ...editEntryData, amount: e.target.value })} required /></div>
             <div><label className="block text-sm font-medium text-gray-700 mb-2">Description</label><textarea className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows={3} value={editEntryData.description} onChange={(e) => setEditEntryData({ ...editEntryData, description: e.target.value })} /></div>
@@ -1098,7 +1121,7 @@ export default function InternalLedger() {
         onClose={() => {
           setShowEntryForm(false);
           setSelectedCustomer(null);
-          setEntryData({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+          setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
         }}
         title={entryType === 'credit' ? 'Add Credit Entry' : 'Add Debit Entry'}
       >
@@ -1219,10 +1242,9 @@ export default function InternalLedger() {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Date
             </label>
-            <Input
-              type="date"
+            <DatePicker
               value={entryData.date}
-              onChange={(e) => setEntryData({ ...entryData, date: e.target.value })}
+              onChange={(date) => setEntryData({ ...entryData, date })}
               required
             />
           </div>
@@ -1261,7 +1283,7 @@ export default function InternalLedger() {
               onClick={() => {
                 setShowEntryForm(false);
                 setSelectedCustomer(null);
-                setEntryData({ amount: '', description: '', date: new Date().toISOString().split('T')[0] });
+                setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
               }}
             >
               Cancel

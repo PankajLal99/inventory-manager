@@ -31,6 +31,7 @@ export default function RepairRegistration() {
     const [customerSearch, setCustomerSearch] = useState('');
     const [repairContactNo, setRepairContactNo] = useState('');
     const [repairModelName, setRepairModelName] = useState('');
+    const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const [repairBookingAmount, setRepairBookingAmount] = useState('');
     const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false);
     const [newCustomerName, setNewCustomerName] = useState('');
@@ -117,6 +118,24 @@ export default function RepairRegistration() {
         const timer = setTimeout(() => setDebouncedSearch(customerSearch.trim()), 300);
         return () => clearTimeout(timer);
     }, [customerSearch]);
+
+    // Debounce device model search (300ms) for dropdown suggestions
+    const [debouncedModelSearch, setDebouncedModelSearch] = useState('');
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedModelSearch(repairModelName.trim()), 300);
+        return () => clearTimeout(timer);
+    }, [repairModelName]);
+
+    // Fetch distinct device models from DB (search/filter by typed value)
+    const { data: deviceModelsResponse, isLoading: deviceModelsLoading } = useQuery({
+        queryKey: ['repair-device-models', debouncedModelSearch],
+        queryFn: async () => {
+            const resp = await posApi.repair.getDeviceModels(debouncedModelSearch || undefined);
+            return resp.data;
+        },
+        enabled: isModelDropdownOpen,
+    });
+    const deviceModels = useMemo(() => deviceModelsResponse?.models ?? [], [deviceModelsResponse]);
 
     // Customer search - fetch when: user has typed (debounced) OR a group filter is selected
     const { data: customersResponse, isLoading: customersLoading, isError: customersError } = useQuery({
@@ -497,13 +516,42 @@ export default function RepairRegistration() {
                         <div className="space-y-2">
                             <label className="text-xs font-black text-gray-400 uppercase tracking-widest pl-1">Device Model *</label>
                             <div className="relative">
-                                <Package className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-300" />
+                                <Package className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-300 z-[1]" />
                                 <Input
-                                    placeholder="e.g. Samsung S23 Ultra"
+                                    placeholder="Type to search or select model..."
                                     value={repairModelName}
                                     onChange={(e) => setRepairModelName(e.target.value)}
+                                    onFocus={() => setIsModelDropdownOpen(true)}
+                                    onBlur={() => setTimeout(() => setIsModelDropdownOpen(false), 200)}
                                     className="pl-12 h-14 font-bold border-2 border-gray-100 focus:border-indigo-500 rounded-2xl bg-gray-50 focus:bg-white transition-all"
                                 />
+                                {isModelDropdownOpen && (
+                                    <div className="absolute z-50 w-full mt-2 bg-white border border-gray-100 rounded-2xl shadow-2xl p-2 max-h-72 overflow-y-auto animate-in fade-in zoom-in duration-200">
+                                        {deviceModelsLoading ? (
+                                            <div className="p-6 text-center">
+                                                <p className="text-gray-400 font-bold animate-pulse">Searching models...</p>
+                                            </div>
+                                        ) : deviceModels.length > 0 ? (
+                                            deviceModels.map((model: string) => (
+                                                <button
+                                                    key={model}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setRepairModelName(model);
+                                                        setIsModelDropdownOpen(false);
+                                                    }}
+                                                    className="w-full text-left px-5 py-3 hover:bg-indigo-50 rounded-xl font-medium text-gray-900 transition-colors"
+                                                >
+                                                    {model}
+                                                </button>
+                                            ))
+                                        ) : (
+                                            <div className="p-6 text-center">
+                                                <p className="text-gray-400 font-bold">No matching models. You can type a new one.</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
