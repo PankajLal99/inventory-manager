@@ -84,34 +84,49 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(product_data['available_quantity'], 1.0)
 
     def test_supplier_breakdown_from_purchase_not_tag(self):
-        """Supplier breakdown shop_stock/warehouse_stock from PurchaseItem; shop_barcode_count = shop - sold (here 0 sold)."""
+        """Breakdown one row per purchase; shop_barcode_count = available (new+returned) for that batch; purchase_date present."""
         supp_a = TestDataFactory.create_supplier(name="SupplierA")
         supp_b = TestDataFactory.create_supplier(name="SupplierB")
         p1 = TestDataFactory.create_purchase(user=self.user, supplier=supp_a, status='finalized')
-        TestDataFactory.create_purchase_item(
+        item1 = TestDataFactory.create_purchase_item(
             purchase=p1, product=self.product,
             quantity=Decimal('10'), shop_quantity=Decimal('6'), warehouse_quantity=Decimal('4')
         )
         p2 = TestDataFactory.create_purchase(user=self.user, supplier=supp_b, status='finalized')
-        TestDataFactory.create_purchase_item(
+        item2 = TestDataFactory.create_purchase_item(
             purchase=p2, product=self.product,
             quantity=Decimal('5'), shop_quantity=Decimal('1'), warehouse_quantity=Decimal('4')
         )
-        TestDataFactory.create_barcode_with_purchase(self.user, self.product, tag='new')
+        from backend.catalog.models import Barcode
+        for i in range(6):
+            b = TestDataFactory.create_barcode(
+                product=self.product, tag='new', purchase_item=item1,
+                barcode=f"BC-A-{i}-{TestDataFactory.random_string(4)}"
+            )
+            b.purchase = p1
+            b.save()
+        b2 = TestDataFactory.create_barcode(
+            product=self.product, tag='new', purchase_item=item2,
+            barcode=f"BC-B-{TestDataFactory.random_string(4)}"
+        )
+        b2.purchase = p2
+        b2.save()
         response = self.client.get('/api/v1/products/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         product_data = next((p for p in response.data.get('results', []) if p['id'] == self.product.id), None)
         self.assertIsNotNone(product_data)
-        breakdown = {b['supplier']: b for b in product_data.get('supplier_breakdown', [])}
+        breakdown_list = product_data.get('supplier_breakdown', [])
+        breakdown = {b['supplier']: b for b in breakdown_list}
         self.assertIn(supp_a.name, breakdown)
         self.assertIn(supp_b.name, breakdown)
         self.assertEqual(breakdown[supp_a.name]['shop_stock'], 6.0)
         self.assertEqual(breakdown[supp_a.name]['warehouse_stock'], 4.0)
         self.assertEqual(breakdown[supp_b.name]['shop_stock'], 1.0)
         self.assertEqual(breakdown[supp_b.name]['warehouse_stock'], 4.0)
-        # Shop Qty = shop_barcode_count = max(0, shop_stock - sold); no sold here so equals shop_stock
         self.assertEqual(breakdown[supp_a.name]['shop_barcode_count'], 6.0)
         self.assertEqual(breakdown[supp_b.name]['shop_barcode_count'], 1.0)
+        self.assertIn('purchase_date', breakdown[supp_a.name])
+        self.assertIn('purchase_date', breakdown[supp_b.name])
 
     def test_draft_purchase_excluded_from_shop_warehouse(self):
         """Only finalized purchases contribute to shop_stock and warehouse_stock."""
@@ -170,15 +185,28 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         supp_a = TestDataFactory.create_supplier(name="SupplierA")
         supp_b = TestDataFactory.create_supplier(name="SupplierB")
         p1 = TestDataFactory.create_purchase(user=self.user, supplier=supp_a, status='finalized')
-        TestDataFactory.create_purchase_item(
+        item1 = TestDataFactory.create_purchase_item(
             purchase=p1, product=self.product,
             quantity=Decimal('10'), shop_quantity=Decimal('6'), warehouse_quantity=Decimal('4')
         )
         p2 = TestDataFactory.create_purchase(user=self.user, supplier=supp_b, status='finalized')
-        TestDataFactory.create_purchase_item(
+        item2 = TestDataFactory.create_purchase_item(
             purchase=p2, product=self.product,
             quantity=Decimal('5'), shop_quantity=Decimal('1'), warehouse_quantity=Decimal('4')
         )
+        for i in range(6):
+            b = TestDataFactory.create_barcode(
+                product=self.product, tag='new', purchase_item=item1,
+                barcode=f"BC-TIE-{i}-{TestDataFactory.random_string(4)}"
+            )
+            b.purchase = p1
+            b.save()
+        b2 = TestDataFactory.create_barcode(
+            product=self.product, tag='new', purchase_item=item2,
+            barcode=f"BC-TIE-B-{TestDataFactory.random_string(4)}"
+        )
+        b2.purchase = p2
+        b2.save()
         data = ProductSerializer(self.product).data
         self.assertIn('supplier_breakdown', data)
         breakdown = data['supplier_breakdown']

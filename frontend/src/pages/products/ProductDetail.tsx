@@ -219,6 +219,7 @@ export default function ProductDetail() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Supplier</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Purchase date</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Whse</th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-blue-600 uppercase tracking-wider">Shop Qty</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
@@ -228,6 +229,7 @@ export default function ProductDetail() {
                 {p.supplier_breakdown.map((s: any, idx: number) => (
                   <tr key={idx} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{s.supplier}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600">{s.purchase_date ?? '—'}</td>
                     <td className="px-4 py-3 text-sm text-right text-gray-600">{Number(s.warehouse_stock).toLocaleString()}</td>
                     <td className="px-4 py-3 text-sm text-right font-medium text-blue-600">{(s.shop_barcode_count ?? s.shop_stock).toLocaleString()}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{s.price}</td>
@@ -236,7 +238,7 @@ export default function ProductDetail() {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-gray-400 mt-2">Shop Qty = allocated to shop from purchase minus sold from that supplier.</p>
+          <p className="text-xs text-gray-400 mt-2">One row per purchase batch (latest first). Shop Qty = available barcodes from that batch.</p>
         </div>
       )}
 
