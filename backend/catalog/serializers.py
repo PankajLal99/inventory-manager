@@ -331,73 +331,50 @@ class ProductSerializer(serializers.ModelSerializer):
 
 def _get_supplier_breakdown_for_product(obj):
     """
-    Shared breakdown by supplier. Warehouse from purchase (PurchaseItem.warehouse_quantity).
-    Shop Qty = in shop only = max(0, purchase shop_quantity - sold barcode count per supplier).
+    One row per purchase batch (PurchaseItem). Warehouse/Shop from that item; Shop Qty = available
+    (new+returned) barcodes for that batch. Ordered by supplier then latest purchase date first.
     """
     from backend.purchasing.models import PurchaseItem
-    from backend.parties.models import Supplier
     from django.db.models import Count
 
-    items = PurchaseItem.objects.filter(
-        product=obj,
-        purchase__status='finalized'
-    ).select_related('purchase__supplier').order_by('purchase__supplier_id')
-    breakdown_map = {}
+    items = (
+        PurchaseItem.objects.filter(
+            product=obj,
+            purchase__status='finalized'
+        )
+        .select_related('purchase__supplier')
+        .order_by('purchase__supplier__name', '-purchase__purchase_date')
+    )
+    # Available (new+returned) count per purchase_item
+    available_per_item = dict(
+        obj.barcodes.filter(
+            tag__in=['new', 'returned'],
+            purchase_item_id__isnull=False
+        ).values('purchase_item').annotate(count=Count('id')).values_list('purchase_item', 'count')
+    )
+
+    breakdown = []
     for item in items:
+        whse = float(item.warehouse_quantity)
+        shop_allocated = float(item.shop_quantity)
+        shop_available = float(available_per_item.get(item.id, 0))
+        if shop_allocated == 0 and whse == 0 and shop_available == 0:
+            continue
         supplier_name = "Unknown"
         if item.purchase and item.purchase.supplier:
             supplier_name = item.purchase.supplier.code or item.purchase.supplier.name
-        if supplier_name not in breakdown_map:
-            breakdown_map[supplier_name] = {
-                'supplier': supplier_name,
-                'shop_stock': 0.0,
-                'warehouse_stock': 0.0,
-                'sold_count': 0,
-                'prices': set(),
-            }
-        breakdown_map[supplier_name]['shop_stock'] += float(item.shop_quantity)
-        breakdown_map[supplier_name]['warehouse_stock'] += float(item.warehouse_quantity)
-        if item.unit_price:
-            breakdown_map[supplier_name]['prices'].add(float(item.unit_price))
-
-    sold_counts = obj.barcodes.filter(
-        tag='sold'
-    ).values('purchase__supplier').annotate(
-        sold_count=Count('id')
-    )
-    supplier_ids = [r['purchase__supplier'] for r in sold_counts if r['purchase__supplier'] is not None]
-    supplier_name_by_id = {}
-    if supplier_ids:
-        for s in Supplier.objects.filter(id__in=supplier_ids).only('id', 'code', 'name'):
-            supplier_name_by_id[s.id] = s.code or s.name
-    for r in sold_counts:
-        sid = r['purchase__supplier']
-        supplier_name = supplier_name_by_id.get(sid, "Unknown") if sid is not None else "Unknown"
-        if supplier_name not in breakdown_map:
-            breakdown_map[supplier_name] = {
-                'supplier': supplier_name,
-                'shop_stock': 0.0,
-                'warehouse_stock': 0.0,
-                'sold_count': 0,
-                'prices': set(),
-            }
-        breakdown_map[supplier_name]['sold_count'] += r['sold_count']
-
-    breakdown = []
-    for supplier, data in breakdown_map.items():
-        shop_qty = max(0.0, data['shop_stock'] - data['sold_count'])
-        if data['shop_stock'] == 0 and data['warehouse_stock'] == 0 and shop_qty == 0:
-            continue
-        prices = sorted(list(data['prices'])) if data['prices'] else [0]
-        price_str = "/".join([f"₹{p:g}" for p in prices])
+        price_val = float(item.unit_price) if item.unit_price else 0
+        price_str = f"₹{price_val:g}" if price_val else "—"
+        purchase_date = item.purchase.purchase_date.strftime('%d-%m-%Y') if item.purchase and item.purchase.purchase_date else None
         breakdown.append({
-            'supplier': supplier,
+            'supplier': supplier_name,
             'price': price_str,
-            'shop_stock': data['shop_stock'],
-            'warehouse_stock': data['warehouse_stock'],
-            'shop_barcode_count': shop_qty,
+            'shop_stock': shop_allocated,
+            'warehouse_stock': whse,
+            'shop_barcode_count': shop_available,
+            'purchase_date': purchase_date,
         })
-    return sorted(breakdown, key=lambda x: x['shop_barcode_count'] + x['warehouse_stock'], reverse=True)
+    return breakdown
 
 
 class ProductListSerializer(serializers.ModelSerializer):
