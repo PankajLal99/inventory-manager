@@ -62,7 +62,7 @@ interface RepairInvoice {
   };
 }
 
-// Matches backend pos.models.Repair.STATUS_CHOICES
+// Matches backend pos.models.Repair.STATUS_CHOICES (status groups show today's repairs only)
 const STATUS_OPTIONS = [
   { value: 'received', label: 'Received' },
   { value: 'work_in_progress', label: 'Work in Progress' },
@@ -107,7 +107,17 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   not_repaired: 'bg-orange-600',
   cancelled: 'bg-red-600',
   other: 'bg-gray-400',
+  old_repair: 'bg-violet-600', // static UI section: repairs not from today and not delivered
 };
+
+/** True if the given ISO date string is today (local date). */
+function isToday(createdAt: string): boolean {
+  const d = new Date(createdAt);
+  const today = new Date();
+  return d.getDate() === today.getDate() &&
+    d.getMonth() === today.getMonth() &&
+    d.getFullYear() === today.getFullYear();
+}
 
 export default function Repairs() {
   const navigate = useNavigate();
@@ -273,18 +283,27 @@ export default function Repairs() {
   // Search is applied server-side (invoice_number + customer_name)
   const filteredRepairs = repairInvoices;
 
-  // Group by repair status (matches backend pos.models.Repair.STATUS_CHOICES)
+  // Today's repairs only (by invoice created_at date, local)
+  const todayRepairs = filteredRepairs.filter((inv) => isToday(inv.created_at));
+  // Old Repair: not from today and not delivered (static UI category)
+  const oldRepairItems = filteredRepairs.filter(
+    (inv) => !isToday(inv.created_at) && inv.repair?.status !== 'delivered'
+  );
+
+  // Status groups show only today's repairs
   const statusGroups = STATUS_ORDER.map((status) => ({
     status,
     label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
-    items: filteredRepairs.filter((inv) => inv.repair?.status === status),
+    items: todayRepairs.filter((inv) => inv.repair?.status === status),
   }));
-  const otherItems = filteredRepairs.filter(
+  const otherItems = todayRepairs.filter(
     (inv) => !inv.repair || !STATUS_ORDER.includes(inv.repair?.status ?? '')
   );
   const groupsWithItems = [
     ...statusGroups.filter((g) => g.items.length > 0),
     ...(otherItems.length > 0 ? [{ status: 'other', label: 'Other', items: otherItems }] : []),
+    // Static "Old Repair" section: repairs not from today and not delivered
+    ...(oldRepairItems.length > 0 ? [{ status: 'old_repair', label: 'Old Repair', items: oldRepairItems }] : []),
   ];
 
   const formatDate = (dateString: string) => {
@@ -619,14 +638,19 @@ export default function Repairs() {
         <div className="space-y-8">
           {groupsWithItems.map((group) => (
             <div key={group.status} className="space-y-4">
-              <div className="flex items-center gap-3 px-2">
-                <div
-                  className={`h-8 w-1.5 rounded-full shrink-0 ${STATUS_BAR_CLASS[group.status] ?? 'bg-gray-400'}`}
-                />
-                <h2 className="text-xl font-bold text-gray-900">{group.label}</h2>
-                <Badge variant="outline" className="ml-2 font-mono">
-                  {group.items.length}
-                </Badge>
+              <div className="flex flex-col gap-1 px-2">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`h-8 w-1.5 rounded-full shrink-0 ${STATUS_BAR_CLASS[group.status] ?? 'bg-gray-400'}`}
+                  />
+                  <h2 className="text-xl font-bold text-gray-900">{group.label}</h2>
+                  <Badge variant="outline" className="ml-2 font-mono">
+                    {group.items.length}
+                  </Badge>
+                </div>
+                {group.status === 'old_repair' && (
+                  <p className="text-sm text-gray-500 ml-5">Repairs from previous days (not delivered)</p>
+                )}
               </div>
 
               {/* Desktop Table View */}

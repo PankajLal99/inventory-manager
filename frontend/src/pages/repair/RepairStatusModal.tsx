@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
-import { Wrench, Clock, CheckCircle, Truck, FileText, AlertTriangle, User, IndianRupee } from 'lucide-react';
+import { posApi } from '../../lib/api';
+import { Wrench, Clock, CheckCircle, Truck, FileText, AlertTriangle, User, IndianRupee, XCircle } from 'lucide-react';
 import { formatNumber } from '../../lib/utils';
 
 interface RepairStatusModalProps {
@@ -11,25 +13,22 @@ interface RepairStatusModalProps {
   onClose: () => void;
   onUpdate: (status: string) => void;
   invoiceNumber: string;
-  currentStatus: 'received' | 'work_in_progress' | 'done' | 'delivered';
+  currentStatus: string;
   invoiceStatus?: 'draft' | 'paid' | 'partial' | 'credit' | 'void';
   isLoading?: boolean;
   customerName?: string | null;
   bookingAmount?: string | null;
+  /** Status options from backend (repair status choices). When provided, dropdown and labels use this list. */
+  statusOptions?: { value: string; label: string }[];
 }
-
-const STATUS_OPTIONS = [
-  { value: 'received', label: 'Received' },
-  { value: 'work_in_progress', label: 'In Progress' },
-  { value: 'done', label: 'Completed' },
-  { value: 'delivered', label: 'Delivered' },
-];
 
 const STATUS_COLORS: Record<string, string> = {
   received: 'bg-blue-100 text-blue-800',
   work_in_progress: 'bg-yellow-100 text-yellow-800',
   done: 'bg-green-100 text-green-800',
   delivered: 'bg-gray-100 text-gray-800',
+  not_repaired: 'bg-orange-100 text-orange-800',
+  cancelled: 'bg-red-100 text-red-800',
 };
 
 const STATUS_ICONS: Record<string, any> = {
@@ -37,6 +36,8 @@ const STATUS_ICONS: Record<string, any> = {
   work_in_progress: Wrench,
   done: CheckCircle,
   delivered: Truck,
+  not_repaired: AlertTriangle,
+  cancelled: XCircle,
 };
 
 export default function RepairStatusModal({
@@ -49,8 +50,18 @@ export default function RepairStatusModal({
   isLoading = false,
   customerName,
   bookingAmount,
+  statusOptions = [],
 }: RepairStatusModalProps) {
   const [selectedStatus, setSelectedStatus] = useState<string>(currentStatus);
+
+  // Use parent-provided options, or fetch when modal is open and none provided
+  const { data: fetchedChoices } = useQuery({
+    queryKey: ['repair-status-choices'],
+    queryFn: () => posApi.repair.getStatusChoices(),
+    enabled: isOpen && statusOptions.length === 0,
+  });
+  const options =
+    statusOptions.length > 0 ? statusOptions : (fetchedChoices?.data ?? []);
 
   // Reset selected status when modal opens or current status changes
   useEffect(() => {
@@ -75,10 +86,11 @@ export default function RepairStatusModal({
 
   const getStatusBadge = (status: string) => {
     const Icon = STATUS_ICONS[status] || Clock;
+    const label = options.find((s) => s.value === status)?.label ?? status;
     return (
       <Badge className={STATUS_COLORS[status] || 'bg-gray-100 text-gray-800'}>
         <Icon className="h-3 w-3 mr-1" />
-        {STATUS_OPTIONS.find(s => s.value === status)?.label || status}
+        {label}
       </Badge>
     );
   };
@@ -154,15 +166,15 @@ export default function RepairStatusModal({
             className="w-full"
           >
             <option value="">Select status</option>
-            {STATUS_OPTIONS.map((status) => {
+            {options.map((status) => {
               // Disable "Completed" (done) if invoice is not paid or credit
               const isCompleted = status.value === 'done';
               const canComplete = invoiceStatus === 'paid' || invoiceStatus === 'credit' || invoiceStatus === 'partial';
               const isDisabled = isCompleted && !canComplete;
               
               return (
-                <option 
-                  key={status.value} 
+                <option
+                  key={status.value}
                   value={status.value}
                   disabled={isDisabled}
                 >
