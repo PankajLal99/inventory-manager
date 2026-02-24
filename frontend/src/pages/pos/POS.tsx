@@ -2502,7 +2502,7 @@ export default function POS() {
 
   // Keyboard Shortcuts Handler
   const handleToggleInvoiceType = useCallback(() => {
-    // Cyclic toggle: cash -> upi -> mixed -> pending -> cash
+    // Cyclic toggle: cash -> upi -> mixed -> pending -> cash --> Deploy
     setInvoiceType(prev => {
       if (prev === 'cash') return 'upi';
       if (prev === 'upi') return 'mixed';
