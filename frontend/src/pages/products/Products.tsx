@@ -140,6 +140,8 @@ export default function Products() {
     }
     // Always include tag filter (defaults to 'new')
     params.tag = tagFilter || 'new';
+    // Exclude Other/Custom products (name starts with "Other -") from Products page list
+    params.exclude_other_custom = 'true';
     // Pagination
     params.page = currentPage;
     params.limit = 50;

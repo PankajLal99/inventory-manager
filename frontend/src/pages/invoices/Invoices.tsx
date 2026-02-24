@@ -43,6 +43,8 @@ interface Invoice {
   due_amount: string;
   created_at: string;
   created_by: number | null;
+  is_edited?: boolean;
+  edited_on?: string | null;
 }
 
 export default function Invoices() {
@@ -364,6 +366,10 @@ export default function Invoices() {
           <div className="h-3 w-3 rounded-full bg-purple-100 border border-purple-200"></div>
           <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Repair Service</span>
         </div>
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-red-500 shrink-0"></span>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Edited invoice</span>
+        </div>
       </div>
 
       {/* Page date label (date-based pagination: each page = one day) */}
@@ -415,8 +421,17 @@ export default function Invoices() {
                       }`}
                   >
                     <TableCell>
-                      <span className="font-mono font-semibold text-gray-900">
-                        {invoice.invoice_number}
+                      <span className="inline-flex items-center gap-1.5">
+                        {invoice.is_edited && (
+                          <span
+                            className="h-2 w-2 rounded-full bg-red-500 shrink-0"
+                            title="Edited"
+                            aria-hidden
+                          />
+                        )}
+                        <span className="font-mono font-semibold text-gray-900">
+                          {invoice.invoice_number}
+                        </span>
                       </span>
                     </TableCell>
                     <TableCell>
@@ -487,6 +502,13 @@ export default function Invoices() {
                     <div className="mb-3">
                       <div className="flex items-center gap-2 mb-1">
                         <FileText className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                        {invoice.is_edited && (
+                          <span
+                            className="h-2 w-2 rounded-full bg-red-500 shrink-0 mt-1.5"
+                            title="Edited"
+                            aria-hidden
+                          />
+                        )}
                         <span className="font-mono font-semibold text-gray-900 text-base">
                           {invoice.invoice_number}
                         </span>
