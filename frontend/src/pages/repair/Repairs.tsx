@@ -22,6 +22,8 @@ import {
   FileText,
   X,
   Printer,
+  RotateCcw,
+  Loader2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatNumber } from '../../lib/utils';
@@ -131,6 +133,11 @@ export default function Repairs() {
   const [barcodeSearch, setBarcodeSearch] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  // Regenerate barcode: which invoice is currently regenerating (for min 5s loading)
+  const [regeneratingInvoiceId, setRegeneratingInvoiceId] = useState<number | null>(null);
+  const [regenerateStartedAt, setRegenerateStartedAt] = useState<number>(0);
+  // Per-invoice last regenerate time for 30s cooldown
+  const [lastRegenerateAt, setLastRegenerateAt] = useState<Record<number, number>>({});
 
   // Fetch stores (already filtered by backend based on user groups)
   const { data: storesResponse } = useQuery({
@@ -269,6 +276,51 @@ export default function Repairs() {
       return;
     }
     generateLabelMutation.mutate(invoice.id);
+  };
+
+  const REGENERATE_COOLDOWN_MS = 30 * 1000;
+  const REGENERATE_MIN_WAIT_MS = 5 * 1000;
+
+  const regenerateLabelMutation = useMutation({
+    mutationFn: async (invoiceId: number) => {
+      return await posApi.repair.generateLabel(invoiceId);
+    },
+    onSuccess: () => {
+      showToast('Repair barcode label regenerated', 'success');
+      const elapsed = Date.now() - regenerateStartedAt;
+      const remaining = Math.max(0, REGENERATE_MIN_WAIT_MS - elapsed);
+      setTimeout(() => setRegeneratingInvoiceId(null), remaining);
+    },
+    onError: (error: any) => {
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to regenerate repair barcode';
+      showToast(errorMsg, 'error');
+      const elapsed = Date.now() - regenerateStartedAt;
+      const remaining = Math.max(0, REGENERATE_MIN_WAIT_MS - elapsed);
+      setTimeout(() => setRegeneratingInvoiceId(null), remaining);
+    },
+  });
+
+  const handleRegenerateRepairLabel = (invoice: RepairInvoice) => {
+    if (!invoice.repair) {
+      showToast('This invoice does not have a repair record', 'error');
+      return;
+    }
+    const now = Date.now();
+    const last = lastRegenerateAt[invoice.id] ?? 0;
+    if (now - last < REGENERATE_COOLDOWN_MS) {
+      const secs = Math.ceil((REGENERATE_COOLDOWN_MS - (now - last)) / 1000);
+      showToast(`Please wait ${secs}s before regenerating again`, 'error');
+      return;
+    }
+    setLastRegenerateAt((prev) => ({ ...prev, [invoice.id]: now }));
+    setRegeneratingInvoiceId(invoice.id);
+    setRegenerateStartedAt(now);
+    regenerateLabelMutation.mutate(invoice.id);
+  };
+
+  const isRegenerateDisabled = (invoiceId: number) => {
+    const last = lastRegenerateAt[invoiceId] ?? 0;
+    return Date.now() - last < REGENERATE_COOLDOWN_MS;
   };
 
   const repairInvoices: RepairInvoice[] = data?.results || [];
@@ -768,6 +820,33 @@ export default function Repairs() {
                               <Printer className="h-4 w-4 flex-shrink-0" />
                               <span></span>
                             </Button>
+                            {regeneratingInvoiceId === invoice.id ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled
+                                className="gap-1.5 text-orange-700 bg-orange-50 border-orange-200"
+                                title="Generating barcode..."
+                              >
+                                <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+                                <span></span>
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRegenerateRepairLabel(invoice);
+                                }}
+                                className="gap-1.5 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
+                                disabled={!invoice.repair || isRegenerateDisabled(invoice.id)}
+                                title={isRegenerateDisabled(invoice.id) ? 'Wait 30s before regenerating again' : 'Regenerate barcode label'}
+                              >
+                                <RotateCcw className="h-4 w-4 flex-shrink-0" />
+                                <span></span>
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="sm"
@@ -886,6 +965,33 @@ export default function Repairs() {
                             <Printer className="h-4 w-4 flex-shrink-0" />
                             <span>Print Label</span>
                           </Button>
+                          {regeneratingInvoiceId === invoice.id ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled
+                              className="w-full gap-1.5 text-orange-700 bg-orange-50 border-orange-200"
+                              title="Generating barcode..."
+                            >
+                              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+                              <span>Generating...</span>
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRegenerateRepairLabel(invoice);
+                              }}
+                              className="w-full gap-1.5 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
+                              disabled={!invoice.repair || isRegenerateDisabled(invoice.id)}
+                              title={isRegenerateDisabled(invoice.id) ? 'Wait 30s before regenerating again' : 'Regenerate barcode label'}
+                            >
+                              <RotateCcw className="h-4 w-4 flex-shrink-0" />
+                              <span>Regenerate Barcode</span>
+                            </Button>
+                          )}
                         </div>
                       </div>
                     </div>
