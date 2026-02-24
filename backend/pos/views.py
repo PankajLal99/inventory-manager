@@ -81,6 +81,14 @@ def repair_invoices_list(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def repair_status_choices(request):
+    """Return repair status choices from the Repair model for use in dropdowns."""
+    choices = [{'value': value, 'label': label} for value, label in Repair.STATUS_CHOICES]
+    return Response(choices)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def repair_device_models(request):
     """Return distinct device model names from Repair records, optionally filtered by search."""
     search = (request.query_params.get('search') or '').strip()
@@ -123,8 +131,8 @@ def update_repair_status(request, pk):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Validate status
-    valid_statuses = ['received', 'work_in_progress', 'done', 'delivered']
+    # Validate status against model choices
+    valid_statuses = [value for value, _ in Repair.STATUS_CHOICES]
     if new_status not in valid_statuses:
         return Response(
             {'error': f'repair_status must be one of: {", ".join(valid_statuses)}'},
@@ -2345,6 +2353,9 @@ def invoice_detail(request, pk):
             # Recalculate totals after update
             update_invoice_totals(invoice)
             invoice.refresh_from_db()
+            invoice.is_edited = True
+            invoice.edited_on = timezone.now()
+            invoice.save(update_fields=['is_edited', 'edited_on'])
             
             # Audit log: Invoice updated
             create_audit_log(
@@ -2466,6 +2477,9 @@ def invoice_detail(request, pk):
                     **changes
                 }
             )
+            invoice.is_edited = True
+            invoice.edited_on = timezone.now()
+            invoice.save(update_fields=['is_edited', 'edited_on'])
             
             return Response(InvoiceSerializer(invoice).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -3220,6 +3234,10 @@ def invoice_update(request, pk):
     # Delete the edit cart so it does not appear on POS
     cart.delete()
 
+    invoice.is_edited = True
+    invoice.edited_on = timezone.now()
+    invoice.save(update_fields=['is_edited', 'edited_on'])
+
     create_audit_log(
         request=request,
         action='invoice_update',
@@ -3505,8 +3523,35 @@ def invoice_items(request, pk):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # For pending invoices, set prices to 0
     item_data = request.data.copy()
+    custom_product_name = item_data.get('custom_product_name')
+    if custom_product_name:
+        from backend.catalog.utils import generate_unique_sku
+        product_name = f"Other - {custom_product_name.strip()}"
+        try:
+            product = Product.objects.get(name=product_name)
+        except Product.DoesNotExist:
+            product = Product.objects.create(
+                name=product_name,
+                sku=generate_unique_sku(product_name),
+                track_inventory=False,
+                can_go_below_purchase_price=True,
+                is_active=True
+            )
+            create_audit_log(
+                request=request,
+                action='create',
+                model_name='Product',
+                object_id=str(product.id),
+                object_name=product.name,
+                object_reference=product.sku,
+                barcode=None,
+                changes={'name': product.name, 'sku': product.sku, 'track_inventory': False, 'custom_product': True}
+            )
+        item_data['product'] = product.id
+        item_data.pop('custom_product_name', None)
+    
+    # For pending invoices, set prices to 0
     if invoice.invoice_type == 'pending':
         item_data['unit_price'] = Decimal('0.00')
         item_data['manual_unit_price'] = None
@@ -3655,6 +3700,9 @@ def invoice_item_detail(request, pk, item_id):
         
         # Update invoice totals
         update_invoice_totals(invoice)
+        invoice.is_edited = True
+        invoice.edited_on = timezone.now()
+        invoice.save(update_fields=['is_edited', 'edited_on'])
         
         return Response(status=status.HTTP_204_NO_CONTENT)
     
@@ -3676,6 +3724,9 @@ def invoice_item_detail(request, pk, item_id):
         
         # Update invoice totals
         update_invoice_totals(invoice)
+        invoice.is_edited = True
+        invoice.edited_on = timezone.now()
+        invoice.save(update_fields=['is_edited', 'edited_on'])
         
         return Response(InvoiceItemSerializer(updated_item).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

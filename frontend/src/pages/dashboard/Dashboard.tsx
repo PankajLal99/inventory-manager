@@ -49,6 +49,14 @@ export default function Dashboard() {
     retry: false,
   });
 
+  // Auto-focus first PIN input when lock screen is shown (on mount or when navigating to dashboard)
+  useEffect(() => {
+    if (!unlocked) {
+      const t = setTimeout(() => pinInputRefs.current[0]?.focus(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [unlocked]);
+
   // PIN entry handlers
   const handlePinChange = (index: number, value: string) => {
     if (value.length > 1) {
@@ -118,6 +126,7 @@ export default function Dashboard() {
                   inputMode="numeric"
                   maxLength={6}
                   autoComplete="one-time-code"
+                  autoFocus={i === 0}
                   value={pinDigits[i]}
                   onChange={(e) => handlePinChange(i, e.target.value)}
                   onKeyDown={(e) => handlePinKeyDown(i, e)}

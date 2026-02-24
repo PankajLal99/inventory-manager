@@ -252,6 +252,10 @@ def product_list_create(request):
         filterset = ProductFilter(request.query_params, queryset=queryset)
         queryset = filterset.qs
         
+        # Exclude Other/Custom products (name starts with "Other -") when requested (e.g. Purchases, Products pages)
+        if request.query_params.get('exclude_other_custom') in ('true', '1', 'yes'):
+            queryset = queryset.exclude(name__startswith='Other -')
+        
         # Additional POS-specific filtering: Filter to only show products with available barcodes when search is present
         # This ensures POS only shows products that can actually be added to cart
         search = request.query_params.get('search', None)

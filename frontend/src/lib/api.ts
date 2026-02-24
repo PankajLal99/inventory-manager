@@ -226,6 +226,7 @@ export const posApi = {
       list: (params?: any) => api.get('/pos/repair/invoices/', { params }),
       findByBarcode: (repairBarcode: string) => api.get('/pos/repair/invoices/find-by-barcode/', { params: { repair_barcode: repairBarcode } }),
     },
+    getStatusChoices: () => api.get<{ value: string; label: string }[]>('/pos/repair/status-choices/'),
     getDeviceModels: (search?: string) => api.get<{ models: string[] }>('/pos/repair/device-models/', { params: search ? { search } : {} }),
     updateStatus: (invoiceId: number, data: { repair_status: string }) => api.patch(`/pos/invoices/${invoiceId}/update-repair-status/`, data),
     generateLabel: (invoiceId: number) => api.post(`/pos/invoices/${invoiceId}/generate-repair-label/`),

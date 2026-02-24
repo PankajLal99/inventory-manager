@@ -97,7 +97,8 @@ export default function Purchases() {
       const response = await productsApi.list({
         search: productSearch.trim(),
         tag: 'new', // This ensures we get all products including unpurchased ones
-        search_mode: 'name_only' // Search only by product name
+        search_mode: 'name_only', // Search only by product name
+        exclude_other_custom: 'true', // Exclude Other/Custom products from purchase add
       });
       return response.data;
     },
@@ -172,6 +173,7 @@ export default function Purchases() {
         search: productFilterSearch.trim(),
         tag: 'new',
         search_mode: 'name_only',
+        exclude_other_custom: 'true', // Exclude Other/Custom products from purchase filter
       });
       return response.data;
     },

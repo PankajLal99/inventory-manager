@@ -60,6 +60,7 @@ def _optimized_product_list_internal(request):
         'in_stock': request.query_params.get('in_stock', ''),
         'low_stock': request.query_params.get('low_stock', ''),
         'out_of_stock': request.query_params.get('out_of_stock', ''),
+        'exclude_other_custom': request.query_params.get('exclude_other_custom', ''),
         'page': request.query_params.get('page', 1),
         'limit': request.query_params.get('limit', 50),
     }
@@ -143,6 +144,10 @@ def _optimized_product_list_internal(request):
     # OPTIMIZATION 3: Apply filters using django-filter early to reduce dataset
     filterset = ProductFilter(request.query_params, queryset=queryset)
     queryset = filterset.qs
+    
+    # Exclude Other/Custom products (name starts with "Other -") when requested (e.g. Purchases, Products pages)
+    if request.query_params.get('exclude_other_custom') in ('true', '1', 'yes'):
+        queryset = queryset.exclude(name__startswith='Other -')
     
     # OPTIMIZATION 4: Only do expensive stock filtering when explicitly requested
     # Skip stock calculations for search/tag filters that don't need them

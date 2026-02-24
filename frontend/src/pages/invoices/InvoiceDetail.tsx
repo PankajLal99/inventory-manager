@@ -36,6 +36,7 @@ import {
   EyeOff,
   Wrench,
   AlertTriangle,
+  Package,
 } from 'lucide-react';
 import RepairStatusModal from '../repair/RepairStatusModal';
 
@@ -90,6 +91,8 @@ export default function InvoiceDetail() {
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Repair status in checkout modal (when invoice is repair)
   const [checkoutRepairStatus, setCheckoutRepairStatus] = useState<string>('');
+  const [showCustomProductModal, setShowCustomProductModal] = useState(false);
+  const [customProductName, setCustomProductName] = useState('');
 
   // Debounce customer search input
   useEffect(() => {
@@ -138,6 +141,14 @@ export default function InvoiceDetail() {
     enabled: editingCustomer,
   });
   const customers = (customersList?.data?.results ?? customersList?.data ?? []) as any[];
+
+  // Repair status choices from backend (for dropdown and labels)
+  const { data: repairStatusChoicesResponse } = useQuery({
+    queryKey: ['repair-status-choices'],
+    queryFn: () => posApi.repair.getStatusChoices(),
+    enabled: !!inv?.repair,
+  });
+  const repairStatusOptions: { value: string; label: string }[] = repairStatusChoicesResponse?.data ?? [];
 
   const { prevBalance, totalOutstanding } = useMemo(() => {
     if (!inv || !customer) return { prevBalance: 0, totalOutstanding: 0 };
@@ -2661,39 +2672,49 @@ export default function InvoiceDetail() {
                         }
                       }}
                       onKeyDown={async (e) => {
+                        const inputElement = e.currentTarget as HTMLInputElement;
+                        const searchValue = (inputElement.value || '').trim();
+                        const searchLower = searchValue.toLowerCase();
+                        const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
+                        const productList: any[] = [];
+                        if (barcodeCheck?.product && !barcodeCheck.isUnavailable) productList.push(barcodeCheck.product);
+                        if (products) {
+                          const existingIds = new Set(productList.map((p: any) => p.id));
+                          if (Array.isArray(products?.results)) productList.push(...products.results.filter((p: any) => !existingIds.has(p.id)));
+                          else if (Array.isArray(products?.data)) productList.push(...products.data.filter((p: any) => !existingIds.has(p.id)));
+                          else if (Array.isArray(products)) productList.push(...products.filter((p: any) => !existingIds.has(p.id)));
+                        }
+                        const totalOptions = (showCustomOption ? 1 : 0) + productList.length;
+
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const inputElement = e.currentTarget as HTMLInputElement;
-                          const searchValue = (inputElement.value || '').trim();
                           if (!searchValue) return;
-
-                          // If a product is selected in dropdown, select it
-                          if (productSearchSelectedIndex >= 0 && products) {
-                            const productList = (() => {
-                              if (Array.isArray(products?.results)) return products.results;
-                              if (Array.isArray(products?.data)) return products.data;
-                              if (Array.isArray(products)) return products;
-                              return [];
-                            })();
-                            if (productList[productSearchSelectedIndex]) {
-                              const product = productList[productSearchSelectedIndex];
+                          if (showCustomOption && productSearchSelectedIndex === 0) {
+                            setShowCustomProductModal(true);
+                            setBarcodeInput('');
+                            inputElement.value = '';
+                            setProductSearchSelectedIndex(-1);
+                            setIsSearchTyped(false);
+                            return;
+                          }
+                          if (productSearchSelectedIndex >= 0 && totalOptions > 0) {
+                            const idx = showCustomOption ? productSearchSelectedIndex - 1 : productSearchSelectedIndex;
+                            if (idx >= 0 && productList[idx]) {
+                              const product = productList[idx];
                               const isPending = inv?.invoice_type === 'pending' && inv?.status === 'draft';
                               const quantity = 1;
                               const unitPrice = isPending ? 0 : (product.selling_price || 0);
                               const discountAmount = 0;
                               const taxAmount = 0;
-                              // Calculate line_total: quantity * price - discount_amount + tax_amount
                               const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-
-                              const itemData: any = {
+                              addItemMutation.mutate({
                                 product: product.id,
-                                quantity: quantity,
+                                quantity,
                                 unit_price: unitPrice,
                                 discount_amount: discountAmount,
                                 tax_amount: taxAmount,
-                                line_total: lineTotal, // Required field - calculate it like checkout does
-                              };
-                              addItemMutation.mutate(itemData);
+                                line_total: lineTotal,
+                              });
                               setBarcodeInput('');
                               inputElement.value = '';
                               setProductSearchSelectedIndex(-1);
@@ -2701,88 +2722,85 @@ export default function InvoiceDetail() {
                               return;
                             }
                           }
-
-                          // Otherwise, try barcode scan (value from DOM for physical scanner speed)
                           await handleBarcodeScan(searchValue);
                           setBarcodeInput('');
                           inputElement.value = '';
                         } else if (e.key === 'ArrowDown') {
                           e.preventDefault();
-                          if (products) {
-                            const productList = (() => {
-                              if (Array.isArray(products?.results)) return products.results;
-                              if (Array.isArray(products?.data)) return products.data;
-                              if (Array.isArray(products)) return products;
-                              return [];
-                            })();
-                            if (productList.length > 0) {
-                              setProductSearchSelectedIndex(0);
-                            }
-                          }
+                          if (totalOptions > 0) setProductSearchSelectedIndex((prev) => Math.min(prev + 1, totalOptions - 1));
                         } else if (e.key === 'ArrowUp') {
                           e.preventDefault();
-                          if (productSearchSelectedIndex > 0) {
-                            setProductSearchSelectedIndex(productSearchSelectedIndex - 1);
-                          }
+                          if (productSearchSelectedIndex > 0) setProductSearchSelectedIndex(productSearchSelectedIndex - 1);
                         }
                       }}
                       className="w-full"
                     />
                     {/* Product Search Dropdown */}
-                    {isSearchTyped && (products || barcodeCheck?.product) && (
-                      <div className="absolute top-full left-0 mt-2 border border-gray-200 rounded-lg bg-white shadow-xl z-20 w-full">
-                        <div className="max-h-64 overflow-y-auto">
-                          {(() => {
-                            const productList: any[] = [];
-                            if (barcodeCheck?.product && !barcodeCheck.isUnavailable) {
-                              productList.push(barcodeCheck.product);
-                            }
-                            if (products) {
-                              const existingIds = new Set(productList.map(p => p.id));
-                              if (Array.isArray(products?.results)) {
-                                productList.push(...products.results.filter((p: any) => !existingIds.has(p.id)));
-                              } else if (Array.isArray(products?.data)) {
-                                productList.push(...products.data.filter((p: any) => !existingIds.has(p.id)));
-                              } else if (Array.isArray(products)) {
-                                productList.push(...products.filter((p: any) => !existingIds.has(p.id)));
-                              }
-                            }
-                            if (productList.length === 0) {
-                              return (
-                                <div className="px-4 py-6 text-center text-sm text-gray-500">
-                                  No products found
+                    {(() => {
+                      const searchLower = barcodeInput.trim().toLowerCase();
+                      const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
+                      if (!isSearchTyped || (!products && !barcodeCheck?.product && !showCustomOption)) return null;
+                      const productList: any[] = [];
+                      if (barcodeCheck?.product && !barcodeCheck.isUnavailable) productList.push(barcodeCheck.product);
+                      if (products) {
+                        const existingIds = new Set(productList.map((p: any) => p.id));
+                        if (Array.isArray(products?.results)) productList.push(...products.results.filter((p: any) => !existingIds.has(p.id)));
+                        else if (Array.isArray(products?.data)) productList.push(...products.data.filter((p: any) => !existingIds.has(p.id)));
+                        else if (Array.isArray(products)) productList.push(...products.filter((p: any) => !existingIds.has(p.id)));
+                      }
+                      return (
+                        <div className="absolute top-full left-0 mt-2 border border-gray-200 rounded-lg bg-white shadow-xl z-20 w-full">
+                          <div className="max-h-64 overflow-y-auto">
+                            {showCustomOption && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowCustomProductModal(true);
+                                  setBarcodeInput('');
+                                  setProductSearchSelectedIndex(-1);
+                                  setIsSearchTyped(false);
+                                }}
+                                onMouseEnter={() => setProductSearchSelectedIndex(0)}
+                                className={`w-full text-left px-4 py-3 transition-colors border-b border-gray-100 ${productSearchSelectedIndex === 0 ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'}`}
+                              >
+                                <div className="font-medium text-gray-900 flex items-center gap-2">
+                                  <Package className="h-4 w-4 text-blue-600" />
+                                  Add Custom Product (Other)
                                 </div>
-                              );
-                            }
-                            return productList.map((product: any, index: number) => {
-                              const isSelected = index === productSearchSelectedIndex;
+                                <div className="text-xs text-gray-500 mt-1">Enter a product name not in inventory</div>
+                              </button>
+                            )}
+                            {productList.length === 0 && !showCustomOption && (
+                              <div className="px-4 py-6 text-center text-sm text-gray-500">No products found</div>
+                            )}
+                            {productList.map((product: any, index: number) => {
+                              const adjustedIndex = showCustomOption ? index + 1 : index;
+                              const isSelected = adjustedIndex === productSearchSelectedIndex;
                               return (
                                 <button
                                   key={product.id}
+                                  type="button"
                                   onClick={() => {
                                     const isPending = inv?.invoice_type === 'pending' && inv?.status === 'draft';
                                     const quantity = 1;
                                     const unitPrice = isPending ? 0 : (product.selling_price || 0);
                                     const discountAmount = 0;
                                     const taxAmount = 0;
-                                    // Calculate line_total: quantity * price - discount_amount + tax_amount
                                     const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-
-                                    const itemData: any = {
+                                    addItemMutation.mutate({
                                       product: product.id,
-                                      quantity: quantity,
+                                      quantity,
                                       unit_price: unitPrice,
                                       discount_amount: discountAmount,
                                       tax_amount: taxAmount,
-                                      line_total: lineTotal, // Required field - calculate it like checkout does
-                                    };
-                                    addItemMutation.mutate(itemData);
+                                      line_total: lineTotal,
+                                    });
                                     setBarcodeInput('');
                                     setProductSearchSelectedIndex(-1);
                                     setIsSearchTyped(false);
                                   }}
-                                  className={`w-full text-left px - 4 py - 3 hover: bg - gray - 50 transition - colors ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''
-                                    } `}
+                                  onMouseEnter={() => setProductSearchSelectedIndex(showCustomOption ? index + 1 : index)}
+                                  className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50 border-l-2 border-blue-500' : ''}`}
                                 >
                                   <div className="font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</div>
                                   {(product.matched_barcode || product.sku) && (
@@ -2792,11 +2810,11 @@ export default function InvoiceDetail() {
                                   )}
                                 </button>
                               );
-                            });
-                          })()}
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                   <Button
                     onClick={async () => {
@@ -3581,9 +3599,12 @@ export default function InvoiceDetail() {
                       inv.repair.status === 'received' ? 'bg-blue-100 text-blue-800' :
                       inv.repair.status === 'work_in_progress' ? 'bg-yellow-100 text-yellow-800' :
                       inv.repair.status === 'done' ? 'bg-green-100 text-green-800' :
+                      inv.repair.status === 'delivered' ? 'bg-gray-100 text-gray-800' :
+                      inv.repair.status === 'not_repaired' ? 'bg-orange-100 text-orange-800' :
+                      inv.repair.status === 'cancelled' ? 'bg-red-100 text-red-800' :
                       'bg-gray-100 text-gray-800'
                     }>
-                      {inv.repair.status === 'received' ? 'Received' : inv.repair.status === 'work_in_progress' ? 'In Progress' : inv.repair.status === 'done' ? 'Completed' : 'Delivered'}
+                      {repairStatusOptions.find((o) => o.value === inv.repair.status)?.label ?? inv.repair.status}
                     </Badge>
                   </div>
                   <div className="flex-1 min-w-[160px]">
@@ -3593,10 +3614,9 @@ export default function InvoiceDetail() {
                       onChange={(e) => setCheckoutRepairStatus(e.target.value)}
                       className="w-full"
                     >
-                      <option value="received">Received</option>
-                      <option value="work_in_progress">In Progress</option>
-                      <option value="done">Completed</option>
-                      <option value="delivered">Delivered</option>
+                      {repairStatusOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
                     </Select>
                   </div>
                   <Button
@@ -3712,6 +3732,68 @@ export default function InvoiceDetail() {
         </Modal>
       )}
 
+      {/* Custom Product Modal (checkout modal add-product search) */}
+      <Modal
+        isOpen={showCustomProductModal}
+        onClose={() => {
+          setShowCustomProductModal(false);
+          setCustomProductName('');
+        }}
+        title="Add Custom Product"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Product Name <span className="text-red-500">*</span>
+            </label>
+            <Input
+              type="text"
+              placeholder="Enter product name"
+              value={customProductName}
+              onChange={(e) => setCustomProductName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && customProductName.trim()) {
+                  addItemMutation.mutate(
+                    { custom_product_name: customProductName.trim(), quantity: 1, unit_price: 0, discount_amount: 0, tax_amount: 0, line_total: 0 },
+                    { onSuccess: () => { setShowCustomProductModal(false); setCustomProductName(''); } }
+                  );
+                }
+              }}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Saved as &quot;Other - [name]&quot;. No inventory tracking.
+            </p>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <Button
+              onClick={() => {
+                if (!customProductName.trim()) {
+                  alert('Product name is required');
+                  return;
+                }
+                addItemMutation.mutate(
+                  { custom_product_name: customProductName.trim(), quantity: 1, unit_price: 0, discount_amount: 0, tax_amount: 0, line_total: 0 },
+                  { onSuccess: () => { setShowCustomProductModal(false); setCustomProductName(''); } }
+                );
+              }}
+              disabled={addItemMutation.isPending || !customProductName.trim()}
+              className="flex-1"
+            >
+              {addItemMutation.isPending ? 'Adding...' : 'Add to Invoice'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => { setShowCustomProductModal(false); setCustomProductName(''); }}
+              disabled={addItemMutation.isPending}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Repair Status Modal (when opened from Repairs page for non-draft repair invoice) */}
       {invoice?.data?.repair && (
         <RepairStatusModal
@@ -3724,6 +3806,7 @@ export default function InvoiceDetail() {
           isLoading={updateRepairStatusMutation.isPending}
           customerName={invoice.data.customer_name}
           bookingAmount={invoice.data.repair.booking_amount}
+          statusOptions={repairStatusOptions}
         />
       )}
 
