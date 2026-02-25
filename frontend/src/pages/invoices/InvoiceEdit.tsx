@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { posApi, productsApi } from '../../lib/api';
 import { formatNumber } from '../../lib/utils';
+import { getPriceValidationError } from '../pos/priceValidation';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -49,6 +50,8 @@ export default function InvoiceEdit() {
 
   const [itemQuantities, setItemQuantities] = useState<Record<number, string>>({});
   const [itemPrices, setItemPrices] = useState<Record<number, string>>({});
+  const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
+  const [priceErrors, setPriceErrors] = useState<Record<number, string>>({});
 
   // Debounce barcode input for search
   useEffect(() => {
@@ -83,7 +86,16 @@ export default function InvoiceEdit() {
   const updateItemMutation = useMutation({
     mutationFn: ({ itemId, data }: { itemId: number; data: any }) =>
       posApi.carts.updateItem(cartId!, itemId, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: editCartQueryKey }),
+    onSuccess: (_res, variables) => {
+      queryClient.invalidateQueries({ queryKey: editCartQueryKey });
+      if (variables.data.purchase_price !== undefined) {
+        setEditingPurchasePrice((p) => {
+          const next = { ...p };
+          delete next[variables.itemId];
+          return next;
+        });
+      }
+    },
     onError: (e: any) => alert(e?.response?.data?.error || e?.response?.data?.manual_unit_price?.[0] || 'Update failed'),
   });
 
@@ -233,10 +245,34 @@ export default function InvoiceEdit() {
     }
   };
 
+  const invoiceType = (cart as any)?.invoice_type ?? 'cash';
+
+  const getEffectivePurchaseForValidation = (item: any) => {
+    if (item.product_name?.startsWith('Other -')) {
+        const inline = editingPurchasePrice[item.id];
+        if (inline !== undefined && inline !== '' && !Number.isNaN(parseFloat(inline))) return parseFloat(inline);
+      }
+    const fromApi = item.product_purchase_price ?? item.purchase_price;
+    return parseFloat(fromApi || '0');
+  };
+
   const handlePriceBlur = (item: any) => {
     const raw = itemPrices[item.id] ?? (item.manual_unit_price ?? item.unit_price) ?? '';
     const price = parseFloat(raw);
     if (isNaN(price)) return;
+    if (priceErrors[item.id]) return; // Don't save if validation error
+    const effectivePurchase = getEffectivePurchaseForValidation(item);
+    const itemForValidation = { ...item, product_purchase_price: effectivePurchase };
+    const err = getPriceValidationError(price, itemForValidation, invoiceType);
+    if (err) {
+      setPriceErrors((p) => ({ ...p, [item.id]: err }));
+      return;
+    }
+    setPriceErrors((p) => {
+      const next = { ...p };
+      delete next[item.id];
+      return next;
+    });
     const current = parseFloat(item.manual_unit_price ?? item.unit_price ?? 0);
     if (Math.abs(price - current) > 0.001) {
       updateItemMutation.mutate({ itemId: item.id, data: { manual_unit_price: price } });
@@ -484,10 +520,10 @@ export default function InvoiceEdit() {
           )}
         </div>
         <div className="overflow-x-auto">
-          <Table headers={['ProductInfo', 'Qty', 'Sell Price', 'Unit Price (₹)', 'Line total', '']}>
+          <Table headers={['ProductInfo', 'Qty', 'Ref Price', 'Cost (₹)', 'Unit Price (₹)', 'Line total', '']}>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                <TableCell colSpan={6} className="text-center py-8 text-gray-500">
                   No items. Scan barcode to add.
                 </TableCell>
               </TableRow>
@@ -496,6 +532,10 @@ export default function InvoiceEdit() {
                 const qty = parseFloat(itemQuantities[item.id] ?? item.quantity) || 0;
                 const price = parseFloat(itemPrices[item.id] ?? item.manual_unit_price ?? item.unit_price ?? 0) || 0;
                 const lineTotal = qty * price;
+                const isCustom = item.product_name?.startsWith('Other -');
+                const rawPurchaseFromApi = (item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : item.purchase_price != null ? parseFloat(String(item.purchase_price)) : NaN);
+                const showCostInput = isCustom; // Only custom products get editable cost; others show ref or —
+                const purchaseInputValue = editingPurchasePrice[item.id] ?? (rawPurchaseFromApi > 0 ? String(rawPurchaseFromApi) : '');
                 return (
                   <TableRow key={item.id}>
                     <TableCell>
@@ -524,19 +564,71 @@ export default function InvoiceEdit() {
                       />
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm font-semibold text-blue-600">₹{formatNumber(item.product_selling_price || item.product_purchase_price)}</span>
+                      <span className="text-sm font-semibold text-blue-600">₹{formatNumber(item.product_selling_price || item.product_purchase_price || 0)}</span>
                     </TableCell>
                     <TableCell>
-                      <Input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={itemPrices[item.id] ?? (item.manual_unit_price ?? item.unit_price) ?? ''}
-                        onChange={(e) => setItemPrices((p) => ({ ...p, [item.id]: e.target.value }))}
-                        onFocus={() => setItemPrices((p) => ({ ...p, [item.id]: '' }))}
-                        onBlur={() => handlePriceBlur(item)}
-                        className="w-28"
-                      />
+                      {showCostInput ? (
+                        <div className="flex items-center gap-1 w-24">
+                          <span className="text-xs text-gray-500">₹</span>
+                          <Input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            placeholder="0"
+                            value={purchaseInputValue}
+                            onChange={(e) => setEditingPurchasePrice((p) => ({ ...p, [item.id]: e.target.value }))}
+                            onBlur={() => {
+                              const raw = editingPurchasePrice[item.id] ?? purchaseInputValue;
+                              const num = parseFloat(raw);
+                              if (raw === '' || raw === undefined) {
+                                setEditingPurchasePrice((p) => ({ ...p, [item.id]: '' }));
+                                return;
+                              }
+                              if (!Number.isNaN(num) && num >= 0) {
+                                updateItemMutation.mutate({
+                                  itemId: item.id,
+                                  data: {
+                                    purchase_price: num > 0 ? num : null,
+                                    ...(isCustom && num > 0 ? { unit_price: num } : {}),
+                                  },
+                                });
+                              }
+                            }}
+                            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                            className="w-20 text-sm"
+                          />
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-600">{!Number.isNaN(rawPurchaseFromApi) && rawPurchaseFromApi > 0 ? `₹${formatNumber(rawPurchaseFromApi)}` : '—'}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div>
+                        <Input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={itemPrices[item.id] ?? (item.manual_unit_price ?? item.unit_price) ?? ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setItemPrices((p) => ({ ...p, [item.id]: v }));
+                            const priceNum = parseFloat(v);
+                            if (v !== '' && !Number.isNaN(priceNum) && priceNum > 0 && invoiceType !== 'pending') {
+                              const effectivePurchase = getEffectivePurchaseForValidation(item);
+                              const itemForVal = { ...item, product_purchase_price: effectivePurchase };
+                              const err = getPriceValidationError(priceNum, itemForVal, invoiceType);
+                              if (err) setPriceErrors((p) => ({ ...p, [item.id]: err }));
+                              else setPriceErrors((p) => { const n = { ...p }; delete n[item.id]; return n; });
+                            } else {
+                              setPriceErrors((p) => { const n = { ...p }; delete n[item.id]; return n; });
+                            }
+                          }}
+                          onFocus={() => setItemPrices((p) => ({ ...p, [item.id]: itemPrices[item.id] ?? (item.manual_unit_price ?? item.unit_price) ?? '' }))}
+                          onBlur={() => handlePriceBlur(item)}
+                          className={`w-28 ${priceErrors[item.id] ? 'border-red-500' : ''}`}
+                        />
+                        {priceErrors[item.id] && <div className="text-xs text-red-600 mt-0.5">{priceErrors[item.id]}</div>}
+                      </div>
                     </TableCell>
                     <TableCell className="font-medium">₹{formatNumber(lineTotal)}</TableCell>
                     <TableCell>

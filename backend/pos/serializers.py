@@ -11,6 +11,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     product_can_go_below_purchase_price = serializers.BooleanField(source='product.can_go_below_purchase_price', read_only=True)
     product_track_inventory = serializers.BooleanField(source='product.track_inventory', read_only=True)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
+    purchase_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
     cart = serializers.PrimaryKeyRelatedField(read_only=True)
     scanned_barcodes = serializers.JSONField(required=False, allow_null=True)
     scanned_barcodes_display = serializers.SerializerMethodField()
@@ -23,7 +24,7 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CartItem
-        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
+        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
 
     def get_scanned_barcodes_display(self, obj):
         """Return display labels (short_code or barcode) for each scanned barcode for UI."""
@@ -46,9 +47,15 @@ class CartItemSerializer(serializers.ModelSerializer):
         return result
 
     def get_product_purchase_price(self, obj):
-        """Get purchase price - use barcode-specific price if available"""
+        """Get purchase price - use barcode-specific price if available; for custom products use item's purchase_price."""
         from backend.catalog.models import Barcode
-        
+
+        # For custom/other products: use cart item's stored purchase_price if set
+        if obj.product and obj.product.name and obj.product.name.startswith('Other -'):
+            if obj.purchase_price is not None and obj.purchase_price > 0:
+                return float(obj.purchase_price)
+            return 0.00
+
         # If cart item has scanned barcodes, use the first barcode's purchase price
         if obj.scanned_barcodes and len(obj.scanned_barcodes) > 0:
             try:
@@ -56,13 +63,13 @@ class CartItemSerializer(serializers.ModelSerializer):
                 return float(first_barcode.get_purchase_price())
             except Barcode.DoesNotExist:
                 pass
-        
+
         # For non-tracked products or when scanned_barcodes is empty, get barcode from product's first barcode
         if obj.product:
             product_barcode = obj.product.barcodes.first()
             if product_barcode:
                 return float(product_barcode.get_purchase_price())
-        
+
         # No barcode available - return 0.00 (purchase price validation will be skipped)
         return 0.00
     
@@ -168,7 +175,11 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
         return None
 
     def get_product_purchase_price(self, obj):
-        """Get purchase price from barcode if available"""
+        """Get purchase price: for custom/other products use item's purchase_price; else from barcode."""
+        if obj.product and obj.product.name and obj.product.name.startswith('Other -'):
+            if obj.purchase_price is not None and obj.purchase_price > 0:
+                return float(obj.purchase_price)
+            return None
         if obj.barcode:
             purchase_price = obj.barcode.get_purchase_price()
             return float(purchase_price) if purchase_price else None
@@ -184,7 +195,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'barcode_value', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
+        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'barcode_value', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
 
 
 class PaymentSerializer(serializers.ModelSerializer):

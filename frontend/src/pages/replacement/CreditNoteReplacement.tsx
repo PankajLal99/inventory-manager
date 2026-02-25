@@ -54,8 +54,8 @@ export default function CreditNoteReplacement() {
     valid: boolean;
     error?: string;
     customers?: Array<{ id: number; name: string }>;
-    processable?: Array<{ barcode: string; invoice_id: number; invoice_number: string; item_id: number; product_name: string; customer_name: string }>;
-    skipped?: Array<{ barcode: string; reason: 'not_found' | 'not_sold' | 'different_customer'; current_tag?: string | null }>;
+    processable?: Array<{ barcode: string; barcode_full?: string | null; short_code?: string | null; invoice_id: number; invoice_number: string; item_id: number; product_name: string; customer_name: string }>;
+    skipped?: Array<{ barcode: string; barcode_full?: string | null; short_code?: string | null; reason: 'not_found' | 'not_sold' | 'different_customer'; current_tag?: string | null }>;
   } | null>(null);
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkApplyLoading, setBulkApplyLoading] = useState(false);
@@ -436,6 +436,24 @@ export default function CreditNoteReplacement() {
   const parseBulkBarcodes = (text: string): string[] => {
     const raw = text.replace(/\r\n/g, '\n').split(/[\n\s]+/).map((s) => s.trim()).filter(Boolean);
     return [...new Set(raw)];
+  };
+
+  // Format barcode with hyphens every 4 characters for readability
+  const formatBarcodeWithHyphens = (value: string): string => {
+    const cleaned = (value || '').replace(/-/g, '');
+    if (!cleaned) return value || '';
+    return cleaned.replace(/(.{4})/g, '$1-').replace(/-$/, '');
+  };
+
+  // Display text for a barcode row: hyphenated barcode + short code when available
+  const formatBarcodeDisplay = (row: { barcode: string; barcode_full?: string | null; short_code?: string | null }) => {
+    const full = row.barcode_full ?? row.barcode;
+    const hyphenated = formatBarcodeWithHyphens(full);
+    const short = row.short_code?.trim();
+    if (short && short !== full && short !== row.barcode) {
+      return `${hyphenated} (short: ${short})`;
+    }
+    return hyphenated;
   };
 
   const handleBulkCheck = async () => {
@@ -999,6 +1017,14 @@ export default function CreditNoteReplacement() {
                       <p className="text-gray-600">
                         Invoices: {[...new Set(bulkCheckResult.processable?.map((b) => b.invoice_number) || [])].join(', ')}
                       </p>
+                      <ul className="list-disc list-inside text-gray-700 space-y-0.5 max-h-32 overflow-y-auto mt-1">
+                        {(bulkCheckResult.processable ?? []).map((p, idx) => (
+                          <li key={p.item_id ?? idx}>
+                            <span className="font-mono text-sm">{formatBarcodeDisplay(p)}</span>
+                            {p.product_name && <span className="text-gray-500 ml-1">· {p.product_name}</span>}
+                          </li>
+                        ))}
+                      </ul>
                     </>
                   )}
                   {(bulkCheckResult.skipped?.length ?? 0) > 0 && (
@@ -1017,8 +1043,8 @@ export default function CreditNoteReplacement() {
                                 ? 'not sold'
                                 : 'different customer';
                           return (
-                            <li key={s.barcode || (s as any).short_code || idx}>
-                              <span className="font-mono">{(s as any).short_code ?? s.barcode}</span>
+                            <li key={s.barcode || s.short_code || idx}>
+                              <span className="font-mono text-sm">{formatBarcodeDisplay(s)}</span>
                               <span className="text-amber-700 ml-1">
                                 ({statusText})
                               </span>
