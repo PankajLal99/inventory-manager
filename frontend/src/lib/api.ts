@@ -176,6 +176,7 @@ export const posApi = {
     update: (id: number, data: any) => api.patch(`/pos/carts/${id}/`, data),
     delete: (id: number) => api.delete(`/pos/carts/${id}/`),
     addItem: (id: number, data: any) => api.post(`/pos/carts/${id}/items/`, data),
+    bulkBarcodesCheck: (barcodes: string[]) => api.post('/pos/carts/bulk-barcodes-check/', { barcodes }),
     updateItem: (cartId: number, itemId: number, data: any) => api.patch(`/pos/carts/${cartId}/items/${itemId}/`, data),
     deleteItem: (cartId: number, itemId: number) => api.delete(`/pos/carts/${cartId}/items/${itemId}/`),
     removeSku: (cartId: number, itemId: number, barcode: string) => api.post(`/pos/carts/${cartId}/items/${itemId}/remove-sku/`, { barcode }),
