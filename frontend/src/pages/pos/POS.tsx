@@ -23,7 +23,7 @@ import Modal from '../../components/ui/Modal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
+import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen, Eye, EyeOff, ListOrdered } from 'lucide-react';
 import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
@@ -66,6 +66,15 @@ export default function POS() {
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  // Bulk add: paste barcodes, check status, add to cart
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkInput, setBulkInput] = useState('');
+  const [bulkCheckResult, setBulkCheckResult] = useState<{
+    addable: Array<{ barcode: string; barcode_full?: string | null; short_code?: string | null; product_id: number; variant_id?: number | null; product_name: string }>;
+    skipped: Array<{ barcode: string; barcode_full?: string | null; short_code?: string | null; reason: string; current_tag?: string | null }>;
+  } | null>(null);
+  const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
+  const [bulkAddLoading, setBulkAddLoading] = useState(false);
   // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
 
@@ -130,6 +139,81 @@ export default function POS() {
   }, [barcodeInput]);
 
   const queryClient = useQueryClient();
+
+  // Bulk add: parse barcodes (line or space separated)
+  const parseBulkBarcodes = useCallback((text: string): string[] => {
+    const raw = text.replace(/\r\n/g, '\n').split(/[\n\s]+/).map((s) => s.trim()).filter(Boolean);
+    return [...new Set(raw)];
+  }, []);
+  const formatBarcodeWithHyphens = useCallback((value: string): string => {
+    const cleaned = (value || '').replace(/-/g, '');
+    if (!cleaned) return value || '';
+    return cleaned.replace(/(.{4})/g, '$1-').replace(/-$/, '');
+  }, []);
+  const formatBarcodeDisplay = useCallback((row: { barcode: string; barcode_full?: string | null; short_code?: string | null }) => {
+    const full = row.barcode_full ?? row.barcode;
+    const hyphenated = formatBarcodeWithHyphens(full);
+    const short = row.short_code?.trim();
+    if (short && short !== full && short !== row.barcode) {
+      return `${hyphenated} (short: ${short})`;
+    }
+    return hyphenated;
+  }, [formatBarcodeWithHyphens]);
+
+  const handleBulkCheck = useCallback(async () => {
+    const barcodes = parseBulkBarcodes(bulkInput);
+    if (barcodes.length === 0) {
+      setToasts(prev => [...prev, { id: Math.random().toString(36).slice(2), message: 'Paste at least one barcode (line or space separated)', type: 'info' }]);
+      return;
+    }
+    setBulkCheckLoading(true);
+    setBulkCheckResult(null);
+    try {
+      const response = await posApi.carts.bulkBarcodesCheck(barcodes);
+      setBulkCheckResult(response.data);
+      const addableCount = response.data.addable?.length ?? 0;
+      const skippedCount = response.data.skipped?.length ?? 0;
+      setToasts(prev => [...prev, {
+        id: Math.random().toString(36).slice(2),
+        message: addableCount > 0
+          ? `${addableCount} barcode(s) can be added to cart.${skippedCount > 0 ? ` ${skippedCount} skipped.` : ''}`
+          : skippedCount > 0 ? `${skippedCount} barcode(s) skipped. Only fresh or returned barcodes can be added.` : 'No barcodes could be added.',
+        type: addableCount > 0 ? 'success' : 'info',
+      }]);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Failed to check barcodes';
+      setToasts(prev => [...prev, { id: Math.random().toString(36).slice(2), message: msg, type: 'error' }]);
+      setBulkCheckResult(null);
+    } finally {
+      setBulkCheckLoading(false);
+    }
+  }, [bulkInput, parseBulkBarcodes]);
+
+  const handleBulkAddToCart = useCallback(async () => {
+    const addable = bulkCheckResult?.addable ?? [];
+    if (!cartId || addable.length === 0) return;
+    setBulkAddLoading(true);
+    try {
+      for (const item of addable) {
+        await posApi.carts.addItem(cartId, {
+          product: item.product_id,
+          quantity: 1,
+          unit_price: 0,
+          barcode: item.barcode,
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+      setToasts(prev => [...prev, { id: Math.random().toString(36).slice(2), message: `Added ${addable.length} barcode(s) to cart.`, type: 'success' }]);
+      setShowBulkModal(false);
+      setBulkInput('');
+      setBulkCheckResult(null);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Failed to add to cart';
+      setToasts(prev => [...prev, { id: Math.random().toString(36).slice(2), message: msg, type: 'error' }]);
+    } finally {
+      setBulkAddLoading(false);
+    }
+  }, [bulkCheckResult, cartId, queryClient]);
 
   // Get user info to check if Admin
   const [user, setUser] = useState<any>(null);
@@ -3526,6 +3610,20 @@ export default function POS() {
                   >
                     <Camera className="h-4 w-4" />
                   </Button>
+                  <Button
+                    onClick={() => {
+                      setShowBulkModal(true);
+                      setBulkCheckResult(null);
+                      setBulkInput('');
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="whitespace-nowrap"
+                    title="Bulk add barcodes to cart"
+                    disabled={!cartId || isCartLocked}
+                  >
+                    <ListOrdered className="h-4 w-4" />
+                  </Button>
                 </div>
                 {/* Queue Display */}
                 {scanQueue.length > 0 && (
@@ -4589,6 +4687,91 @@ export default function POS() {
           </div>
         </div>
       </div>
+
+      {/* Bulk add barcodes modal */}
+      {showBulkModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b gap-3">
+              <h2 className="text-lg font-semibold text-gray-900">Bulk add to cart</h2>
+              <button
+                type="button"
+                onClick={() => !bulkAddLoading && setShowBulkModal(false)}
+                className="p-1 rounded hover:bg-gray-100 shrink-0"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto flex-1 space-y-4">
+              <p className="text-sm text-gray-600">
+                Paste barcodes or short codes below (one per line or space separated). Only <strong>fresh</strong> or <strong>returned</strong> barcodes can be added to cart.
+              </p>
+              <textarea
+                value={bulkInput}
+                onChange={(e) => setBulkInput(e.target.value)}
+                placeholder="Paste barcodes or short codes here..."
+                className="w-full h-40 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                disabled={bulkAddLoading}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  onClick={handleBulkCheck}
+                  disabled={bulkCheckLoading || bulkAddLoading || parseBulkBarcodes(bulkInput).length === 0}
+                >
+                  {bulkCheckLoading ? 'Checking...' : 'Check status'}
+                </Button>
+                {bulkCheckResult && (bulkCheckResult.addable?.length ?? 0) > 0 && (
+                  <Button
+                    variant="primary"
+                    onClick={handleBulkAddToCart}
+                    disabled={bulkAddLoading}
+                  >
+                    {bulkAddLoading ? 'Adding...' : `Add ${bulkCheckResult.addable.length} to cart`}
+                  </Button>
+                )}
+              </div>
+              {bulkCheckResult && (
+                <div className="border rounded-lg p-3 bg-gray-50 text-sm space-y-3">
+                  {(bulkCheckResult.addable?.length ?? 0) > 0 && (
+                    <>
+                      <p className="font-medium text-green-700">
+                        ✓ {bulkCheckResult.addable.length} barcode(s) can be added to cart
+                      </p>
+                      <ul className="list-disc list-inside text-gray-700 space-y-0.5 max-h-32 overflow-y-auto">
+                        {bulkCheckResult.addable.map((a, idx) => (
+                          <li key={a.barcode + String(idx)}>
+                            <span className="font-mono text-sm">{formatBarcodeDisplay(a)}</span>
+                            {a.product_name && <span className="text-gray-500 ml-1">· {a.product_name}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {(bulkCheckResult.skipped?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="font-medium text-amber-800 mb-1">
+                        Skipped ({(bulkCheckResult.skipped ?? []).length}):
+                      </p>
+                      <ul className="list-disc list-inside text-gray-700 space-y-0.5 max-h-32 overflow-y-auto">
+                        {(bulkCheckResult.skipped ?? []).map((s, idx) => {
+                          const reasonText = s.reason === 'not_found' ? 'not found' : s.reason === 'not_available' ? (s.current_tag ? `not available (${s.current_tag})` : 'not available') : s.reason === 'in_other_cart' ? 'already in a cart' : s.reason === 'already_sold' ? 'already sold' : s.reason;
+                          return (
+                            <li key={s.barcode + String(idx)}>
+                              <span className="font-mono text-sm">{formatBarcodeDisplay(s)}</span>
+                              <span className="text-amber-700 ml-1">({reasonText})</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 

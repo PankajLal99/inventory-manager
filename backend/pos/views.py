@@ -5222,6 +5222,114 @@ def bulk_barcodes_check(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def bulk_barcodes_check_pos(request):
+    """Check bulk barcodes for POS add-to-cart. Only barcodes with tag 'new' or 'returned'
+    (and not already in a cart) can be added. Returns addable and skipped lists."""
+    barcodes_raw = request.data.get('barcodes')
+    if barcodes_raw is None:
+        return Response({'error': 'barcodes array is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if isinstance(barcodes_raw, str):
+        barcodes_raw = [s.strip() for s in barcodes_raw.replace('\r\n', '\n').split() if s.strip()]
+    if not isinstance(barcodes_raw, list):
+        return Response({'error': 'barcodes must be a list or a string'}, status=status.HTTP_400_BAD_REQUEST)
+    seen = set()
+    barcode_strings = []
+    for b in barcodes_raw:
+        val = (b or '').strip()
+        if val and val not in seen:
+            seen.add(val)
+            barcode_strings.append(val)
+    if not barcode_strings:
+        return Response({
+            'addable': [],
+            'skipped': [],
+        })
+
+    addable = []
+    skipped = []
+    # All active carts' scanned_barcodes for "in other cart" check
+    all_scanned = set()
+    for item in CartItem.objects.filter(cart__status='active').exclude(scanned_barcodes=[]):
+        if item.scanned_barcodes:
+            all_scanned.update(item.scanned_barcodes)
+
+    for barcode_str in barcode_strings:
+        barcode_obj = Barcode.objects.filter(
+            Q(barcode__iexact=barcode_str) | Q(short_code__iexact=barcode_str)
+        ).select_related('product', 'variant').first()
+
+        if not barcode_obj:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': None,
+                'short_code': None,
+                'reason': 'not_found',
+                'current_tag': None,
+            })
+            continue
+
+        tag = barcode_obj.tag
+        barcode_full = barcode_obj.barcode
+        short_code = getattr(barcode_obj, 'short_code', None)
+
+        if tag not in ['new', 'returned']:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'not_available',
+                'current_tag': tag,
+            })
+            continue
+        if barcode_full in all_scanned:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'in_other_cart',
+                'current_tag': tag,
+            })
+            continue
+
+        # Skip if product not purchased / purchase not finalized (same as add-item)
+        if not barcode_obj.purchase_item:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'not_available',
+                'current_tag': tag,
+            })
+            continue
+        purchase = barcode_obj.purchase_item.purchase if barcode_obj.purchase_item else None
+        if purchase and purchase.status != 'finalized':
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'not_available',
+                'current_tag': tag,
+            })
+            continue
+
+        product = barcode_obj.product
+        addable.append({
+            'barcode': barcode_full,
+            'barcode_full': barcode_full,
+            'short_code': short_code,
+            'product_id': product.id if product else None,
+            'variant_id': barcode_obj.variant_id,
+            'product_name': product.name if product else 'N/A',
+        })
+
+    return Response({
+        'addable': addable,
+        'skipped': skipped,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def process_replacement(request, invoice_id):
     """Process replacement - mark items as unknown and remove/reduce items from invoice"""
     invoice = get_object_or_404(Invoice, pk=invoice_id)

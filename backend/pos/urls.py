@@ -3,7 +3,7 @@ from .views import (
     pos_session_list_create, pos_session_detail, pos_session_close,
     active_carts_overview,
     cart_list_create, cart_detail, cart_items, cart_item_update, cart_item_remove_sku,
-    cart_hold, cart_unhold, cart_checkout,
+    cart_hold, cart_unhold, cart_checkout, bulk_barcodes_check_pos,
     invoice_list_create, invoice_detail, invoice_payments, invoice_void,
     invoice_checkout, invoice_edit, invoice_update, invoice_mark_credit, invoice_return, invoice_exchange, invoice_items, invoice_item_detail,
     return_list_create, return_detail, return_credit_note, return_refund,
@@ -31,7 +31,8 @@ urlpatterns = [
     path('pos/carts/<int:pk>/hold/', cart_hold, name='cart-hold'),
     path('pos/carts/<int:pk>/unhold/', cart_unhold, name='cart-unhold'),
     path('pos/carts/<int:pk>/checkout/', cart_checkout, name='cart-checkout'),
-    
+    path('pos/carts/bulk-barcodes-check/', bulk_barcodes_check_pos, name='cart-bulk-barcodes-check'),
+
     # Invoice endpoints
     path('pos/invoices/', invoice_list_create, name='invoice-list-create'),
     path('pos/invoices/<int:pk>/', invoice_detail, name='invoice-detail'),
