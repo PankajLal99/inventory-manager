@@ -652,7 +652,7 @@ export default function Repairs() {
                       onClick={() => setEditingInvoice(selectedInvoice)}
                     >
                       <Pencil className="h-4 w-4 mr-2" />
-                      Edit Registration
+                      Edit
                     </Button>
                     <Button
                       variant="primary"
@@ -845,7 +845,7 @@ export default function Repairs() {
                               title="Edit repair details (contact, model, description, booking amount)"
                             >
                               <Pencil className="h-4 w-4 flex-shrink-0" />
-                              <span>Edit Registration</span>
+                              <span>Edit</span>
                             </Button>
                             <Button
                               variant="primary"
@@ -1005,7 +1005,7 @@ export default function Repairs() {
                             disabled={!invoice.repair}
                           >
                             <Pencil className="h-4 w-4 flex-shrink-0" />
-                            <span>Edit Registration</span>
+                            <span>Edit</span>
                           </Button>
                           <Button
                             variant="primary"
