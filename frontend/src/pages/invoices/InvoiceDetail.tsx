@@ -3684,36 +3684,32 @@ export default function InvoiceDetail() {
                     </Badge>
                   </div>
                   <div className="flex-1 min-w-[160px]">
-                    <label className="block text-xs font-medium text-gray-700 mb-1">New Status</label>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      New Status
+                      {updateRepairStatusMutation.isPending && (
+                        <span className="ml-2 text-gray-500 font-normal">Updating...</span>
+                      )}
+                    </label>
                     <Select
                       value={checkoutRepairStatus || inv.repair.status}
-                      onChange={(e) => setCheckoutRepairStatus(e.target.value)}
+                      onChange={(e) => {
+                        const newStatus = e.target.value;
+                        setCheckoutRepairStatus(newStatus);
+                        if (newStatus && newStatus !== inv.repair.status) {
+                          if (newStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial') {
+                            return;
+                          }
+                          updateRepairStatusMutation.mutate({ repair_status: newStatus });
+                        }
+                      }}
                       className="w-full"
+                      disabled={updateRepairStatusMutation.isPending}
                     >
                       {repairStatusOptions.map((opt) => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
                     </Select>
                   </div>
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      const newStatus = checkoutRepairStatus || inv.repair.status;
-                      if (newStatus && newStatus !== inv.repair.status) {
-                        updateRepairStatusMutation.mutate({ repair_status: newStatus });
-                      }
-                    }}
-                    disabled={
-                      updateRepairStatusMutation.isPending ||
-                      !checkoutRepairStatus ||
-                      (checkoutRepairStatus || inv.repair.status) === inv.repair.status ||
-                      (checkoutRepairStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial')
-                    }
-                  >
-                    {updateRepairStatusMutation.isPending ? 'Updating...' : 'Update Status'}
-                  </Button>
                 </div>
                 {(checkoutRepairStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial') && (
                   <div className="text-xs text-red-600 flex items-center gap-1">
