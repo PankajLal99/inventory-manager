@@ -45,6 +45,7 @@ interface Invoice {
   created_by: number | null;
   is_edited?: boolean;
   edited_on?: string | null;
+  repair?: { id: number; [key: string]: unknown } | null;
 }
 
 export default function Invoices() {
@@ -141,7 +142,11 @@ export default function Invoices() {
     if (Array.isArray((raw as any).data)) return (raw as any).data;
     if (Array.isArray(raw)) return raw;
     return [];
-  })().filter((inv: Invoice) => inv.invoice_type !== 'defective');
+  })().filter((inv: Invoice) => {
+    if (inv.invoice_type === 'defective') return false;
+    if (inv.invoice_type === 'pending' && inv.repair) return false;
+    return true;
+  });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', currentPage, search],
@@ -173,10 +178,13 @@ export default function Invoices() {
   } : null;
 
   // Filter out defective invoices (they should only appear in defective move-outs page)
+  // Filter out repair invoices with pending type (show them only on Repairs page)
   // Search is applied server-side (invoice_number + customer_name)
-  const filteredInvoices = invoices.filter(
-    (invoice) => invoice.invoice_type !== 'defective'
-  );
+  const filteredInvoices = invoices.filter((invoice) => {
+    if (invoice.invoice_type === 'defective') return false;
+    if (invoice.invoice_type === 'pending' && invoice.repair) return false;
+    return true;
+  });
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
