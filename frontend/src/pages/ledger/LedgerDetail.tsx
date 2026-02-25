@@ -110,10 +110,14 @@ export default function LedgerDetail() {
   }, [isAdmin, selectedStoreId, stores]);
 
   const { data: ledgerDetail, isLoading } = useQuery({
-    queryKey: ['ledger-customer-detail', customerId, defaultStore?.id],
+    queryKey: ['ledger-customer-detail', customerId, defaultStore?.id, filters.dateFrom, filters.dateTo, filters.entryType, filters.search],
     queryFn: () => {
       const params: any = {};
       if (defaultStore?.id) params.store = defaultStore.id;
+      if (filters.dateFrom) params.date_from = filters.dateFrom;
+      if (filters.dateTo) params.date_to = filters.dateTo;
+      if (filters.entryType) params.entry_type = filters.entryType;
+      if (filters.search) params.search = filters.search;
       return customersApi.ledger.customerDetail(parseInt(customerId || '0'), params);
     },
     enabled: !!customerId && !!defaultStore,
@@ -243,33 +247,10 @@ export default function LedgerDetail() {
   };
 
   const filteredEntries = useMemo(() => {
-    let entries = [...allEntries];
-
-    if (filters.dateFrom) {
-      entries = entries.filter(entry =>
-        new Date(entry.created_at) >= new Date(filters.dateFrom)
-      );
-    }
-    if (filters.dateTo) {
-      entries = entries.filter(entry =>
-        new Date(entry.created_at) <= new Date(filters.dateTo + 'T23:59:59')
-      );
-    }
-    if (filters.entryType) {
-      entries = entries.filter(entry => entry.entry_type === filters.entryType);
-    }
-    if (filters.search) {
-      const searchLower = filters.search.toLowerCase();
-      entries = entries.filter(entry =>
-        entry.description?.toLowerCase().includes(searchLower) ||
-        entry.invoice_number?.toLowerCase().includes(searchLower)
-      );
-    }
-
-    return entries.sort((a, b) =>
+    return [...allEntries].sort((a, b) =>
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
-  }, [allEntries, filters]);
+  }, [allEntries]);
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({

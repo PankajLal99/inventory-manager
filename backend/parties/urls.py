@@ -3,7 +3,7 @@ from .views import (
     customer_group_list_create, customer_group_detail,
     customer_list_create, customer_detail, customer_balance, customer_adjust_credit,
     supplier_list_create, supplier_detail,
-    ledger_entry_list_create, ledger_entry_retrieve_update_destroy, ledger_summary, ledger_customer_detail, ledger_customer_invoice_items_by_category,
+    ledger_entry_list_create, ledger_entry_retrieve_update_destroy, ledger_summary, ledger_by_customer, ledger_customer_detail, ledger_customer_invoice_items_by_category,
     personal_customer_list_create, personal_customer_detail,
     personal_ledger_entry_list_create, personal_ledger_entry_retrieve_update_destroy, personal_ledger_summary, personal_ledger_customer_detail,
     internal_customer_list_create, internal_customer_detail,
@@ -29,6 +29,7 @@ urlpatterns = [
     path('ledger/entries/', ledger_entry_list_create, name='ledger-entry-list-create'),
     path('ledger/entries/<int:entry_id>/', ledger_entry_retrieve_update_destroy, name='ledger-entry-retrieve-update-destroy'),
     path('ledger/summary/', ledger_summary, name='ledger-summary'),
+    path('ledger/by-customer/', ledger_by_customer, name='ledger-by-customer'),
     path('ledger/customers/<int:customer_id>/', ledger_customer_detail, name='ledger-customer-detail'),
     path('ledger/customers/<int:customer_id>/invoice-items-by-category/', ledger_customer_invoice_items_by_category, name='ledger-customer-invoice-items-by-category'),
 

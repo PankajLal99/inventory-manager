@@ -1,9 +1,8 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi } from '../../lib/api';
-import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -50,17 +49,9 @@ export default function InternalLedger() {
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
-  const [user, setUser] = useState<any>(null);
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-
-  useEffect(() => {
-    const loadUser = async () => { try { await auth.loadUser(); setUser(auth.getUser()); } catch (e) {} };
-    loadUser();
-  }, []);
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
-
 
   // Fetch internal customers for internal ledger (separate from regular customers)
   const { data: customersResponse } = useQuery({
@@ -678,7 +669,6 @@ export default function InternalLedger() {
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Latest
                           </th>
-                          {isAdmin && <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">Actions</th>}
                           <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Net Amount
                           </th>
@@ -721,7 +711,6 @@ export default function InternalLedger() {
                                   {group.latestDescription || <span className="text-gray-400 italic">—</span>}
                                 </div>
                               </td>
-                              {isAdmin && <td className="px-6 py-4"></td>}
                               <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
                                 }`}>
                                 <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0
@@ -741,7 +730,6 @@ export default function InternalLedger() {
                             Totals:
                           </td>
                           <td className="px-6 py-4" />
-                          {isAdmin && <td className="px-6 py-4"></td>}
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <div className="space-y-1">
                               <div className="text-sm">

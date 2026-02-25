@@ -174,6 +174,40 @@ def update_repair_status(request, pk):
     return Response(serializer.data)
 
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_repair(request, pk):
+    """Update repair registration details (contact_no, model_name, description, booking_amount)."""
+    repair = get_object_or_404(Repair, invoice_id=pk)
+    allowed = ('contact_no', 'model_name', 'description', 'booking_amount')
+    for key in allowed:
+        if key in request.data:
+            value = request.data[key]
+            if key == 'booking_amount':
+                if value is None or value == '':
+                    setattr(repair, key, None)
+                else:
+                    try:
+                        setattr(repair, key, Decimal(str(value)))
+                    except (InvalidOperation, TypeError):
+                        pass
+            else:
+                setattr(repair, key, value if value is not None else '')
+    repair.updated_by = request.user
+    repair.save()
+    create_audit_log(
+        request=request,
+        action='repair_update',
+        model_name='Repair',
+        object_id=str(repair.id),
+        object_name=f"Repair {repair.barcode}",
+        object_reference=repair.barcode,
+        barcode=repair.barcode,
+    )
+    serializer = RepairSerializer(repair)
+    return Response(serializer.data)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generate_repair_label(request, pk):

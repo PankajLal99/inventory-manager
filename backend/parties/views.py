@@ -2,7 +2,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q, Sum, Count
+from django.db.models import Q, Sum, Count, F, Case, When, Value, Subquery, OuterRef
 from django.shortcuts import get_object_or_404
 from django.core.cache import cache
 from decimal import Decimal
@@ -255,6 +255,84 @@ def supplier_detail(request, pk):
 
 
 # Ledger views (Admin only)
+
+
+def _ledger_entries_base_queryset(request):
+    """Build base LedgerEntry queryset from request query params (same filters as list view)."""
+    queryset = LedgerEntry.objects.all()
+    customer_id = request.query_params.get('customer', None)
+    customer_group_id = request.query_params.get('customer_group', None)
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    entry_type = request.query_params.get('entry_type', None)
+    search = request.query_params.get('search', None)
+    store_id = request.query_params.get('store', None)
+    invoice_status = request.query_params.get('invoice_status', None)
+
+    if invoice_status:
+        queryset = queryset.filter(invoice__status=invoice_status)
+    if store_id:
+        queryset = queryset.filter(
+            Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
+        )
+    if customer_id:
+        queryset = queryset.filter(customer_id=customer_id)
+    if customer_group_id:
+        queryset = queryset.filter(customer__customer_group_id=customer_group_id)
+    if date_from or date_to:
+        date_filter = Q()
+        if date_from and date_to:
+            date_filter = Q(created_at__isnull=True) | (Q(created_at__date__gte=date_from) & Q(created_at__date__lte=date_to))
+        elif date_from:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__gte=date_from)
+        elif date_to:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__lte=date_to)
+        queryset = queryset.filter(date_filter)
+    if entry_type:
+        queryset = queryset.filter(entry_type=entry_type)
+    if search:
+        queryset = queryset.filter(
+            Q(customer__name__icontains=search) |
+            Q(customer__phone__icontains=search) |
+            Q(description__icontains=search) |
+            Q(invoice__invoice_number__icontains=search)
+        )
+    return queryset
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def ledger_by_customer(request):
+    """Get ledger entries aggregated by customer (Admin only). Returns one row per customer with totals.
+    Use this for credit-only view to avoid loading all entries; supports same filters as entries list."""
+    if not is_admin_user(request.user):
+        return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+    base = _ledger_entries_base_queryset(request)
+    latest_desc = base.filter(customer_id=OuterRef('customer')).order_by('-created_at', '-id').values('description')[:1]
+    grouped = base.values('customer', 'customer__name', 'customer__customer_group__name').annotate(
+        total_credit=Sum(Case(When(entry_type='credit', then=F('amount')), default=Value(Decimal('0')))),
+        total_debit=Sum(Case(When(entry_type='debit', then=F('amount')), default=Value(Decimal('0')))),
+        entry_count=Count('id'),
+        latest_description=Subquery(latest_desc)
+    ).order_by('customer__name')
+    out = []
+    for row in grouped:
+        total_credit = row['total_credit'] or Decimal('0.00')
+        total_debit = row['total_debit'] or Decimal('0.00')
+        net = total_credit - total_debit
+        out.append({
+            'customer_id': row['customer'],
+            'customer_name': row['customer__name'] or 'Anonymous',
+            'customer_group_name': row['customer__customer_group__name'] or '',
+            'total_credit': str(total_credit),
+            'total_debit': str(total_debit),
+            'net_amount': str(net),
+            'entry_count': row['entry_count'],
+            'latest_description': row['latest_description'] or '',
+        })
+    return Response(out)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def ledger_entry_list_create(request):
@@ -275,13 +353,10 @@ def ledger_entry_list_create(request):
         
         # Filter by invoice status if provided (only show entries from invoices with this status)
         if invoice_status:
-            from django.db.models import Q
             queryset = queryset.filter(invoice__status=invoice_status)
         
         # Filter by store if provided (through invoice relationship)
-        # Include manual entries (without invoices) OR entries with invoices from the selected store
         if store_id:
-            from django.db.models import Q
             queryset = queryset.filter(
                 Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
             )
@@ -291,17 +366,12 @@ def ledger_entry_list_create(request):
         if customer_group_id:
             queryset = queryset.filter(customer__customer_group_id=customer_group_id)
         if date_from or date_to:
-            from django.db.models import Q
-            # Build date filter: include entries with None created_at OR entries within date range
             date_filter = Q()
             if date_from and date_to:
-                # Both dates specified: include None OR entries within range
                 date_filter = Q(created_at__isnull=True) | (Q(created_at__date__gte=date_from) & Q(created_at__date__lte=date_to))
             elif date_from:
-                # Only from date: include None OR entries >= date_from
                 date_filter = Q(created_at__isnull=True) | Q(created_at__date__gte=date_from)
             elif date_to:
-                # Only to date: include None OR entries <= date_to
                 date_filter = Q(created_at__isnull=True) | Q(created_at__date__lte=date_to)
             queryset = queryset.filter(date_filter)
         if entry_type:
@@ -314,7 +384,6 @@ def ledger_entry_list_create(request):
                 Q(invoice__invoice_number__icontains=search)
             )
         
-        # Order by created_at (None values will be sorted last)
         queryset = queryset.order_by('-created_at', '-id')
         serializer = LedgerEntrySerializer(queryset, many=True)
         return Response(serializer.data)
@@ -446,21 +515,40 @@ def ledger_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def ledger_customer_detail(request, customer_id):
-    """Get ledger entries for a specific customer with running balance (Admin only)"""
+    """Get ledger entries for a specific customer with running balance (Admin only).
+    Query params: store, date_from, date_to, entry_type, search."""
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
     customer = get_object_or_404(Customer, pk=customer_id)
     store_id = request.query_params.get('store', None)
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    entry_type = request.query_params.get('entry_type', None)
+    search = request.query_params.get('search', None)
     
     # Base queryset for this customer
     entries = LedgerEntry.objects.filter(customer=customer).select_related('customer', 'customer__customer_group', 'invoice', 'created_by')
     
     # Filter by store if provided (through invoice relationship)
-    # Include manual entries (without invoices) OR entries with invoices from the selected store
     if store_id:
         entries = entries.filter(
             Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
+        )
+    if date_from or date_to:
+        date_filter = Q()
+        if date_from and date_to:
+            date_filter = Q(created_at__isnull=True) | (Q(created_at__date__gte=date_from) & Q(created_at__date__lte=date_to))
+        elif date_from:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__gte=date_from)
+        elif date_to:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__lte=date_to)
+        entries = entries.filter(date_filter)
+    if entry_type:
+        entries = entries.filter(entry_type=entry_type)
+    if search:
+        entries = entries.filter(
+            Q(description__icontains=search) | Q(invoice__invoice_number__icontains=search)
         )
     
     entries = entries.order_by('created_at')
@@ -737,17 +825,32 @@ def personal_ledger_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_customer_detail(request, customer_id):
-    """Get personal ledger entries for a specific customer with running balance (Admin only)"""
+    """Get personal ledger entries for a specific customer with running balance (Admin only).
+    Query params: date_from, date_to, entry_type, search."""
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access personal ledger'}, status=status.HTTP_403_FORBIDDEN)
     customer = get_object_or_404(PersonalCustomer, pk=customer_id)
-    store_id = request.query_params.get('store', None)
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    entry_type = request.query_params.get('entry_type', None)
+    search = request.query_params.get('search', None)
     
-    # Base queryset for this customer
     entries = PersonalLedgerEntry.objects.filter(customer=customer).select_related('customer', 'created_by')
     
-    # Store filtering is not applicable for personal ledger, but we keep param for consistency
+    if date_from or date_to:
+        date_filter = Q()
+        if date_from and date_to:
+            date_filter = Q(created_at__isnull=True) | (Q(created_at__date__gte=date_from) & Q(created_at__date__lte=date_to))
+        elif date_from:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__gte=date_from)
+        elif date_to:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__lte=date_to)
+        entries = entries.filter(date_filter)
+    if entry_type:
+        entries = entries.filter(entry_type=entry_type)
+    if search:
+        entries = entries.filter(Q(description__icontains=search))
     
     entries = entries.order_by('created_at')
     
@@ -954,14 +1057,36 @@ def internal_ledger_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def internal_ledger_customer_detail(request, customer_id):
-    """Get internal ledger entries for a specific customer with running balance (Admin only)"""
+    """Get internal ledger entries for a specific customer with running balance (Admin only).
+    Query params: date_from, date_to, entry_type, search."""
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
     
     customer = get_object_or_404(InternalCustomer, pk=customer_id)
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    entry_type = request.query_params.get('entry_type', None)
+    search = request.query_params.get('search', None)
     
     entries = InternalLedgerEntry.objects.filter(customer=customer).select_related('customer', 'created_by')
+    
+    if date_from or date_to:
+        date_filter = Q()
+        if date_from and date_to:
+            date_filter = Q(created_at__isnull=True) | (Q(created_at__date__gte=date_from) & Q(created_at__date__lte=date_to))
+        elif date_from:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__gte=date_from)
+        elif date_to:
+            date_filter = Q(created_at__isnull=True) | Q(created_at__date__lte=date_to)
+        entries = entries.filter(date_filter)
+    if entry_type:
+        entries = entries.filter(entry_type=entry_type)
+    if search:
+        entries = entries.filter(
+            Q(description__icontains=search) | Q(customer__name__icontains=search) | Q(customer__phone__icontains=search)
+        )
+    
     entries = entries.order_by('created_at')
     
     serializer = InternalLedgerEntrySerializer(entries, many=True)

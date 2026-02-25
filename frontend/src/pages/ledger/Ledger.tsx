@@ -172,34 +172,49 @@ export default function Ledger() {
     retry: false,
   });
 
-  const { data: ledgerEntries, isLoading, error } = useQuery({
-    queryKey: ['ledger-entries', filters, defaultStore?.id, showCreditInvoicesOnly],
-    queryFn: async () => {
-      const params: any = {};
-      if (filters.dateFrom) params.date_from = filters.dateFrom;
-      if (filters.dateTo) params.date_to = filters.dateTo;
-      if (filters.entryType) params.entry_type = filters.entryType;
-      if (filters.customer) params.customer = filters.customer;
-      if (filters.customerGroup) params.customer_group = filters.customerGroup;
-      if (filters.search) params.search = filters.search;
-      if (defaultStore?.id) params.store = defaultStore.id;
-      // Filter to show only credit invoices (if toggle is enabled)
-      if (showCreditInvoicesOnly) {
-        params.invoice_status = 'credit';
-      }
+  const buildLedgerParams = useMemo(() => {
+    const params: any = {};
+    if (filters.dateFrom) params.date_from = filters.dateFrom;
+    if (filters.dateTo) params.date_to = filters.dateTo;
+    if (filters.entryType) params.entry_type = filters.entryType;
+    if (filters.customer) params.customer = filters.customer;
+    if (filters.customerGroup) params.customer_group = filters.customerGroup;
+    if (filters.search) params.search = filters.search;
+    if (defaultStore?.id) params.store = defaultStore.id;
+    return params;
+  }, [filters.dateFrom, filters.dateTo, filters.entryType, filters.customer, filters.customerGroup, filters.search, defaultStore?.id]);
 
+  const { data: ledgerEntries, isLoading: entriesLoading, error } = useQuery({
+    queryKey: ['ledger-entries', buildLedgerParams, defaultStore?.id],
+    queryFn: async () => {
+      const params = { ...buildLedgerParams };
       const response = await customersApi.ledger.entries.list(params);
       return response.data;
     },
-    enabled: !!defaultStore,
+    enabled: !!defaultStore && !showCreditInvoicesOnly,
     retry: false,
   });
+
+  const { data: ledgerByCustomer, isLoading: byCustomerLoading } = useQuery({
+    queryKey: ['ledger-by-customer', buildLedgerParams, defaultStore?.id],
+    queryFn: async () => {
+      const params = { ...buildLedgerParams };
+      params.invoice_status = 'credit';
+      const response = await customersApi.ledger.byCustomer(params);
+      return response.data;
+    },
+    enabled: !!defaultStore && showCreditInvoicesOnly,
+    retry: false,
+  });
+
+  const isLoading = showCreditInvoicesOnly ? byCustomerLoading : entriesLoading;
 
   const createEntryMutation = useMutation({
     mutationFn: (data: any) => customersApi.ledger.entries.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
       queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
       setShowEntryForm(false);
       setSelectedCustomer(null);
       setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
@@ -215,6 +230,7 @@ export default function Ledger() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
       queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
       setEditingEntry(null);
       setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' });
       toast('Ledger entry updated successfully', 'success');
@@ -229,6 +245,7 @@ export default function Ledger() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
       queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
       setDeletingEntryId(null);
       toast('Ledger entry removed successfully', 'success');
     },
@@ -306,13 +323,12 @@ export default function Ledger() {
   })();
 
   const filteredEntries = useMemo(() => {
+    if (showCreditInvoicesOnly) return [];
     let sorted = [...entries];
-
     if (sortConfig) {
       sorted.sort((a, b) => {
         let aValue: any;
         let bValue: any;
-
         switch (sortConfig.key) {
           case 'date':
             aValue = new Date(a.created_at).getTime();
@@ -333,7 +349,6 @@ export default function Ledger() {
           default:
             return 0;
         }
-
         if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
         if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
@@ -343,25 +358,45 @@ export default function Ledger() {
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
     }
-
     return sorted;
-  }, [entries, sortConfig]);
+  }, [entries, sortConfig, showCreditInvoicesOnly]);
 
   const totalCredit = useMemo(() => {
+    if (showCreditInvoicesOnly && ledgerSummary) return parseFloat(String(ledgerSummary.total_credit || 0));
     return filteredEntries
       .filter((e: any) => e.entry_type === 'credit')
       .reduce((sum: number, e: any) => sum + parseFloat(e.amount || 0), 0);
-  }, [filteredEntries]);
+  }, [showCreditInvoicesOnly, ledgerSummary, filteredEntries]);
 
   const totalDebit = useMemo(() => {
+    if (showCreditInvoicesOnly && ledgerSummary) return parseFloat(String(ledgerSummary.total_debit || 0));
     return filteredEntries
       .filter((e: any) => e.entry_type === 'debit')
       .reduce((sum: number, e: any) => sum + parseFloat(e.amount || 0), 0);
-  }, [filteredEntries]);
+  }, [showCreditInvoicesOnly, ledgerSummary, filteredEntries]);
 
-  // Group entries by customer
+  // Group entries by customer: from aggregated API when credit-only, else from filtered entries
   const groupedByCustomer = useMemo(() => {
-    const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string } } = {};
+    if (showCreditInvoicesOnly && Array.isArray(ledgerByCustomer)) {
+      const grouped: { [key: string]: { customer: any; entries: any[]; entryCount?: number; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string } } = {};
+      ledgerByCustomer.forEach((row: any) => {
+        const customerId = row.customer_id != null ? `customer-${row.customer_id}` : 'anonymous';
+        const totalCredit = parseFloat(row.total_credit || 0);
+        const totalDebit = parseFloat(row.total_debit || 0);
+        const entryCount = Number(row.entry_count) || 0;
+        grouped[customerId] = {
+          customer: { id: row.customer_id ?? null, name: row.customer_name || 'Anonymous' },
+          entries: [],
+          entryCount,
+          totalCredit,
+          totalDebit,
+          netAmount: parseFloat(row.net_amount || 0),
+          latestDescription: row.latest_description || '',
+        };
+      });
+      return grouped;
+    }
+    const grouped: { [key: string]: { customer: any; entries: any[]; entryCount?: number; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string } } = {};
     filteredEntries.forEach((entry: any) => {
       const customerId = entry.customer ? `customer-${entry.customer}` : 'anonymous';
       const customerName = entry.customer_name || 'Anonymous';
@@ -391,62 +426,97 @@ export default function Ledger() {
       grouped[key].entries = byDate;
     });
     return grouped;
-  }, [filteredEntries]);
+  }, [showCreditInvoicesOnly, ledgerByCustomer, filteredEntries]);
+
+  const totalEntryCount = useMemo(() => {
+    if (showCreditInvoicesOnly) {
+      return Object.values(groupedByCustomer).reduce((sum, g) => sum + (g.entryCount ?? 0), 0);
+    }
+    return filteredEntries.length;
+  }, [showCreditInvoicesOnly, groupedByCustomer, filteredEntries.length]);
+
+  const hasDataToShow = useMemo(() => {
+    if (showCreditInvoicesOnly) return Array.isArray(ledgerByCustomer) && ledgerByCustomer.length > 0;
+    return filteredEntries.length > 0;
+  }, [showCreditInvoicesOnly, ledgerByCustomer, filteredEntries.length]);
 
   const handleExportExcel = () => {
-    const data = filteredEntries.map((entry: any) => ({
-      'Date': new Date(entry.created_at).toLocaleDateString(),
-      'Customer': entry.customer_name || 'Anonymous',
-      'Group': entry.customer_group_name || '-',
-      'Type': entry.entry_type.toUpperCase(),
-      'Description': entry.description || '-',
-      'Amount': formatAmountINR(parseFloat(entry.amount || 0)),
-      'Invoice': entry.invoice_number || '-',
-    }));
+    const data = showCreditInvoicesOnly
+      ? Object.values(groupedByCustomer).map((group: any) => ({
+          'Customer': group.customer.name,
+          'Entries': group.entryCount ?? group.entries.length,
+          'Total Credit': formatAmountINR(group.totalCredit),
+          'Total Debit': formatAmountINR(group.totalDebit),
+          'Net Amount': formatAmountINR(group.netAmount),
+          'Latest Description': group.latestDescription || '-',
+        }))
+      : filteredEntries.map((entry: any) => ({
+          'Date': new Date(entry.created_at).toLocaleDateString(),
+          'Customer': entry.customer_name || 'Anonymous',
+          'Group': entry.customer_group_name || '-',
+          'Type': entry.entry_type.toUpperCase(),
+          'Description': entry.description || '-',
+          'Amount': formatAmountINR(parseFloat(entry.amount || 0)),
+          'Invoice': entry.invoice_number || '-',
+        }));
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Ledger Entries');
+    XLSX.utils.book_append_sheet(wb, ws, showCreditInvoicesOnly ? 'Ledger by Customer' : 'Ledger Entries');
 
-    const fileName = `ledger_entries_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
+    const fileName = `ledger_${showCreditInvoicesOnly ? 'by_customer' : 'entries'}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
   const handleExportPDF = () => {
     const doc = new jsPDF();
 
-    // Add title
     doc.setFontSize(18);
-    doc.text('Ledger Entries Report', 14, 20);
+    doc.text(showCreditInvoicesOnly ? 'Ledger by Customer (Credit Invoices)' : 'Ledger Entries Report', 14, 20);
 
-    // Add date range if filtered
     doc.setFontSize(10);
-    doc.text(
-      `Date Range: ${filters.dateFrom} to ${filters.dateTo}`,
-      14,
-      30
-    );
+    if (filters.dateFrom || filters.dateTo) {
+      doc.text(`Date Range: ${filters.dateFrom || '—'} to ${filters.dateTo || '—'}`, 14, 30);
+    } else if (showCreditInvoicesOnly) {
+      doc.text('All credit invoices (no date filter)', 14, 30);
+    }
 
-    // Prepare table data
-    const tableData = filteredEntries.map((entry: any) => [
-      new Date(entry.created_at).toLocaleDateString(),
-      entry.customer_name || 'Anonymous',
-      entry.customer_group_name || '-',
-      entry.entry_type.toUpperCase(),
-      entry.description || '-',
-      `₹${formatAmountINR(entry.amount || 0)}`,
-      entry.invoice_number || '-',
-    ]);
+    if (showCreditInvoicesOnly) {
+      const tableData = Object.values(groupedByCustomer).map((group: any) => [
+        group.customer.name,
+        String(group.entryCount ?? group.entries.length),
+        `₹${formatAmountINR(group.totalCredit)}`,
+        `₹${formatAmountINR(group.totalDebit)}`,
+        `₹${formatAmountINR(group.netAmount)}`,
+        (group.latestDescription || '-').slice(0, 40),
+      ]);
+      (doc as any).autoTable({
+        head: [['Customer', 'Entries', 'Total Credit', 'Total Debit', 'Net Amount', 'Latest Description']],
+        body: tableData,
+        startY: 35,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [59, 130, 246] },
+      });
+    } else {
+      const tableData = filteredEntries.map((entry: any) => [
+        new Date(entry.created_at).toLocaleDateString(),
+        entry.customer_name || 'Anonymous',
+        entry.customer_group_name || '-',
+        entry.entry_type.toUpperCase(),
+        entry.description || '-',
+        `₹${formatAmountINR(entry.amount || 0)}`,
+        entry.invoice_number || '-',
+      ]);
+      (doc as any).autoTable({
+        head: [['Date', 'Customer', 'Group', 'Type', 'Description', 'Amount', 'Invoice']],
+        body: tableData,
+        startY: 35,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [59, 130, 246] },
+      });
+    }
 
-    (doc as any).autoTable({
-      head: [['Date', 'Customer', 'Group', 'Type', 'Description', 'Amount', 'Invoice']],
-      body: tableData,
-      startY: 35,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [59, 130, 246] },
-    });
-
-    const fileName = `ledger_entries_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
+    const fileName = `ledger_${showCreditInvoicesOnly ? 'by_customer' : 'entries'}_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
     doc.save(fileName);
   };
 
@@ -454,7 +524,59 @@ export default function Ledger() {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const printContent = `
+    const printContent = showCreditInvoicesOnly
+      ? `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Ledger by Customer (Credit Invoices)</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #1f2937; margin-bottom: 10px; }
+            .info { color: #6b7280; margin-bottom: 20px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th { background-color: #3b82f6; color: white; padding: 12px; text-align: left; }
+            td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+            tr:hover { background-color: #f9fafb; }
+            .credit { color: #059669; }
+            .debit { color: #dc2626; }
+            @media print { body { margin: 0; } .no-print { display: none; } }
+          </style>
+        </head>
+        <body>
+          <h1>Ledger by Customer (Credit Invoices)</h1>
+          <div class="info">
+            <p><strong>Date Range:</strong> ${filters.dateFrom || '—'} to ${filters.dateTo || '—'} ${!filters.dateFrom && !filters.dateTo ? '(all)' : ''}</p>
+            <p><strong>Customers:</strong> ${Object.keys(groupedByCustomer).length} | <strong>Total Entries:</strong> ${totalEntryCount}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Entries</th>
+                <th>Total Credit</th>
+                <th>Total Debit</th>
+                <th>Net Amount</th>
+                <th>Latest Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Object.values(groupedByCustomer).map((group: any) => `
+                <tr>
+                  <td>${group.customer.name}</td>
+                  <td>${group.entryCount ?? group.entries.length}</td>
+                  <td class="credit">+₹${formatAmountINR(group.totalCredit)}</td>
+                  <td class="debit">-₹${formatAmountINR(group.totalDebit)}</td>
+                  <td class="${group.netAmount >= 0 ? 'credit' : 'debit'}">${group.netAmount >= 0 ? '+' : ''}₹${formatAmountINR(group.netAmount)}</td>
+                  <td>${(group.latestDescription || '-').replace(/</g, '&lt;')}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `
+      : `
       <!DOCTYPE html>
       <html>
         <head>
@@ -869,7 +991,7 @@ export default function Ledger() {
               ))}
             </div>
           </div>
-        ) : filteredEntries && filteredEntries.length > 0 ? (
+        ) : hasDataToShow ? (
           <>
             {/* Desktop Table View - Grouped by Customer */}
             <div className="mt-6 hidden md:block">
@@ -885,28 +1007,36 @@ export default function Ledger() {
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Entries
                           </th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                            Date
-                          </th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                            Group
-                          </th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                            Type
-                          </th>
+                          {!showCreditInvoicesOnly && (
+                            <>
+                              <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                                Date
+                              </th>
+                              <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                                Group
+                              </th>
+                              <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                                Type
+                              </th>
+                            </>
+                          )}
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Description
                           </th>
-                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
-                            Amount
-                          </th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
-                            Invoice
-                          </th>
-                          {isAdmin && (
-                            <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
-                              Actions
-                            </th>
+                          {!showCreditInvoicesOnly && (
+                            <>
+                              <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                                Amount
+                              </th>
+                              <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                                Invoice
+                              </th>
+                              {isAdmin && (
+                                <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
+                                  Actions
+                                </th>
+                              )}
+                            </>
                           )}
                           <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Net Amount
@@ -940,20 +1070,28 @@ export default function Ledger() {
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap">
                                 <span className="text-sm text-gray-600">
-                                  {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
+                                  {(group.entryCount ?? group.entries.length)} {(group.entryCount ?? group.entries.length) === 1 ? 'entry' : 'entries'}
                                 </span>
                               </td>
-                              <td className="px-6 py-4" />
-                              <td className="px-6 py-4" />
-                              <td className="px-6 py-4" />
+                              {!showCreditInvoicesOnly && (
+                                <>
+                                  <td className="px-6 py-4" />
+                                  <td className="px-6 py-4" />
+                                  <td className="px-6 py-4" />
+                                </>
+                              )}
                               <td className="px-6 py-4">
                                 <div className="text-sm text-gray-700 max-w-xs truncate" title={group.latestDescription || '-'}>
                                   {group.latestDescription || <span className="text-gray-400 italic">—</span>}
                                 </div>
                               </td>
-                              <td className="px-6 py-4" />
-                              <td className="px-6 py-4" />
-                              {isAdmin && <td className="px-6 py-4" />}
+                              {!showCreditInvoicesOnly && (
+                                <>
+                                  <td className="px-6 py-4" />
+                                  <td className="px-6 py-4" />
+                                  {isAdmin && <td className="px-6 py-4" />}
+                                </>
+                              )}
                               <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                                 <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
                                   {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
@@ -968,8 +1106,8 @@ export default function Ledger() {
                           <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
                             Totals:
                           </td>
-                          <td colSpan={6} className="px-6 py-4" />
-                          {isAdmin && <td className="px-6 py-4" />}
+                          <td colSpan={showCreditInvoicesOnly ? 1 : 6} className="px-6 py-4" />
+                          {!showCreditInvoicesOnly && isAdmin && <td className="px-6 py-4" />}
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <div className="space-y-1">
                               <div className="text-sm"><span className="text-gray-600">Credit: </span><span className="font-bold text-green-700">+₹{formatAmountINR(totalCredit)}</span></div>
@@ -990,7 +1128,7 @@ export default function Ledger() {
               </div>
               <div className="mt-4 flex items-center justify-between text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
                 <div>
-                  Showing <strong className="text-gray-900">{Object.keys(groupedByCustomer).length}</strong> customers with <strong className="text-gray-900">{filteredEntries.length}</strong> entries
+                  Showing <strong className="text-gray-900">{Object.keys(groupedByCustomer).length}</strong> customers with <strong className="text-gray-900">{totalEntryCount}</strong> entries
                   {hasActiveFilters && (
                     <span className="ml-2 text-xs text-blue-600">(filtered)</span>
                   )}
@@ -1032,7 +1170,7 @@ export default function Ledger() {
                               <span className="text-base font-semibold text-gray-700">{group.customer.name}</span>
                             )}
                             <p className="text-xs text-gray-600 mt-0.5">
-                              {group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}
+                              {(group.entryCount ?? group.entries.length)} {(group.entryCount ?? group.entries.length) === 1 ? 'entry' : 'entries'}
                             </p>
                             {group.latestDescription ? (
                               <p className="text-xs text-gray-600 mt-1 truncate max-w-[200px]" title={group.latestDescription}>
@@ -1069,7 +1207,7 @@ export default function Ledger() {
                   </div>
                 </div>
                 <div className="mt-3 pt-3 border-t border-gray-300 text-xs text-gray-500 text-center">
-                  Showing <strong className="text-gray-900">{Object.keys(groupedByCustomer).length}</strong> customers with <strong className="text-gray-900">{filteredEntries.length}</strong> entries
+                  Showing <strong className="text-gray-900">{Object.keys(groupedByCustomer).length}</strong> customers with <strong className="text-gray-900">{totalEntryCount}</strong> entries
                   {hasActiveFilters && <span className="ml-1 text-blue-600">(filtered)</span>}
                 </div>
               </div>
