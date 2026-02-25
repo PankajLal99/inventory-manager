@@ -66,7 +66,7 @@ interface RepairInvoice {
   };
 }
 
-// Matches backend pos.models.Repair.STATUS_CHOICES (status groups show today's repairs only)
+// Matches backend pos.models.Repair.STATUS_CHOICES
 const STATUS_OPTIONS = [
   { value: 'received', label: 'Received' },
   { value: 'work_in_progress', label: 'Work in Progress' },
@@ -83,6 +83,16 @@ const STATUS_ORDER: string[] = [
   'delivered',
   'not_repaired',
   'cancelled',
+];
+
+// Row order: when sorting table rows by status, not_repaired at the end (after actual workflow)
+const ROW_STATUS_ORDER: string[] = [
+  'received',
+  'work_in_progress',
+  'done',
+  'delivered',
+  'cancelled',
+  'not_repaired',
 ];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -113,6 +123,19 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   other: 'bg-gray-400',
   old_repair: 'bg-violet-600', // static UI section: repairs not from today and not delivered
 };
+
+/** Sort repair invoices by status for table display: not_repaired at the end (actual status row-wise). */
+function sortRepairsByRowStatusOrder<T extends { repair?: { status: string } | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const statusA = a.repair?.status ?? '';
+    const statusB = b.repair?.status ?? '';
+    const idxA = ROW_STATUS_ORDER.indexOf(statusA);
+    const idxB = ROW_STATUS_ORDER.indexOf(statusB);
+    const i = idxA === -1 ? ROW_STATUS_ORDER.length : idxA;
+    const j = idxB === -1 ? ROW_STATUS_ORDER.length : idxB;
+    return i - j;
+  });
+}
 
 /** True if the given ISO date string is today (local date). */
 function isToday(createdAt: string): boolean {
@@ -759,7 +782,7 @@ export default function Repairs() {
                   { label: 'Invoice Type', align: 'left' },
                   { label: '', align: 'right' },
                 ]}>
-                  {group.items.map((invoice) => {
+                  {sortRepairsByRowStatusOrder(group.items).map((invoice) => {
                     const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
@@ -927,7 +950,7 @@ export default function Repairs() {
 
               {/* Mobile Card View */}
               <div className="md:hidden space-y-3">
-                {group.items.map((invoice) => {
+                {sortRepairsByRowStatusOrder(group.items).map((invoice) => {
                   const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
