@@ -18,7 +18,7 @@ class POSSessionAdmin(admin.ModelAdmin):
 class CartItemInline(admin.TabularInline):
     model = CartItem
     extra = 0
-    readonly_fields = ['product', 'variant', 'quantity', 'unit_price', 'discount_amount', 'tax_amount']
+    readonly_fields = ['product', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount']
 
 
 @admin.register(Cart)
@@ -34,7 +34,7 @@ class CartAdmin(admin.ModelAdmin):
 class InvoiceItemInline(admin.TabularInline):
     model = InvoiceItem
     extra = 0
-    readonly_fields = ['product', 'variant', 'quantity', 'unit_price', 'discount_amount', 'tax_amount', 'line_total']
+    readonly_fields = ['product', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total']
 
 
 class PaymentInline(admin.TabularInline):

@@ -1,8 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { customersApi, purchasingApi } from '../../lib/api';
-import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -50,23 +49,9 @@ export default function PersonalLedger() {
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
-  const [user, setUser] = useState<any>(null);
-  
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-
-  useEffect(() => {
-    const loadUser = async () => {
-      try {
-        await auth.loadUser();
-        setUser(auth.getUser());
-      } catch (e) {}
-    };
-    loadUser();
-  }, []);
-
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
-
 
   // Fetch personal customers for personal ledger (separate from regular customers)
   const { data: customersResponse } = useQuery({
@@ -767,12 +752,7 @@ export default function PersonalLedger() {
                         <tr>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Customer</th>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Entries</th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Date</th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Group</th>
-                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Type</th>
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">Description</th>
-                          <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">Amount</th>
-                          {isAdmin && <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">Actions</th>}
                           <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">Net Amount</th>
                         </tr>
                       </thead>
@@ -804,16 +784,11 @@ export default function PersonalLedger() {
                               <td className="px-6 py-4 whitespace-nowrap">
                                 <span className="text-sm text-gray-600">{group.entries.length} {group.entries.length === 1 ? 'entry' : 'entries'}</span>
                               </td>
-                              <td className="px-6 py-4" />
-                              <td className="px-6 py-4" />
-                              <td className="px-6 py-4" />
                               <td className="px-6 py-4">
                                 <div className="text-sm text-gray-700 max-w-xs truncate" title={group.latestDescription || '-'}>
                                   {group.latestDescription || <span className="text-gray-400 italic">—</span>}
                                 </div>
                               </td>
-                              <td className="px-6 py-4" />
-                              {isAdmin && <td className="px-6 py-4" />}
                               <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                                 <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
                                   {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
@@ -826,8 +801,7 @@ export default function PersonalLedger() {
                       <tfoot className="bg-gray-50 border-t-2 border-gray-300">
                         <tr>
                           <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">Totals:</td>
-                          <td colSpan={5} className="px-6 py-4" />
-                          {isAdmin && <td className="px-6 py-4" />}
+                          <td className="px-6 py-4" />
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <div className="space-y-1">
                               <div className="text-sm"><span className="text-gray-600">Credit: </span><span className="font-bold text-green-700">+₹{formatAmountINR(totalCredit)}</span></div>

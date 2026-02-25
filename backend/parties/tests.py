@@ -1,6 +1,8 @@
 from decimal import Decimal
+from datetime import datetime, timedelta
 from django.test import TestCase
 from django.urls import reverse
+from django.db.models import Sum
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
@@ -67,6 +69,8 @@ class LedgerAPITestCase(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
+        self.assertEqual(LedgerEntry.objects.count(), 2)
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 2)
 
     def test_ledger_create_credit_updates_customer_balance(self):
         """Creating a credit entry increases customer credit_balance."""
@@ -79,6 +83,7 @@ class LedgerAPITestCase(APITestCase):
         }
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 1)
         self.customer.refresh_from_db()
         self.assertEqual(self.customer.credit_balance, Decimal('150.50'))
 
@@ -128,6 +133,10 @@ class LedgerAPITestCase(APITestCase):
         self.assertEqual(Decimal(response.data['total_debit']), Decimal('30.00'))
         self.assertEqual(response.data['num_accounts'], 1)
         self.assertEqual(Decimal(response.data['balance']), Decimal('120.00'))
+        db_credit = LedgerEntry.objects.filter(entry_type='credit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        db_debit = LedgerEntry.objects.filter(entry_type='debit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        self.assertEqual(db_credit, Decimal('150.00'))
+        self.assertEqual(db_debit, Decimal('30.00'))
 
     def test_ledger_customer_detail_entries_and_final_balance(self):
         """Customer detail returns entries and correct final_balance (running balance)."""
@@ -151,6 +160,7 @@ class LedgerAPITestCase(APITestCase):
         entries = response.data['entries']
         self.assertEqual(len(entries), 2)
         self.assertEqual(Decimal(response.data['final_balance']), Decimal('60.00'))
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 2)
 
     def test_ledger_entry_get_update_delete_and_balance(self):
         """Get entry, update it (amount/type/description), then delete; balance stays correct."""
@@ -210,6 +220,200 @@ class LedgerAPITestCase(APITestCase):
         self.assertEqual(self.client.patch(detail_url, {'amount': '20'}, format='json').status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(self.client.delete(detail_url).status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_ledger_by_customer_returns_aggregated_rows(self):
+        """GET ledger/by-customer/ returns one row per customer with totals and entry_count."""
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('100.00'),
+            description='First',
+            created_by=self.admin,
+        )
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='debit',
+            amount=Decimal('25.00'),
+            description='Second',
+            created_by=self.admin,
+        )
+        customer2 = Customer.objects.create(
+            name='Customer Two',
+            phone='9999990011',
+            credit_balance=Decimal('0.00'),
+        )
+        LedgerEntry.objects.create(
+            customer=customer2,
+            entry_type='credit',
+            amount=Decimal('50.00'),
+            description='Other',
+            created_by=self.admin,
+        )
+        url = reverse('ledger-by-customer')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 2)
+        by_customer = {row['customer_id']: row for row in response.data}
+        self.assertIn(self.customer.id, by_customer)
+        self.assertIn(customer2.id, by_customer)
+        r1 = by_customer[self.customer.id]
+        self.assertEqual(Decimal(r1['total_credit']), Decimal('100.00'))
+        self.assertEqual(Decimal(r1['total_debit']), Decimal('25.00'))
+        self.assertEqual(Decimal(r1['net_amount']), Decimal('75.00'))
+        self.assertEqual(r1['entry_count'], 2)
+        self.assertEqual(r1['latest_description'], 'Second')
+        r2 = by_customer[customer2.id]
+        self.assertEqual(Decimal(r2['total_credit']), Decimal('50.00'))
+        self.assertEqual(r2['entry_count'], 1)
+        self.assertEqual(LedgerEntry.objects.count(), 3)
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 2)
+        self.assertEqual(LedgerEntry.objects.filter(customer=customer2).count(), 1)
+
+    def test_ledger_by_customer_respects_date_filter(self):
+        """ledger/by-customer/ with date_from and date_to returns only entries in range."""
+        base_date = timezone.now().date()
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('100.00'),
+            description='In range',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
+        )
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('200.00'),
+            description='Out of range',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=10), datetime.min.time())),
+        )
+        url = reverse('ledger-by-customer')
+        response = self.client.get(url, {
+            'date_from': (base_date - timedelta(days=2)).isoformat(),
+            'date_to': (base_date + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(Decimal(response.data[0]['total_credit']), Decimal('100.00'))
+        self.assertEqual(response.data[0]['entry_count'], 1)
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 2)
+
+    def test_ledger_by_customer_respects_customer_filter(self):
+        """ledger/by-customer/ with customer=id returns only that customer's aggregation."""
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('80.00'),
+            description='A',
+            created_by=self.admin,
+        )
+        customer2 = Customer.objects.create(name='Other', phone='9999990022', credit_balance=Decimal('0.00'))
+        LedgerEntry.objects.create(
+            customer=customer2,
+            entry_type='credit',
+            amount=Decimal('50.00'),
+            description='B',
+            created_by=self.admin,
+        )
+        url = reverse('ledger-by-customer')
+        response = self.client.get(url, {'customer': self.customer.id})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['customer_id'], self.customer.id)
+        self.assertEqual(Decimal(response.data[0]['total_credit']), Decimal('80.00'))
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 1)
+        self.assertEqual(LedgerEntry.objects.filter(customer=customer2).count(), 1)
+
+    def test_ledger_by_customer_non_admin_forbidden(self):
+        """Non-admin gets 403 on ledger/by-customer/."""
+        self.client.force_authenticate(user=create_regular_user())
+        url = reverse('ledger-by-customer')
+        self.assertEqual(self.client.get(url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_ledger_customer_detail_respects_date_filter(self):
+        """ledger/customers/<id>/ with date_from and date_to returns only entries in range."""
+        base_date = timezone.now().date()
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('100.00'),
+            description='In',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
+        )
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='debit',
+            amount=Decimal('30.00'),
+            description='Out',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=15), datetime.min.time())),
+        )
+        url = reverse('ledger-customer-detail', kwargs={'customer_id': self.customer.id})
+        response = self.client.get(url, {
+            'date_from': (base_date - timedelta(days=2)).isoformat(),
+            'date_to': (base_date + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['entries']), 1)
+        self.assertEqual(Decimal(response.data['entries'][0]['amount']), Decimal('100.00'))
+        self.assertEqual(Decimal(response.data['final_balance']), Decimal('100.00'))
+        in_range = LedgerEntry.objects.filter(
+            customer=self.customer,
+            created_at__date__gte=base_date - timedelta(days=2),
+            created_at__date__lte=base_date + timedelta(days=1),
+        )
+        self.assertEqual(in_range.count(), 1)
+        self.assertEqual(in_range.first().amount, Decimal('100.00'))
+
+    def test_ledger_customer_detail_respects_entry_type_and_search(self):
+        """ledger/customers/<id>/ with entry_type and search filters entries."""
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('10.00'),
+            description='UniqueWord',
+            created_by=self.admin,
+        )
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='debit',
+            amount=Decimal('5.00'),
+            description='Other',
+            created_by=self.admin,
+        )
+        url = reverse('ledger-customer-detail', kwargs={'customer_id': self.customer.id})
+        response = self.client.get(url, {'entry_type': 'credit'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['entries']), 1)
+        self.assertEqual(response.data['entries'][0]['entry_type'], 'credit')
+        response2 = self.client.get(url, {'search': 'UniqueWord'})
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response2.data['entries']), 1)
+        self.assertIn('UniqueWord', response2.data['entries'][0]['description'])
+        self.assertEqual(LedgerEntry.objects.filter(customer=self.customer).count(), 2)
+
+    def test_ledger_entry_delete_removes_from_db(self):
+        """Delete entry removes row from DB and reverses customer balance."""
+        self.customer.credit_balance = Decimal('0.00')
+        self.customer.save()
+        entry = LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('88.00'),
+            description='To delete',
+            created_by=self.admin,
+        )
+        self.customer.credit_balance = Decimal('88.00')
+        self.customer.save()
+        self.assertTrue(LedgerEntry.objects.filter(pk=entry.id).exists())
+        url = reverse('ledger-entry-retrieve-update-destroy', kwargs={'entry_id': entry.id})
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(LedgerEntry.objects.filter(pk=entry.id).exists())
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, Decimal('0.00'))
+
 
 class PersonalLedgerAPITestCase(APITestCase):
     """Tests for Personal Ledger: list, create, summary, customer detail, get/update/delete entry, totals."""
@@ -243,6 +447,8 @@ class PersonalLedgerAPITestCase(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
+        self.assertEqual(PersonalLedgerEntry.objects.count(), 2)
+        self.assertEqual(PersonalLedgerEntry.objects.filter(customer=self.personal_customer).count(), 2)
 
     def test_personal_ledger_create_with_customer_key(self):
         """Create entry using 'customer' key (not personal_customer); balance updates."""
@@ -256,6 +462,7 @@ class PersonalLedgerAPITestCase(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data.get('customer_name'), 'Personal Test')
+        self.assertEqual(PersonalLedgerEntry.objects.filter(customer=self.personal_customer).count(), 1)
         self.personal_customer.refresh_from_db()
         self.assertEqual(self.personal_customer.credit_balance, Decimal('75.25'))
 
@@ -282,6 +489,10 @@ class PersonalLedgerAPITestCase(APITestCase):
         self.assertEqual(Decimal(response.data['total_debit']), Decimal('25.00'))
         self.assertEqual(response.data['num_accounts'], 1)
         self.assertEqual(Decimal(response.data['balance']), Decimal('75.00'))
+        db_credit = PersonalLedgerEntry.objects.filter(entry_type='credit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        db_debit = PersonalLedgerEntry.objects.filter(entry_type='debit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        self.assertEqual(db_credit, Decimal('100.00'))
+        self.assertEqual(db_debit, Decimal('25.00'))
 
     def test_personal_ledger_customer_detail_final_balance(self):
         """Personal ledger customer detail returns entries and final_balance."""
@@ -304,6 +515,7 @@ class PersonalLedgerAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data['entries']), 2)
         self.assertEqual(Decimal(response.data['final_balance']), Decimal('60.00'))
+        self.assertEqual(PersonalLedgerEntry.objects.filter(customer=self.personal_customer).count(), 2)
 
     def test_personal_ledger_entry_update_and_delete_balance(self):
         """Update personal entry then delete; customer balance correct after each step."""
@@ -326,6 +538,86 @@ class PersonalLedgerAPITestCase(APITestCase):
 
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.personal_customer.refresh_from_db()
+        self.assertEqual(self.personal_customer.credit_balance, Decimal('0.00'))
+
+    def test_personal_ledger_customer_detail_respects_date_filter(self):
+        """personal-ledger/customers/<id>/ with date_from and date_to returns only entries in range."""
+        base_date = timezone.now().date()
+        PersonalLedgerEntry.objects.create(
+            customer=self.personal_customer,
+            entry_type='credit',
+            amount=Decimal('60.00'),
+            description='In range',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
+        )
+        PersonalLedgerEntry.objects.create(
+            customer=self.personal_customer,
+            entry_type='debit',
+            amount=Decimal('20.00'),
+            description='Out of range',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=20), datetime.min.time())),
+        )
+        url = reverse('personal-ledger-customer-detail', kwargs={'customer_id': self.personal_customer.id})
+        response = self.client.get(url, {
+            'date_from': (base_date - timedelta(days=2)).isoformat(),
+            'date_to': (base_date + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['entries']), 1)
+        self.assertEqual(Decimal(response.data['final_balance']), Decimal('60.00'))
+        in_range = PersonalLedgerEntry.objects.filter(
+            customer=self.personal_customer,
+            created_at__date__gte=base_date - timedelta(days=2),
+            created_at__date__lte=base_date + timedelta(days=1),
+        )
+        self.assertEqual(in_range.count(), 1)
+
+    def test_personal_ledger_customer_detail_respects_entry_type_and_search(self):
+        """personal-ledger/customers/<id>/ with entry_type and search filters entries."""
+        PersonalLedgerEntry.objects.create(
+            customer=self.personal_customer,
+            entry_type='credit',
+            amount=Decimal('25.00'),
+            description='NeedleText',
+            created_by=self.admin,
+        )
+        PersonalLedgerEntry.objects.create(
+            customer=self.personal_customer,
+            entry_type='debit',
+            amount=Decimal('10.00'),
+            description='Other',
+            created_by=self.admin,
+        )
+        url = reverse('personal-ledger-customer-detail', kwargs={'customer_id': self.personal_customer.id})
+        response = self.client.get(url, {'entry_type': 'debit'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['entries']), 1)
+        self.assertEqual(response.data['entries'][0]['entry_type'], 'debit')
+        response2 = self.client.get(url, {'search': 'NeedleText'})
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response2.data['entries']), 1)
+        self.assertIn('NeedleText', response2.data['entries'][0]['description'])
+        self.assertEqual(PersonalLedgerEntry.objects.filter(customer=self.personal_customer).count(), 2)
+
+    def test_personal_ledger_entry_delete_removes_from_db(self):
+        """Delete personal entry removes row from DB and reverses balance."""
+        entry = PersonalLedgerEntry.objects.create(
+            customer=self.personal_customer,
+            entry_type='credit',
+            amount=Decimal('33.00'),
+            description='To delete',
+            created_by=self.admin,
+        )
+        self.personal_customer.credit_balance = Decimal('33.00')
+        self.personal_customer.save()
+        self.assertTrue(PersonalLedgerEntry.objects.filter(pk=entry.id).exists())
+        url = reverse('personal-ledger-entry-retrieve-update-destroy', kwargs={'entry_id': entry.id})
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(PersonalLedgerEntry.objects.filter(pk=entry.id).exists())
         self.personal_customer.refresh_from_db()
         self.assertEqual(self.personal_customer.credit_balance, Decimal('0.00'))
 
@@ -362,6 +654,8 @@ class InternalLedgerAPITestCase(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
+        self.assertEqual(InternalLedgerEntry.objects.count(), 2)
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 2)
 
     def test_internal_ledger_create_and_balance(self):
         """Create internal ledger entry; customer balance updates."""
@@ -374,6 +668,7 @@ class InternalLedgerAPITestCase(APITestCase):
         }
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 1)
         self.internal_customer.refresh_from_db()
         self.assertEqual(self.internal_customer.credit_balance, Decimal('99.99'))
 
@@ -400,6 +695,10 @@ class InternalLedgerAPITestCase(APITestCase):
         self.assertEqual(Decimal(response.data['total_debit']), Decimal('15.00'))
         self.assertEqual(response.data['num_accounts'], 1)
         self.assertEqual(Decimal(response.data['balance']), Decimal('25.00'))
+        db_credit = InternalLedgerEntry.objects.filter(entry_type='credit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        db_debit = InternalLedgerEntry.objects.filter(entry_type='debit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        self.assertEqual(db_credit, Decimal('40.00'))
+        self.assertEqual(db_debit, Decimal('15.00'))
 
     def test_internal_ledger_customer_detail_and_final_balance(self):
         """Internal ledger customer detail has entries and final_balance."""
@@ -422,6 +721,7 @@ class InternalLedgerAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data['entries']), 2)
         self.assertEqual(Decimal(response.data['final_balance']), Decimal('65.00'))
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 2)
 
     def test_internal_ledger_entry_get_update_delete(self):
         """Get, update (amount/type), delete internal entry; balance correct."""
@@ -448,6 +748,86 @@ class InternalLedgerAPITestCase(APITestCase):
 
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.internal_customer.refresh_from_db()
+        self.assertEqual(self.internal_customer.credit_balance, Decimal('0.00'))
+
+    def test_internal_ledger_customer_detail_respects_date_filter(self):
+        """internal-ledger/customers/<id>/ with date_from and date_to returns only entries in range."""
+        base_date = timezone.now().date()
+        InternalLedgerEntry.objects.create(
+            customer=self.internal_customer,
+            entry_type='credit',
+            amount=Decimal('70.00'),
+            description='In range',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
+        )
+        InternalLedgerEntry.objects.create(
+            customer=self.internal_customer,
+            entry_type='debit',
+            amount=Decimal('15.00'),
+            description='Out',
+            created_by=self.admin,
+            created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=25), datetime.min.time())),
+        )
+        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.internal_customer.id})
+        response = self.client.get(url, {
+            'date_from': (base_date - timedelta(days=2)).isoformat(),
+            'date_to': (base_date + timedelta(days=1)).isoformat(),
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['entries']), 1)
+        self.assertEqual(Decimal(response.data['final_balance']), Decimal('70.00'))
+        in_range = InternalLedgerEntry.objects.filter(
+            customer=self.internal_customer,
+            created_at__date__gte=base_date - timedelta(days=2),
+            created_at__date__lte=base_date + timedelta(days=1),
+        )
+        self.assertEqual(in_range.count(), 1)
+
+    def test_internal_ledger_customer_detail_respects_entry_type_and_search(self):
+        """internal-ledger/customers/<id>/ with entry_type and search filters entries."""
+        InternalLedgerEntry.objects.create(
+            customer=self.internal_customer,
+            entry_type='credit',
+            amount=Decimal('40.00'),
+            description='SearchableDesc',
+            created_by=self.admin,
+        )
+        InternalLedgerEntry.objects.create(
+            customer=self.internal_customer,
+            entry_type='debit',
+            amount=Decimal('12.00'),
+            description='Other',
+            created_by=self.admin,
+        )
+        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.internal_customer.id})
+        response = self.client.get(url, {'entry_type': 'credit'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['entries']), 1)
+        self.assertEqual(response.data['entries'][0]['entry_type'], 'credit')
+        response2 = self.client.get(url, {'search': 'SearchableDesc'})
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response2.data['entries']), 1)
+        self.assertIn('SearchableDesc', response2.data['entries'][0]['description'])
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 2)
+
+    def test_internal_ledger_entry_delete_removes_from_db(self):
+        """Delete internal entry removes row from DB and reverses balance."""
+        entry = InternalLedgerEntry.objects.create(
+            customer=self.internal_customer,
+            entry_type='credit',
+            amount=Decimal('44.00'),
+            description='To delete',
+            created_by=self.admin,
+        )
+        self.internal_customer.credit_balance = Decimal('44.00')
+        self.internal_customer.save()
+        self.assertTrue(InternalLedgerEntry.objects.filter(pk=entry.id).exists())
+        url = reverse('internal-ledger-entry-retrieve-update-destroy', kwargs={'entry_id': entry.id})
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(InternalLedgerEntry.objects.filter(pk=entry.id).exists())
         self.internal_customer.refresh_from_db()
         self.assertEqual(self.internal_customer.credit_balance, Decimal('0.00'))
 

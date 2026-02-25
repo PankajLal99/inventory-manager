@@ -1374,3 +1374,224 @@ class BulkBarcodesCheckTests(APITestCase):
         self.assertFalse(response.data['valid'])
         self.assertEqual(len(response.data['skipped']), 1)
         self.assertEqual(response.data['skipped'][0]['reason'], 'not_found')
+
+
+class CustomProductAndPurchasePriceTests(APITestCase):
+    """Tests for custom/other product, CartItem/InvoiceItem purchase_price, and manual_unit_price vs purchase_price validation (can_go_below_purchase_price)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'custom_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Custom Test Store', shop_type='retail')
+        self.category = Category.objects.create(name='Custom Category')
+        self.cart = Cart.objects.create(
+            cart_number=f'CRT-CUST-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            created_by=self.user,
+            invoice_type='cash',
+            status='active',
+        )
+
+    def test_add_custom_product_without_purchase_price_succeeds(self):
+        """Adding custom product without purchase_price is allowed; user can set it inline later."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'custom_product_name': 'Misc Item',
+            'quantity': 1,
+            'unit_price': 0,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        item = CartItem.objects.get(cart=self.cart, product__name='Other - Misc Item')
+        self.assertIsNone(item.purchase_price)
+        self.assertEqual(item.unit_price, Decimal('0.00'))
+
+    def test_add_custom_product_with_purchase_price_succeeds(self):
+        """Adding custom product with purchase_price stores it and sets unit_price to cost."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'custom_product_name': 'Widget X',
+            'quantity': 1,
+            'unit_price': 0,
+            'purchase_price': 50.99,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        item = CartItem.objects.get(cart=self.cart, product__name='Other - Widget X')
+        self.assertEqual(item.purchase_price, Decimal('50.99'))
+        self.assertEqual(item.unit_price, Decimal('50.99'))
+        self.assertEqual(response.data.get('product_purchase_price'), 50.99)
+
+    def test_add_custom_product_negative_purchase_price_rejected(self):
+        """Purchase price cannot be negative."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'custom_product_name': 'Bad',
+            'quantity': 1,
+            'purchase_price': -10,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('negative', response.data.get('error', '').lower())
+
+    def test_add_custom_product_invalid_purchase_price_rejected(self):
+        """Non-numeric purchase_price is rejected when provided."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'custom_product_name': 'Bad',
+            'quantity': 1,
+            'purchase_price': 'not a number',
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_patch_cart_item_purchase_price_succeeds(self):
+        """Updating cart item purchase_price via PATCH (e.g. inline cost entry) succeeds."""
+        prod = Product.objects.create(
+            name='Other - Inline Cost',
+            sku=f'SKU-{uuid.uuid4().hex[:8]}',
+            category=self.category,
+            track_inventory=False,
+            can_go_below_purchase_price=True,
+        )
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=prod,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('0.00'),
+            purchase_price=None,
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        response = self.client.patch(url, {'purchase_price': 25.50}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.purchase_price, Decimal('25.50'))
+
+    def test_manual_unit_price_below_purchase_price_rejected_when_can_go_below_false(self):
+        """When can_go_below_purchase_price is False, manual_unit_price cannot be less than purchase_price."""
+        prod = Product.objects.create(
+            name='Other - Strict Product',
+            sku=f'SKU-{uuid.uuid4().hex[:8]}',
+            category=self.category,
+            track_inventory=False,
+            can_go_below_purchase_price=False,
+        )
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=prod,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            purchase_price=Decimal('100.00'),
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        response = self.client.patch(url, {'manual_unit_price': 80}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('cannot be less than', response.data.get('error', ''))
+
+    def test_manual_unit_price_below_purchase_price_allowed_when_can_go_below_true(self):
+        """When can_go_below_purchase_price is True, manual_unit_price can be less than purchase_price."""
+        prod = Product.objects.create(
+            name='Other - Flexible',
+            sku=f'SKU-{uuid.uuid4().hex[:8]}',
+            category=self.category,
+            track_inventory=False,
+            can_go_below_purchase_price=True,
+        )
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=prod,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            purchase_price=Decimal('100.00'),
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        response = self.client.patch(url, {'manual_unit_price': 80}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        item.refresh_from_db()
+        self.assertEqual(item.manual_unit_price, Decimal('80.00'))
+
+    def test_custom_product_purchase_price_used_in_validation(self):
+        """For custom product (Other - X), cart item purchase_price is used when validating manual_unit_price."""
+        prod = Product.objects.create(
+            name='Other - Custom Cost',
+            sku=f'SKU-{uuid.uuid4().hex[:8]}',
+            category=self.category,
+            track_inventory=False,
+            can_go_below_purchase_price=False,
+        )
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=prod,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('40.00'),
+            purchase_price=Decimal('40.00'),
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        # 50 >= 40: allowed
+        response = self.client.patch(url, {'manual_unit_price': 50}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # 30 < 40: rejected
+        response2 = self.client.patch(url, {'manual_unit_price': 30}, format='json')
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_checkout_copies_purchase_price_to_invoice_item_for_custom(self):
+        """Checkout copies CartItem.purchase_price to InvoiceItem for custom/non-tracked items."""
+        prod = Product.objects.create(
+            name='Other - For Invoice',
+            sku=f'SKU-{uuid.uuid4().hex[:8]}',
+            category=self.category,
+            track_inventory=False,
+            can_go_below_purchase_price=True,
+        )
+        CartItem.objects.create(
+            cart=self.cart,
+            product=prod,
+            quantity=Decimal('2.000'),
+            unit_price=Decimal('25.00'),
+            manual_unit_price=Decimal('35.00'),
+            purchase_price=Decimal('25.00'),
+        )
+        url = reverse('cart-checkout', kwargs={'pk': self.cart.id})
+        response = self.client.post(url, {'invoice_type': 'cash'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invoice = Invoice.objects.get(id=response.data['id'])
+        inv_item = invoice.items.get(product=prod)
+        self.assertEqual(inv_item.purchase_price, Decimal('25.00'))
+        self.assertEqual(inv_item.manual_unit_price, Decimal('35.00'))
+        self.assertEqual(inv_item.line_total, Decimal('70.00'))  # 2 * 35
+
+    def test_add_custom_product_same_name_increments_quantity(self):
+        """Adding same custom product name again increments quantity, does not create duplicate line."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        for _ in range(2):
+            response = self.client.post(url, {
+                'custom_product_name': 'Same Item',
+                'quantity': 1,
+                'unit_price': 0,
+            }, format='json')
+            self.assertEqual(response.status_code, status.HTTP_200_OK if _ == 1 else status.HTTP_201_CREATED)
+        self.assertEqual(CartItem.objects.filter(cart=self.cart, product__name='Other - Same Item').count(), 1)
+        item = CartItem.objects.get(cart=self.cart, product__name='Other - Same Item')
+        self.assertEqual(item.quantity, Decimal('2.000'))
+
+    def test_pending_invoice_accepts_manual_price_below_purchase(self):
+        """For pending invoice type, price validation (below purchase) is not applied."""
+        self.cart.invoice_type = 'pending'
+        self.cart.save()
+        prod = Product.objects.create(
+            name='Other - Pending',
+            sku=f'SKU-{uuid.uuid4().hex[:8]}',
+            category=self.category,
+            track_inventory=False,
+            can_go_below_purchase_price=False,
+        )
+        item = CartItem.objects.create(
+            cart=self.cart,
+            product=prod,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            purchase_price=Decimal('100.00'),
+        )
+        url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
+        response = self.client.patch(url, {'manual_unit_price': 50}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

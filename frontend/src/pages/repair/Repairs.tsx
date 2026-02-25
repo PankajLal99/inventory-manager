@@ -1,4 +1,4 @@
-import { useQuery, useMutation, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import ToastContainer from '../../components/ui/Toast';
@@ -24,6 +24,7 @@ import {
   Printer,
   RotateCcw,
   Loader2,
+  Pencil,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatNumber } from '../../lib/utils';
@@ -38,6 +39,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import Button from '../../components/ui/Button';
 import Pagination from '../../components/ui/Pagination';
 import Badge from '../../components/ui/Badge';
+import Modal from '../../components/ui/Modal';
 
 interface RepairInvoice {
   id: number;
@@ -123,6 +125,7 @@ function isToday(createdAt: string): boolean {
 
 export default function Repairs() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [dateFrom, setDateFrom] = useState('');
@@ -133,6 +136,9 @@ export default function Repairs() {
   const [barcodeSearch, setBarcodeSearch] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  // Edit registration modal
+  const [editingInvoice, setEditingInvoice] = useState<RepairInvoice | null>(null);
+  const [editForm, setEditForm] = useState({ contact_no: '', model_name: '', description: '', booking_amount: '' });
   // Regenerate barcode: which invoice is currently regenerating (for min 5s loading)
   const [regeneratingInvoiceId, setRegeneratingInvoiceId] = useState<number | null>(null);
   const [regenerateStartedAt, setRegenerateStartedAt] = useState<number>(0);
@@ -221,6 +227,18 @@ export default function Repairs() {
   useEffect(() => {
     setCurrentPage(1);
   }, [statusFilter, dateFrom, dateTo, defaultStore?.id, search, barcodeSearch]);
+
+  // Sync edit form when opening edit modal
+  useEffect(() => {
+    if (editingInvoice?.repair) {
+      setEditForm({
+        contact_no: editingInvoice.repair.contact_no || '',
+        model_name: editingInvoice.repair.model_name || '',
+        description: editingInvoice.repair.description || '',
+        booking_amount: editingInvoice.repair.booking_amount != null && editingInvoice.repair.booking_amount !== '' ? String(editingInvoice.repair.booking_amount) : '',
+      });
+    }
+  }, [editingInvoice]);
 
   const handleBarcodeSearch = () => {
     if (!barcodeSearch.trim()) {
@@ -322,6 +340,21 @@ export default function Repairs() {
     const last = lastRegenerateAt[invoiceId] ?? 0;
     return Date.now() - last < REGENERATE_COOLDOWN_MS;
   };
+
+  const updateRepairMutation = useMutation({
+    mutationFn: async ({ invoiceId, data }: { invoiceId: number; data: { contact_no: string; model_name: string; description?: string; booking_amount?: string | null } }) => {
+      return await posApi.repair.update(invoiceId, data);
+    },
+    onSuccess: () => {
+      showToast('Repair registration updated', 'success');
+      setEditingInvoice(null);
+      queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+    },
+    onError: (error: any) => {
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to update repair';
+      showToast(errorMsg, 'error');
+    },
+  });
 
   const repairInvoices: RepairInvoice[] = data?.results || [];
   const paginationInfo = data ? {
@@ -613,7 +646,14 @@ export default function Repairs() {
                       </span>
                     </div>
                   </div>
-                  <div className="pt-3 border-t">
+                  <div className="pt-3 border-t flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setEditingInvoice(selectedInvoice)}
+                    >
+                      <Pencil className="h-4 w-4 mr-2" />
+                      Edit
+                    </Button>
                     <Button
                       variant="primary"
                       onClick={() => navigate(`/invoices/${selectedInvoice.id}?openCheckout=1`)}
@@ -790,6 +830,24 @@ export default function Repairs() {
                         <TableCell>
                           <div className="flex items-center gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
                             <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (invoice.repair) {
+                                  setEditingInvoice(invoice);
+                                } else {
+                                  showToast('This invoice does not have a repair record', 'error');
+                                }
+                              }}
+                              className="gap-1.5"
+                              disabled={!invoice.repair}
+                              title="Edit repair details (contact, model, description, booking amount)"
+                            >
+                              <Pencil className="h-4 w-4 flex-shrink-0" />
+                              <span>Edit</span>
+                            </Button>
+                            <Button
                               variant="primary"
                               size="sm"
                               onClick={(e) => {
@@ -936,6 +994,20 @@ export default function Repairs() {
                         </div>
                         <div className="pt-3 border-t border-black/5 mt-2 space-y-2">
                           <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (invoice.repair) setEditingInvoice(invoice);
+                              else showToast('This invoice does not have a repair record', 'error');
+                            }}
+                            className="w-full gap-1.5"
+                            disabled={!invoice.repair}
+                          >
+                            <Pencil className="h-4 w-4 flex-shrink-0" />
+                            <span>Edit</span>
+                          </Button>
+                          <Button
                             variant="primary"
                             size="sm"
                             onClick={(e) => {
@@ -1003,6 +1075,98 @@ export default function Repairs() {
         </div>
       )}
 
+
+      {/* Edit Repair Registration Modal */}
+      <Modal
+        isOpen={!!editingInvoice}
+        onClose={() => setEditingInvoice(null)}
+        title="Edit Repair Registration"
+        size="md"
+      >
+        {editingInvoice?.repair && (
+          <div className="p-2 space-y-4">
+            <p className="text-sm text-gray-600">
+              Invoice <span className="font-mono font-semibold">{editingInvoice.invoice_number}</span>
+              {editingInvoice.repair.barcode && (
+                <span className="ml-2 text-gray-500">· {editingInvoice.repair.barcode}</span>
+              )}
+            </p>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Contact Number *</label>
+              <Input
+                value={editForm.contact_no}
+                onChange={(e) => setEditForm((f) => ({ ...f, contact_no: e.target.value }))}
+                placeholder="Contact number"
+                className="h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Device Model *</label>
+              <Input
+                value={editForm.model_name}
+                onChange={(e) => setEditForm((f) => ({ ...f, model_name: e.target.value }))}
+                placeholder="Model name"
+                className="h-11"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Issue Description</label>
+              <textarea
+                value={editForm.description}
+                onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Describe the problem..."
+                className="w-full h-24 px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">Booking Amount</label>
+              <Input
+                type="number"
+                value={editForm.booking_amount}
+                onChange={(e) => setEditForm((f) => ({ ...f, booking_amount: e.target.value }))}
+                placeholder="0.00"
+                className="h-11"
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button
+                variant="primary"
+                onClick={() => {
+                  if (!editingInvoice?.repair) return;
+                  if (!editForm.contact_no.trim() || !editForm.model_name.trim()) {
+                    showToast('Contact number and device model are required', 'error');
+                    return;
+                  }
+                  updateRepairMutation.mutate({
+                    invoiceId: editingInvoice.id,
+                    data: {
+                      contact_no: editForm.contact_no.trim(),
+                      model_name: editForm.model_name.trim(),
+                      description: editForm.description.trim() || undefined,
+                      booking_amount: editForm.booking_amount.trim() ? editForm.booking_amount.trim() : null,
+                    },
+                  });
+                }}
+                disabled={updateRepairMutation.isPending || !editForm.contact_no.trim() || !editForm.model_name.trim()}
+                className="flex-1"
+              >
+                {updateRepairMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  'Save Changes'
+                )}
+              </Button>
+              <Button variant="outline" onClick={() => setEditingInvoice(null)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Toast Container */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />

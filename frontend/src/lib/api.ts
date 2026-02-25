@@ -176,6 +176,7 @@ export const posApi = {
     update: (id: number, data: any) => api.patch(`/pos/carts/${id}/`, data),
     delete: (id: number) => api.delete(`/pos/carts/${id}/`),
     addItem: (id: number, data: any) => api.post(`/pos/carts/${id}/items/`, data),
+    bulkBarcodesCheck: (barcodes: string[]) => api.post('/pos/carts/bulk-barcodes-check/', { barcodes }),
     updateItem: (cartId: number, itemId: number, data: any) => api.patch(`/pos/carts/${cartId}/items/${itemId}/`, data),
     deleteItem: (cartId: number, itemId: number) => api.delete(`/pos/carts/${cartId}/items/${itemId}/`),
     removeSku: (cartId: number, itemId: number, barcode: string) => api.post(`/pos/carts/${cartId}/items/${itemId}/remove-sku/`, { barcode }),
@@ -229,6 +230,8 @@ export const posApi = {
     getStatusChoices: () => api.get<{ value: string; label: string }[]>('/pos/repair/status-choices/'),
     getDeviceModels: (search?: string) => api.get<{ models: string[] }>('/pos/repair/device-models/', { params: search ? { search } : {} }),
     updateStatus: (invoiceId: number, data: { repair_status: string }) => api.patch(`/pos/invoices/${invoiceId}/update-repair-status/`, data),
+    update: (invoiceId: number, data: { contact_no?: string; model_name?: string; description?: string; booking_amount?: string | null }) =>
+      api.patch(`/pos/invoices/${invoiceId}/update-repair/`, data),
     generateLabel: (invoiceId: number) => api.post(`/pos/invoices/${invoiceId}/generate-repair-label/`),
   },
   creditNotes: {
@@ -257,6 +260,7 @@ export const customersApi = {
       update: (id: number, data: any) => api.patch(`/ledger/entries/${id}/`, data),
       delete: (id: number) => api.delete(`/ledger/entries/${id}/`),
     },
+    byCustomer: (params?: any) => api.get('/ledger/by-customer/', { params }),
     summary: (params?: any) => api.get('/ledger/summary/', { params }),
     customerDetail: (customerId: number, params?: any) => api.get(`/ledger/customers/${customerId}/`, { params }),
     invoiceItemsByCategory: (customerId: number, params?: { store?: number; categories?: number[]; date_from?: string; date_to?: string }) => {
