@@ -174,6 +174,40 @@ def update_repair_status(request, pk):
     return Response(serializer.data)
 
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_repair(request, pk):
+    """Update repair registration details (contact_no, model_name, description, booking_amount)."""
+    repair = get_object_or_404(Repair, invoice_id=pk)
+    allowed = ('contact_no', 'model_name', 'description', 'booking_amount')
+    for key in allowed:
+        if key in request.data:
+            value = request.data[key]
+            if key == 'booking_amount':
+                if value is None or value == '':
+                    setattr(repair, key, None)
+                else:
+                    try:
+                        setattr(repair, key, Decimal(str(value)))
+                    except (InvalidOperation, TypeError):
+                        pass
+            else:
+                setattr(repair, key, value if value is not None else '')
+    repair.updated_by = request.user
+    repair.save()
+    create_audit_log(
+        request=request,
+        action='repair_update',
+        model_name='Repair',
+        object_id=str(repair.id),
+        object_name=f"Repair {repair.barcode}",
+        object_reference=repair.barcode,
+        barcode=repair.barcode,
+    )
+    serializer = RepairSerializer(repair)
+    return Response(serializer.data)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generate_repair_label(request, pk):
@@ -664,11 +698,30 @@ def cart_items(request, pk):
     # Check if this is a custom product (borrowed product not in inventory)
     custom_product_name = request.data.get('custom_product_name')
     if custom_product_name:
+        # Purchase price is optional on add; user can enter it inline in the cart (cost field)
+        raw_purchase = request.data.get('purchase_price')
+        purchase_price = None
+        if raw_purchase is not None and raw_purchase != '':
+            try:
+                purchase_price = Decimal(str(raw_purchase))
+                if purchase_price < 0:
+                    return Response(
+                        {'error': 'Purchase price cannot be negative.', 'purchase_price': ['Must be zero or greater.']},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if purchase_price == 0:
+                    purchase_price = None
+            except (TypeError, ValueError, Exception):
+                return Response(
+                    {'error': 'Purchase price must be a valid number.', 'purchase_price': ['Enter a valid number.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         # Handle custom product - create or get product with "Other - <Name>" format
         from backend.catalog.utils import generate_unique_sku
-        
+
         product_name = f"Other - {custom_product_name.strip()}"
-        
+
         # Check if product already exists
         try:
             product = Product.objects.get(name=product_name)
@@ -749,9 +802,12 @@ def cart_items(request, pk):
             return Response(serializer.data, status=status.HTTP_200_OK)
         
         # Create new item for custom product (no barcodes, no stock validation)
+        # purchase_price can be set later inline in cart; unit_price = cost when set, else 0
         item_data = request.data.copy()
         item_data['product'] = product_id
         item_data['scanned_barcodes'] = []  # Empty list for custom products
+        item_data['purchase_price'] = purchase_price  # Optional; user can enter in cart inline
+        item_data['unit_price'] = purchase_price if purchase_price is not None else Decimal('0.00')
         item_data.pop('custom_product_name', None)  # Remove custom_product_name from item_data
         
         serializer = CartItemSerializer(
@@ -1729,7 +1785,10 @@ def cart_item_update(request, pk, item_id):
             # Check selling_price first, then fall back to purchase_price
             selling_price = None
             purchase_price = Decimal('0.00')
-            if cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
+            # For custom/other products: use cart item's stored purchase_price
+            if cart_item.product.name and cart_item.product.name.startswith('Other -') and cart_item.purchase_price is not None and cart_item.purchase_price > 0:
+                purchase_price = cart_item.purchase_price
+            elif cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
                 # For tracked products: Get selling_price and purchase_price from first barcode (all barcodes in item should have same price)
                 try:
                     first_barcode = Barcode.objects.get(barcode=cart_item.scanned_barcodes[0])
@@ -1760,9 +1819,7 @@ def cart_item_update(request, pk, item_id):
             can_go_below = cart_item.product.can_go_below_purchase_price
             price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
 
-            # If can_go_below_purchase_price is False, price cannot be below min_price
-            # IMPORTANT: If min_price is 0, it means purchase price couldn't be retrieved - this should not happen for valid products
-            # For safety, if min_price is 0 and can_go_below is False, we should still validate (treat as error case)
+            # When can_go_below_purchase_price is False: manual_unit_price cannot be less than purchase_price
             if not can_go_below and sale_price_decimal > 0:
                 if min_price > 0 and sale_price_decimal < min_price:
                     return Response({
@@ -1772,7 +1829,6 @@ def cart_item_update(request, pk, item_id):
                         'sale_price': str(sale_price_decimal)
                     }, status=status.HTTP_400_BAD_REQUEST)
                 elif min_price == 0:
-                    # Purchase price is 0 - this shouldn't happen for valid products, but block the sale as a safety measure
                     return Response({
                         'error': 'Purchase price not available',
                         'message': 'Cannot determine purchase price for this product. Please ensure the product has been purchased and has a valid purchase price.',
@@ -1805,10 +1861,11 @@ def cart_item_update(request, pk, item_id):
             try:
                 final_price_decimal = Decimal(str(final_sale_price))
                 if final_price_decimal > 0:
-                    # Get purchase price for validation
                     selling_price = None
                     purchase_price = Decimal('0.00')
-                    if cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
+                    if cart_item.product.name and cart_item.product.name.startswith('Other -') and cart_item.purchase_price is not None and cart_item.purchase_price > 0:
+                        purchase_price = cart_item.purchase_price
+                    elif cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
                         try:
                             first_barcode = Barcode.objects.get(barcode=cart_item.scanned_barcodes[0])
                             selling_price = first_barcode.get_selling_price()
@@ -1833,7 +1890,7 @@ def cart_item_update(request, pk, item_id):
                     min_price = selling_price if selling_price and selling_price > Decimal('0.00') else purchase_price
                     can_go_below = cart_item.product.can_go_below_purchase_price
                     price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
-                    
+                    # When can_go_below_purchase_price is False: manual_unit_price cannot be less than purchase_price
                     if not can_go_below and min_price > 0 and final_price_decimal < min_price:
                         return Response({
                             'error': f'Sale price (₹{final_price_decimal}) cannot be less than {price_type} (₹{min_price})',
@@ -2111,7 +2168,8 @@ def cart_checkout(request, pk):
                     quantity=ci.quantity, unit_price=ci.unit_price,
                     manual_unit_price=ci.manual_unit_price,
                     discount_amount=ci.discount_amount, tax_amount=ci.tax_amount,
-                    line_total=line_total
+                    line_total=line_total,
+                    purchase_price=ci.purchase_price,
                 )
                 subtotal += line_total
                 discount_total += ci.discount_amount
@@ -2780,6 +2838,13 @@ def invoice_checkout(request, pk):
                         item.unit_price = Decimal(str(item_data['unit_price']))
                     if 'manual_unit_price' in item_data:
                         item.manual_unit_price = Decimal(str(item_data['manual_unit_price'])) if item_data['manual_unit_price'] else None
+                    if 'purchase_price' in item_data:
+                        raw = item_data['purchase_price']
+                        try:
+                            val = Decimal(str(raw)) if raw not in (None, '') else None
+                            item.purchase_price = val if val is not None and val > 0 else None
+                        except (TypeError, ValueError):
+                            item.purchase_price = None
                     if 'discount_amount' in item_data:
                         item.discount_amount = Decimal(str(item_data['discount_amount']))
                     if 'tax_amount' in item_data:
@@ -2821,7 +2886,10 @@ def invoice_checkout(request, pk):
             # Get selling_price first, then fall back to purchase_price
             selling_price = None
             purchase_price = Decimal('0.00')
-            if item.barcode:
+            # For custom/other products: use invoice item's purchase_price
+            if item.product.name and item.product.name.startswith('Other -') and item.purchase_price is not None and item.purchase_price > 0:
+                purchase_price = item.purchase_price
+            elif item.barcode:
                 # For tracked products: Get price from item's barcode
                 selling_price = item.barcode.get_selling_price()
                 purchase_price = item.barcode.get_purchase_price()
@@ -3058,6 +3126,7 @@ def invoice_edit(request, pk):
             quantity=inv_item.quantity,
             unit_price=inv_item.unit_price,
             manual_unit_price=inv_item.manual_unit_price,
+            purchase_price=inv_item.purchase_price,
             discount_amount=inv_item.discount_amount,
             tax_amount=inv_item.tax_amount,
             scanned_barcodes=scanned
@@ -3158,7 +3227,8 @@ def invoice_update(request, pk):
                     manual_unit_price=cart_item.manual_unit_price,
                     discount_amount=cart_item.discount_amount,
                     tax_amount=cart_item.tax_amount,
-                    line_total=line_total
+                    line_total=line_total,
+                    purchase_price=cart_item.purchase_price,
                 )
                 # Deduct stock for the new item in non-tracked mode
                 if invoice.store:
@@ -3204,7 +3274,8 @@ def invoice_update(request, pk):
                     manual_unit_price=cart_item.manual_unit_price,
                     discount_amount=per_unit_discount,
                     tax_amount=per_unit_tax,
-                    line_total=line_total
+                    line_total=line_total,
+                    purchase_price=cart_item.purchase_price,
                 )
                 # Deduct stock for the new barcode in tracked mode
                 if invoice.store:
@@ -5112,8 +5183,12 @@ def bulk_barcodes_check(request):
         if cust_id:
             customer_names[cust_id] = cust_name
 
+        barcode_full = barcode_obj.barcode if barcode_obj else None
+        short_code = getattr(barcode_obj, 'short_code', None) if barcode_obj else None
         results.append({
             'barcode': barcode_str,
+            'barcode_full': barcode_full,
+            'short_code': short_code,
             'tag': tag,
             'invoice_id': item.invoice_id,
             'invoice_number': item.invoice.invoice_number,
@@ -5126,18 +5201,25 @@ def bulk_barcodes_check(request):
     # Build skipped list: not_found (with current_tag if barcode exists in DB), not_sold, different_customer
     skipped = []
     for b in not_found:
-        # Resolve current tag when barcode exists in system (e.g. fresh, in-cart) but not on eligible invoice
-        barcode_in_db = Barcode.objects.filter(
+        # Resolve current tag and barcode/short_code when barcode exists in system
+        row = Barcode.objects.filter(
             Q(barcode__iexact=b) | Q(short_code__iexact=b)
-        ).values_list('tag', flat=True).first()
+        ).values('tag', 'barcode', 'short_code').first()
         skipped.append({
             'barcode': b,
+            'barcode_full': row['barcode'] if row else None,
+            'short_code': row['short_code'] if row else None,
             'reason': 'not_found',
-            'current_tag': barcode_in_db,
+            'current_tag': row['tag'] if row else None,
         })
     for entry in invalid_tag:
+        row = Barcode.objects.filter(
+            Q(barcode__iexact=entry['barcode']) | Q(short_code__iexact=entry['barcode'])
+        ).values('barcode', 'short_code').first()
         skipped.append({
             'barcode': entry['barcode'],
+            'barcode_full': row['barcode'] if row else None,
+            'short_code': row['short_code'] if row else None,
             'reason': 'not_sold',
             'current_tag': entry['tag'],
         })
@@ -5152,6 +5234,8 @@ def bulk_barcodes_check(request):
             if r['customer_id'] != chosen_cust_id:
                 skipped.append({
                     'barcode': r['barcode'],
+                    'barcode_full': r.get('barcode_full'),
+                    'short_code': r.get('short_code'),
                     'reason': 'different_customer',
                     'current_tag': r.get('tag', 'sold'),
                 })
@@ -5166,6 +5250,114 @@ def bulk_barcodes_check(request):
         'error': None if valid else 'none_processable',
         'customers': customers_list,
         'processable': processable,
+        'skipped': skipped,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bulk_barcodes_check_pos(request):
+    """Check bulk barcodes for POS add-to-cart. Only barcodes with tag 'new' or 'returned'
+    (and not already in a cart) can be added. Returns addable and skipped lists."""
+    barcodes_raw = request.data.get('barcodes')
+    if barcodes_raw is None:
+        return Response({'error': 'barcodes array is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if isinstance(barcodes_raw, str):
+        barcodes_raw = [s.strip() for s in barcodes_raw.replace('\r\n', '\n').split() if s.strip()]
+    if not isinstance(barcodes_raw, list):
+        return Response({'error': 'barcodes must be a list or a string'}, status=status.HTTP_400_BAD_REQUEST)
+    seen = set()
+    barcode_strings = []
+    for b in barcodes_raw:
+        val = (b or '').strip()
+        if val and val not in seen:
+            seen.add(val)
+            barcode_strings.append(val)
+    if not barcode_strings:
+        return Response({
+            'addable': [],
+            'skipped': [],
+        })
+
+    addable = []
+    skipped = []
+    # All active carts' scanned_barcodes for "in other cart" check
+    all_scanned = set()
+    for item in CartItem.objects.filter(cart__status='active').exclude(scanned_barcodes=[]):
+        if item.scanned_barcodes:
+            all_scanned.update(item.scanned_barcodes)
+
+    for barcode_str in barcode_strings:
+        barcode_obj = Barcode.objects.filter(
+            Q(barcode__iexact=barcode_str) | Q(short_code__iexact=barcode_str)
+        ).select_related('product', 'variant').first()
+
+        if not barcode_obj:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': None,
+                'short_code': None,
+                'reason': 'not_found',
+                'current_tag': None,
+            })
+            continue
+
+        tag = barcode_obj.tag
+        barcode_full = barcode_obj.barcode
+        short_code = getattr(barcode_obj, 'short_code', None)
+
+        if tag not in ['new', 'returned']:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'not_available',
+                'current_tag': tag,
+            })
+            continue
+        if barcode_full in all_scanned:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'in_other_cart',
+                'current_tag': tag,
+            })
+            continue
+
+        # Skip if product not purchased / purchase not finalized (same as add-item)
+        if not barcode_obj.purchase_item:
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'not_available',
+                'current_tag': tag,
+            })
+            continue
+        purchase = barcode_obj.purchase_item.purchase if barcode_obj.purchase_item else None
+        if purchase and purchase.status != 'finalized':
+            skipped.append({
+                'barcode': barcode_str,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'reason': 'not_available',
+                'current_tag': tag,
+            })
+            continue
+
+        product = barcode_obj.product
+        addable.append({
+            'barcode': barcode_full,
+            'barcode_full': barcode_full,
+            'short_code': short_code,
+            'product_id': product.id if product else None,
+            'variant_id': barcode_obj.variant_id,
+            'product_name': product.name if product else 'N/A',
+        })
+
+    return Response({
+        'addable': addable,
         'skipped': skipped,
     })
 
