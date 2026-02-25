@@ -66,6 +66,9 @@ export default function POS() {
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
+  const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
+
   // Toggle to show/hide purchase price in cart (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Barcode Queue Types and State
@@ -294,10 +297,12 @@ export default function POS() {
   });
 
   // Refetch cart once if any items have product_purchase_price as 0 (might be cached old data)
-  // This ensures we get the correct purchase price from the updated serializer
+  // Skip refetch while user is typing in a purchase price field so the value does not disappear
   const hasRefetchedForZeroPrice = useRef(false);
   useEffect(() => {
     if (cart?.data?.items && cartId && !hasRefetchedForZeroPrice.current) {
+      const isEditingPurchase = Object.keys(editingPurchasePrice).length > 0;
+      if (isEditingPurchase) return; // Don't refetch while user is typing cost
       const hasItemsWithZeroPrice = cart.data.items.some((item: any) =>
         (item.product_purchase_price === 0 || item.product_purchase_price === null || item.product_purchase_price === undefined) &&
         item.product && // Only refetch if product exists (legitimate case)
@@ -305,11 +310,10 @@ export default function POS() {
       );
       if (hasItemsWithZeroPrice) {
         hasRefetchedForZeroPrice.current = true;
-        // Refetch cart to get updated purchase prices from serializer
         queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
       }
     }
-  }, [cart?.data?.items, cartId, queryClient]);
+  }, [cart?.data?.items, cartId, queryClient, editingPurchasePrice]);
 
   // State to track if searched barcode is unavailable
   const [searchedBarcodeStatus, setSearchedBarcodeStatus] = useState<{
@@ -967,13 +971,18 @@ export default function POS() {
         throw new Error('No store available. Please create a store first.');
       }
       const cartData: any = { store: defaultStore.id };
+      if (isWholesaleGroup && !isWholesaleAdmin) {
+        cartData.invoice_type = 'pending';
+      }
       return posApi.carts.create(cartData);
     },
     onSuccess: async (data) => {
       const newCartId = data.data.id;
 
-      // Update invoiceType state from cart
-      const cartInvoiceType = backendToFrontendInvoiceType(data.data.invoice_type || 'cash');
+      // Update invoiceType state from cart (Wholesale users get 'pending' from backend when we created with it)
+      const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin)
+        ? 'pending'
+        : backendToFrontendInvoiceType(data.data.invoice_type || 'cash');
       setInvoiceType(cartInvoiceType);
 
       // Save to localStorage FIRST
@@ -1081,12 +1090,17 @@ export default function POS() {
       }
       try {
         const cartData: any = { store: defaultStore.id };
+        if (isWholesaleGroup && !isWholesaleAdmin) {
+          cartData.invoice_type = 'pending';
+        }
         const cartResponse = await posApi.carts.create(cartData);
         currentCartId = cartResponse.data.id;
         cartWasCreated = true;
 
-        // Update invoiceType state from cart
-        const cartInvoiceType = backendToFrontendInvoiceType(cartResponse.data.invoice_type || 'cash');
+        // Update invoiceType state from cart (Wholesale users get 'pending')
+        const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin)
+          ? 'pending'
+          : backendToFrontendInvoiceType(cartResponse.data.invoice_type || 'cash');
         setInvoiceType(cartInvoiceType);
 
         // Update state immediately
@@ -1128,7 +1142,7 @@ export default function POS() {
     }
 
     return response;
-  }, [cartId, defaultStore, username, backendToFrontendInvoiceType]);
+  }, [cartId, defaultStore, username, backendToFrontendInvoiceType, isWholesaleGroup, isWholesaleAdmin]);
 
   const addItemMutation = useMutation({
     mutationFn: (data: any) => {
@@ -1251,6 +1265,14 @@ export default function POS() {
           const newEditingPrices = { ...prev };
           delete newEditingPrices[variables.itemId];
           return newEditingPrices;
+        });
+      }
+      // Clear purchase price editing state after successful save so we show refetched value
+      if (variables.data.purchase_price !== undefined) {
+        setEditingPurchasePrice((prev) => {
+          const next = { ...prev };
+          delete next[variables.itemId];
+          return next;
         });
       }
     },
@@ -1455,7 +1477,10 @@ export default function POS() {
         if (defaultStore && username) {
           try {
             const cartData: any = { store: defaultStore.id };
-            setInvoiceType('cash');
+            if (isWholesaleGroup && !isWholesaleAdmin) {
+              cartData.invoice_type = 'pending';
+            }
+            setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) ? 'pending' : 'cash');
             const data = await posApi.carts.create(cartData);
             const newCartId = data.data.id;
             if (username && data.data) {
@@ -1521,7 +1546,7 @@ export default function POS() {
           // Silently handle sync errors
         });
       });
-  }, [username, cartId, cart?.data?.items, defaultStore, queryClient, syncCartsWithBackend, loadCartsFromStorage, removeCartTab, cartTabs.length]);
+  }, [username, cartId, cart?.data?.items, defaultStore, queryClient, syncCartsWithBackend, loadCartsFromStorage, removeCartTab, cartTabs.length, isWholesaleGroup, isWholesaleAdmin]);
 
   const createCustomerMutation = useMutation({
     mutationFn: (data: { name: string; phone?: string }) => customersApi.create(data),
@@ -1565,7 +1590,7 @@ export default function POS() {
           setCartId(null);
           setActiveTabId(null);
           setSelectedCustomer(null);
-          setInvoiceType('cash');
+          setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) ? 'pending' : 'cash');
           setCashAmount('');
           setUpiAmount('');
           setBarcodeInput('');
@@ -1578,7 +1603,7 @@ export default function POS() {
         setCartId(null);
         setActiveTabId(null);
         setSelectedCustomer(null);
-        setInvoiceType('cash');
+        setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) ? 'pending' : 'cash');
         setBarcodeInput('');
         // Create new cart automatically after checkout
         if (defaultStore) {
@@ -1818,12 +1843,12 @@ export default function POS() {
     if (!isPendingInvoice) {
       const itemsWithMissingPrice =
         cart.data.items?.filter((item: any) => {
-          const rawPrice = item.manual_unit_price ?? item.unit_price;
+          const rawPrice = item.manual_unit_price;
           const priceNum =
             typeof rawPrice === 'string'
               ? parseFloat(rawPrice)
               : Number(rawPrice ?? 0);
-          return !rawPrice || isNaN(priceNum) || priceNum <= 0;
+          return rawPrice === undefined || rawPrice === null || rawPrice === '' || isNaN(priceNum) || priceNum <= 0;
         }) || [];
 
       if (itemsWithMissingPrice.length > 0) {
@@ -1832,7 +1857,7 @@ export default function POS() {
           .join(', ');
         alert(
           `All items must have a selling price before checkout.\n` +
-          `These item(s) are missing prices or have zero price: ${names}.`
+          `Please enter the price for: ${names}.`
         );
         return;
       }
@@ -1982,7 +2007,7 @@ export default function POS() {
                 <tr>
                   <td>${(item.product_name || '-').substring(0, 20)}</td>
                   <td class="text-right">${item.quantity}</td>
-                  <td class="text-right">₹{formatNumber(item.manual_unit_price || item.unit_price || '0')}</td>
+                  <td class="text-right">₹{formatNumber(item.manual_unit_price ?? '0')}</td>
                   <td class="text-right">₹{formatNumber(item.line_total || '0')}</td>
                 </tr>
               `).join('') : '<tr><td colspan="4">No items</td></tr>'}
@@ -2115,12 +2140,12 @@ export default function POS() {
     if (!isPendingInvoice) {
       const itemsWithMissingPrice =
         cart.data.items?.filter((item: any) => {
-          const rawPrice = item.manual_unit_price ?? item.unit_price;
+          const rawPrice = item.manual_unit_price;
           const priceNum =
             typeof rawPrice === 'string'
               ? parseFloat(rawPrice)
               : Number(rawPrice ?? 0);
-          return !rawPrice || isNaN(priceNum) || priceNum <= 0;
+          return rawPrice === undefined || rawPrice === null || rawPrice === '' || isNaN(priceNum) || priceNum <= 0;
         }) || [];
 
       if (itemsWithMissingPrice.length > 0) {
@@ -2129,7 +2154,7 @@ export default function POS() {
           .join(', ');
         alert(
           `All items must have a selling price before checkout.\n` +
-          `These item(s) are missing prices or have zero price: ${names}.`
+          `Please enter the price for: ${names}.`
         );
         return;
       }
@@ -2355,7 +2380,15 @@ export default function POS() {
   // Sync invoice_type and customer from cart when it loads
   useEffect(() => {
     if (cart?.data) {
-      if (cart.data.invoice_type) {
+      // Wholesale (non-admin) users must always use 'pending' — enforce and persist to backend
+      if (isWholesaleGroup && !isWholesaleAdmin) {
+        setInvoiceType('pending');
+        if (cart.data.invoice_type !== 'pending') {
+          updateCartMutation.mutate({ invoice_type: 'pending' });
+        }
+        setCashAmount('');
+        setUpiAmount('');
+      } else if (cart.data.invoice_type) {
         const newType = backendToFrontendInvoiceType(cart.data.invoice_type);
         setInvoiceType(newType);
         // Clear split amounts if not mixed type
@@ -2399,7 +2432,7 @@ export default function POS() {
         loadCartsFromStorage();
       }
     }
-  }, [cart?.data, username, loadCartsFromStorage]);
+  }, [cart?.data, username, loadCartsFromStorage, isWholesaleGroup, isWholesaleAdmin]);
 
   // Clear price errors when invoice type changes to pending
   useEffect(() => {
@@ -2416,6 +2449,14 @@ export default function POS() {
       return;
     }
 
+    // Wholesale (non-admin) users must always use 'pending' — never reset to cash
+    if (isWholesaleGroup && !isWholesaleAdmin) {
+      if (invoiceType !== 'pending') {
+        setInvoiceType('pending');
+      }
+      return;
+    }
+
     if (defaultStore?.shop_type === 'repair') {
       // Only change if not already pending (to avoid unnecessary updates)
       if (invoiceType !== 'pending') {
@@ -2428,7 +2469,7 @@ export default function POS() {
         setInvoiceType('cash');
       }
     }
-  }, [defaultStore?.shop_type, invoiceType, cartId, cart?.data?.invoice_type]);
+  }, [defaultStore?.shop_type, invoiceType, cartId, cart?.data?.invoice_type, isWholesaleGroup, isWholesaleAdmin]);
 
   const calculateTotal = () => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
@@ -2436,9 +2477,10 @@ export default function POS() {
       const quantity = parseInt(item.quantity || '0') || 0;
       // Use editingManualPrice if user is typing, otherwise use saved price
       const editingPrice = editingManualPrice[item.id];
+      // Always use manual_unit_price (user-entered); no fallback to unit_price
       const price = editingPrice !== undefined && editingPrice !== ''
         ? (parseFloat(editingPrice) || 0)
-        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+        : (parseFloat(item.manual_unit_price) || 0);
       const discount = parseFloat(item.discount_amount || 0);
       return sum + (quantity * price - discount);
     }, 0);
@@ -2458,12 +2500,11 @@ export default function POS() {
     if (!cart?.data?.items || !Array.isArray(cart.data.items) || cart.data.items.length === 0) return false;
 
     return cart.data.items.every((item: any) => {
-      // Check if user is currently editing this item's price
       const editingPrice = editingManualPrice[item.id];
-      // Use editing price if available, otherwise use saved price
+      // Always use manual_unit_price (user-entered); no fallback to unit_price
       const effectivePrice = editingPrice !== undefined && editingPrice !== ''
         ? (parseFloat(editingPrice) || 0)
-        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+        : (parseFloat(item.manual_unit_price) || 0);
       return effectivePrice > 0;
     });
   };
@@ -2474,21 +2515,18 @@ export default function POS() {
     if (!cart?.data?.items || !Array.isArray(cart.data.items) || cart.data.items.length === 0) return false;
 
     const itemsWithZeroPrice = cart.data.items.filter((item: any) => {
-      // Check if user is currently editing this item's price
       const editingPrice = editingManualPrice[item.id];
-      // Use editing price if available, otherwise use saved price
       const effectivePrice = editingPrice !== undefined && editingPrice !== ''
         ? (parseFloat(editingPrice) || 0)
-        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+        : (parseFloat(item.manual_unit_price) || 0);
       return effectivePrice === 0;
     });
 
-    // Return true if some items have zero price AND some items have non-zero price
     const itemsWithPrice = cart.data.items.filter((item: any) => {
       const editingPrice = editingManualPrice[item.id];
       const effectivePrice = editingPrice !== undefined && editingPrice !== ''
         ? (parseFloat(editingPrice) || 0)
-        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+        : (parseFloat(item.manual_unit_price) || 0);
       return effectivePrice > 0;
     });
 
@@ -2627,8 +2665,10 @@ export default function POS() {
                     if (selectedStore && selectedStore.shop_type === 'repair') {
                       setInvoiceType('pending');
                     } else if (selectedStore && selectedStore.shop_type !== 'repair' && invoiceType === 'pending') {
-                      // If switching from repair to non-repair shop, reset to 'cash' if currently 'pending'
-                      setInvoiceType('cash');
+                      // If switching from repair to non-repair shop, reset to 'cash' — but not for Wholesale users
+                      if (!isWholesaleGroup || isWholesaleAdmin) {
+                        setInvoiceType('cash');
+                      }
                     }
 
                     // Clear current cart when switching stores (cart is tied to a specific store)
@@ -3977,9 +4017,10 @@ export default function POS() {
                 {cart.data.items.map((item: any) => {
                   // Use editingManualPrice if user is typing, otherwise use saved price
                   const editingPrice = editingManualPrice[item.id];
+                  // Always use manual_unit_price (user-entered); no fallback to unit_price
                   const effectivePrice = editingPrice !== undefined && editingPrice !== ''
                     ? parseFloat(editingPrice) || 0
-                    : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+                    : (parseFloat(item.manual_unit_price) || 0);
                   const scannedBarcodes = item.scanned_barcodes || [];
                   const scannedBarcodesDisplay = item.scanned_barcodes_display || scannedBarcodes;
                   const hasBarcodes = scannedBarcodes.length > 0;
@@ -4062,15 +4103,18 @@ export default function POS() {
                                 <span className="text-xs font-semibold text-gray-700">Qty: {formatNumber(item.quantity, 3)}</span>
                               </div>
                             )}
-                            {/* Show selling price if available, else fallback to purchase price. Eye off = hide that value (•••) for both. No price = show —. */}
+                            {/* Show selling price if available, else purchase price. If neither, show inline input for cost (e.g. custom product). */}
                             {(() => {
                               const rawSelling = item.product_selling_price != null ? parseFloat(String(item.product_selling_price)) : NaN;
-                              const rawPurchase = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : NaN;
+                              const rawPurchaseFromApi = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : NaN;
                               const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
-                              const hasValidPurchasePrice = !Number.isNaN(rawPurchase) && rawPurchase > 0;
-                              const displayPrice = hasValidSellingPrice ? rawSelling : (hasValidPurchasePrice ? rawPurchase : null);
+                              const hasValidPurchasePriceFromApi = !Number.isNaN(rawPurchaseFromApi) && rawPurchaseFromApi > 0;
+                              const displayPriceFromApi = hasValidSellingPrice ? rawSelling : (hasValidPurchasePriceFromApi ? rawPurchaseFromApi : null);
+                              // For custom products: always show the input so user can type full amount (e.g. "50") and can re-edit cost anytime
+                              const isCustomProduct = item.product_name?.startsWith('Other -');
+                              const showPurchaseInput = displayPriceFromApi === null || isCustomProduct;
 
-                              if (displayPrice !== null) {
+                              if (!showPurchaseInput) {
                                 if (!showPurchasePrice) {
                                   return (
                                     <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="Price hidden">
@@ -4080,13 +4124,50 @@ export default function POS() {
                                 }
                                 return (
                                   <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={hasValidSellingPrice ? 'Selling Price' : 'Purchase Price'}>
-                                    <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPrice)}</span>
+                                    <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPriceFromApi)}</span>
                                   </div>
                                 );
                               }
+                              // No price set or user is editing: show inline input so user can enter/edit cost (purchase price)
+                              const purchaseInputValue = editingPurchasePrice[item.id] ?? (rawPurchaseFromApi > 0 ? String(rawPurchaseFromApi) : '');
                               return (
-                                <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="No selling or purchase price set for this item">
-                                  <span className="text-xs font-medium text-gray-400">—</span>
+                                <div className="px-0 py-0.5 rounded-md border border-gray-300 bg-white min-w-[72px]" title="Enter cost (purchase price)">
+                                  <div className="relative">
+                                    <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs">₹</span>
+                                    <Input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      placeholder="0"
+                                      readOnly={isCartLocked}
+                                      className="h-7 pl-5 pr-1 text-xs border-0 focus:ring-0"
+                                      value={purchaseInputValue}
+                                      onChange={(e) => setEditingPurchasePrice((p) => ({ ...p, [item.id]: e.target.value }))}
+                                      onBlur={() => {
+                                        const raw = editingPurchasePrice[item.id] ?? purchaseInputValue;
+                                        const num = parseFloat(raw);
+                                        if (raw === '' || raw === undefined) {
+                                          setEditingPurchasePrice((p) => ({ ...p, [item.id]: '' }));
+                                          return;
+                                        }
+                                        if (!Number.isNaN(num) && num >= 0) {
+                                          updateItemMutation.mutate({
+                                            itemId: item.id,
+                                            data: {
+                                              purchase_price: num > 0 ? num : null,
+                                              ...(item.product_name?.startsWith('Other -') && num > 0 ? { unit_price: num } : {}),
+                                            },
+                                          });
+                                          // Clear editing state only in mutation onSuccess so value doesn't disappear if refetch is slow
+                                        }
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          (e.target as HTMLInputElement).blur();
+                                        }
+                                      }}
+                                    />
+                                  </div>
                                 </div>
                               );
                             })()}
@@ -4109,7 +4190,7 @@ export default function POS() {
                                 min="0"
                                 placeholder="0.00"
                                 readOnly={isCartLocked}
-                                value={editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null ? parseFloat(item.manual_unit_price.toString()).toString() : (item.unit_price && parseFloat(item.unit_price) > 0 ? parseFloat(item.unit_price).toString() : '') || '')}
+                                value={editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null && item.manual_unit_price !== '' ? parseFloat(String(item.manual_unit_price)).toString() : '')}
                                 onChange={(e) => {
                                   if (isCartLocked) return;
                                   // Mark that user is typing in price input
@@ -4118,48 +4199,31 @@ export default function POS() {
                                   const value = e.target.value;
                                   setEditingManualPrice((prev) => ({ ...prev, [item.id]: value }));
 
-                                  // Validate selling price or purchase price for Cash/UPI/Mixed invoices only (if can_go_below_purchase_price is false)
+                                  // When can_go_below_purchase_price is false: manual_unit_price cannot be less than purchase_price
                                   if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed')) {
                                     const price = parseFloat(value);
                                     if (!isNaN(price) && price > 0) {
-                                      // Check selling_price first, then fall back to purchase_price
                                       const sellingPrice = item.product_selling_price && item.product_selling_price > 0
                                         ? parseFloat(item.product_selling_price)
                                         : null;
-                                      // Ensure we have a valid purchase price - if it's 0 or undefined, it might be cached
                                       let purchasePrice = parseFloat(item.product_purchase_price || '0');
-                                      // Use selling_price if available and > 0, otherwise use purchase_price
+                                      // For custom products, use the cost in the inline input when present (avoids stale API value)
+                                      if (item.product_name?.startsWith('Other -')) {
+                                        const inlineCost = editingPurchasePrice[item.id];
+                                        if (inlineCost !== undefined && inlineCost !== '' && !Number.isNaN(parseFloat(inlineCost))) {
+                                          purchasePrice = parseFloat(inlineCost);
+                                        }
+                                      }
                                       const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
+                                      const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
                                       const canGoBelow = item.product_can_go_below_purchase_price || false;
 
-                                      // Validate if canGoBelow is false
-                                      // Note: If minPrice is 0, we can't validate on frontend, but backend will catch it
-                                      if (!canGoBelow) {
-                                        if (minPrice > 0 && price < minPrice) {
-                                          // Price is below minimum - show error
-                                          const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
-                                          setPriceErrors((prev) => ({
-                                            ...prev,
-                                            [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
-                                          }));
-                                        } else if (minPrice === 0) {
-                                          // Purchase price not available - clear error but backend will validate
-                                          // Don't show error here as it might be cached data, backend will handle it
-                                          setPriceErrors((prev) => {
-                                            const newErrors = { ...prev };
-                                            delete newErrors[item.id];
-                                            return newErrors;
-                                          });
-                                        } else {
-                                          // Price is valid - clear any errors
-                                          setPriceErrors((prev) => {
-                                            const newErrors = { ...prev };
-                                            delete newErrors[item.id];
-                                            return newErrors;
-                                          });
-                                        }
+                                      if (!canGoBelow && minPrice > 0 && price < minPrice) {
+                                        setPriceErrors((prev) => ({
+                                          ...prev,
+                                          [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
+                                        }));
                                       } else {
-                                        // canGoBelow is true - clear errors
                                         setPriceErrors((prev) => {
                                           const newErrors = { ...prev };
                                           delete newErrors[item.id];
@@ -4215,9 +4279,14 @@ export default function POS() {
                                         const sellingPrice = item.product_selling_price && item.product_selling_price > 0
                                           ? parseFloat(item.product_selling_price)
                                           : null;
-                                        // Ensure we have a valid purchase price - if it's 0 or undefined, it might be cached
                                         let purchasePrice = parseFloat(item.product_purchase_price || '0');
-                                        // Use selling_price if available and > 0, otherwise use purchase_price
+                                        // For custom products, use the cost in the inline input when present (avoids stale API value)
+                                        if (item.product_name?.startsWith('Other -')) {
+                                          const inlineCost = editingPurchasePrice[item.id];
+                                          if (inlineCost !== undefined && inlineCost !== '' && !Number.isNaN(parseFloat(inlineCost))) {
+                                            purchasePrice = parseFloat(inlineCost);
+                                          }
+                                        }
                                         const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
                                         const canGoBelow = item.product_can_go_below_purchase_price || false;
 
@@ -4615,7 +4684,7 @@ export default function POS() {
         </div>
       </Modal>
 
-      {/* Custom Product Modal */}
+      {/* Custom Product Modal - only product name; purchase price is entered inline in the cart */}
       <Modal
         isOpen={showCustomProductModal}
         onClose={() => {
@@ -4638,11 +4707,10 @@ export default function POS() {
               autoFocus
               onKeyPress={(e) => {
                 if (e.key === 'Enter' && customProductName.trim()) {
-                  // Add custom product to cart
                   addItemMutation.mutate({
                     custom_product_name: customProductName.trim(),
                     quantity: 1,
-                    unit_price: 0, // Price must be entered manually
+                    unit_price: 0,
                   });
                   setShowCustomProductModal(false);
                   setCustomProductName('');
@@ -4650,7 +4718,7 @@ export default function POS() {
               }}
             />
             <p className="mt-1 text-xs text-gray-500">
-              This product will be saved as "Other - {customProductName || '[name]'}" and won't require inventory tracking.
+              This product will be saved as &quot;Other - {customProductName || '[name]'}&quot;. Enter cost (purchase price) in the cart row.
             </p>
           </div>
           <div className="flex gap-3 pt-2">
@@ -4660,11 +4728,10 @@ export default function POS() {
                   showToast('Product name is required', 'error');
                   return;
                 }
-                // Add custom product to cart
                 addItemMutation.mutate({
                   custom_product_name: customProductName.trim(),
                   quantity: 1,
-                  unit_price: 0, // Price must be entered manually
+                  unit_price: 0,
                 });
                 setShowCustomProductModal(false);
                 setCustomProductName('');
