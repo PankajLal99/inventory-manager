@@ -52,49 +52,51 @@ def normalize_barcode_for_search(barcode_str: str) -> str:
     return ''.join(result_parts)
 
 
-def find_barcode_by_search_value(search_value: str, logger=None):
+def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=False):
     """
     Find a Barcode by search value. EXACT match only — no .first(), no prefix/icontains/iexact.
-    Priority: cache by id, then exact short_code (get), then exact barcode (get).
+    Priority: cache by id (unless skip_cache=True), then exact short_code (get), then exact barcode (get).
     Returns Barcode or None.
+    skip_cache: if True, do not read from or write to barcode cache (use for invoice add to avoid stale matches).
     """
     if not search_value or not search_value.strip():
         return None
     
     barcode_clean = search_value.strip().upper()
     
-    # Cache: exact id lookup (use get, not first)
-    try:
-        from .barcode_cache import get_cached_barcode, get_cached_barcode_by_short_code
+    # Cache: exact id lookup (use get, not first) — skip when skip_cache=True (e.g. invoice creation)
+    if not skip_cache:
+        try:
+            from .barcode_cache import get_cached_barcode, get_cached_barcode_by_short_code
 
-        cached_data = get_cached_barcode(barcode_clean)
-        if cached_data:
-            try:
-                barcode_obj = Barcode.objects.select_related(
-                    'product', 'product__category', 'product__brand'
-                ).get(id=cached_data['id'])
-                if barcode_obj.product and barcode_obj.product.is_active:
-                    if logger:
-                        logger.debug(f"Cache hit for barcode: '{barcode_clean}' -> ID: {barcode_obj.id}")
-                    return barcode_obj
-            except Barcode.DoesNotExist:
-                pass
+            cached_data = get_cached_barcode(barcode_clean)
+            if cached_data:
+                try:
+                    barcode_obj = Barcode.objects.select_related(
+                        'product', 'product__category', 'product__brand'
+                    ).get(id=cached_data['id'])
+                    if barcode_obj.product and barcode_obj.product.is_active:
+                        if logger:
+                            logger.debug(f"Cache hit for barcode: '{barcode_clean}' -> ID: {barcode_obj.id}")
+                        return barcode_obj
+                except Barcode.DoesNotExist:
+                    pass
 
-        cached_data = get_cached_barcode_by_short_code(barcode_clean)
-        if cached_data:
-            try:
-                barcode_obj = Barcode.objects.select_related(
-                    'product', 'product__category', 'product__brand'
-                ).get(id=cached_data['id'])
-                if barcode_obj.product and barcode_obj.product.is_active:
-                    if logger:
-                        logger.debug(f"Cache hit for short_code: '{barcode_clean}' -> ID: {barcode_obj.id}")
-                    return barcode_obj
-            except Barcode.DoesNotExist:
-                pass
-    except Exception as e:
-        if logger:
-            logger.warning(f"Cache lookup failed for '{barcode_clean}': {str(e)}")
+            cached_data = get_cached_barcode_by_short_code(barcode_clean)
+            if cached_data:
+                try:
+                    barcode_obj = Barcode.objects.select_related(
+                        'product', 'product__category', 'product__brand'
+                    ).get(id=cached_data['id'])
+                    if barcode_obj.product and barcode_obj.product.is_active:
+                        if logger:
+                            logger.debug(f"Cache hit for short_code: '{barcode_clean}' -> ID: {barcode_obj.id}")
+                        return barcode_obj
+                except Barcode.DoesNotExist:
+                    pass
+        except Exception as e:
+            if logger:
+                logger.warning(f"Cache lookup failed for '{barcode_clean}': {str(e)}")
 
     # EXACT match only: short_code then barcode. Use get(), never first().
     try:
@@ -102,11 +104,12 @@ def find_barcode_by_search_value(search_value: str, logger=None):
             'product', 'product__category', 'product__brand'
         ).get()
         if barcode_obj.product and barcode_obj.product.is_active:
-            try:
-                from .barcode_cache import cache_barcode_data
-                cache_barcode_data(barcode_obj)
-            except Exception:
-                pass
+            if not skip_cache:
+                try:
+                    from .barcode_cache import cache_barcode_data
+                    cache_barcode_data(barcode_obj)
+                except Exception:
+                    pass
             return barcode_obj
     except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
         pass
@@ -116,11 +119,12 @@ def find_barcode_by_search_value(search_value: str, logger=None):
             'product', 'product__category', 'product__brand'
         ).get()
         if barcode_obj.product and barcode_obj.product.is_active:
-            try:
-                from .barcode_cache import cache_barcode_data
-                cache_barcode_data(barcode_obj)
-            except Exception:
-                pass
+            if not skip_cache:
+                try:
+                    from .barcode_cache import cache_barcode_data
+                    cache_barcode_data(barcode_obj)
+                except Exception:
+                    pass
             return barcode_obj
     except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
         pass

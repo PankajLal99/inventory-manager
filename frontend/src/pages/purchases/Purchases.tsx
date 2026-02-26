@@ -719,6 +719,10 @@ export default function Purchases() {
     }, 0);
   };
 
+  const calculateTotalQty = () => {
+    return purchaseItems.reduce((sum, item) => sum + (parseInt(item.quantity) || 0), 0);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -2273,7 +2277,7 @@ export default function Purchases() {
                       <tfoot className="bg-gray-50">
                         <tr>
                           <td colSpan={4} className="px-3 py-2 text-right text-sm font-medium text-gray-700">
-                            Total:
+                            Total qty: {formatNumber(calculateTotalQty())} · Total:
                           </td>
                           <td colSpan={2} className="px-3 py-2 text-right text-sm font-bold text-gray-900">
                             ₹{formatNumber(calculateTotal())}
@@ -2393,7 +2397,11 @@ export default function Purchases() {
                     })}
 
                     {/* Total Footer for Mobile */}
-                    <div className="bg-gray-50 border border-gray-300 rounded-lg p-4">
+                    <div className="bg-gray-50 border border-gray-300 rounded-lg p-4 space-y-1">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-gray-700">Total qty:</span>
+                        <span className="text-sm font-semibold text-gray-900">{formatNumber(calculateTotalQty())}</span>
+                      </div>
                       <div className="flex justify-between items-center">
                         <span className="text-sm font-medium text-gray-700">Total:</span>
                         <span className="text-lg font-bold text-gray-900">₹{formatNumber(calculateTotal())}</span>

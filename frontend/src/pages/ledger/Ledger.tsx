@@ -27,7 +27,7 @@ export default function Ledger() {
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
   const [entryData, setEntryData] = useState({ amount: '', description: '', date: toLocalDateString(new Date()) });
   const [customerSearch, setCustomerSearch] = useState('');
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null); // 0 = ALL (no shop filter)
   const [user, setUser] = useState<any>(null);
   const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false);
   const [newCustomerData, setNewCustomerData] = useState({
@@ -95,18 +95,21 @@ export default function Ledger() {
     (user?.groups && user.groups.includes('Admin'));
 
   // Determine the active store:
-  // - For Admin: Use selectedStoreId if set, otherwise first active store
+  // - For Admin: Use selectedStoreId (0 = ALL), or first active store if none selected
   // - For others: Auto-select first active store (filtered by backend)
   const defaultStore = (() => {
+    if (isAdmin && selectedStoreId === 0) {
+      return { id: 0, name: 'All Stores' };
+    }
     if (isAdmin && selectedStoreId) {
       return stores.find((s: any) => s.id === selectedStoreId) || stores.find((s: any) => s.is_active) || stores[0];
     }
     return stores.find((s: any) => s.is_active) || stores[0];
   })();
 
-  // Update selectedStoreId when stores load and Admin hasn't selected one yet
+  // Update selectedStoreId when stores load and Admin hasn't selected one yet (don't overwrite 0 = ALL)
   useEffect(() => {
-    if (isAdmin && !selectedStoreId && stores.length > 0) {
+    if (isAdmin && selectedStoreId == null && stores.length > 0) {
       const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
       if (firstActiveStore) {
         setSelectedStoreId(firstActiveStore.id);
@@ -125,8 +128,8 @@ export default function Ledger() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Get current selected store for display
-  const currentStore = stores.find((s: any) => s.id === selectedStoreId);
+  // Get current selected store for display (ALL when selectedStoreId === 0)
+  const currentStore = selectedStoreId === 0 ? { name: 'All' } : stores.find((s: any) => s.id === selectedStoreId);
 
   const { data: customersResponse } = useQuery({
     queryKey: ['customers', customerSearch],
@@ -160,7 +163,7 @@ export default function Ledger() {
     queryKey: ['ledger-summary', defaultStore?.id, showCreditInvoicesOnly],
     queryFn: async () => {
       const params: any = {};
-      if (defaultStore?.id) params.store = defaultStore.id;
+      if (defaultStore?.id && defaultStore.id !== 0) params.store = defaultStore.id;
       // Filter to show only credit invoices (if toggle is enabled)
       if (showCreditInvoicesOnly) {
         params.invoice_status = 'credit';
@@ -180,7 +183,8 @@ export default function Ledger() {
     if (filters.customer) params.customer = filters.customer;
     if (filters.customerGroup) params.customer_group = filters.customerGroup;
     if (filters.search) params.search = filters.search;
-    if (defaultStore?.id) params.store = defaultStore.id;
+    // Only filter by store when a specific store is selected (not ALL)
+    if (defaultStore?.id && defaultStore.id !== 0) params.store = defaultStore.id;
     return params;
   }, [filters.dateFrom, filters.dateTo, filters.entryType, filters.customer, filters.customerGroup, filters.search, defaultStore?.id]);
 
@@ -696,13 +700,14 @@ export default function Ledger() {
                   </div>
                 </div>
                 <select
-                  value={selectedStoreId?.toString() || ''}
+                  value={selectedStoreId == null ? '' : String(selectedStoreId)}
                   onChange={(e) => {
-                    const storeId = parseInt(e.target.value);
-                    setSelectedStoreId(storeId);
+                    const val = e.target.value;
+                    setSelectedStoreId(val === '0' ? 0 : parseInt(val, 10));
                   }}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
                 >
+                  <option value="0">All</option>
                   {stores.map((store: any) => (
                     <option key={store.id} value={store.id.toString()}>
                       {store.name}

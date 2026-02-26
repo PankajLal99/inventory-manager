@@ -22,6 +22,17 @@ from .serializers import (
 from backend.catalog.label_generator import generate_label_image
 
 
+def _get_barcode_supplier_id(barcode_obj):
+    """Return supplier_id for a barcode (from its purchase), or None if no purchase."""
+    if not barcode_obj:
+        return None
+    if barcode_obj.purchase_item and barcode_obj.purchase_item.purchase_id:
+        return barcode_obj.purchase_item.purchase.supplier_id
+    if getattr(barcode_obj, 'purchase_id', None):
+        return barcode_obj.purchase.supplier_id if barcode_obj.purchase else None
+    return None
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def repair_invoices_list(request):
@@ -33,8 +44,32 @@ def repair_invoices_list(request):
     queryset = Invoice.objects.filter(
         store__in=repair_stores,
         repair__isnull=False  # Only invoices with Repair records
-    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'payments').order_by('-repair__created_at')
-    
+    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'payments')
+
+    ordering_param = request.query_params.get('ordering', '-created_at')
+    if ordering_param == 'created_at':
+        queryset = queryset.order_by('created_at')
+    else:
+        queryset = queryset.order_by('-created_at')
+
+    # Filter by store only if it's a repair store (otherwise we'd filter to retail and get 0 repairs)
+    store_id = request.query_params.get('store', None)
+    if store_id:
+        try:
+            sid = int(store_id)
+            if repair_stores.filter(id=sid).exists():
+                queryset = queryset.filter(store_id=sid)
+        except (ValueError, TypeError):
+            pass
+
+    # Filter by date range if provided
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    if date_from:
+        queryset = queryset.filter(created_at__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(created_at__date__lte=date_to)
+
     # Filter by repair status if provided
     repair_status = request.query_params.get('repair_status', None)
     if repair_status:
@@ -177,9 +212,9 @@ def update_repair_status(request, pk):
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def update_repair(request, pk):
-    """Update repair registration details (contact_no, model_name, description, booking_amount)."""
+    """Update repair registration details (contact_no, model_name, description, booking_amount, delivery_date)."""
     repair = get_object_or_404(Repair, invoice_id=pk)
-    allowed = ('contact_no', 'model_name', 'description', 'booking_amount')
+    allowed = ('contact_no', 'model_name', 'description', 'booking_amount', 'delivery_date')
     for key in allowed:
         if key in request.data:
             value = request.data[key]
@@ -190,6 +225,15 @@ def update_repair(request, pk):
                     try:
                         setattr(repair, key, Decimal(str(value)))
                     except (InvalidOperation, TypeError):
+                        pass
+            elif key == 'delivery_date':
+                if value is None or value == '':
+                    setattr(repair, key, None)
+                else:
+                    from datetime import datetime
+                    try:
+                        setattr(repair, key, datetime.strptime(value, '%Y-%m-%d').date())
+                    except (ValueError, TypeError):
                         pass
             else:
                 setattr(repair, key, value if value is not None else '')
@@ -1369,57 +1413,72 @@ def cart_items(request, pk):
             'message': f'This is a tracked product ({product.name}). You MUST physically scan a barcode to add it to the cart.'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    # If existing item found, add the barcode to it and increment quantity
+    # If existing item found, only merge when same supplier (same product from different suppliers = separate rows, like different brands)
     if existing_item:
-        # Add barcode to the list if not already present
-        if not existing_item.scanned_barcodes:
-            existing_item.scanned_barcodes = []
-            
-        if barcode_value_to_use and barcode_value_to_use not in existing_item.scanned_barcodes:
-            with transaction.atomic():
-                existing_item.scanned_barcodes.append(barcode_value_to_use)
-                existing_item.quantity = Decimal(len(existing_item.scanned_barcodes))
-                existing_item.save(update_fields=['scanned_barcodes', 'quantity'])
+        do_merge = True
+        if barcode_obj and (existing_item.scanned_barcodes or []):
+            new_supplier_id = _get_barcode_supplier_id(barcode_obj)
+            first_existing_bc = str((existing_item.scanned_barcodes or [])[0] or '').strip().upper()
+            first_barcode_obj = None
+            if first_existing_bc:
+                try:
+                    first_barcode_obj = Barcode.objects.get(barcode=first_existing_bc)
+                except Barcode.DoesNotExist:
+                    try:
+                        first_barcode_obj = Barcode.objects.get(short_code=first_existing_bc)
+                    except Barcode.DoesNotExist:
+                        pass
+            existing_supplier_id = _get_barcode_supplier_id(first_barcode_obj) if first_barcode_obj else None
+            if new_supplier_id is not None and existing_supplier_id is not None and new_supplier_id != existing_supplier_id:
+                do_merge = False
+        if do_merge:
+            # Add barcode to the list if not already present
+            if not existing_item.scanned_barcodes:
+                existing_item.scanned_barcodes = []
+
+            if barcode_value_to_use and barcode_value_to_use not in existing_item.scanned_barcodes:
+                with transaction.atomic():
+                    existing_item.scanned_barcodes.append(barcode_value_to_use)
+                    existing_item.quantity = Decimal(len(existing_item.scanned_barcodes))
+                    existing_item.save(update_fields=['scanned_barcodes', 'quantity'])
+                    
+                    # Mark barcode as 'in-cart' when added to cart
+                    if barcode_obj and barcode_obj.tag in ['new', 'returned']:
+                        barcode_obj.tag = 'in-cart'
+                        barcode_obj.save(update_fields=['tag'])
+                    
+                    # Update stock quantity when tracked item barcode is added to existing cart item
+                    if cart.store and barcode_obj:
+                        reduce_stock_for_cart_item(product, variant_id, cart.store, Decimal('1.000'))
                 
-                # Mark barcode as 'in-cart' when added to cart
-                if barcode_obj and barcode_obj.tag in ['new', 'returned']:
-                    barcode_obj.tag = 'in-cart'
-                    barcode_obj.save(update_fields=['tag'])
-                
-                # Update stock quantity when tracked item barcode is added to existing cart item
-                # Use helper function to reduce duplication (always reduces by 1 for tracked products)
-                if cart.store and barcode_obj:
-                    reduce_stock_for_cart_item(product, variant_id, cart.store, Decimal('1.000'))
-            
-            # Audit log: Item barcode added to existing cart item (tracked inventory)
-            barcode_str = barcode_value_to_use if barcode_value_to_use else None
-            create_audit_log(
-                request=request,
-                action='cart_add',
-                model_name='CartItem',
-                object_id=str(existing_item.id),
-                object_name=f"{product.name}",
-                object_reference=f"Cart #{cart.cart_number or cart.id}",
-                barcode=barcode_str,
-                changes={
-                    'product_id': product.id,
-                    'product_name': product.name,
-                    'product_sku': product.sku,
-                    'barcode_added': barcode_str,
-                    'new_quantity': str(existing_item.quantity),
-                    'unit_price': str(existing_item.unit_price),
-                    'cart_id': cart.id,
-                    'cart_number': cart.cart_number,
-                    'action': 'barcode_added_to_existing_item',
-                }
-            )
-            
-            serializer = CartItemSerializer(existing_item)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        else:
-            # Barcode already in this item
-            serializer = CartItemSerializer(existing_item)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+                barcode_str = barcode_value_to_use if barcode_value_to_use else None
+                create_audit_log(
+                    request=request,
+                    action='cart_add',
+                    model_name='CartItem',
+                    object_id=str(existing_item.id),
+                    object_name=f"{product.name}",
+                    object_reference=f"Cart #{cart.cart_number or cart.id}",
+                    barcode=barcode_str,
+                    changes={
+                        'product_id': product.id,
+                        'product_name': product.name,
+                        'product_sku': product.sku,
+                        'barcode_added': barcode_str,
+                        'new_quantity': str(existing_item.quantity),
+                        'unit_price': str(existing_item.unit_price),
+                        'cart_id': cart.id,
+                        'cart_number': cart.cart_number,
+                        'action': 'barcode_added_to_existing_item',
+                    }
+                )
+                serializer = CartItemSerializer(existing_item)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            else:
+                # Barcode already in this item
+                serializer = CartItemSerializer(existing_item)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+        # When do_merge is False (different supplier), fall through to create new cart line
     
     # No existing item - create new one
     
@@ -2346,14 +2405,37 @@ def invoice_list_create(request):
         if invoice_type_filter != 'defective':
             queryset = queryset.exclude(invoice_type='defective')
 
-        # Exclude credit invoices from main invoice list (credit is a status; also exclude legacy invoice_type='credit')
-        queryset = queryset.exclude(status='credit').exclude(invoice_type='credit')
+        # Exclude repair invoices (they appear on the Repairs page only)
+        queryset = queryset.filter(repair__isnull=True)
 
-        queryset = queryset.order_by('-created_at')
+        # When invoice type filter is set: show all invoices, no date pagination, old first (ascending).
+        if invoice_type_filter:
+            order_by = 'created_at'
+            queryset = queryset.order_by(order_by)
+            serializer = InvoiceSerializer(queryset, many=True)
+            return Response({
+                'results': serializer.data,
+                'count': len(serializer.data),
+                'next': None,
+                'previous': None,
+                'page': 1,
+                'page_size': None,
+                'total_pages': 1,
+                'page_date': None,
+            })
 
-        # Date-based pagination: each page = one day. Page 1 = most recent day (today or last day with invoices).
+        ordering_param = request.query_params.get('ordering', '-created_at')
+        if ordering_param == 'created_at':
+            order_by = 'created_at'
+            dates_order = 'day'
+        else:
+            order_by = '-created_at'
+            dates_order = '-day'
+        queryset = queryset.order_by(order_by)
+
+        # Date-based pagination: each page = one day. Page 1 = oldest day when ordering asc, else most recent day.
         page = max(1, int(request.query_params.get('page', 1)))
-        dates_qs = queryset.annotate(day=TruncDate('created_at')).values_list('day', flat=True).distinct().order_by('-day')
+        dates_qs = queryset.annotate(day=TruncDate('created_at')).values_list('day', flat=True).distinct().order_by(dates_order)
         dates_list = list(dates_qs)
         total_pages = len(dates_list) or 1
         page = min(page, total_pages)
@@ -3105,6 +3187,26 @@ def invoice_checkout(request, pk):
             
         invoice.customer.save()
     
+    # If this invoice is linked to a repair: optionally update delivery_date from request; auto-set status when received
+    try:
+        repair = invoice.repair
+        if repair:
+            if 'delivery_date' in request.data:
+                v = request.data.get('delivery_date')
+                if v is None or v == '':
+                    repair.delivery_date = None
+                else:
+                    try:
+                        from datetime import datetime
+                        repair.delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
+                    except (ValueError, TypeError):
+                        pass
+            if invoice.items.exists() and repair.status == 'received':
+                repair.status = 'work_in_progress'
+            repair.save()
+    except Repair.DoesNotExist:
+        pass
+    
     serializer = InvoiceSerializer(invoice)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -3642,6 +3744,43 @@ def invoice_items(request, pk):
         item_data['discount_amount'] = Decimal('0.00')
         item_data['tax_amount'] = Decimal('0.00')
     
+    # When adding from checkout modal barcode/short_code search, frontend sends barcode_id so we assign
+    # the exact barcode the user scanned (not another available barcode for the same product).
+    requested_barcode_id = request.data.get('barcode_id') or item_data.get('barcode_id')
+    if requested_barcode_id and item_data.get('product'):
+        try:
+            barcode_obj = Barcode.objects.get(pk=requested_barcode_id)
+        except (Barcode.DoesNotExist, ValueError, TypeError):
+            barcode_obj = None
+        if barcode_obj:
+            product_id = item_data.get('product')
+            if barcode_obj.product_id != product_id:
+                return Response(
+                    {'error': 'Barcode does not belong to this product.', 'barcode_id': requested_barcode_id},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if barcode_obj.tag not in ['new', 'returned']:
+                return Response(
+                    {'error': 'This barcode is not available (already sold or in use).', 'barcode_id': requested_barcode_id},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Already in this invoice?
+            if invoice.items.filter(barcode=barcode_obj).exists():
+                return Response(
+                    {'error': 'This barcode is already on this invoice.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Already sold on another invoice?
+            if InvoiceItem.objects.filter(barcode=barcode_obj).exclude(invoice__status='void').exclude(
+                invoice=invoice
+            ).exists():
+                return Response(
+                    {'error': 'This barcode is already sold on another invoice.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            item_data['barcode'] = barcode_obj.id
+        item_data.pop('barcode_id', None)  # serializer expects 'barcode' FK, not 'barcode_id'
+    
     serializer = InvoiceItemSerializer(data=item_data)
     if serializer.is_valid():
         item = serializer.save(invoice=invoice)
@@ -3689,20 +3828,53 @@ def invoice_items(request, pk):
             
             available_barcodes = available_barcodes.exclude(id__in=sold_barcode_ids)
             
-            # Get the first available barcode
-            barcode_obj = available_barcodes.first()
+            # Never guess when multiple barcodes exist: require client to send barcode_id (exact scan/selection).
+            available_count = available_barcodes.count()
+            if available_count > 1:
+                item.delete()  # Remove the item we just created so invoice stays consistent
+                return Response(
+                    {
+                        'error': 'Multiple barcodes available for this product.',
+                        'message': 'Please scan or search by short code/barcode so the exact unit is assigned. Do not add by product only when multiple units exist.',
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if available_count == 1:
+                barcode_obj = available_barcodes.get()
+            else:
+                barcode_obj = None
             
             if barcode_obj:
                 item.barcode = barcode_obj
-                # Mark barcode as sold when assigned to invoice item
-                # Mark as 'sold' for all invoice types (including pending) since the item is now in an invoice
-                # Once an item is in an invoice, it should be considered sold regardless of payment status
+                item.save()
                 old_tag = barcode_obj.tag
                 barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
-                item.save()
-                
-                # Audit log: Barcode tag changed (new -> sold)
+                create_audit_log(
+                    request=request,
+                    action='barcode_tag_change',
+                    model_name='Barcode',
+                    object_id=str(barcode_obj.id),
+                    object_name=item.product.name,
+                    object_reference=invoice.invoice_number,
+                    barcode=barcode_obj.barcode,
+                    changes={
+                        'tag': {'old': old_tag, 'new': 'sold'},
+                        'barcode': barcode_obj.barcode,
+                        'product_id': item.product.id,
+                        'product_name': item.product.name,
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'context': 'invoice_item_added',
+                    }
+                )
+        elif item.quantity == Decimal('1.000') and item.barcode:
+            # Barcode was passed from frontend (exact scan) — mark as sold
+            barcode_obj = item.barcode
+            if barcode_obj.tag in ['new', 'returned']:
+                old_tag = barcode_obj.tag
+                barcode_obj.tag = 'sold'
+                barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
                     action='barcode_tag_change',
@@ -3724,6 +3896,15 @@ def invoice_items(request, pk):
         
         # Update invoice totals
         update_invoice_totals(invoice)
+        
+        # If this invoice is linked to a repair, auto-set status to work_in_progress when first product is added (was received)
+        try:
+            repair = invoice.repair
+            if repair and repair.status == 'received':
+                repair.status = 'work_in_progress'
+                repair.save(update_fields=['status'])
+        except Repair.DoesNotExist:
+            pass
         
         # Don't decrease stock for draft invoices - stock will be updated on checkout
         

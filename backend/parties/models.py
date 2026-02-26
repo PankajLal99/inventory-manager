@@ -126,11 +126,16 @@ class PersonalLedgerEntry(models.Model):
 
 
 class InternalCustomer(models.Model):
-    """Internal customers for internal ledger (separate from regular and personal customers)"""
+    """Internal customers for internal ledger (separate from regular and personal customers).
+    Only customers with customer_group name 'MTSHOP' are shown in Shop Boys Ledger."""
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True)
     address = models.TextField(blank=True)
+    customer_group = models.ForeignKey(
+        CustomerGroup, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='internal_customers'
+    )
     credit_balance = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -145,13 +150,13 @@ class InternalCustomer(models.Model):
 
 
 class InternalLedgerEntry(models.Model):
-    """Internal ledger entries (without invoice link)"""
+    """Internal ledger entries (without invoice link). Uses Customer (MTSHOP group) only."""
     ENTRY_TYPE_CHOICES = [
         ('credit', 'Credit'),
         ('debit', 'Debit'),
     ]
     
-    customer = models.ForeignKey(InternalCustomer, on_delete=models.CASCADE, related_name='internal_ledger_entries', null=True, blank=True)
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='internal_ledger_entries', null=True, blank=True)
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True)

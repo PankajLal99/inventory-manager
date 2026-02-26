@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -25,6 +26,7 @@ import {
   Coins,
   Printer,
   Download,
+  Camera,
   ShoppingCart,
   Plus,
   Minus,
@@ -38,6 +40,7 @@ import {
   AlertTriangle,
   Package,
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
 
 export default function InvoiceDetail() {
@@ -88,10 +91,15 @@ export default function InvoiceDetail() {
   const [debouncedCustomerSearch, setDebouncedCustomerSearch] = useState('');
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
   // Toggle to show/hide purchase price in checkout modal (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Repair status in checkout modal (when invoice is repair)
   const [checkoutRepairStatus, setCheckoutRepairStatus] = useState<string>('');
+  // Original repair status when checkout modal opened (used to require change when invoice type changes)
+  const [checkoutOriginalRepairStatus, setCheckoutOriginalRepairStatus] = useState<string>('');
+  // Repair delivery date in checkout modal (from repair model, editable)
+  const [checkoutDeliveryDate, setCheckoutDeliveryDate] = useState<string>('');
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
 
@@ -187,6 +195,20 @@ export default function InvoiceDetail() {
     return { prevBalance: pb, totalOutstanding: total };
   }, [inv, customer]);
 
+  // Only show Previous Balance / Total Outstanding when this customer has at least one credit invoice
+  const { data: customerCreditInvoicesData } = useQuery({
+    queryKey: ['invoices', 'customer-credit', inv?.customer],
+    queryFn: () => posApi.invoices.list({ customer: inv!.customer, status: 'credit', page: 1, page_size: 1 }),
+    enabled: !!inv?.customer,
+    retry: false,
+  });
+  const customerHasCreditInvoice = (() => {
+    const raw = customerCreditInvoicesData?.data;
+    if (!raw || typeof raw !== 'object') return false;
+    const results = (raw as any).results;
+    return Array.isArray(results) && results.length > 0;
+  })();
+
   // Fetch stores list
   const { data: storesData } = useQuery({
     queryKey: ['stores'],
@@ -201,11 +223,17 @@ export default function InvoiceDetail() {
     mutationFn: (data: { invoice_type: 'cash' | 'upi' | 'pending' | 'mixed'; items: any[]; cash_amount?: number; upi_amount?: number }) => {
       return posApi.invoices.checkout(invoiceId, data);
     },
-    onSuccess: async (_, variables) => {
-      // Invalidate and refetch to get updated totals
+    onSuccess: async (response: any) => {
+      // Update invoice cache immediately with response (includes updated repair status when backend auto-set to work_in_progress)
+      const updatedInvoice = response?.data;
+      if (updatedInvoice) {
+        queryClient.setQueryData(['invoice', invoiceId], updatedInvoice);
+      }
+      // Invalidate and refetch so totals and related data are in sync
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
       setShowCheckoutModal(false);
       setCheckoutQuantities({});
       setCheckoutPrices({});
@@ -213,11 +241,6 @@ export default function InvoiceDetail() {
       setCheckoutPurchasePrices({});
       setCheckoutCashAmount('');
       setCheckoutUpiAmount('');
-      if (variables.invoice_type === 'pending') {
-        alert('Prices saved successfully! Invoice remains as draft.');
-      } else {
-        alert('Invoice checked out successfully!');
-      }
     },
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to checkout invoice';
@@ -279,7 +302,6 @@ export default function InvoiceDetail() {
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
       setShowRepairStatusModal(false);
-      alert('Repair status updated successfully.');
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to update repair status');
@@ -313,9 +335,10 @@ export default function InvoiceDetail() {
   const addItemMutation = useMutation({
     mutationFn: (data: any) => posApi.invoices.addItem(invoiceId, data),
     onSuccess: async () => {
-      // Invalidate and refetch to get updated invoice with new items
+      // Invalidate and refetch to get updated invoice (includes repair status when backend auto-set to work_in_progress)
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
       setBarcodeInput('');
       setProductSearchSelectedIndex(-1);
       setIsSearchTyped(false);
@@ -360,7 +383,7 @@ export default function InvoiceDetail() {
       if (!looksLikeBarcode(trimmedBarcodeInput)) return null;
 
       try {
-        const response = await productsApi.byBarcode(trimmedBarcodeInput, true);
+        const response = await productsApi.byBarcode(trimmedBarcodeInput, true, true);
         if (response.data) {
           return { product: response.data, isUnavailable: !response.data.barcode_available };
         }
@@ -498,13 +521,15 @@ export default function InvoiceDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoice?.data, searchParams]);
 
-  // Sync repair status dropdown in checkout modal when modal opens or invoice repair status changes
+  // Sync repair status and delivery date in checkout modal when modal opens or invoice repair changes
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
       setCheckoutRepairStatus(inv.repair.status);
+      setCheckoutOriginalRepairStatus(inv.repair.status);
+      setCheckoutDeliveryDate(inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '');
     }
-  }, [showCheckoutModal, invoice?.data?.repair?.status]);
+  }, [showCheckoutModal, invoice?.data?.repair?.status, invoice?.data?.repair?.delivery_date]);
 
   // Early returns after all hooks
   if (isLoading) {
@@ -938,6 +963,16 @@ export default function InvoiceDetail() {
       }
     }
 
+    // Repair checkout: if invoice type changed, repair status must be changed (compare to original at modal open)
+    if (freshInv?.repair && checkoutInvoiceType !== freshInv.invoice_type) {
+      const originalStatus = (checkoutOriginalRepairStatus || (freshInv.repair?.status ?? '')).trim();
+      const newStatus = (checkoutRepairStatus ?? '').trim();
+      if (!newStatus || newStatus === originalStatus) {
+        alert('You changed the invoice type. Please update the repair status before completing checkout.');
+        return;
+      }
+    }
+
     const checkoutData: any = {
       invoice_type: checkoutInvoiceType,
       items: items,
@@ -947,6 +982,13 @@ export default function InvoiceDetail() {
     if (checkoutInvoiceType === 'mixed') {
       checkoutData.cash_amount = parseFloat(checkoutCashAmount);
       checkoutData.upi_amount = parseFloat(checkoutUpiAmount);
+    }
+
+    // Include repair delivery date when invoice is a repair (from repair model, can be set/updated at checkout)
+    if (freshInv?.repair && checkoutDeliveryDate.trim()) {
+      checkoutData.delivery_date = checkoutDeliveryDate.trim();
+    } else if (freshInv?.repair && (checkoutDeliveryDate === '' || checkoutDeliveryDate === null)) {
+      checkoutData.delivery_date = null;
     }
 
     checkoutMutation.mutate(checkoutData);
@@ -982,23 +1024,32 @@ export default function InvoiceDetail() {
     let matchedBarcode: string | null = null;
 
     try {
-      const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true);
+      const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true, true);
       if (barcodeResponse.data) {
-        product = barcodeResponse.data;
-        matchedBarcode = product.matched_barcode || trimmedBarcode;
+        const data = barcodeResponse.data;
+        const responseMatched = (data.matched_barcode || data.canonical_barcode || '').trim();
+        const searchUpper = trimmedBarcode.toUpperCase();
+        const matchedUpper = responseMatched.toUpperCase();
+        // Require exact match: searched value must match the barcode/short_code we actually resolved
+        if (matchedUpper !== searchUpper) {
+          product = null;
+        } else {
+          product = data;
+          matchedBarcode = data.matched_barcode || trimmedBarcode;
 
-        // Check if barcode is available
-        if (product.barcode_available === false) {
-          const errorMsg = product.sold_invoice
-            ? `This item(SKU: ${matchedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
-            : `This item(SKU: ${matchedBarcode}) has already been sold and is not available in inventory.`;
-          alert(errorMsg);
-          return;
+          // Check if barcode is available
+          if (product.barcode_available === false) {
+            const errorMsg = product.sold_invoice
+              ? `This item(SKU: ${matchedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
+              : `This item(SKU: ${matchedBarcode}) has already been sold and is not available in inventory.`;
+            alert(errorMsg);
+            return;
+          }
         }
       }
     } catch (barcodeError: any) {
       if (barcodeError?.response?.status === 404) {
-        // Barcode not found - try product name search
+        // Barcode not found - only allow exact SKU match from product search (never use first result)
         const searchResponse = await productsApi.list({ search: trimmedBarcode });
         const searchData = searchResponse.data || searchResponse;
         let products: any[] = [];
@@ -1010,10 +1061,8 @@ export default function InvoiceDetail() {
           products = searchData;
         }
 
-        product = products.find((p: any) => p.sku?.toLowerCase() === trimmedBarcode.toLowerCase());
-        if (!product && products.length > 0) {
-          product = products[0];
-        }
+        product = products.find((p: any) => p.sku?.toLowerCase() === trimmedBarcode.toLowerCase()) ?? null;
+        // Do NOT fall back to products[0] - only add when we have exact barcode or exact SKU match
       } else {
         alert(barcodeError?.response?.data?.error || 'Failed to search for product');
         return;
@@ -1043,9 +1092,11 @@ export default function InvoiceDetail() {
       line_total: lineTotal, // Required field - calculate it like checkout does
     };
 
-    // Don't pass barcode - backend will auto-assign based on product
-    // The backend expects barcode to be an ID (integer), not a string value
-    // It will auto-assign a barcode if quantity is 1 and barcode is not provided
+    // When we resolved by barcode/short_code, send barcode_id so the backend assigns this exact barcode
+    // (not another available barcode for the same product).
+    if (product.barcode_id != null && product.barcode_available !== false) {
+      itemData.barcode_id = product.barcode_id;
+    }
 
     addItemMutation.mutate(itemData);
     setBarcodeInput('');
@@ -1137,9 +1188,10 @@ export default function InvoiceDetail() {
             .party-section {margin-bottom: 10px; }
             .party-section p {margin: 2px 0; font-size: 13px; }
 
-            /* Table */
+            /* Table - explicit vertical-align for consistent capture (e.g. html2canvas) */
             table {width: 100%; border-collapse: collapse; margin-bottom: 10px; table-layout: fixed; }
-            th {background: #f0f0f0; padding: 6px 8px; text-align: left; border: 1px solid #000; font-weight: bold; font-size: 12px; }
+            th, td {vertical-align: middle; }
+            th {background: #f0f0f0; padding: 6px 8px; border: 1px solid #000; font-weight: bold; font-size: 12px; }
             td {padding: 4px 8px; border-left: 1px solid #000; border-right: 1px solid #000; font-size: 12px; }
             .text-right {text-align: right; }
             .text-center {text-align: center; }
@@ -1228,11 +1280,11 @@ export default function InvoiceDetail() {
             <table style="flex: 1; border-bottom: 1px solid #000;">
               <thead>
                 <tr>
-                  <th style="width: 45%;">Description of Good</th>
-                  <th style="width: 15%;" class="text-center">Quantity in PCS</th>
-                  <th style="width: 15%;" class="text-right">Rate</th>
-                  <th style="width: 10%;" class="text-center">Per (PCS)</th>
-                  <th style="width: 15%;" class="text-right">Amount</th>
+                  <th style="width: 45%; text-align: left;">Description of Good</th>
+                  <th style="width: 15%; text-align: center;">Quantity in PCS</th>
+                  <th style="width: 15%; text-align: right;">Rate</th>
+                  <th style="width: 10%; text-align: center;">Per (PCS)</th>
+                  <th style="width: 15%; text-align: right;">Amount</th>
                 </tr>
               </thead>
               <tbody>
@@ -1291,10 +1343,10 @@ export default function InvoiceDetail() {
           return `
                         <tr style="border-bottom: 1px solid #eee;">
                           <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}</td>
-                          <td class="text-center" style="border-bottom: 1px solid #eee;">${formatNumber(group.totalQuantity, 3)}</td>
-                          <td class="text-right" style="border-bottom: 1px solid #eee;">${formatNumber(avgUnitPrice, 2)}</td>
-                          <td class="text-center" style="border-bottom: 1px solid #eee;">PCS</td>
-                          <td class="text-right" style="border-bottom: 1px solid #eee;">${formatNumber(group.totalAmount, 2)}</td>
+                          <td style="border-bottom: 1px solid #eee; text-align: center;">${formatNumber(group.totalQuantity, 3)}</td>
+                          <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(avgUnitPrice, 2)}</td>
+                          <td style="border-bottom: 1px solid #eee; text-align: center;">PCS</td>
+                          <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(group.totalAmount, 2)}</td>
                         </tr>
                       `;
         }).join('');
@@ -1319,30 +1371,30 @@ export default function InvoiceDetail() {
                   <td></td>
                   <td></td>
                   <td></td>
-                  <td class="text-right">${formatNumber(0, 2)}</td>
+                  <td style="text-align: right;">${formatNumber(0, 2)}</td>
                 </tr>
                 <!-- Total Row -->
                 <tr class="total-row">
                   <td><strong>Total</strong></td>
-                  <td class="text-center"><strong>${formatNumber(totalPcs, 3)}</strong></td>
+                  <td style="text-align: center;"><strong>${formatNumber(totalPcs, 3)}</strong></td>
                   <td></td>
                   <td></td>
-                  <td class="text-right"><strong>${formatNumber(totalAmount, 2)}</strong></td>
+                  <td style="text-align: right;"><strong>${formatNumber(totalAmount, 2)}</strong></td>
                 </tr>
-                ${inv.customer ? `
+                ${inv.customer && customerHasCreditInvoice ? `
                 <tr style="border-top: 1px dashed #000;">
                   <td style="padding-top: 8px;">Previous Balance</td>
                   <td></td>
                   <td></td>
                   <td></td>
-                  <td class="text-right" style="padding-top: 8px;">${prevBalance < 0 ? formatNumber(Math.abs(prevBalance), 2) + ' (Cr)' : formatNumber(prevBalance, 2)}</td>
+                  <td style="text-align: right; padding-top: 8px;">${prevBalance < 0 ? formatNumber(Math.abs(prevBalance), 2) + ' (Cr)' : formatNumber(prevBalance, 2)}</td>
                 </tr>
                 <tr class="total-row">
                   <td><strong>Total Outstanding</strong></td>
                   <td></td>
                   <td></td>
                   <td></td>
-                  <td class="text-right"><strong>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding), 2) + ' (Cr)' : formatNumber(totalOutstanding, 2)}</strong></td>
+                  <td style="text-align: right;"><strong>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding), 2) + ' (Cr)' : formatNumber(totalOutstanding, 2)}</strong></td>
                 </tr>
                 ` : ''}
               </tbody>
@@ -1414,6 +1466,45 @@ export default function InvoiceDetail() {
         // Note: Browser will handle PDF download through print dialog
       }, 250);
     };
+  };
+
+  const handleCapturePhoto = async () => {
+    const iframe = invoicePreviewRef.current;
+    const doc = iframe?.contentDocument;
+    const body = doc?.body;
+    if (!body) {
+      toast('Invoice preview is not ready. Please wait a moment and try again.', 'error');
+      return;
+    }
+    const el = doc?.documentElement;
+    const w = el?.scrollWidth ?? 794; // A4 ~210mm at 96dpi
+    const h = el?.scrollHeight ?? 1123;
+    try {
+      const canvas = await html2canvas(body, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: w,
+        windowHeight: h,
+      });
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            toast('Failed to create image.', 'error');
+            return;
+          }
+          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
+            () => toast('Invoice image copied to clipboard.', 'success'),
+            () => toast('Failed to copy to clipboard. Please check permissions.', 'error')
+          );
+        },
+        'image/png',
+        1
+      );
+    } catch (e) {
+      toast('Failed to capture invoice preview.', 'error');
+    }
   };
 
   const generateThermalInvoiceHTML = (invoice: any) => {
@@ -1616,7 +1707,7 @@ export default function InvoiceDetail() {
             <span>TOTAL:</span>
             <span>₹${formatNumber(invoice.total || '0')}</span>
           </div>
-          ${invoice.customer ? `
+          ${invoice.customer && customerHasCreditInvoice ? `
           <div class="summary-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px dotted #ccc;">
             <span>Previous Balance:</span>
             <span>${prevBalance < 0 ? formatNumber(Math.abs(prevBalance)) + ' (Cr)' : '₹' + formatNumber(prevBalance)}</span>
@@ -2062,7 +2153,7 @@ export default function InvoiceDetail() {
                   <span className="text-base font-semibold text-gray-900">Total</span>
                   <span className="text-lg font-bold text-gray-900">₹{formatNumber('0')}</span>
                 </div>
-                {inv.customer && (
+                {inv.customer && customerHasCreditInvoice && (
                   <>
                     <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
                       <span className="text-sm text-gray-600">Previous Balance</span>
@@ -2102,7 +2193,7 @@ export default function InvoiceDetail() {
                   <span className="text-base font-semibold text-gray-900">Total</span>
                   <span className="text-lg font-bold text-gray-900">₹{formatNumber(inv.total || '0')}</span>
                 </div>
-                {inv.customer && (
+                {inv.customer && customerHasCreditInvoice && (
                   <>
                     <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
                       <span className="text-sm text-gray-600">Previous Balance</span>
@@ -2482,6 +2573,15 @@ export default function InvoiceDetail() {
             <Button
               variant="outline"
               size="sm"
+              onClick={handleCapturePhoto}
+              className="flex-1 sm:flex-none"
+            >
+              <Camera className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Photo</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleDownload}
               className="flex-1 sm:flex-none"
             >
@@ -2506,6 +2606,7 @@ export default function InvoiceDetail() {
               }}
             >
               <iframe
+                ref={invoicePreviewRef}
                 title="Invoice A4 Preview"
                 srcDoc={generateInvoiceHTML()}
                 className="w-full border-0 block"
@@ -2552,6 +2653,8 @@ export default function InvoiceDetail() {
             setParentGroupPrices({});
             setCheckoutCashAmount('');
             setCheckoutUpiAmount('');
+            setCheckoutOriginalRepairStatus('');
+            setCheckoutDeliveryDate('');
           }}
           title="Checkout Invoice"
           size="xl-wide"
@@ -2571,101 +2674,6 @@ export default function InvoiceDetail() {
               >
                 {showPurchasePrice ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
               </button>
-            </div>
-            {/* Invoice Type Selection */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <label className="block text-sm font-semibold text-gray-900 mb-3">
-                <FileText className="h-4 w-4 inline mr-2" />
-                Invoice Type
-              </label>
-              <Select
-                value={checkoutInvoiceType}
-                onChange={(e) => {
-                  const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed';
-                  setCheckoutInvoiceType(newType);
-                  // Clear split amounts when switching away from mixed
-                  if (newType !== 'mixed') {
-                    setCheckoutCashAmount('');
-                    setCheckoutUpiAmount('');
-                  }
-                }}
-                className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
-              >
-                <option value="pending">PENDING (Save Prices Only)</option>
-                <option value="cash">CASH (Checkout)</option>
-                <option value="upi">UPI (Checkout)</option>
-                <option value="mixed">CASH + UPI (Checkout)</option>
-              </Select>
-              <p className="text-xs text-blue-700 mt-2 font-medium">
-                {checkoutInvoiceType === 'pending' && '✓ Prices will be saved. Invoice remains as draft. No checkout performed.'}
-                {checkoutInvoiceType === 'cash' && '✓ Invoice will be checked out and marked as paid (cash). Inventory will be updated.'}
-                {checkoutInvoiceType === 'upi' && '✓ Invoice will be checked out and marked as paid (UPI). Inventory will be updated.'}
-                {checkoutInvoiceType === 'mixed' && '✓ Invoice will be checked out with split payment (cash + UPI). Inventory will be updated.'}
-              </p>
-              {/* Split Payment Inputs for Mixed Type */}
-              {checkoutInvoiceType === 'mixed' && (
-                <div className="mt-3 space-y-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-blue-900 mb-2">
-                    <FileText className="h-3.5 w-3.5" />
-                    Split Payment Amounts
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Cash Amount (₹)</label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0.00"
-                        value={checkoutCashAmount}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setCheckoutCashAmount(value);
-                          // Auto-calculate UPI amount if total is known
-                          if (inv?.items && value) {
-                            const total = calculateCheckoutTotal();
-                            const cash = parseFloat(value) || 0;
-                            const remaining = Math.max(0, total - cash);
-                            setCheckoutUpiAmount(formatNumber(remaining));
-                          }
-                        }}
-                        className="w-full text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">UPI Amount (₹)</label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0.00"
-                        value={checkoutUpiAmount}
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setCheckoutUpiAmount(value);
-                          // Auto-calculate Cash amount if total is known
-                          if (inv?.items && value) {
-                            const total = calculateCheckoutTotal();
-                            const upi = parseFloat(value) || 0;
-                            const remaining = Math.max(0, total - upi);
-                            setCheckoutCashAmount(formatNumber(remaining));
-                          }
-                        }}
-                        className="w-full text-xs"
-                      />
-                    </div>
-                  </div>
-                  {inv?.items && checkoutCashAmount && checkoutUpiAmount && (
-                    <div className="text-xs mt-2">
-                      <span className="text-gray-600">Total: </span>
-                      <span className={`font - semibold ${formatNumber(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount)) === formatNumber(calculateCheckoutTotal()) ? 'text-green-600' : 'text-red-600'} `}>
-                        ₹{formatNumber(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount))}
-                      </span>
-                      <span className="text-gray-600"> / Invoice Total: ₹{formatNumber(calculateCheckoutTotal())}</span>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Add Product Section */}
@@ -2702,7 +2710,12 @@ export default function InvoiceDetail() {
                         const searchLower = searchValue.toLowerCase();
                         const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
                         const productList: any[] = [];
-                        if (barcodeCheck?.product && !barcodeCheck.isUnavailable) productList.push(barcodeCheck.product);
+                        const searchUpper = searchValue.trim().toUpperCase();
+                        if (barcodeCheck?.product && !barcodeCheck.isUnavailable) {
+                          const p = barcodeCheck.product;
+                          const matched = (p.matched_barcode ?? p.canonical_barcode ?? '').toString().trim().toUpperCase();
+                          if (matched && matched === searchUpper) productList.push(p);
+                        }
                         if (products) {
                           const existingIds = new Set(productList.map((p: any) => p.id));
                           if (Array.isArray(products?.results)) productList.push(...products.results.filter((p: any) => !existingIds.has(p.id)));
@@ -2732,14 +2745,18 @@ export default function InvoiceDetail() {
                               const discountAmount = 0;
                               const taxAmount = 0;
                               const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-                              addItemMutation.mutate({
+                              const payload: any = {
                                 product: product.id,
                                 quantity,
                                 unit_price: unitPrice,
                                 discount_amount: discountAmount,
                                 tax_amount: taxAmount,
                                 line_total: lineTotal,
-                              });
+                              };
+                              if (product.barcode_id != null && product.barcode_available !== false) {
+                                payload.barcode_id = product.barcode_id;
+                              }
+                              addItemMutation.mutate(payload);
                               setBarcodeInput('');
                               inputElement.value = '';
                               setProductSearchSelectedIndex(-1);
@@ -2766,7 +2783,12 @@ export default function InvoiceDetail() {
                       const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
                       if (!isSearchTyped || (!products && !barcodeCheck?.product && !showCustomOption)) return null;
                       const productList: any[] = [];
-                      if (barcodeCheck?.product && !barcodeCheck.isUnavailable) productList.push(barcodeCheck.product);
+                      const exactSearchUpper = barcodeInput.trim().toUpperCase();
+                      if (barcodeCheck?.product && !barcodeCheck.isUnavailable) {
+                        const p = barcodeCheck.product;
+                        const matched = (p.matched_barcode ?? p.canonical_barcode ?? '').toString().trim().toUpperCase();
+                        if (matched && matched === exactSearchUpper) productList.push(p);
+                      }
                       if (products) {
                         const existingIds = new Set(productList.map((p: any) => p.id));
                         if (Array.isArray(products?.results)) productList.push(...products.results.filter((p: any) => !existingIds.has(p.id)));
@@ -2812,14 +2834,18 @@ export default function InvoiceDetail() {
                                     const discountAmount = 0;
                                     const taxAmount = 0;
                                     const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-                                    addItemMutation.mutate({
+                                    const payload: any = {
                                       product: product.id,
                                       quantity,
                                       unit_price: unitPrice,
                                       discount_amount: discountAmount,
                                       tax_amount: taxAmount,
                                       line_total: lineTotal,
-                                    });
+                                    };
+                                    if (product.barcode_id != null && product.barcode_available !== false) {
+                                      payload.barcode_id = product.barcode_id;
+                                    }
+                                    addItemMutation.mutate(payload);
                                     setBarcodeInput('');
                                     setProductSearchSelectedIndex(-1);
                                     setIsSearchTyped(false);
@@ -2884,7 +2910,6 @@ export default function InvoiceDetail() {
                           <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Quantity</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Unit Price</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Total</th>
-                          <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
@@ -2924,7 +2949,7 @@ export default function InvoiceDetail() {
                                 {/* Parent Row */}
                                 <tr className="hover:bg-gray-50 transition-colors">
                                   <td className="px-4 py-4">
-                                    <div className="font-medium text-gray-900">{group.productName}</div>
+                                    <div className="font-medium text-gray-900" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>{group.productName}</div>
                                   </td>
                                   <td className="px-4 py-4">
                                     <button
@@ -3134,25 +3159,6 @@ export default function InvoiceDetail() {
                                       </div>
                                     </div>
                                   </td>
-                                  <td className="px-4 py-4">
-                                    <div className="flex items-center justify-center">
-                                      <button
-                                        onClick={() => {
-                                          // Remove all items in this group by calling delete API for each item
-                                          if (window.confirm(`Remove all items of "${group.productName}" from the invoice ? `)) {
-                                            group.items.forEach((item) => {
-                                              deleteItemMutation.mutate(item.id);
-                                            });
-                                          }
-                                        }}
-                                        disabled={deleteItemMutation.isPending}
-                                        className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50"
-                                        title="Remove Product"
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </button>
-                                    </div>
-                                  </td>
                                 </tr>
                                 {/* Expanded Barcode Rows */}
                                 {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
@@ -3164,7 +3170,7 @@ export default function InvoiceDetail() {
                                   return (
                                     <tr key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50 hover:bg-gray-100 transition-colors">
                                       <td className="px-4 py-3 pl-12">
-                                        <div className="text-xs text-gray-500">↳ {group.productName}</div>
+                                        <div className="text-xs text-gray-500" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>↳ {group.productName}</div>
                                       </td>
                                       <td className="px-4 py-3">
                                         <div className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</div>
@@ -3298,7 +3304,7 @@ export default function InvoiceDetail() {
                               <div className="mb-3">
                                 <div className="flex justify-between items-start">
                                   <div>
-                                    <h5 className="font-semibold text-gray-900 mb-1">{group.productName}</h5>
+                                    <h5 className="font-semibold text-gray-900 mb-1" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>{group.productName}</h5>
                                     <button
                                       onClick={() => setExpandedGroups({ ...expandedGroups, [groupKey]: !isExpanded })}
                                       className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-900 font-mono"
@@ -3661,13 +3667,118 @@ export default function InvoiceDetail() {
               return null;
             })()}
 
+            {/* Invoice Type Selection */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <label className="block text-sm font-semibold text-gray-900 mb-3">
+                <FileText className="h-4 w-4 inline mr-2" />
+                Invoice Type
+              </label>
+              <Select
+                value={checkoutInvoiceType}
+                onChange={(e) => {
+                  const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed';
+                  setCheckoutInvoiceType(newType);
+                  // Clear split amounts when switching away from mixed
+                  if (newType !== 'mixed') {
+                    setCheckoutCashAmount('');
+                    setCheckoutUpiAmount('');
+                  }
+                }}
+                className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
+              >
+                <option value="pending">PENDING (Save Prices Only)</option>
+                <option value="cash">CASH (Checkout)</option>
+                <option value="upi">UPI (Checkout)</option>
+                <option value="mixed">CASH + UPI (Checkout)</option>
+              </Select>
+              <p className="text-xs text-blue-700 mt-2 font-medium">
+                {checkoutInvoiceType === 'pending' && '✓ Prices will be saved. Invoice remains as draft. No checkout performed.'}
+                {checkoutInvoiceType === 'cash' && '✓ Invoice will be checked out and marked as paid (cash). Inventory will be updated.'}
+                {checkoutInvoiceType === 'upi' && '✓ Invoice will be checked out and marked as paid (UPI). Inventory will be updated.'}
+                {checkoutInvoiceType === 'mixed' && '✓ Invoice will be checked out with split payment (cash + UPI). Inventory will be updated.'}
+              </p>
+              {/* Split Payment Inputs for Mixed Type */}
+              {checkoutInvoiceType === 'mixed' && (
+                <div className="mt-3 space-y-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-blue-900 mb-2">
+                    <FileText className="h-3.5 w-3.5" />
+                    Split Payment Amounts
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Cash Amount (₹)</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0.00"
+                        value={checkoutCashAmount}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setCheckoutCashAmount(value);
+                          // Auto-calculate UPI amount if total is known
+                          if (inv?.items && value) {
+                            const total = calculateCheckoutTotal();
+                            const cash = parseFloat(value) || 0;
+                            const remaining = Math.max(0, total - cash);
+                            setCheckoutUpiAmount(formatNumber(remaining));
+                          }
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">UPI Amount (₹)</label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0.00"
+                        value={checkoutUpiAmount}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setCheckoutUpiAmount(value);
+                          // Auto-calculate Cash amount if total is known
+                          if (inv?.items && value) {
+                            const total = calculateCheckoutTotal();
+                            const upi = parseFloat(value) || 0;
+                            const remaining = Math.max(0, total - upi);
+                            setCheckoutCashAmount(formatNumber(remaining));
+                          }
+                        }}
+                        className="w-full text-xs"
+                      />
+                    </div>
+                  </div>
+                  {inv?.items && checkoutCashAmount && checkoutUpiAmount && (
+                    <div className="text-xs mt-2">
+                      <span className="text-gray-600">Total: </span>
+                      <span className={`font - semibold ${formatNumber(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount)) === formatNumber(calculateCheckoutTotal()) ? 'text-green-600' : 'text-red-600'} `}>
+                        ₹{formatNumber(parseFloat(checkoutCashAmount) + parseFloat(checkoutUpiAmount))}
+                      </span>
+                      <span className="text-gray-600"> / Invoice Total: ₹{formatNumber(calculateCheckoutTotal())}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Update Repair Status (when invoice is repair) */}
             {inv?.repair && (
-              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 space-y-3">
+              <div className={`rounded-lg p-4 space-y-3 border ${checkoutInvoiceType !== inv.invoice_type ? 'bg-amber-50 border-amber-300' : 'bg-purple-50 border-purple-200'}`}>
                 <h4 className="text-sm font-semibold text-purple-900 flex items-center gap-2">
                   <Wrench className="h-4 w-4" />
                   Update Repair Status
+                  {checkoutInvoiceType !== inv.invoice_type && (
+                    <span className="text-amber-700 text-xs font-normal">(required when invoice type is changed)</span>
+                  )}
                 </h4>
+                {checkoutInvoiceType !== inv.invoice_type && (
+                  <p className="text-xs text-amber-700 flex items-center gap-1">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    You changed the invoice type. Please select a new repair status before completing checkout.
+                  </p>
+                )}
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="flex-1 min-w-[140px]">
                     <label className="block text-xs font-medium text-gray-700 mb-1">Current</label>
@@ -3709,6 +3820,18 @@ export default function InvoiceDetail() {
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
                     </Select>
+                  </div>
+                  <div className="flex-1 min-w-[160px]">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Delivery date</label>
+                    <Input
+                      type="date"
+                      value={checkoutDeliveryDate}
+                      onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
+                      className="w-full"
+                    />
+                    {inv.repair.delivery_date && !checkoutDeliveryDate && (
+                      <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
+                    )}
                   </div>
                 </div>
                 {(checkoutRepairStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial') && (
