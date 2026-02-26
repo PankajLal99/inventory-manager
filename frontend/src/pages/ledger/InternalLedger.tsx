@@ -53,35 +53,55 @@ export default function InternalLedger() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Fetch internal customers for internal ledger (separate from regular customers)
-  const { data: customersResponse } = useQuery({
-    queryKey: ['internal-customers', customerSearch],
+  // MTSHOP group: Shop Boys Ledger uses only Customer with this group
+  const MTSHOP_GROUP_NAME = 'MTSHOP';
+  const { data: customerGroupsData } = useQuery({
+    queryKey: ['customer-groups'],
     queryFn: async () => {
-      const response = await customersApi.internalCustomers.list({ search: customerSearch });
+      const response = await customersApi.groups.list();
       return response.data;
     },
-    enabled: customerSearch.trim().length > 0,
     retry: false,
   });
+  const mtshopGroupId = useMemo(() => {
+    const groups = Array.isArray(customerGroupsData) ? customerGroupsData : (customerGroupsData as any)?.results ?? (customerGroupsData as any)?.data ?? [];
+    const g = groups.find((x: any) => (x.name || '').toUpperCase() === MTSHOP_GROUP_NAME);
+    return g ? String(g.id) : null;
+  }, [customerGroupsData]);
 
+  // All customer lists on this page show only MTSHOP group (Shop Boys). Never fetch without customer_group.
+  const { data: customersResponse } = useQuery({
+    queryKey: ['customers', 'mtshop', mtshopGroupId, customerSearch],
+    queryFn: async () => {
+      const params: Record<string, string> = { customer_group: mtshopGroupId! };
+      if (customerSearch.trim()) params.search = customerSearch.trim();
+      const response = await customersApi.list(params);
+      return response.data;
+    },
+    enabled: !!mtshopGroupId && customerSearch.trim().length > 0,
+    retry: false,
+  });
 
   const { data: allCustomers } = useQuery({
-    queryKey: ['internal-customers-all'],
+    queryKey: ['customers', 'mtshop', mtshopGroupId],
     queryFn: async () => {
-      const response = await customersApi.internalCustomers.list();
+      const response = await customersApi.list({ customer_group: mtshopGroupId! });
       return response.data;
     },
+    enabled: !!mtshopGroupId,
     retry: false,
   });
 
-  // Fetch internal customers for customer list modal
+  // Customer list for "Customers" modal and add-customer flows: MTSHOP only
   const { data: customerListResponse } = useQuery({
-    queryKey: ['internal-customers-list', customerListSearch],
+    queryKey: ['customers', 'mtshop', mtshopGroupId, customerListSearch],
     queryFn: async () => {
-      const response = await customersApi.internalCustomers.list({ search: customerListSearch });
+      const params: Record<string, string> = { customer_group: mtshopGroupId! };
+      if (customerListSearch.trim()) params.search = customerListSearch.trim();
+      const response = await customersApi.list(params);
       return response.data;
     },
-    enabled: showCustomerListModal,
+    enabled: !!mtshopGroupId && showCustomerListModal,
     retry: false,
   });
 
@@ -150,20 +170,19 @@ export default function InternalLedger() {
   });
 
   const createCustomerMutation = useMutation({
-    mutationFn: (data: any) => customersApi.internalCustomers.create(data),
+    mutationFn: (data: any) =>
+      customersApi.create({ ...data, customer_group: mtshopGroupId ? parseInt(mtshopGroupId, 10) : undefined }),
     onSuccess: (response) => {
       const newCustomer = response.data;
       setSelectedCustomer({ ...newCustomer, type: 'customer' });
       setCustomerSearch('');
       setNewCustomerData({ name: '', phone: '', email: '', address: '' });
       setShowCreateCustomerModal(false);
-      queryClient.invalidateQueries({ queryKey: ['internal-customers'] });
-      queryClient.invalidateQueries({ queryKey: ['internal-customers-all'] });
-      queryClient.invalidateQueries({ queryKey: ['internal-customers-list'] });
-      toast('Internal customer created successfully', 'success');
+      queryClient.invalidateQueries({ queryKey: ['customers', 'mtshop'] });
+      toast('Shop boy (customer) created successfully', 'success');
     },
     onError: (error: any) => {
-      toast(error?.response?.data?.error || error?.response?.data?.message || 'Failed to create internal customer', 'error');
+      toast(error?.response?.data?.error || error?.response?.data?.message || 'Failed to create shop boy', 'error');
     },
   });
 
@@ -1089,9 +1108,18 @@ export default function InternalLedger() {
             />
           </div>
 
-          {/* Customer List */}
+          {/* Customer List — MTSHOP group only */}
           <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg">
             {(() => {
+              if (!mtshopGroupId) {
+                return (
+                  <div className="p-8 text-center text-gray-500">
+                    <Users className="h-12 w-12 mx-auto mb-2 text-gray-400" />
+                    <p>Customer group &quot;MTSHOP&quot; is required</p>
+                    <p className="text-sm mt-1">Create it under Customer Groups to show shop boys here.</p>
+                  </div>
+                );
+              }
               const customerList = (() => {
                 if (!customerListResponse) return [];
                 if (Array.isArray(customerListResponse.results)) return customerListResponse.results;
@@ -1106,7 +1134,7 @@ export default function InternalLedger() {
                 return (
                   <div className="p-8 text-center text-gray-500">
                     <Users className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                    <p>No shop boys found</p>
+                    <p>No shop boys found (MTSHOP group only)</p>
                     {customerListSearch && (
                       <p className="text-sm mt-1">Try a different search term</p>
                     )}
@@ -1206,6 +1234,10 @@ export default function InternalLedger() {
             e.preventDefault();
             if (!newCustomerData.name.trim()) {
               toast('Name is required', 'error');
+              return;
+            }
+            if (!mtshopGroupId) {
+              toast('Customer group MTSHOP is required. Create it under Customer Groups first.', 'error');
               return;
             }
             createCustomerMutation.mutate({

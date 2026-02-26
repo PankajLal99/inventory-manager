@@ -49,9 +49,10 @@ export default function InternalLedgerDetail() {
   }, []);
   const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
 
+  // Use Customer API only (Shop Boys are Customers in MTSHOP group)
   const { data: customerData } = useQuery({
-    queryKey: ['internal-customer', customerId],
-    queryFn: () => customersApi.internalCustomers.get(parseInt(customerId || '0')),
+    queryKey: ['customer', customerId],
+    queryFn: () => customersApi.get(parseInt(customerId || '0')),
     enabled: !!customerId,
     retry: false,
   });
@@ -79,7 +80,7 @@ export default function InternalLedgerDetail() {
     mutationFn: (data: any) => customersApi.internalLedger.entries.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-customer-detail', customerId] });
-      queryClient.invalidateQueries({ queryKey: ['internal-customer', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['customer', customerId] });
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
       setShowEntryForm(false);
       setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
@@ -94,7 +95,7 @@ export default function InternalLedgerDetail() {
     mutationFn: ({ id, data }: { id: number; data: any }) => customersApi.internalLedger.entries.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-customer-detail', customerId] });
-      queryClient.invalidateQueries({ queryKey: ['internal-customer', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['customer', customerId] });
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
       setEditingEntry(null);
       setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' });
@@ -107,7 +108,7 @@ export default function InternalLedgerDetail() {
     mutationFn: (id: number) => customersApi.internalLedger.entries.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-customer-detail', customerId] });
-      queryClient.invalidateQueries({ queryKey: ['internal-customer', customerId] });
+      queryClient.invalidateQueries({ queryKey: ['customer', customerId] });
       queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
       setDeletingEntryId(null);
       toast('Entry removed successfully', 'success');

@@ -811,8 +811,11 @@ def product_backfill_barcodes(request):
     for product in products_without_barcodes:
         if product.sku:
             try:
-                # Check if barcode with this SKU already exists
-                existing = Barcode.objects.filter(barcode=product.sku).first()
+                # Check if barcode with this SKU already exists (exact match only)
+                try:
+                    existing = Barcode.objects.get(barcode=product.sku)
+                except Barcode.DoesNotExist:
+                    existing = None
                 if existing:
                     # Link existing barcode to this product if not already linked
                     if not existing.product:
@@ -1064,7 +1067,7 @@ def product_generate_labels(request, pk):
             for item in barcodes_to_queue:
                 bulk_data.append({
                     'product_name': item['product_name'],
-                    'barcode_value': item['barcode_value'],
+                    'barcode_value': item.get('short_code') or item['barcode_value'],
                     'short_code': item.get('short_code'),
                     'barcode_id': item['barcode_id'],
                     'vendor_name': item['vendor_name'],
@@ -1423,28 +1426,30 @@ def check_barcode_sold_status(barcode_obj):
     """
     # Fast path: if tag is 'sold', it's definitely sold
     if barcode_obj.tag == 'sold':
-        # Still need to get invoice number
+        # Still need to get invoice number (one barcode -> at most one invoice item; use get, not first)
         from backend.pos.models import InvoiceItem
+        try:
+            sold_item = InvoiceItem.objects.filter(
+                barcode=barcode_obj
+            ).exclude(
+                invoice__status='void'
+            ).select_related('invoice').only('invoice__invoice_number').get()
+            return True, sold_item.invoice.invoice_number
+        except (InvoiceItem.DoesNotExist, InvoiceItem.MultipleObjectsReturned):
+            return True, None
+
+    # Check if assigned to a non-void invoice (one barcode -> at most one invoice item; use get, not first)
+    from backend.pos.models import InvoiceItem
+    try:
         sold_item = InvoiceItem.objects.filter(
             barcode=barcode_obj
         ).exclude(
             invoice__status='void'
-        ).select_related('invoice').only('invoice__invoice_number').first()
-        if sold_item:
-            return True, sold_item.invoice.invoice_number
-        return True, None
-    
-    # Check if assigned to a non-void invoice
-    from backend.pos.models import InvoiceItem
-    sold_item = InvoiceItem.objects.filter(
-        barcode=barcode_obj
-    ).exclude(
-        invoice__status='void'
-    ).select_related('invoice').only('invoice__invoice_number').first()
-    
-    if sold_item:
+        ).select_related('invoice').only('invoice__invoice_number').get()
         return True, sold_item.invoice.invoice_number
-    
+    except (InvoiceItem.DoesNotExist, InvoiceItem.MultipleObjectsReturned):
+        pass
+
     return False, None
 
 
@@ -1460,8 +1465,10 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
     # Include the matched barcode and availability status
     # matched_barcode: for display (prefer short_code if available)
     # canonical_barcode: always the DB barcode field - use this when adding to cart so cart stores exactly this
+    # barcode_id: use when adding to invoice so the exact scanned barcode is assigned (not another one for same product)
     response_data['matched_barcode'] = barcode_obj.short_code or barcode_obj.barcode
     response_data['canonical_barcode'] = barcode_obj.barcode
+    response_data['barcode_id'] = barcode_obj.id
     response_data['barcode_tag'] = barcode_obj.tag
     response_data['barcode_available'] = barcode_obj.tag in ['new', 'returned']
     
@@ -1551,7 +1558,9 @@ def barcode_by_barcode(request, barcode=None):
 
         # Check if we should only search barcodes (skip SKU fallback)
         barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'
-        
+        # Skip all cache (API response + barcode cache) when no_cache=true — use for invoice add to avoid stale matches
+        no_cache = request.query_params.get('no_cache', 'false').lower() == 'true'
+
         # Reject reserved keywords that are barcode tags, not actual barcodes
         reserved_keywords = ['new', 'sold', 'returned', 'defective', 'unknown']
         if barcode_clean.lower() in reserved_keywords:
@@ -1566,28 +1575,29 @@ def barcode_by_barcode(request, barcode=None):
         logger = logging.getLogger(__name__)
         logger.info(f"Looking up barcode/SKU: '{barcode_clean}'")
         
-        # Check cache first (5 minute TTL for barcode lookups)
+        # Check cache first (5 minute TTL for barcode lookups) — skip when no_cache=true (e.g. invoice creation)
         cache_key = f'barcode_lookup:{barcode_clean}'
-        cached_response = cache.get(cache_key)
-        if cached_response:
-            logger.debug(f"Cache hit for barcode: '{barcode_clean}'")
-            response = Response(cached_response)
-            # Add cache headers for browser-level caching (1 minute for barcode lookups)
-            response['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=300'
-            return response
-        
-        # Use centralized barcode search function from filters.py
+        if not no_cache:
+            cached_response = cache.get(cache_key)
+            if cached_response:
+                logger.debug(f"Cache hit for barcode: '{barcode_clean}'")
+                response = Response(cached_response)
+                # Add cache headers for browser-level caching (1 minute for barcode lookups)
+                response['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=300'
+                return response
+
+        # Use centralized barcode search function from filters.py (skip_cache=no_cache for invoice add)
         # This handles all flexible matching: normalized, prefix, exact, case-insensitive, contains
         # All barcode search logic is now centralized in filters.py for consistency
-        # The function now uses cache internally for fast lookups
-        barcode_obj = find_barcode_by_search_value(barcode_clean, logger)
+        barcode_obj = find_barcode_by_search_value(barcode_clean, logger, skip_cache=no_cache)
         if barcode_obj:
             product = barcode_obj.product or (barcode_obj.variant.product if barcode_obj.variant else None)
             if product and product.is_active:
                 logger.info(f"Found barcode match: '{barcode_clean}' -> '{barcode_obj.short_code or barcode_obj.barcode}'")
                 response_data = build_barcode_response(barcode_obj, product, logger, 'flexible_match')
-                # Cache the API response for 5 minutes (separate from barcode data cache)
-                cache.set(cache_key, response_data, 300)
+                # Cache the API response for 5 minutes (separate from barcode data cache) — skip when no_cache
+                if not no_cache:
+                    cache.set(cache_key, response_data, 300)
                 response = Response(response_data)
                 # Add cache headers for browser-level caching (1 minute for barcode lookups)
                 response['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=300'
@@ -1608,18 +1618,24 @@ def barcode_by_barcode(request, barcode=None):
             from backend.core.model_cache import get_cached_product_by_sku, cache_product_data
             cached_product = get_cached_product_by_sku(barcode_clean)
             
+            product = None
             if cached_product:
-                # Get full product object for serializer
-                product = Product.objects.filter(
-                    id=cached_product['id'],
-                    is_active=True
-                ).select_related('category', 'brand').first()
-            else:
-                # Cache miss - fetch from database
-                product = Product.objects.filter(
-                    sku=barcode_clean,
-                    is_active=True
-                ).exclude(sku__isnull=True).exclude(sku='').select_related('category', 'brand').first()
+                # Get full product object for serializer (exact id — use get, not first)
+                try:
+                    product = Product.objects.select_related('category', 'brand').get(
+                        id=cached_product['id'],
+                        is_active=True
+                    )
+                except Product.DoesNotExist:
+                    pass
+            if product is None:
+                # Cache miss - fetch from database (exact SKU — use get, not first)
+                try:
+                    product = Product.objects.exclude(sku__isnull=True).exclude(sku='').select_related(
+                        'category', 'brand'
+                    ).get(sku=barcode_clean, is_active=True)
+                except (Product.DoesNotExist, Product.MultipleObjectsReturned):
+                    product = None
                 
                 # Cache the result if found
                 if product:
@@ -1642,6 +1658,7 @@ def barcode_by_barcode(request, barcode=None):
                     is_sold, sold_invoice = check_barcode_sold_status(product_barcode)
                     response_data['matched_barcode'] = product_barcode.barcode
                     response_data['canonical_barcode'] = product_barcode.barcode
+                    response_data['barcode_id'] = product_barcode.id
                     response_data['barcode_tag'] = product_barcode.tag
                     response_data['barcode_available'] = product_barcode.tag in ['new', 'returned']
                     
@@ -1665,17 +1682,23 @@ def barcode_by_barcode(request, barcode=None):
             from backend.core.model_cache import get_cached_product_by_sku, cache_product_data
             cached_product = get_cached_product_by_sku(barcode_clean.upper()) or get_cached_product_by_sku(barcode_clean.lower())
             
+            product = None
             if cached_product:
-                product = Product.objects.filter(
-                    id=cached_product['id'],
-                    is_active=True
-                ).select_related('category', 'brand').first()
-            else:
-                # Cache miss - fetch from database
-                product = Product.objects.filter(
-                    sku__iexact=barcode_clean,
-                    is_active=True
-                ).exclude(sku__isnull=True).exclude(sku='').select_related('category', 'brand').first()
+                try:
+                    product = Product.objects.select_related('category', 'brand').get(
+                        id=cached_product['id'],
+                        is_active=True
+                    )
+                except Product.DoesNotExist:
+                    pass
+            if product is None:
+                # Cache miss - fetch from database (exact SKU iexact — use get, not first)
+                try:
+                    product = Product.objects.exclude(sku__isnull=True).exclude(sku='').select_related(
+                        'category', 'brand'
+                    ).get(sku__iexact=barcode_clean, is_active=True)
+                except (Product.DoesNotExist, Product.MultipleObjectsReturned):
+                    product = None
                 
                 # Cache the result if found
                 if product:
@@ -1716,22 +1739,21 @@ def barcode_by_barcode(request, barcode=None):
                 response['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=300'
                 return response
         
-                
-                # Cache the response for 5 minutes
-                cache.set(cache_key, response_data, 300)
-                response = Response(response_data)
-                response['Cache-Control'] = 'private, max-age=60, stale-while-revalidate=300'
-                return response
-        
         # Strategy 6: Removed barcode contains match - barcodes must be exact matches only
         # Barcode searches should always use exact matching via find_barcode_by_search_value()
         
-        # Strategy 7: Try product name search as fallback (only if no barcode/SKU match found)
-        # This allows users to search by product name if barcode/SKU doesn't match
-        product = Product.objects.filter(
-            name__icontains=barcode_clean,
-            is_active=True
-        ).first()
+        # Strategy 7: Try product name search as fallback (only if barcode_only is False)
+        # When barcode_only=True (e.g. checkout modal short code scan), require exact barcode/short_code
+        # match only — never return a product by name match, or the wrong item can be added (e.g. different invoice).
+        # No .first(): only return a product when exactly one name match (get, not first).
+        product = None
+        if not barcode_only:
+            name_qs = Product.objects.filter(
+                name__icontains=barcode_clean,
+                is_active=True
+            )
+            if name_qs.count() == 1:
+                product = name_qs.get()
         
         if product:
             logger.info(f"Found product by name (fallback): {product.name}")
@@ -1752,16 +1774,19 @@ def barcode_by_barcode(request, barcode=None):
                 from backend.pos.models import InvoiceItem
                 sold_invoice = None
                 if searched_barcode_obj.tag == 'sold':
-                    sold_item = InvoiceItem.objects.filter(
-                        barcode=searched_barcode_obj
-                    ).exclude(
-                        invoice__status='void'
-                    ).select_related('invoice').first()
-                    if sold_item:
+                    try:
+                        sold_item = InvoiceItem.objects.filter(
+                            barcode=searched_barcode_obj
+                        ).exclude(
+                            invoice__status='void'
+                        ).select_related('invoice').get()
                         sold_invoice = sold_item.invoice.invoice_number
+                    except (InvoiceItem.DoesNotExist, InvoiceItem.MultipleObjectsReturned):
+                        sold_invoice = None
                 
                 response_data['matched_barcode'] = searched_barcode_obj.barcode
                 response_data['canonical_barcode'] = searched_barcode_obj.barcode
+                response_data['barcode_id'] = searched_barcode_obj.id
                 response_data['barcode_tag'] = searched_barcode_obj.tag
                 response_data['barcode_available'] = searched_barcode_obj.tag in ['new', 'returned']
                 

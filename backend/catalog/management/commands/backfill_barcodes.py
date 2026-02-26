@@ -19,8 +19,11 @@ class Command(BaseCommand):
         for product in products_without_barcodes:
             if product.sku:
                 try:
-                    # Check if barcode with this SKU already exists globally
-                    existing_barcode = Barcode.objects.filter(barcode=product.sku).first()
+                    # Check if barcode with this SKU already exists globally (exact match only)
+                    try:
+                        existing_barcode = Barcode.objects.get(barcode=product.sku)
+                    except Barcode.DoesNotExist:
+                        existing_barcode = None
                     if existing_barcode:
                         # Link existing barcode to this product if not already linked
                         if not existing_barcode.product:
