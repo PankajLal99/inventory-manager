@@ -607,8 +607,12 @@ def cart_detail(request, pk):
                 for barcode_value in cart_item.scanned_barcodes:
                     if not barcode_value:
                         continue
+                    b_upper = str(barcode_value).strip().upper()
                     try:
-                        barcode_obj = Barcode.objects.get(barcode=barcode_value)
+                        try:
+                            barcode_obj = Barcode.objects.get(barcode=b_upper)
+                        except Barcode.DoesNotExist:
+                            barcode_obj = Barcode.objects.get(short_code=b_upper)
                         # Restore from 'in-cart' or 'sold' back to 'new' when cart is deleted
                         old_tag = barcode_obj.tag
                         if barcode_obj.tag in ['in-cart', 'sold']:
@@ -1232,26 +1236,24 @@ def cart_items(request, pk):
     barcode_value = request.data.get('barcode') or request.data.get('barcode_value')
     sku_value = request.data.get('sku')
     scanned_value = barcode_value or sku_value
-    scanned_value_str = str(scanned_value).strip() if scanned_value else None
+    scanned_value_str = str(scanned_value).strip().upper() if scanned_value else None
     
     # Check if this barcode is already sold (assigned to an invoice item)
     # Allow 'new' and 'returned' tags to be added to cart - they are available for sale
     if scanned_value_str:
-        # Try to find the barcode object - check BOTH barcode and short_code
+        barcode_obj = None
         try:
-            barcode_obj = Barcode.objects.filter(
-                Q(barcode=scanned_value_str) | Q(short_code=scanned_value_str)
-            ).first()
-            
-            if not barcode_obj:
-                raise Barcode.DoesNotExist
-            
+            try:
+                barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
+            except Barcode.DoesNotExist:
+                barcode_obj = Barcode.objects.get(short_code=scanned_value_str)
+        except Barcode.DoesNotExist:
+            pass
+        if barcode_obj:
             # Allow 'new' and 'returned' tags - they are available for sale
             if barcode_obj.tag in ['new', 'returned']:
-                # These tags are available, continue processing
                 pass
             elif barcode_obj.tag == 'sold':
-                # Check which invoice it's assigned to
                 sold_item = InvoiceItem.objects.filter(
                     barcode=barcode_obj
                 ).exclude(
@@ -1263,35 +1265,29 @@ def cart_items(request, pk):
                     'message': f'Barcode/SKU {scanned_value_str} has already been sold{invoice_info}. It is not available in inventory.'
                 }, status=status.HTTP_400_BAD_REQUEST)
             elif barcode_obj.tag == 'in-cart':
-                # Barcode is already in another cart - block adding to this cart
                 return Response({
                     'error': 'Item already in cart',
                     'message': f'Barcode/SKU {scanned_value_str} is already in another cart and cannot be added to this cart.'
                 }, status=status.HTTP_400_BAD_REQUEST)
             else:
-                # For other tags (defective, unknown), block them
                 tag_display = barcode_obj.get_tag_display() if hasattr(barcode_obj, 'get_tag_display') else barcode_obj.tag
                 return Response({
                     'error': 'Item not available',
                     'message': f'Barcode/SKU {scanned_value_str} has tag "{tag_display}" and cannot be added to cart. Only items with "new" or "returned" tags can be sold.'
                 }, status=status.HTTP_400_BAD_REQUEST)
-        except Barcode.DoesNotExist:
-            # Barcode not found in database - might be SKU or a new barcode
-            # For SKU-based products without barcodes, we can't track individual items
-            # So we allow them to be scanned multiple times
-            pass
-    
+
     # Get or find an available barcode for this product
     # If barcode is provided, verify it belongs to this product and is available
     barcode_obj = None
     barcode_value_to_use = None
     
     if scanned_value_str:
-        # Try to find the barcode object - check BOTH barcode and short_code
+        # Exact match only: try barcode then short_code (scanned_value_str already .upper())
         try:
-            barcode_obj = Barcode.objects.get(
-                Q(barcode=scanned_value_str) | Q(short_code=scanned_value_str)
-            )
+            try:
+                barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
+            except Barcode.DoesNotExist:
+                barcode_obj = Barcode.objects.get(short_code=scanned_value_str)
 
             # Verify this barcode belongs to the product being added
             if barcode_obj.product_id != product_id:
@@ -1596,8 +1592,12 @@ def cart_item_update(request, pk, item_id):
             for barcode_value in cart_item.scanned_barcodes:
                 if not barcode_value:
                     continue
+                b_upper = str(barcode_value).strip().upper()
                 try:
-                    barcode_obj = Barcode.objects.get(barcode=barcode_value)
+                    try:
+                        barcode_obj = Barcode.objects.get(barcode=b_upper)
+                    except Barcode.DoesNotExist:
+                        barcode_obj = Barcode.objects.get(short_code=b_upper)
                     # Restore from 'in-cart' or 'sold' back to 'new' when cart item is deleted
                     old_tag = barcode_obj.tag
                     if barcode_obj.tag in ['in-cart', 'sold']:
@@ -1789,9 +1789,13 @@ def cart_item_update(request, pk, item_id):
             if cart_item.product.name and cart_item.product.name.startswith('Other -') and cart_item.purchase_price is not None and cart_item.purchase_price > 0:
                 purchase_price = cart_item.purchase_price
             elif cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
-                # For tracked products: Get selling_price and purchase_price from first barcode (all barcodes in item should have same price)
+                # For tracked products: Get selling_price and purchase_price from first barcode (standardize .upper())
                 try:
-                    first_barcode = Barcode.objects.get(barcode=cart_item.scanned_barcodes[0])
+                    b_upper = str(cart_item.scanned_barcodes[0] or '').strip().upper()
+                    try:
+                        first_barcode = Barcode.objects.get(barcode=b_upper)
+                    except Barcode.DoesNotExist:
+                        first_barcode = Barcode.objects.get(short_code=b_upper)
                     selling_price = first_barcode.get_selling_price()
                     purchase_price = first_barcode.get_purchase_price()
                 except Barcode.DoesNotExist:
@@ -1867,7 +1871,11 @@ def cart_item_update(request, pk, item_id):
                         purchase_price = cart_item.purchase_price
                     elif cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
                         try:
-                            first_barcode = Barcode.objects.get(barcode=cart_item.scanned_barcodes[0])
+                            b_upper = str(cart_item.scanned_barcodes[0] or '').strip().upper()
+                            try:
+                                first_barcode = Barcode.objects.get(barcode=b_upper)
+                            except Barcode.DoesNotExist:
+                                first_barcode = Barcode.objects.get(short_code=b_upper)
                             selling_price = first_barcode.get_selling_price()
                             purchase_price = first_barcode.get_purchase_price()
                         except Barcode.DoesNotExist:
@@ -1924,13 +1932,15 @@ def cart_item_remove_sku(request, pk, item_id):
     barcode_to_remove = request.data.get('barcode')
     if not barcode_to_remove:
         return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    # Check if barcode exists in scanned_barcodes
-    if not cart_item.scanned_barcodes or barcode_to_remove not in cart_item.scanned_barcodes:
+    b_upper = str(barcode_to_remove).strip().upper()
+    # Match in scanned_barcodes by normalized (uppercase) value
+    scanned_upper = [str(x).strip().upper() for x in (cart_item.scanned_barcodes or []) if x]
+    if not cart_item.scanned_barcodes or b_upper not in scanned_upper:
         return Response({'error': 'Barcode not found in cart item'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    # Remove the barcode from scanned_barcodes
-    cart_item.scanned_barcodes.remove(barcode_to_remove)
+    # Remove the matching entry (same value, may differ by case)
+    to_remove = next((x for x in cart_item.scanned_barcodes if str(x).strip().upper() == b_upper), None)
+    if to_remove is not None:
+        cart_item.scanned_barcodes.remove(to_remove)
     cart_item.quantity = Decimal(len(cart_item.scanned_barcodes))
     
     # Update stock quantity when tracked item barcode is removed
@@ -1953,9 +1963,12 @@ def cart_item_remove_sku(request, pk, item_id):
     
     cart_item.save(update_fields=['scanned_barcodes', 'quantity'])
     
-    # Release the barcode back to available inventory - restore from 'in-cart' or 'sold' to 'new'
+    # Release the barcode back to available inventory (b_upper already set above)
     try:
-        barcode_obj = Barcode.objects.get(barcode=barcode_to_remove)
+        try:
+            barcode_obj = Barcode.objects.get(barcode=b_upper)
+        except Barcode.DoesNotExist:
+            barcode_obj = Barcode.objects.get(short_code=b_upper)
         old_tag = barcode_obj.tag
         if barcode_obj.tag in ['in-cart', 'sold']:
             # Restore to 'new' (default) - could be enhanced to remember original state
@@ -3948,9 +3961,15 @@ def replacement_check(request):
         barcode_obj = None
         
         if barcode_value:
-            barcode_obj = Barcode.objects.filter(
-                Q(barcode=barcode_value) | Q(short_code=barcode_value)
-            ).select_related('product').first()
+            barcode_clean = str(barcode_value).strip().upper()
+            barcode_obj = None
+            try:
+                barcode_obj = Barcode.objects.select_related('product').get(barcode=barcode_clean)
+            except Barcode.DoesNotExist:
+                try:
+                    barcode_obj = Barcode.objects.select_related('product').get(short_code=barcode_clean)
+                except Barcode.DoesNotExist:
+                    pass
             if barcode_obj:
                 product = barcode_obj.product
 
@@ -3969,10 +3988,10 @@ def replacement_check(request):
                     product__sku=''
                 ).select_related('product', 'invoice', 'invoice__store', 'invoice__customer', 'barcode')
                 
-                # Also search by barcode if no results
+                # Exact match on barcode if no results by SKU (standardize to .upper())
                 if not invoice_items_by_sku.exists():
                     invoice_items_by_sku = InvoiceItem.objects.filter(
-                        barcode__barcode__iexact=sku_clean
+                        barcode__barcode=sku_clean.upper()
                     ).exclude(
                         barcode__isnull=True
                     ).select_related('product', 'invoice', 'invoice__store', 'invoice__customer', 'barcode')
@@ -4132,9 +4151,16 @@ def replacement_create(request):
     if not barcode_value:
         return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    barcode_obj = Barcode.objects.filter(
-        Q(barcode=barcode_value) | Q(short_code=barcode_value)
-    ).first()
+    # Standardize and exact match: try barcode then short_code (never .first())
+    barcode_clean = str(barcode_value).strip().upper()
+    barcode_obj = None
+    try:
+        barcode_obj = Barcode.objects.get(barcode=barcode_clean)
+    except Barcode.DoesNotExist:
+        try:
+            barcode_obj = Barcode.objects.get(short_code=barcode_clean)
+        except Barcode.DoesNotExist:
+            pass
     if not barcode_obj:
         return Response({'error': 'Barcode not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -4284,33 +4310,44 @@ def replacement_replace(request):
     if new_product:
         # Only allow barcodes with tag='new' or tag='returned' (available inventory)
         if scanned_barcode:
-            # Try to find the exact barcode that was scanned
-            # Check both barcode and short_code fields
             from django.db.models import Q
-            
+            scanned_clean = str(scanned_barcode).strip().upper()
+            # Exact match only: try barcode then short_code (never .first())
             try:
-                # First try: exact match with product, variant, and available tags
-                # Match either barcode OR short_code
                 new_barcode = Barcode.objects.get(
-                    Q(barcode=scanned_barcode) | Q(short_code=scanned_barcode),
+                    barcode=scanned_clean,
                     product=new_product,
                     variant=invoice_item.variant,
-                    tag__in=['new', 'returned']  # Only available inventory
+                    tag__in=['new', 'returned']
                 )
             except Barcode.DoesNotExist:
-                # Second try: exact match without variant constraint
                 try:
                     new_barcode = Barcode.objects.get(
-                        Q(barcode=scanned_barcode) | Q(short_code=scanned_barcode),
+                        short_code=scanned_clean,
                         product=new_product,
-                        tag__in=['new', 'returned']  # Only available inventory
+                        variant=invoice_item.variant,
+                        tag__in=['new', 'returned']
                     )
                 except Barcode.DoesNotExist:
-                    # Exact barcode not found or not available
-                    return Response({
-                        'error': f'Barcode {scanned_barcode} not found or not available for sale',
-                        'message': f'The barcode {scanned_barcode} is either not found, already sold, or not in available inventory (must be tagged as "new" or "returned").'
-                    }, status=status.HTTP_400_BAD_REQUEST)
+                    try:
+                        new_barcode = Barcode.objects.get(
+                            barcode=scanned_clean,
+                            product=new_product,
+                            tag__in=['new', 'returned']
+                        )
+                    except Barcode.DoesNotExist:
+                        try:
+                            new_barcode = Barcode.objects.get(
+                                short_code=scanned_clean,
+                                product=new_product,
+                                tag__in=['new', 'returned']
+                            )
+                        except Barcode.DoesNotExist:
+                                # Exact barcode not found or not available
+                                return Response({
+                                'error': f'Barcode {scanned_barcode} not found or not available for sale',
+                                'message': f'The barcode {scanned_barcode} is either not found, already sold, or not in available inventory (must be tagged as "new" or "returned").'
+                            }, status=status.HTTP_400_BAD_REQUEST)
         else:
             # No scanned barcode provided - this should not happen in normal flow
             return Response({
@@ -5009,25 +5046,41 @@ def find_invoice_by_barcode(request):
     else:
         search_value = barcode_value or sku
     
-    search_value_clean = str(search_value).strip()
+    search_value_clean = str(search_value).strip().upper()
     
     try:
-        # Try to find invoice item by barcode (for tracked products)
-        # First try with 'sold' tag (preferred for replacement) - case-insensitive search
+        # Exact match only: try barcode then short_code (standardized to .upper())
         invoice_items = InvoiceItem.objects.filter(
-            barcode__barcode__iexact=search_value_clean,
-            barcode__tag='sold'  # Only items with 'sold' tag can be replaced
+            barcode__barcode=search_value_clean,
+            barcode__tag='sold'
         ).exclude(
             invoice__status__in=['void', 'draft']
         ).exclude(
             invoice__invoice_type='pending'
         ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
-        
-        # If not found with 'sold' tag, try without tag restriction (for Return to Stock scenarios)
-        # Still exclude draft/pending invoices - case-insensitive search
+
         if not invoice_items.exists():
             invoice_items = InvoiceItem.objects.filter(
-                barcode__barcode__iexact=search_value_clean
+                barcode__short_code=search_value_clean,
+                barcode__tag='sold'
+            ).exclude(
+                invoice__status__in=['void', 'draft']
+            ).exclude(
+                invoice__invoice_type='pending'
+            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+
+        if not invoice_items.exists():
+            invoice_items = InvoiceItem.objects.filter(
+                barcode__barcode=search_value_clean
+            ).exclude(
+                invoice__status__in=['void', 'draft']
+            ).exclude(
+                invoice__invoice_type='pending'
+            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+
+        if not invoice_items.exists():
+            invoice_items = InvoiceItem.objects.filter(
+                barcode__short_code=search_value_clean
             ).exclude(
                 invoice__status__in=['void', 'draft']
             ).exclude(
@@ -5128,11 +5181,11 @@ def bulk_barcodes_check(request):
         barcodes_raw = [s.strip() for s in barcodes_raw.replace('\r\n', '\n').split() if s.strip()]
     if not isinstance(barcodes_raw, list):
         return Response({'error': 'barcodes must be a list or a string'}, status=status.HTTP_400_BAD_REQUEST)
-    # Dedupe and trim
+    # Dedupe, trim, and standardize to uppercase for lookup
     seen = set()
     barcode_strings = []
     for b in barcodes_raw:
-        val = (b or '').strip()
+        val = (b or '').strip().upper()
         if val and val not in seen:
             seen.add(val)
             barcode_strings.append(val)
@@ -5163,9 +5216,11 @@ def bulk_barcodes_check(request):
     customer_names = {}
 
     for barcode_str in barcode_strings:
-        item = invoice_items_qs.filter(
-            Q(barcode__barcode__iexact=barcode_str) | Q(barcode__short_code__iexact=barcode_str)
-        ).order_by('-invoice__created_at').first()
+        # Exact match only: try barcode then short_code
+        items = invoice_items_qs.filter(barcode__barcode=barcode_str).order_by('-invoice__created_at')
+        if not items.exists():
+            items = invoice_items_qs.filter(barcode__short_code=barcode_str).order_by('-invoice__created_at')
+        item = items.first()  # one invoice item per barcode (pick most recent if multiple)
 
         if not item:
             not_found.append(barcode_str)
@@ -5201,10 +5256,17 @@ def bulk_barcodes_check(request):
     # Build skipped list: not_found (with current_tag if barcode exists in DB), not_sold, different_customer
     skipped = []
     for b in not_found:
-        # Resolve current tag and barcode/short_code when barcode exists in system
-        row = Barcode.objects.filter(
-            Q(barcode__iexact=b) | Q(short_code__iexact=b)
-        ).values('tag', 'barcode', 'short_code').first()
+        # Exact match only: try barcode then short_code (get, not first)
+        row = None
+        try:
+            obj = Barcode.objects.get(barcode=b)
+            row = {'tag': obj.tag, 'barcode': obj.barcode, 'short_code': obj.short_code}
+        except Barcode.DoesNotExist:
+            try:
+                obj = Barcode.objects.get(short_code=b)
+                row = {'tag': obj.tag, 'barcode': obj.barcode, 'short_code': obj.short_code}
+            except Barcode.DoesNotExist:
+                pass
         skipped.append({
             'barcode': b,
             'barcode_full': row['barcode'] if row else None,
@@ -5213,9 +5275,16 @@ def bulk_barcodes_check(request):
             'current_tag': row['tag'] if row else None,
         })
     for entry in invalid_tag:
-        row = Barcode.objects.filter(
-            Q(barcode__iexact=entry['barcode']) | Q(short_code__iexact=entry['barcode'])
-        ).values('barcode', 'short_code').first()
+        row = None
+        try:
+            obj = Barcode.objects.get(barcode=entry['barcode'])
+            row = {'barcode': obj.barcode, 'short_code': obj.short_code}
+        except Barcode.DoesNotExist:
+            try:
+                obj = Barcode.objects.get(short_code=entry['barcode'])
+                row = {'barcode': obj.barcode, 'short_code': obj.short_code}
+            except Barcode.DoesNotExist:
+                pass
         skipped.append({
             'barcode': entry['barcode'],
             'barcode_full': row['barcode'] if row else None,
@@ -5269,7 +5338,7 @@ def bulk_barcodes_check_pos(request):
     seen = set()
     barcode_strings = []
     for b in barcodes_raw:
-        val = (b or '').strip()
+        val = (b or '').strip().upper()
         if val and val not in seen:
             seen.add(val)
             barcode_strings.append(val)
@@ -5288,9 +5357,15 @@ def bulk_barcodes_check_pos(request):
             all_scanned.update(item.scanned_barcodes)
 
     for barcode_str in barcode_strings:
-        barcode_obj = Barcode.objects.filter(
-            Q(barcode__iexact=barcode_str) | Q(short_code__iexact=barcode_str)
-        ).select_related('product', 'variant').first()
+        # Exact match only: try barcode then short_code (get, not first)
+        barcode_obj = None
+        try:
+            barcode_obj = Barcode.objects.select_related('product', 'variant').get(barcode=barcode_str)
+        except Barcode.DoesNotExist:
+            try:
+                barcode_obj = Barcode.objects.select_related('product', 'variant').get(short_code=barcode_str)
+            except Barcode.DoesNotExist:
+                pass
 
         if not barcode_obj:
             skipped.append({
