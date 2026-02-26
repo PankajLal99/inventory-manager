@@ -12,6 +12,7 @@ import {
   User,
   Store,
   ChevronDown,
+  Loader2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatNumber } from '../../lib/utils';
@@ -101,20 +102,20 @@ export default function Invoices() {
     return true;
   })();
 
-  // When group contains Admin: no store filter (all). Else: use selected store or first active store.
+  // When Admin: use selected store or null (ALL). When non-Admin: use selected store or first active store.
   const defaultStore = groupContainsAdmin
-    ? null
+    ? (selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId) ?? null)
     : (stores.find((s: any) => s.id === selectedStoreId) || stores.find((s: any) => s.is_active) || stores[0]) ?? null;
 
-  // For non-Admin groups: set selectedStoreId to first store when stores load
+  // For non-Admin groups: set selectedStoreId to first store when stores load. Admin keeps null (ALL) by default.
   useEffect(() => {
-    if (!groupContainsAdmin && !selectedStoreId && stores.length > 0) {
+    if (!groupContainsAdmin && selectedStoreId === null && stores.length > 0) {
       const first = stores.find((s: any) => s.is_active) || stores[0];
       if (first) setSelectedStoreId(first.id);
     }
   }, [groupContainsAdmin, selectedStoreId, stores]);
 
-  const currentStore = stores.find((s: any) => s.id === selectedStoreId);
+  const currentStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId);
 
   // Today's date in YYYY-MM-DD for KPI summary
   const todayStr = (() => {
@@ -144,19 +145,23 @@ export default function Invoices() {
     return [];
   })().filter((inv: Invoice) => {
     if (inv.invoice_type === 'defective') return false;
-    if (inv.invoice_type === 'pending' && inv.repair) return false;
+    if (inv.repair) return false;
+    if (inv.status === 'credit') return false;
     return true;
   });
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', currentPage, search],
+  // When invoice type filter is selected: no pagination, all invoices, date ascending (old first).
+  const useTypeFilterMode = !!invoiceTypeFilter;
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', useTypeFilterMode ? 1 : currentPage, search],
     queryFn: () => posApi.invoices.list({
       invoice_type: invoiceTypeFilter || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       store: defaultStore?.id ?? undefined,
-      page: currentPage,
+      page: useTypeFilterMode ? 1 : currentPage,
       search: search.trim() || undefined,
+      ordering: useTypeFilterMode || dateFrom || dateTo ? 'created_at' : undefined,
     }),
     enabled: groupContainsAdmin ? true : !!defaultStore,
     placeholderData: keepPreviousData,
@@ -178,11 +183,13 @@ export default function Invoices() {
   } : null;
 
   // Filter out defective invoices (they should only appear in defective move-outs page)
-  // Filter out repair invoices with pending type (show them only on Repairs page)
+  // Filter out repair invoices (they appear on the Repairs page only)
+  // Filter out credit invoices (credit memos / refunds — not shown on this page)
   // Search is applied server-side (invoice_number + customer_name)
   const filteredInvoices = invoices.filter((invoice) => {
     if (invoice.invoice_type === 'defective') return false;
-    if (invoice.invoice_type === 'pending' && invoice.repair) return false;
+    if (invoice.repair) return false;
+    if (invoice.status === 'credit') return false;
     return true;
   });
 
@@ -238,8 +245,8 @@ export default function Invoices() {
           subtitle={groupContainsAdmin ? 'View and manage all invoices (all stores)' : 'View and manage all invoices'}
           icon={FileText}
         />
-        {/* Store selector for non-Admin groups (Retail, Repair, Wholesale, etc.) - like POS */}
-        {!groupContainsAdmin && stores.length > 0 && (
+        {/* Store selector: Admin gets "All" + stores; non-Admin gets stores only */}
+        {stores.length > 0 && (
           <div className="w-full sm:w-auto">
             <div className="relative group">
               <div className="flex items-center gap-2 sm:gap-3 bg-white border-2 border-blue-200 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm hover:shadow-md hover:border-blue-400 transition-all duration-200 cursor-pointer">
@@ -249,20 +256,21 @@ export default function Invoices() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-sm sm:text-base font-semibold text-gray-900 truncate block">
-                      {currentStore?.name || 'Select Store'}
+                      {groupContainsAdmin && selectedStoreId === null ? 'All' : (currentStore?.name || 'Select Store')}
                     </span>
                   </div>
                   <ChevronDown className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400 group-hover:text-blue-600 transition-colors flex-shrink-0" />
                 </div>
               </div>
               <select
-                value={selectedStoreId?.toString() || ''}
+                value={selectedStoreId === null ? '' : selectedStoreId.toString()}
                 onChange={(e) => {
-                  const storeId = parseInt(e.target.value);
-                  setSelectedStoreId(storeId);
+                  const val = e.target.value;
+                  setSelectedStoreId(val === '' ? null : parseInt(val, 10));
                 }}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
               >
+                {groupContainsAdmin && <option value="">All</option>}
                 {stores.map((store: any) => (
                   <option key={store.id} value={store.id.toString()}>
                     {store.name}
@@ -320,7 +328,7 @@ export default function Invoices() {
 
       {/* Filters */}
       <Card>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <Input
@@ -341,19 +349,32 @@ export default function Invoices() {
             <option value="upi">UPI</option>
             <option value="pending">Pending</option>
           </Select>
-          <Input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            placeholder="From Date"
-          />
-          <Input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            placeholder="To Date"
-          />
+          <div>
+            <Input
+              id="invoices-date-from"
+              type="date"
+              label="Start date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              aria-label="Filter invoices from this date (inclusive)"
+            />
+          </div>
+          <div>
+            <Input
+              id="invoices-date-to"
+              type="date"
+              label="End date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              aria-label="Filter invoices until this date (inclusive)"
+            />
+          </div>
         </div>
+        {(dateFrom && dateTo && dateTo < dateFrom) && (
+          <p className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="alert">
+            End date must be on or after start date. Adjust the dates to see results.
+          </p>
+        )}
       </Card>
 
       {/* Color Legend */}
@@ -380,8 +401,8 @@ export default function Invoices() {
         </div>
       </div>
 
-      {/* Page date label (date-based pagination: each page = one day) */}
-      {paginationInfo && pageDate && (
+      {/* Page date label (date-based pagination: each page = one day; hidden when type filter is on) */}
+      {paginationInfo && pageDate && !invoiceTypeFilter && (
         <p className="text-sm text-gray-600 font-medium">
           Invoices for{' '}
           <span className="text-gray-900">
@@ -393,6 +414,14 @@ export default function Invoices() {
             })}
           </span>
         </p>
+      )}
+
+      {/* Loader when filters are updated (refetching in background) */}
+      {isFetching && !isLoading && (
+        <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-600 flex-shrink-0" />
+          <span>Updating results...</span>
+        </div>
       )}
 
       {/* Invoices Table */}
@@ -560,7 +589,7 @@ export default function Invoices() {
           </div>
         </>
       )}
-      {paginationInfo && (
+      {paginationInfo && !invoiceTypeFilter && (
         <Card>
           <Pagination
             currentPage={paginationInfo.currentPage}

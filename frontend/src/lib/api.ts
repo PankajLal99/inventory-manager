@@ -119,8 +119,10 @@ export const productsApi = {
   barcodes: (id: number, params?: any) => api.get(`/products/${id}/barcodes/`, { params }),
   barcodesFull: (id: number) => api.get(`/products/${id}/barcodes-full/`),
   invoices: (id: number) => api.get(`/products/${id}/invoices/`),
-  byBarcode: (barcode: string, barcodeOnly: boolean = false) => {
-    const params = barcodeOnly ? { barcode_only: 'true' } : {};
+  byBarcode: (barcode: string, barcodeOnly: boolean = false, noCache: boolean = false) => {
+    const params: Record<string, string> = {};
+    if (barcodeOnly) params.barcode_only = 'true';
+    if (noCache) params.no_cache = 'true';
     return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
   },
   generateLabel: (zplCode: string) => api.post('/products/generate-label/', { zpl_code: zplCode }),

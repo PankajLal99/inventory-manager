@@ -77,6 +77,8 @@ export default function POS() {
   const [bulkAddLoading, setBulkAddLoading] = useState(false);
   // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
+  // Live date/time for header (updates every second)
+  const [now, setNow] = useState(() => new Date());
 
   // Toggle to show/hide purchase price in cart (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
@@ -125,6 +127,12 @@ export default function POS() {
       });
     }, 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Live date/time tick (every second)
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
   // Debounce barcode input for search
@@ -2800,8 +2808,11 @@ export default function POS() {
           )}
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          {/* Mobile: Stack buttons, Desktop: Horizontal */}
+          {/* Live date/time then Delete Cart, New Sale */}
           <div className="flex items-center gap-2 flex-1 sm:flex-initial">
+            <span className="text-sm text-gray-600 tabular-nums whitespace-nowrap" title={now.toLocaleString()}>
+              {now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
             {cartId && (
               <Button
                 variant="outline"
@@ -4134,10 +4145,13 @@ export default function POS() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3
                               className="font-semibold text-sm text-gray-900 break-words"
-                              title={item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
+                              title={[item.product_name, item.product_brand_name, item.product_supplier_name].filter(Boolean).join(' • ')}
                               style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
                             >
                               {item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
+                              {item.product_supplier_name ? (
+                                <span className="text-gray-500 font-normal ml-1">({item.product_supplier_name})</span>
+                              ) : null}
                             </h3>
                             {/* Edit Product Button */}
                             {!isCartLocked && (

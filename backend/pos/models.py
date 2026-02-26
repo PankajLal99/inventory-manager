@@ -153,6 +153,7 @@ class Repair(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='received', help_text='Repair status')
     barcode = models.CharField(max_length=100, unique=True, db_index=True, help_text='Barcode for tracking repair')
     label_image = models.TextField(blank=True, null=True, help_text='Label image URL (blob URL or base64 data URL)')
+    delivery_date = models.DateField(null=True, blank=True, help_text='Expected or actual delivery date')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='repairs_updated')

@@ -12,7 +12,8 @@ import Modal from '../../components/ui/Modal';
 import { toast } from '../../lib/toast';
 import {
   ArrowLeft, FileText, FileSpreadsheet, FileText as FileTextIcon,
-  Printer, Filter, X, Calendar, Search, Plus, Minus, Pencil, Trash2, Package
+  Printer, Filter, X, Calendar, Search, Plus, Minus, Pencil, Trash2, Package,
+  Store, ChevronDown, Receipt
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -29,6 +30,7 @@ export default function LedgerDetail() {
     entryType: '',
     search: '',
   });
+  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(true); // Default: show only entries from invoices with status 'credit'
   const [showFilters, setShowFilters] = useState(false);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
@@ -51,7 +53,7 @@ export default function LedgerDetail() {
     retry: false,
   });
 
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null); // 0 = ALL (no shop filter)
   const [user, setUser] = useState<any>(null);
 
   // Load user on mount
@@ -90,18 +92,21 @@ export default function LedgerDetail() {
     (user?.groups && user.groups.includes('Admin'));
 
   // Determine the active store:
-  // - For Admin: Use selectedStoreId if set, otherwise first active store
+  // - For Admin: Use selectedStoreId (0 = ALL), or first active store if none selected
   // - For others: Auto-select first active store (filtered by backend)
   const defaultStore = (() => {
+    if (isAdmin && selectedStoreId === 0) {
+      return { id: 0, name: 'All Stores' };
+    }
     if (isAdmin && selectedStoreId) {
       return stores.find((s: any) => s.id === selectedStoreId) || stores.find((s: any) => s.is_active) || stores[0];
     }
     return stores.find((s: any) => s.is_active) || stores[0];
   })();
 
-  // Update selectedStoreId when stores load and Admin hasn't selected one yet
+  // Update selectedStoreId when stores load and Admin hasn't selected one yet (don't overwrite 0 = ALL)
   useEffect(() => {
-    if (isAdmin && !selectedStoreId && stores.length > 0) {
+    if (isAdmin && selectedStoreId == null && stores.length > 0) {
       const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
       if (firstActiveStore) {
         setSelectedStoreId(firstActiveStore.id);
@@ -110,10 +115,11 @@ export default function LedgerDetail() {
   }, [isAdmin, selectedStoreId, stores]);
 
   const { data: ledgerDetail, isLoading } = useQuery({
-    queryKey: ['ledger-customer-detail', customerId, defaultStore?.id, filters.dateFrom, filters.dateTo, filters.entryType, filters.search],
+    queryKey: ['ledger-customer-detail', customerId, defaultStore?.id, showCreditInvoicesOnly, filters.dateFrom, filters.dateTo, filters.entryType, filters.search],
     queryFn: () => {
       const params: any = {};
-      if (defaultStore?.id) params.store = defaultStore.id;
+      if (defaultStore?.id && defaultStore.id !== 0) params.store = defaultStore.id;
+      if (showCreditInvoicesOnly) params.invoice_status = 'credit';
       if (filters.dateFrom) params.date_from = filters.dateFrom;
       if (filters.dateTo) params.date_to = filters.dateTo;
       if (filters.entryType) params.entry_type = filters.entryType;
@@ -149,7 +155,7 @@ export default function LedgerDetail() {
     queryKey: ['ledger-invoice-items-by-category', customerId, defaultStore?.id, selectedCategoryIds, filters.dateFrom, filters.dateTo],
     queryFn: () => {
       const params: any = {};
-      if (defaultStore?.id) params.store = defaultStore.id;
+      if (defaultStore?.id && defaultStore.id !== 0) params.store = defaultStore.id;
       if (selectedCategoryIds.length) params.categories = selectedCategoryIds;
       if (filters.dateFrom) params.date_from = filters.dateFrom;
       if (filters.dateTo) params.date_to = filters.dateTo;
@@ -238,8 +244,8 @@ export default function LedgerDetail() {
       created_at: entryData.date ? dateStringWithCurrentTimeISO(entryData.date) : undefined,
     };
 
-    // Add store if available
-    if (defaultStore?.id) {
+    // Add store if a specific store is selected (not ALL)
+    if (defaultStore?.id && defaultStore.id !== 0) {
       submitData.store = defaultStore.id;
     }
 
@@ -410,10 +416,12 @@ export default function LedgerDetail() {
 
   const hasActiveFilters = filters.entryType || filters.search || filters.dateFrom || filters.dateTo;
 
+  const currentStore = selectedStoreId === 0 ? { name: 'ALL' } : stores.find((s: any) => s.id === selectedStoreId);
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 flex-1 min-w-0">
           <Button
             variant="outline"
             onClick={() => navigate('/ledger')}
@@ -422,14 +430,43 @@ export default function LedgerDetail() {
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back
           </Button>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold text-gray-900 truncate">
               {customer?.name || 'Customer'} Ledger
             </h1>
             {customer?.phone && (
               <p className="text-sm text-gray-600 mt-1">Phone: {customer.phone}</p>
             )}
           </div>
+          {/* Store selector for Admin - choose ALL or a specific store */}
+          {isAdmin && stores.length > 0 && (
+            <div className="w-full sm:w-auto min-w-0">
+              <div className="relative group">
+                <div className="flex items-center gap-2 bg-white border-2 border-blue-200 rounded-xl px-3 py-2.5 shadow-sm hover:shadow-md hover:border-blue-400 transition-all duration-200 cursor-pointer">
+                  <Store className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                  <span className="text-sm font-semibold text-gray-900 truncate">
+                    {currentStore?.name || 'Select Store'}
+                  </span>
+                  <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                </div>
+                <select
+                  value={selectedStoreId == null ? '' : String(selectedStoreId)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedStoreId(val === '0' ? 0 : parseInt(val, 10));
+                  }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
+                >
+                  <option value="0">ALL</option>
+                  {stores.map((store: any) => (
+                    <option key={store.id} value={store.id.toString()}>
+                      {store.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -536,7 +573,16 @@ export default function LedgerDetail() {
       <div className="bg-white rounded-2xl shadow p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">Statement</h2>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={() => setShowCreditInvoicesOnly(!showCreditInvoicesOnly)}
+              className={`flex items-center gap-2 ${!showCreditInvoicesOnly ? 'bg-blue-100 text-blue-700 border-blue-300' : ''}`}
+              title={showCreditInvoicesOnly ? 'Show all entries' : 'Show only credit invoice entries'}
+            >
+              <Receipt className="h-4 w-4" />
+              {showCreditInvoicesOnly ? 'Credit Invoices Only' : 'All Invoices'}
+            </Button>
             <Button
               variant="outline"
               onClick={() => setShowFilters(!showFilters)}

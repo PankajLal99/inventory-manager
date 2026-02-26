@@ -623,28 +623,30 @@ class PersonalLedgerAPITestCase(APITestCase):
 
 
 class InternalLedgerAPITestCase(APITestCase):
-    """Tests for Internal (Shop Boys) Ledger: list, create, summary, customer detail, get/update/delete entry, totals."""
+    """Tests for Internal (Shop Boys) Ledger: uses Customer in MTSHOP group, not InternalCustomer."""
 
     def setUp(self):
         self.admin = create_admin_user()
-        self.internal_customer = InternalCustomer.objects.create(
+        self.mtshop_group = CustomerGroup.objects.create(name='MTSHOP', description='Shop boys')
+        self.mtshop_customer = Customer.objects.create(
             name='Shop Boy One',
             phone='9999990003',
+            customer_group=self.mtshop_group,
             credit_balance=Decimal('0.00'),
         )
         self.client.force_authenticate(user=self.admin)
 
     def test_internal_ledger_list_all_when_no_date_filter(self):
-        """Without date filter, internal ledger list returns all entries."""
+        """Without date filter, internal ledger list returns all entries (MTSHOP customers only)."""
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='credit',
             amount=Decimal('50.00'),
             description='I1',
             created_by=self.admin,
         )
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='debit',
             amount=Decimal('10.00'),
             description='I2',
@@ -655,34 +657,34 @@ class InternalLedgerAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
         self.assertEqual(InternalLedgerEntry.objects.count(), 2)
-        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 2)
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.mtshop_customer).count(), 2)
 
     def test_internal_ledger_create_and_balance(self):
-        """Create internal ledger entry; customer balance updates."""
+        """Create internal ledger entry; customer (MTSHOP) balance updates."""
         url = reverse('internal-ledger-entry-list-create')
         data = {
-            'customer': self.internal_customer.id,
+            'customer': self.mtshop_customer.id,
             'entry_type': 'credit',
             'amount': '99.99',
             'description': 'Internal credit',
         }
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 1)
-        self.internal_customer.refresh_from_db()
-        self.assertEqual(self.internal_customer.credit_balance, Decimal('99.99'))
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.mtshop_customer).count(), 1)
+        self.mtshop_customer.refresh_from_db()
+        self.assertEqual(self.mtshop_customer.credit_balance, Decimal('99.99'))
 
     def test_internal_ledger_summary_totals(self):
-        """Internal ledger summary totals and num_accounts correct."""
+        """Internal ledger summary totals and num_accounts (MTSHOP customers only)."""
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='credit',
             amount=Decimal('40.00'),
             description='A',
             created_by=self.admin,
         )
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='debit',
             amount=Decimal('15.00'),
             description='B',
@@ -695,45 +697,46 @@ class InternalLedgerAPITestCase(APITestCase):
         self.assertEqual(Decimal(response.data['total_debit']), Decimal('15.00'))
         self.assertEqual(response.data['num_accounts'], 1)
         self.assertEqual(Decimal(response.data['balance']), Decimal('25.00'))
-        db_credit = InternalLedgerEntry.objects.filter(entry_type='credit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
-        db_debit = InternalLedgerEntry.objects.filter(entry_type='debit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        base = InternalLedgerEntry.objects.filter(customer__customer_group=self.mtshop_group)
+        db_credit = base.filter(entry_type='credit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+        db_debit = base.filter(entry_type='debit').aggregate(s=Sum('amount'))['s'] or Decimal('0')
         self.assertEqual(db_credit, Decimal('40.00'))
         self.assertEqual(db_debit, Decimal('15.00'))
 
     def test_internal_ledger_customer_detail_and_final_balance(self):
-        """Internal ledger customer detail has entries and final_balance."""
+        """Internal ledger customer detail has entries and final_balance (Customer in MTSHOP)."""
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='credit',
             amount=Decimal('100.00'),
             description='C',
             created_by=self.admin,
         )
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='debit',
             amount=Decimal('35.00'),
             description='D',
             created_by=self.admin,
         )
-        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.internal_customer.id})
+        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.mtshop_customer.id})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data['entries']), 2)
         self.assertEqual(Decimal(response.data['final_balance']), Decimal('65.00'))
-        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 2)
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.mtshop_customer).count(), 2)
 
     def test_internal_ledger_entry_get_update_delete(self):
-        """Get, update (amount/type), delete internal entry; balance correct."""
+        """Get, update (amount/type), delete internal entry; Customer balance correct."""
         entry = InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='debit',
             amount=Decimal('20.00'),
             description='E',
             created_by=self.admin,
         )
-        self.internal_customer.credit_balance = Decimal('-20.00')
-        self.internal_customer.save()
+        self.mtshop_customer.credit_balance = Decimal('-20.00')
+        self.mtshop_customer.save()
 
         url = reverse('internal-ledger-entry-retrieve-update-destroy', kwargs={'entry_id': entry.id})
         resp = self.client.get(url)
@@ -743,19 +746,19 @@ class InternalLedgerAPITestCase(APITestCase):
         # Change to credit 30: reverse debit 20 => balance -20+20=0, apply credit 30 => 30
         resp = self.client.patch(url, {'entry_type': 'credit', 'amount': '30.00'}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.internal_customer.refresh_from_db()
-        self.assertEqual(self.internal_customer.credit_balance, Decimal('30.00'))
+        self.mtshop_customer.refresh_from_db()
+        self.assertEqual(self.mtshop_customer.credit_balance, Decimal('30.00'))
 
         resp = self.client.delete(url)
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
-        self.internal_customer.refresh_from_db()
-        self.assertEqual(self.internal_customer.credit_balance, Decimal('0.00'))
+        self.mtshop_customer.refresh_from_db()
+        self.assertEqual(self.mtshop_customer.credit_balance, Decimal('0.00'))
 
     def test_internal_ledger_customer_detail_respects_date_filter(self):
         """internal-ledger/customers/<id>/ with date_from and date_to returns only entries in range."""
         base_date = timezone.now().date()
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='credit',
             amount=Decimal('70.00'),
             description='In range',
@@ -763,14 +766,14 @@ class InternalLedgerAPITestCase(APITestCase):
             created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
         )
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='debit',
             amount=Decimal('15.00'),
             description='Out',
             created_by=self.admin,
             created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=25), datetime.min.time())),
         )
-        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.internal_customer.id})
+        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.mtshop_customer.id})
         response = self.client.get(url, {
             'date_from': (base_date - timedelta(days=2)).isoformat(),
             'date_to': (base_date + timedelta(days=1)).isoformat(),
@@ -779,7 +782,7 @@ class InternalLedgerAPITestCase(APITestCase):
         self.assertEqual(len(response.data['entries']), 1)
         self.assertEqual(Decimal(response.data['final_balance']), Decimal('70.00'))
         in_range = InternalLedgerEntry.objects.filter(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             created_at__date__gte=base_date - timedelta(days=2),
             created_at__date__lte=base_date + timedelta(days=1),
         )
@@ -788,20 +791,20 @@ class InternalLedgerAPITestCase(APITestCase):
     def test_internal_ledger_customer_detail_respects_entry_type_and_search(self):
         """internal-ledger/customers/<id>/ with entry_type and search filters entries."""
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='credit',
             amount=Decimal('40.00'),
             description='SearchableDesc',
             created_by=self.admin,
         )
         InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='debit',
             amount=Decimal('12.00'),
             description='Other',
             created_by=self.admin,
         )
-        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.internal_customer.id})
+        url = reverse('internal-ledger-customer-detail', kwargs={'customer_id': self.mtshop_customer.id})
         response = self.client.get(url, {'entry_type': 'credit'})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data['entries']), 1)
@@ -810,26 +813,26 @@ class InternalLedgerAPITestCase(APITestCase):
         self.assertEqual(response2.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response2.data['entries']), 1)
         self.assertIn('SearchableDesc', response2.data['entries'][0]['description'])
-        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.internal_customer).count(), 2)
+        self.assertEqual(InternalLedgerEntry.objects.filter(customer=self.mtshop_customer).count(), 2)
 
     def test_internal_ledger_entry_delete_removes_from_db(self):
-        """Delete internal entry removes row from DB and reverses balance."""
+        """Delete internal entry removes row from DB and reverses Customer balance."""
         entry = InternalLedgerEntry.objects.create(
-            customer=self.internal_customer,
+            customer=self.mtshop_customer,
             entry_type='credit',
             amount=Decimal('44.00'),
             description='To delete',
             created_by=self.admin,
         )
-        self.internal_customer.credit_balance = Decimal('44.00')
-        self.internal_customer.save()
+        self.mtshop_customer.credit_balance = Decimal('44.00')
+        self.mtshop_customer.save()
         self.assertTrue(InternalLedgerEntry.objects.filter(pk=entry.id).exists())
         url = reverse('internal-ledger-entry-retrieve-update-destroy', kwargs={'entry_id': entry.id})
         response = self.client.delete(url)
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(InternalLedgerEntry.objects.filter(pk=entry.id).exists())
-        self.internal_customer.refresh_from_db()
-        self.assertEqual(self.internal_customer.credit_balance, Decimal('0.00'))
+        self.mtshop_customer.refresh_from_db()
+        self.assertEqual(self.mtshop_customer.credit_balance, Decimal('0.00'))
 
 
 class LedgerEntryNotFoundTestCase(APITestCase):

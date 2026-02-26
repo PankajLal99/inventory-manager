@@ -542,12 +542,12 @@ export default function InvoiceEdit() {
                       <div className="min-w-[180px] max-w-[320px]">
                         <p className="font-medium text-gray-900">{item.product_name}</p>
                         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          {item.scanned_barcodes && item.scanned_barcodes.length > 0 ? (
+                          {item.scanned_barcodes_display && item.scanned_barcodes_display.length > 0 ? (
                             <span className="text-[10px] text-gray-500 font-mono bg-gray-50 px-1.5 py-0.5 border border-gray-100 rounded break-all">
-                              BC: {item.scanned_barcodes.join(', ')}
+                              SKU: {item.scanned_barcodes_display.join(', ')}
                             </span>
                           ) : (
-                            <span className="text-[10px] text-gray-400 font-mono italic">No barcode</span>
+                            <span className="text-[10px] text-gray-400 font-mono italic">No SKU</span>
                           )}
                         </div>
                       </div>
