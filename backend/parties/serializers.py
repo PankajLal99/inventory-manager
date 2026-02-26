@@ -63,10 +63,13 @@ class PersonalLedgerEntrySerializer(serializers.ModelSerializer):
 
 
 class InternalCustomerSerializer(serializers.ModelSerializer):
+    customer_group_name = serializers.CharField(source='customer_group.name', read_only=True, allow_null=True)
+
     class Meta:
         model = InternalCustomer
         fields = [
             'id', 'name', 'phone', 'email', 'address',
+            'customer_group', 'customer_group_name',
             'credit_balance', 'is_active', 'created_at', 'updated_at'
         ]
 

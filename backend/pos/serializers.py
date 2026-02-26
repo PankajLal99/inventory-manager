@@ -6,6 +6,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_sku = serializers.CharField(source='product.sku', read_only=True)
     product_brand_name = serializers.SerializerMethodField()
+    product_supplier_name = serializers.SerializerMethodField()
     product_purchase_price = serializers.SerializerMethodField()
     product_selling_price = serializers.SerializerMethodField()
     product_can_go_below_purchase_price = serializers.BooleanField(source='product.can_go_below_purchase_price', read_only=True)
@@ -22,9 +23,32 @@ class CartItemSerializer(serializers.ModelSerializer):
             return obj.product.brand.name
         return None
 
+    def get_product_supplier_name(self, obj):
+        """Get supplier name from first scanned barcode's purchase (for same product, different supplier = separate rows)."""
+        from backend.catalog.models import Barcode
+        if not obj.scanned_barcodes:
+            return None
+        first_bc = str((obj.scanned_barcodes or [])[0] or '').strip().upper()
+        if not first_bc:
+            return None
+        try:
+            barcode_obj = None
+            try:
+                barcode_obj = Barcode.objects.get(barcode=first_bc)
+            except Barcode.DoesNotExist:
+                try:
+                    barcode_obj = Barcode.objects.get(short_code=first_bc)
+                except Barcode.DoesNotExist:
+                    pass
+            if barcode_obj and barcode_obj.purchase_item and barcode_obj.purchase_item.purchase and barcode_obj.purchase_item.purchase.supplier:
+                return barcode_obj.purchase_item.purchase.supplier.name or barcode_obj.purchase_item.purchase.supplier.code
+        except Exception:
+            pass
+        return None
+
     class Meta:
         model = CartItem
-        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
+        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
 
     def get_scanned_barcodes_display(self, obj):
         """Return display labels (short_code or barcode) for each scanned barcode for UI."""
@@ -228,7 +252,7 @@ class RepairSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'invoice', 'invoice_number', 'customer_name', 'store_name',
             'contact_no', 'model_name', 'description', 'booking_amount', 'status', 'barcode',
-            'created_at', 'updated_at', 'updated_by'
+            'delivery_date', 'created_at', 'updated_at', 'updated_by'
         ]
         read_only_fields = ['barcode', 'created_at', 'updated_at']
 
