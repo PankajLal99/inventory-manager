@@ -54,302 +54,77 @@ def normalize_barcode_for_search(barcode_str: str) -> str:
 
 def find_barcode_by_search_value(search_value: str, logger=None):
     """
-    Find a Barcode object by search value.
-    This centralizes all barcode search logic from filters.py.
-    
-    IMPORTANT: 
-    - barcode field: must always be exact matches (no icontains/contains)
-    - short_code field: can use icontains for flexible matching
-    
-    Priority:
-    1. Check cache for exact barcode match
-    2. Check cache for exact short_code match
-    3. Exact normalized match on short_code (flexible)
-    4. Exact normalized match on full barcode (flexible)
-    5. Exact match on short_code
-    6. Exact match on full barcode
-    7. Case-insensitive match on short_code
-    8. Case-insensitive match on full barcode
-    9. Prefix matching (normalized and original)
-    10. Contains match on short_code only (not barcode)
-    
-    Returns:
-        Barcode object or None if not found
+    Find a Barcode by search value. EXACT match only — no .first(), no prefix/icontains/iexact.
+    Priority: cache by id, then exact short_code (get), then exact barcode (get).
+    Returns Barcode or None.
     """
     if not search_value or not search_value.strip():
         return None
     
-    barcode_clean = search_value.strip()
+    barcode_clean = search_value.strip().upper()
     
-    # PRIORITY 0: Check cache first for fast retrieval
+    # Cache: exact id lookup (use get, not first)
     try:
         from .barcode_cache import get_cached_barcode, get_cached_barcode_by_short_code
-        
-        # Try cache lookup by barcode
+
         cached_data = get_cached_barcode(barcode_clean)
         if cached_data:
-            # Get the actual Barcode object from cache data
-            barcode_obj = Barcode.objects.filter(id=cached_data['id']).select_related(
-                'product', 'product__category', 'product__brand'
-            ).first()
-            if barcode_obj:
-                product = barcode_obj.product
-                if product and product.is_active:
+            try:
+                barcode_obj = Barcode.objects.select_related(
+                    'product', 'product__category', 'product__brand'
+                ).get(id=cached_data['id'])
+                if barcode_obj.product and barcode_obj.product.is_active:
                     if logger:
                         logger.debug(f"Cache hit for barcode: '{barcode_clean}' -> ID: {barcode_obj.id}")
                     return barcode_obj
-        
-        # Try cache lookup by short_code
+            except Barcode.DoesNotExist:
+                pass
+
         cached_data = get_cached_barcode_by_short_code(barcode_clean)
         if cached_data:
-            barcode_obj = Barcode.objects.filter(id=cached_data['id']).select_related(
-                'product', 'product__category', 'product__brand'
-            ).first()
-            if barcode_obj:
-                product = barcode_obj.product
-                if product and product.is_active:
+            try:
+                barcode_obj = Barcode.objects.select_related(
+                    'product', 'product__category', 'product__brand'
+                ).get(id=cached_data['id'])
+                if barcode_obj.product and barcode_obj.product.is_active:
                     if logger:
                         logger.debug(f"Cache hit for short_code: '{barcode_clean}' -> ID: {barcode_obj.id}")
                     return barcode_obj
+            except Barcode.DoesNotExist:
+                pass
     except Exception as e:
-        # If cache fails, continue with database lookup
         if logger:
             logger.warning(f"Cache lookup failed for '{barcode_clean}': {str(e)}")
-    
-    normalized_input = normalize_barcode_for_search(barcode_clean)
-    
-    # PRIORITY 1: Flexible normalized matching (highest priority)
-    if normalized_input and len(normalized_input) >= 3:
-        prefix_match = re.match(r'^([A-Z]+)', normalized_input)
-        if prefix_match:
-            prefix = prefix_match.group(1)
-            # Get candidates by prefix
-            candidate_barcodes = Barcode.objects.filter(
-                Q(short_code__istartswith=prefix) | Q(barcode__istartswith=prefix)
-            ).filter(
-                Q(short_code__isnull=False) | Q(barcode__isnull=False)
-            ).exclude(
-                Q(short_code='') & Q(barcode='')
-            ).select_related(
-                'product', 'product__category', 'product__brand'
-            ).distinct()[:200]
-            
-            if logger:
-                logger.debug(f"Searching {candidate_barcodes.count()} candidate barcodes with prefix '{prefix}' for normalized input '{normalized_input}'")
-            
-            # Try exact normalized match first
-            for barcode_obj in candidate_barcodes:
-                # Check short_code first
-                if barcode_obj.short_code:
-                    normalized_short_code = normalize_barcode_for_search(barcode_obj.short_code)
-                    if normalized_short_code == normalized_input:
-                        # Check if product is active before returning
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            if logger:
-                                logger.debug(f"Found exact normalized match: short_code='{barcode_obj.short_code}' -> '{normalized_short_code}'")
-                            # Cache the result for future lookups
-                            try:
-                                from .barcode_cache import cache_barcode_data
-                                cache_barcode_data(barcode_obj)
-                            except Exception:
-                                pass  # Cache failure shouldn't break the lookup
-                            return barcode_obj
-                
-                # Check full barcode
-                if barcode_obj.barcode:
-                    normalized_barcode = normalize_barcode_for_search(barcode_obj.barcode)
-                    if normalized_barcode == normalized_input:
-                        # Check if product is active before returning
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            if logger:
-                                logger.debug(f"Found exact normalized match: barcode='{barcode_obj.barcode}' -> '{normalized_barcode}'")
-                            # Cache the result for future lookups
-                            try:
-                                from .barcode_cache import cache_barcode_data
-                                cache_barcode_data(barcode_obj)
-                            except Exception:
-                                pass  # Cache failure shouldn't break the lookup
-                            return barcode_obj
-            
-            # Try prefix matching if exact match didn't work
-            input_no_separators = barcode_clean.replace('-', '').replace(' ', '').replace('_', '').upper()
-            for barcode_obj in candidate_barcodes:
-                if barcode_obj.short_code:
-                    normalized_short_code = normalize_barcode_for_search(barcode_obj.short_code)
-                    short_code_no_separators = barcode_obj.short_code.replace('-', '').replace(' ', '').replace('_', '').upper()
-                    
-                    # Prefix match on original (no separators)
-                    if short_code_no_separators.startswith(input_no_separators) and len(input_no_separators) >= 3:
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            return barcode_obj
-                    
-                    # Prefix match on normalized
-                    if normalized_short_code.startswith(normalized_input) and len(normalized_short_code) - len(normalized_input) <= 2:
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            return barcode_obj
-                
-                if barcode_obj.barcode:
-                    normalized_barcode = normalize_barcode_for_search(barcode_obj.barcode)
-                    barcode_no_separators = barcode_obj.barcode.replace('-', '').replace(' ', '').replace('_', '').upper()
-                    
-                    if barcode_no_separators.startswith(input_no_separators) and len(input_no_separators) >= 3:
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            return barcode_obj
-                    
-                    if normalized_barcode.startswith(normalized_input) and len(normalized_barcode) - len(normalized_input) <= 2:
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            return barcode_obj
-            
-            # FALLBACK: If prefix search didn't find a match, try direct search by normalized value
-            # This is more efficient than scanning through thousands of candidates
-            # We'll search for barcodes where the normalized short_code or barcode matches
-            # Since we can't do normalized matching in SQL, we'll use a more targeted approach:
-            # 1. Try to extract numeric parts from normalized input to narrow down
-            # 2. Search for barcodes that might match based on pattern
-            
-            # Extract numeric suffix from normalized input (e.g., "1261" from "FRAM1261")
-            numeric_suffix_match = re.search(r'(\d+)$', normalized_input)
-            if numeric_suffix_match:
-                numeric_suffix = numeric_suffix_match.group(1)
-                # Search for barcodes with numeric pattern
-                # Use icontains for short_code, but exact matching for barcode
-                numeric_candidates = Barcode.objects.filter(
-                    Q(short_code__icontains=numeric_suffix) | Q(barcode__endswith=numeric_suffix)
-                ).filter(
-                    Q(short_code__istartswith=prefix) | Q(barcode__istartswith=prefix)
-                ).filter(
-                    Q(short_code__isnull=False) | Q(barcode__isnull=False)
-                ).exclude(
-                    Q(short_code='') & Q(barcode='')
-                ).select_related(
-                    'product', 'product__category', 'product__brand'
-                ).distinct()[:1000]  # Still limit but more targeted
-                
-                if logger:
-                    logger.debug(f"Trying numeric-pattern search with '{numeric_suffix}' for prefix '{prefix}'")
-                
-                # Check normalized matches
-                for barcode_obj in numeric_candidates:
-                    if barcode_obj.short_code:
-                        normalized_short_code = normalize_barcode_for_search(barcode_obj.short_code)
-                        if normalized_short_code == normalized_input:
-                            product = barcode_obj.product
-                            if product and product.is_active:
-                                if logger:
-                                    logger.debug(f"Found exact normalized match in numeric search: short_code='{barcode_obj.short_code}' -> '{normalized_short_code}'")
-                                return barcode_obj
-                    
-                    if barcode_obj.barcode:
-                        normalized_barcode = normalize_barcode_for_search(barcode_obj.barcode)
-                        if normalized_barcode == normalized_input:
-                            product = barcode_obj.product
-                            if product and product.is_active:
-                                if logger:
-                                    logger.debug(f"Found exact normalized match in numeric search: barcode='{barcode_obj.barcode}' -> '{normalized_barcode}'")
-                                return barcode_obj
-            
-            # Last resort: broader search - use icontains for short_code, istartswith for barcode
-            if logger:
-                logger.debug(f"Trying broader search with icontains for short_code, exact prefix for barcode")
-            
-            broader_candidates = Barcode.objects.filter(
-                Q(short_code__icontains=prefix) | Q(barcode__istartswith=prefix)
-            ).filter(
-                Q(short_code__isnull=False) | Q(barcode__isnull=False)
-            ).exclude(
-                Q(short_code='') & Q(barcode='')
-            ).select_related(
-                'product', 'product__category', 'product__brand'
-            ).distinct()[:2000]  # Increased limit significantly
-            
-            # Try exact normalized match in broader search
-            for barcode_obj in broader_candidates:
-                if barcode_obj.short_code:
-                    normalized_short_code = normalize_barcode_for_search(barcode_obj.short_code)
-                    if normalized_short_code == normalized_input:
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            if logger:
-                                logger.debug(f"Found exact normalized match in broader search: short_code='{barcode_obj.short_code}' -> '{normalized_short_code}'")
-                            return barcode_obj
-                
-                if barcode_obj.barcode:
-                    normalized_barcode = normalize_barcode_for_search(barcode_obj.barcode)
-                    if normalized_barcode == normalized_input:
-                        product = barcode_obj.product
-                        if product and product.is_active:
-                            if logger:
-                                logger.debug(f"Found exact normalized match in broader search: barcode='{barcode_obj.barcode}' -> '{normalized_barcode}'")
-                            return barcode_obj
-    
-    # PRIORITY 2: Exact match on short_code
-    barcode_obj = Barcode.objects.filter(short_code=barcode_clean).select_related(
-        'product', 'product__category', 'product__brand'
-    ).first()
-    if barcode_obj:
-        product = barcode_obj.product
-        if product and product.is_active:
-            # Cache the result for future lookups
+
+    # EXACT match only: short_code then barcode. Use get(), never first().
+    try:
+        barcode_obj = Barcode.objects.filter(short_code=barcode_clean).select_related(
+            'product', 'product__category', 'product__brand'
+        ).get()
+        if barcode_obj.product and barcode_obj.product.is_active:
             try:
                 from .barcode_cache import cache_barcode_data
                 cache_barcode_data(barcode_obj)
             except Exception:
-                pass  # Cache failure shouldn't break the lookup
+                pass
             return barcode_obj
-    
-    # PRIORITY 3: Exact match on full barcode
-    barcode_obj = Barcode.objects.filter(barcode=barcode_clean).select_related(
-        'product', 'product__category', 'product__brand'
-    ).first()
-    if barcode_obj:
-        product = barcode_obj.product
-        if product and product.is_active:
-            # Cache the result for future lookups
+    except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
+        pass
+
+    try:
+        barcode_obj = Barcode.objects.filter(barcode=barcode_clean).select_related(
+            'product', 'product__category', 'product__brand'
+        ).get()
+        if barcode_obj.product and barcode_obj.product.is_active:
             try:
                 from .barcode_cache import cache_barcode_data
                 cache_barcode_data(barcode_obj)
             except Exception:
-                pass  # Cache failure shouldn't break the lookup
+                pass
             return barcode_obj
-    
-    # PRIORITY 4: Case-insensitive match on short_code ONLY (barcode must be exact)
-    barcode_obj = Barcode.objects.filter(short_code__iexact=barcode_clean).select_related(
-        'product', 'product__category', 'product__brand'
-    ).first()
-    if barcode_obj:
-        product = barcode_obj.product
-        if product and product.is_active:
-            # Cache the result for future lookups
-            try:
-                from .barcode_cache import cache_barcode_data
-                cache_barcode_data(barcode_obj)
-            except Exception:
-                pass  # Cache failure shouldn't break the lookup
-            return barcode_obj
-    
-    # PRIORITY 5: Contains match for short_code only (not for barcode)
-    # short_code can use icontains, but barcode must be exact
-    if len(barcode_clean) >= 3:
-        barcode_obj = Barcode.objects.filter(
-            short_code__icontains=barcode_clean
-        ).select_related('product').first()
-        if barcode_obj:
-            product = barcode_obj.product
-            if product and product.is_active:
-                # Cache the result for future lookups
-                try:
-                    from .barcode_cache import cache_barcode_data
-                    cache_barcode_data(barcode_obj)
-                except Exception:
-                    pass  # Cache failure shouldn't break the lookup
-                return barcode_obj
-    
+    except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
+        pass
+
     return None
 
 
@@ -602,73 +377,13 @@ class ProductFilter(django_filters.FilterSet):
         return queryset.filter(is_active=is_active)
     
     def filter_barcode(self, queryset, name, value):
-        """Filter by barcode or short_code
-        
-        IMPORTANT: barcode field uses EXACT case-sensitive matching only
-        short_code field can use flexible matching (iexact, icontains)
-        """
+        """Filter by barcode or short_code — exact match only (no .first(), no iexact/icontains)."""
         if not value:
             return queryset
-        
-        # Normalize input for flexible matching
-        value = value.upper()
-        normalized_input = normalize_barcode_for_search(value)
-        
-        # Try exact matches first (most efficient)
-        # barcode: exact matching (normalized)
-        # short_code: exact match
-        queryset_exact = queryset.filter(
+        value = str(value).strip().upper()
+        return queryset.filter(
             Q(barcodes__barcode=value) | Q(barcodes__short_code=value)
         ).distinct()
-        
-        if queryset_exact.exists():
-            return queryset_exact
-        
-        # Try case-insensitive match on short_code ONLY (not barcode)
-        queryset_iexact = queryset.filter(
-            Q(barcodes__short_code__iexact=value)
-        ).distinct()
-        
-        if queryset_iexact.exists():
-            return queryset_iexact
-        
-        # If normalized input is meaningful, try flexible matching on short_code
-        if normalized_input and len(normalized_input) >= 3:
-            # Get all products with barcodes that have short_code
-            # We'll do normalized matching in Python for flexibility
-            products_with_matching_short_code = []
-            barcodes_with_short_code = Barcode.objects.filter(
-                short_code__isnull=False
-            ).exclude(short_code='').select_related('product')
-            
-            # Extract prefix for initial filtering
-            prefix_match = re.match(r'^([A-Z]+)', normalized_input)
-            if prefix_match:
-                prefix = prefix_match.group(1)
-                barcodes_with_short_code = barcodes_with_short_code.filter(
-                    short_code__istartswith=prefix
-                )[:100]  # Limit for performance
-            
-            for barcode_obj in barcodes_with_short_code:
-                if barcode_obj.short_code and barcode_obj.product:
-                    normalized_short_code = normalize_barcode_for_search(barcode_obj.short_code)
-                    if normalized_short_code == normalized_input:
-                        products_with_matching_short_code.append(barcode_obj.product_id)
-            
-            if products_with_matching_short_code:
-                return queryset.filter(id__in=products_with_matching_short_code).distinct()
-        
-        # Fallback: try icontains for short_code only (not for barcode)
-        # barcode field must be exact match, but short_code can use contains
-        queryset_short_code_contains = queryset.filter(
-            barcodes__short_code__icontains=value
-        ).distinct()
-        
-        if queryset_short_code_contains.exists():
-            return queryset_short_code_contains
-        
-        # No match found
-        return queryset.none()
     
     def filter_supplier(self, queryset, name, value):
         """Filter products by supplier through purchase items"""

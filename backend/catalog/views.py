@@ -1546,15 +1546,11 @@ def barcode_by_barcode(request, barcode=None):
         if not barcode:
             return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Clean the barcode (trim whitespace, handle URL encoding, normalize)
-        barcode_clean = unquote(str(barcode)).strip()
+        # Clean and standardize: trim, URL decode, uppercase for consistent lookup
+        barcode_clean = unquote(str(barcode)).strip().upper()
 
-        # Check if we should only search barcodes (skip SKU fallback) - MOVED UP to allow uppercase enforcement
-        # This is strictly for POS/strict scanning where we want to enforce uppercase
+        # Check if we should only search barcodes (skip SKU fallback)
         barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'
-        
-        if barcode_only:
-            barcode_clean = barcode_clean.upper()
         
         # Reject reserved keywords that are barcode tags, not actual barcodes
         reserved_keywords = ['new', 'sold', 'returned', 'defective', 'unknown']
@@ -1637,8 +1633,11 @@ def barcode_by_barcode(request, barcode=None):
                 serializer = ProductSerializer(product)
                 response_data = serializer.data
                 
-                # Check if product has a barcode with matching SKU and get its tag status
-                product_barcode = product.barcodes.filter(barcode=barcode_clean).first()
+                # Exact match: product barcode with this value (get, not first)
+                try:
+                    product_barcode = product.barcodes.get(barcode=barcode_clean)
+                except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
+                    product_barcode = None
                 if product_barcode:
                     is_sold, sold_invoice = check_barcode_sold_status(product_barcode)
                     response_data['matched_barcode'] = product_barcode.barcode
@@ -1690,8 +1689,11 @@ def barcode_by_barcode(request, barcode=None):
                 serializer = ProductSerializer(product)
                 response_data = serializer.data
                 
-                # Check if product has a barcode with matching SKU and get its tag status
-                product_barcode = product.barcodes.filter(barcode__iexact=barcode_clean).first()
+                # Exact match: product barcode with this value (get, not first)
+                try:
+                    product_barcode = product.barcodes.get(barcode=barcode_clean)
+                except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
+                    product_barcode = None
                 if product_barcode:
                     is_sold, sold_invoice = check_barcode_sold_status(product_barcode)
                     response_data['matched_barcode'] = product_barcode.barcode
@@ -1736,9 +1738,15 @@ def barcode_by_barcode(request, barcode=None):
             serializer = ProductSerializer(product)
             response_data = serializer.data
             
-            # Even though this is a name search fallback, check if the searched value exists as a barcode
-            # If it does, include it so frontend can use the specific barcode
-            searched_barcode_obj = Barcode.objects.filter(barcode=barcode_clean).first()
+            # Exact match: searched value as barcode or short_code (get, not first)
+            searched_barcode_obj = None
+            try:
+                searched_barcode_obj = Barcode.objects.get(barcode=barcode_clean)
+            except Barcode.DoesNotExist:
+                try:
+                    searched_barcode_obj = Barcode.objects.get(short_code=barcode_clean)
+                except Barcode.DoesNotExist:
+                    pass
             if searched_barcode_obj and searched_barcode_obj.product_id == product.id:
                 # The searched value is actually a barcode for this product
                 from backend.pos.models import InvoiceItem

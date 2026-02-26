@@ -922,8 +922,8 @@ class CartBarcodeConsistencyTests(APITestCase):
             shop_quantity=Decimal('5.000'),
             warehouse_quantity=Decimal('0.000'),
         )
-        # Full barcode (canonical) - what we store in cart
-        self.full_barcode = f'BC-FULL-{uuid.uuid4().hex[:8]}'
+        # Full barcode (canonical) - uppercase so it matches API's standardized .upper() lookup
+        self.full_barcode = f'BC-FULL-{uuid.uuid4().hex[:8]}'.upper()
         self.barcode = Barcode.objects.create(
             product=self.product,
             barcode=self.full_barcode,
@@ -962,7 +962,7 @@ class CartBarcodeConsistencyTests(APITestCase):
 
     def test_add_by_short_code_stores_canonical_barcode_in_cart(self):
         """When adding by short_code, cart item scanned_barcodes must contain canonical (full) barcode, not short_code."""
-        short_code = f'SC-{uuid.uuid4().hex[:6]}'
+        short_code = f'SC-{uuid.uuid4().hex[:6]}'.upper()
         self.barcode.short_code = short_code
         self.barcode.save(update_fields=['short_code'])
 
@@ -1066,12 +1066,12 @@ class BulkBarcodesCheckTests(APITestCase):
         self.customer_a = Customer.objects.create(name='Customer A', phone='1111111111')
         self.customer_b = Customer.objects.create(name='Customer B', phone='2222222222')
 
-        # Helper to create a completed invoice (paid, cash) with one item for a barcode
+        # Helper to create a completed invoice (paid, cash) with one item for a barcode (uppercase for .upper() lookup)
         def make_invoice(inv_number, customer, barcode, barcode_tag='sold'):
             b = Barcode.objects.create(
                 product=self.product,
-                barcode=f'BC-{inv_number}-{uuid.uuid4().hex[:6]}',
-                short_code=f'SC-{inv_number}' if inv_number else None,
+                barcode=f'BC-{inv_number}-{uuid.uuid4().hex[:6]}'.upper(),
+                short_code=f'SC-{inv_number}'.upper() if inv_number else None,
                 tag=barcode_tag,
             )
             inv = Invoice.objects.create(
