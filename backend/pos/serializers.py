@@ -193,6 +193,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
     product_can_go_below_purchase_price = serializers.BooleanField(source='product.can_go_below_purchase_price', read_only=True)
     product_track_inventory = serializers.BooleanField(source='product.track_inventory', read_only=True)
     barcode_value = serializers.SerializerMethodField()  # Display: short_code or barcode for UI
+    barcode_full = serializers.SerializerMethodField()
     barcode_id = serializers.IntegerField(source='barcode.id', read_only=True)
     available_quantity = serializers.SerializerMethodField()
 
@@ -200,6 +201,12 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
         """Return short_code when available for display, else full barcode."""
         if obj.barcode:
             return obj.barcode.short_code or obj.barcode.barcode
+        return None
+
+    def get_barcode_full(self, obj):
+        """Return the full barcode string."""
+        if obj.barcode:
+            return obj.barcode.barcode
         return None
 
     def get_available_quantity(self, obj):
@@ -233,7 +240,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'barcode_value', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
+        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
 
 
 class PaymentSerializer(serializers.ModelSerializer):

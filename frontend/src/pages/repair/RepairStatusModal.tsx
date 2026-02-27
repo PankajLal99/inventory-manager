@@ -112,8 +112,19 @@ export default function RepairStatusModal({
               <FileText className="h-4 w-4 inline mr-1.5" />
               Invoice Number
             </label>
-            <div className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">
+            <div className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700 flex items-center justify-between">
               {invoiceNumber}
+              {invoiceStatus && (
+                <Badge className={
+                  invoiceStatus === 'paid' ? 'bg-green-100 text-green-800' :
+                  invoiceStatus === 'partial' ? 'bg-yellow-100 text-yellow-800' :
+                  invoiceStatus === 'void' ? 'bg-red-100 text-red-800' :
+                  invoiceStatus === 'credit' ? 'bg-purple-100 text-purple-800' :
+                  'bg-gray-100 text-gray-800'
+                }>
+                  {invoiceStatus.charAt(0).toUpperCase() + invoiceStatus.slice(1)}
+                </Badge>
+              )}
             </div>
           </div>
           {(customerName != null || bookingAmount != null) && (
@@ -166,29 +177,15 @@ export default function RepairStatusModal({
             className="w-full"
           >
             <option value="">Select status</option>
-            {options.map((status) => {
-              // Disable "Completed" (done) if invoice is not paid or credit
-              const isCompleted = status.value === 'done';
-              const canComplete = invoiceStatus === 'paid' || invoiceStatus === 'credit' || invoiceStatus === 'partial';
-              const isDisabled = isCompleted && !canComplete;
-              
-              return (
-                <option
-                  key={status.value}
-                  value={status.value}
-                  disabled={isDisabled}
-                >
-                  {status.label} {isDisabled ? '(Invoice must be paid/credit)' : ''}
-                </option>
-              );
-            })}
+            {options.map((status) => (
+              <option
+                key={status.value}
+                value={status.value}
+              >
+                {status.label}
+              </option>
+            ))}
           </Select>
-          {selectedStatus === 'done' && invoiceStatus && invoiceStatus !== 'paid' && invoiceStatus !== 'credit' && invoiceStatus !== 'partial' && (
-            <div className="mt-2 text-sm text-red-600 flex items-center gap-1">
-              <AlertTriangle className="h-4 w-4" />
-              <span>Cannot mark as Completed. Invoice must be marked as Paid, Credit, or Partially Paid first.</span>
-            </div>
-          )}
         </div>
 
         {/* Action Buttons */}
@@ -207,8 +204,7 @@ export default function RepairStatusModal({
             disabled={
               isLoading || 
               !selectedStatus || 
-              selectedStatus === currentStatus ||
-              (selectedStatus === 'done' && invoiceStatus && invoiceStatus !== 'paid' && invoiceStatus !== 'credit' && invoiceStatus !== 'partial')
+              selectedStatus === currentStatus
             }
           >
             {isLoading ? 'Updating...' : 'Update Status'}
