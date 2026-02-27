@@ -3658,6 +3658,15 @@ export default function InvoiceDetail() {
                     setCheckoutCashAmount('');
                     setCheckoutUpiAmount('');
                   }
+
+                  // Auto-update repair status to 'delivered' when changing to a checkout type
+                  if (inv?.repair && newType !== 'pending') {
+                    const statusToSet = 'delivered';
+                    setCheckoutRepairStatus(statusToSet);
+                    if (inv.repair.status !== statusToSet) {
+                      updateRepairStatusMutation.mutate({ repair_status: statusToSet });
+                    }
+                  }
                 }}
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
               >
@@ -3788,9 +3797,13 @@ export default function InvoiceDetail() {
                       className="w-full"
                       disabled={updateRepairStatusMutation.isPending}
                     >
-                      {repairStatusOptions.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
+                      {repairStatusOptions
+                        .filter((opt) =>
+                          checkoutInvoiceType === 'pending' || ['delivered', 'done'].includes(opt.value)
+                        )
+                        .map((opt) => (
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
                     </Select>
                   </div>
                   <div className="flex-1 min-w-[160px]">
