@@ -87,9 +87,9 @@ export default function LedgerDetail() {
     return [];
   })();
 
-  // Check if user is Admin (only Admin group gets store selector)
+  // Check if user is Admin (any group containing "Admin" gets store selector)
   const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
-    (user?.groups && user.groups.includes('Admin'));
+    (user?.groups && user.groups.some((group: string) => group.includes('Admin')));
 
   // Determine the active store:
   // - For Admin: Use selectedStoreId (0 = ALL), or first active store if none selected
@@ -104,15 +104,13 @@ export default function LedgerDetail() {
     return stores.find((s: any) => s.is_active) || stores[0];
   })();
 
-  // Update selectedStoreId when stores load and Admin hasn't selected one yet (don't overwrite 0 = ALL)
+  // Update selectedStoreId when stores/user load and Admin hasn't selected one yet
   useEffect(() => {
-    if (isAdmin && selectedStoreId == null && stores.length > 0) {
-      const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
-      if (firstActiveStore) {
-        setSelectedStoreId(firstActiveStore.id);
-      }
+    if (isAdmin && selectedStoreId == null) {
+      // Default to ALL for any admin-like user
+      setSelectedStoreId(0);
     }
-  }, [isAdmin, selectedStoreId, stores]);
+  }, [isAdmin, selectedStoreId]);
 
   const { data: ledgerDetail, isLoading } = useQuery({
     queryKey: ['ledger-customer-detail', customerId, defaultStore?.id, showCreditInvoicesOnly, filters.dateFrom, filters.dateTo, filters.entryType, filters.search],
@@ -416,7 +414,7 @@ export default function LedgerDetail() {
 
   const hasActiveFilters = filters.entryType || filters.search || filters.dateFrom || filters.dateTo;
 
-  const currentStore = selectedStoreId === 0 ? { name: 'ALL' } : stores.find((s: any) => s.id === selectedStoreId);
+  const currentStore = selectedStoreId === 0 ? { name: 'All' } : stores.find((s: any) => s.id === selectedStoreId);
 
   return (
     <div className="space-y-6">
@@ -457,7 +455,7 @@ export default function LedgerDetail() {
                   }}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
                 >
-                  <option value="0">ALL</option>
+                  <option value="0">All</option>
                   {stores.map((store: any) => (
                     <option key={store.id} value={store.id.toString()}>
                       {store.name}

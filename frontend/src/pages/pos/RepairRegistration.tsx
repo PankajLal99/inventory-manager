@@ -41,6 +41,7 @@ export default function RepairRegistration() {
     const [registeredRepair, setRegisteredRepair] = useState<any>(null);
     const [repairDescription, setRepairDescription] = useState('');
     const [customerGroupFilter, setCustomerGroupFilter] = useState('');
+    const [hasUserChangedGroupFilter, setHasUserChangedGroupFilter] = useState(false);
     const [isSearchFocused, setIsSearchFocused] = useState(false);
 
 
@@ -107,10 +108,10 @@ export default function RepairRegistration() {
     }, [customerGroups]);
 
     useEffect(() => {
-        if (repairGroup && !customerGroupFilter && !customerSearch) {
+        if (repairGroup && !customerGroupFilter && !customerSearch && !hasUserChangedGroupFilter) {
             setCustomerGroupFilter(repairGroup.id.toString());
         }
-    }, [repairGroup, customerGroupFilter, customerSearch]);
+    }, [repairGroup, customerGroupFilter, customerSearch, hasUserChangedGroupFilter]);
 
     // Debounce customer search (300ms) to reduce API calls while typing
     const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -391,7 +392,10 @@ export default function RepairRegistration() {
                             <Filter className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
                             <select
                                 value={customerGroupFilter}
-                                onChange={(e) => setCustomerGroupFilter(e.target.value)}
+                                onChange={(e) => {
+                                    setCustomerGroupFilter(e.target.value);
+                                    setHasUserChangedGroupFilter(true);
+                                }}
                                 className="w-full h-14 pl-12 pr-10 appearance-none bg-gray-50 border-2 border-gray-100 rounded-2xl font-bold text-gray-700 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100 transition-all outline-none"
                             >
                                 <option value="">All Groups</option>

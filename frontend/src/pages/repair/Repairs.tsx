@@ -149,6 +149,11 @@ function isToday(createdAt: string): boolean {
     d.getFullYear() === today.getFullYear();
 }
 
+/** Effective date for grouping/sorting: prefer repair.updated_at, fallback to invoice.created_at. */
+function getRepairDisplayDate(inv: RepairInvoice): string {
+  return inv.repair?.updated_at || inv.created_at;
+}
+
 export default function Repairs() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -214,14 +219,16 @@ export default function Repairs() {
       if (dateTo) {
         params.date_to = dateTo;
       }
-      if (repairStore?.id) {
-        params.store = repairStore.id;
-      }
       if (search.trim()) {
         params.search = search.trim();
       }
       if (barcodeSearch.trim()) {
         params.repair_barcode = barcodeSearch.trim();
+      }
+      // When searching by text or barcode, show results across all repair stores.
+      // Only apply store filter when there is no search input.
+      if (!search.trim() && !barcodeSearch.trim() && repairStore?.id) {
+        params.store = repairStore.id;
       }
       if (dateFrom || dateTo) {
         params.ordering = 'created_at';
@@ -404,13 +411,12 @@ export default function Repairs() {
   // Search is applied server-side (invoice_number + customer_name)
   const filteredRepairs = repairInvoices;
 
-  // Today's repairs only (by invoice created_at date, local)
-  const todayRepairs = filteredRepairs.filter((inv) => isToday(inv.created_at));
-  // Old Repair: not from today, not delivered, and not not_repaired (not_repaired has its own section at the end)
+  // Today's repairs only (by effective display date: updated_at (if any) else created_at)
+  const todayRepairs = filteredRepairs.filter((inv) => isToday(getRepairDisplayDate(inv)));
+  // Old Repair: not from today and not not_repaired (not_repaired has its own section at the end)
   const oldRepairItems = filteredRepairs.filter(
     (inv) =>
-      !isToday(inv.created_at) &&
-      inv.repair?.status !== 'delivered' &&
+      !isToday(getRepairDisplayDate(inv)) &&
       inv.repair?.status !== 'not_repaired'
   );
   // Single "Not Repaired" group: all not_repaired (today + old), shown last and collapsed
@@ -867,7 +873,7 @@ export default function Repairs() {
                         </TableCell>
                         <TableCell>
                           <span className="text-gray-600">
-                            {formatDate(invoice.created_at)}
+                            {formatDate(getRepairDisplayDate(invoice))}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -1043,7 +1049,7 @@ export default function Repairs() {
                             </Badge>
                           </div>
                           <div className="text-sm text-gray-600 mb-1">
-                            {formatDate(invoice.created_at)}
+                            {formatDate(getRepairDisplayDate(invoice))}
                           </div>
                           <div className="flex items-center gap-2 text-sm text-gray-900 font-medium mb-1">
                             <User className="h-3.5 w-3.5 text-gray-400" />

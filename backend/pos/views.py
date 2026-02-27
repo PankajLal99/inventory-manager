@@ -3702,10 +3702,11 @@ def invoice_items(request, pk):
     """Add item to invoice"""
     invoice = get_object_or_404(Invoice, pk=pk)
     
-    # Only allow adding items to draft invoices (credit or pending)
-    if invoice.status != 'draft' or invoice.invoice_type != 'pending':
+    # Only restrict for void invoices - allow adding items to non-void
+    # (pending/credit/other) invoices so they can be edited.
+    if invoice.status == 'void':
         return Response(
-            {'error': 'Items can only be added to draft credit or pending invoices'},
+            {'error': 'Items cannot be added to void invoices'},
             status=status.HTTP_400_BAD_REQUEST
         )
     
@@ -3744,42 +3745,63 @@ def invoice_items(request, pk):
         item_data['discount_amount'] = Decimal('0.00')
         item_data['tax_amount'] = Decimal('0.00')
     
-    # When adding from checkout modal barcode/short_code search, frontend sends barcode_id so we assign
-    # the exact barcode the user scanned (not another available barcode for the same product).
+    # Resolve barcode from request: barcode_id (FK) or raw barcode string.
+    # After this block, item_data['barcode'] is either a valid Barcode PK (int) or absent.
     requested_barcode_id = request.data.get('barcode_id') or item_data.get('barcode_id')
-    if requested_barcode_id and item_data.get('product'):
+    raw_barcode_value = request.data.get('barcode') or item_data.get('barcode')
+
+    # Remove keys that the serializer doesn't understand (it expects 'barcode' as FK int)
+    item_data.pop('barcode_id', None)
+    item_data.pop('barcode', None)
+
+    resolved_barcode_obj = None
+
+    if requested_barcode_id:
         try:
-            barcode_obj = Barcode.objects.get(pk=requested_barcode_id)
+            resolved_barcode_obj = Barcode.objects.get(pk=requested_barcode_id)
         except (Barcode.DoesNotExist, ValueError, TypeError):
-            barcode_obj = None
-        if barcode_obj:
-            product_id = item_data.get('product')
-            if barcode_obj.product_id != product_id:
-                return Response(
-                    {'error': 'Barcode does not belong to this product.', 'barcode_id': requested_barcode_id},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if barcode_obj.tag not in ['new', 'returned']:
-                return Response(
-                    {'error': 'This barcode is not available (already sold or in use).', 'barcode_id': requested_barcode_id},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Already in this invoice?
-            if invoice.items.filter(barcode=barcode_obj).exists():
-                return Response(
-                    {'error': 'This barcode is already on this invoice.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Already sold on another invoice?
-            if InvoiceItem.objects.filter(barcode=barcode_obj).exclude(invoice__status='void').exclude(
-                invoice=invoice
-            ).exists():
-                return Response(
-                    {'error': 'This barcode is already sold on another invoice.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            item_data['barcode'] = barcode_obj.id
-        item_data.pop('barcode_id', None)  # serializer expects 'barcode' FK, not 'barcode_id'
+            pass
+
+    if not resolved_barcode_obj and raw_barcode_value:
+        barcode_clean = str(raw_barcode_value).strip().upper()
+        try:
+            resolved_barcode_obj = Barcode.objects.get(barcode=barcode_clean)
+        except Barcode.DoesNotExist:
+            try:
+                resolved_barcode_obj = Barcode.objects.get(short_code=barcode_clean)
+            except Barcode.DoesNotExist:
+                pass
+        if not resolved_barcode_obj:
+            return Response(
+                {'error': f'Barcode "{barcode_clean}" not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    if resolved_barcode_obj and item_data.get('product'):
+        product_id = item_data.get('product')
+        if resolved_barcode_obj.product_id != product_id:
+            return Response(
+                {'error': 'Barcode does not belong to this product.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if resolved_barcode_obj.tag not in ['new', 'returned']:
+            return Response(
+                {'error': 'This barcode is not available (already sold or in use).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if invoice.items.filter(barcode=resolved_barcode_obj).exists():
+            return Response(
+                {'error': 'This barcode is already on this invoice.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if InvoiceItem.objects.filter(barcode=resolved_barcode_obj).exclude(
+            invoice__status='void'
+        ).exclude(invoice=invoice).exists():
+            return Response(
+                {'error': 'This barcode is already sold on another invoice.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        item_data['barcode'] = resolved_barcode_obj.id
     
     serializer = InvoiceItemSerializer(data=item_data)
     if serializer.is_valid():

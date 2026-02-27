@@ -402,6 +402,18 @@ class ProductListSerializer(serializers.ModelSerializer):
     purchase_price = serializers.SerializerMethodField()
     selling_price = serializers.SerializerMethodField()
 
+    def _get_tag_filter(self):
+        """Get the current tag filter from request context."""
+        request = self.context.get('request')
+        return request.query_params.get('tag', None) if request else None
+
+    def _needs_barcode_details(self):
+        """Whether this tag filter requires individual barcode objects in the list.
+        'sold' only needs an aggregate count; individual barcodes are fetched
+        by the View SKU modal via a separate endpoint."""
+        tag = self._get_tag_filter()
+        return tag in ['defective', 'returned', 'unknown', 'in-cart']
+
     def get_barcodes(self, obj):
         """
         PERFORMANCE OPTIMIZATION: Only include barcode data when explicitly requested.
@@ -416,8 +428,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         tag_filter = request.query_params.get('tag', None) if request else None
         
         # Check if we should force include barcodes based on tag
-        # We need barcodes for specific tags to show them in the list (including in-cart)
-        force_include = tag_filter in ['defective', 'returned', 'sold', 'in-cart']
+        # 'sold' excluded: list only needs aggregate count, View SKU modal fetches details
+        force_include = self._needs_barcode_details()
         
         # OPTIMIZATION: Check if barcodes should be included in response
         # Default to 'false' for better performance (smaller payload)
@@ -545,6 +557,11 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_sold_quantity(self, obj):
         """Calculate sold quantity from InvoiceItems for completed invoices"""
+        # When viewing sold filter, annotated_barcode_count already has the sold count
+        tag = self._get_tag_filter()
+        if tag == 'sold' and hasattr(obj, 'annotated_barcode_count'):
+            return int(obj.annotated_barcode_count)
+
         from backend.pos.models import InvoiceItem
         
         # For non-tracked inventory products, sum quantities from InvoiceItems
@@ -567,6 +584,8 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_purchase_price(self, obj):
         """Get purchase price from product's primary barcode or first barcode"""
+        if self._get_tag_filter() == 'sold':
+            return None
         product_barcode = obj.barcodes.filter(is_primary=True).first() or obj.barcodes.first()
         if product_barcode:
             purchase_price = product_barcode.get_purchase_price()
@@ -576,6 +595,8 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_selling_price(self, obj):
         """Get selling price from product's primary barcode or first barcode.
         Returns None if selling_price is 0 or null, indicating fallback to purchase price."""
+        if self._get_tag_filter() == 'sold':
+            return None
         product_barcode = obj.barcodes.filter(is_primary=True).first() or obj.barcodes.first()
         if product_barcode:
             selling_price = product_barcode.get_selling_price()
@@ -584,6 +605,8 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_stock_bifurcation(self, obj):
         """Stock breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT counted."""
+        if self._get_tag_filter() not in (None, 'new'):
+            return ""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
 
@@ -605,6 +628,8 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_price_bifurcation(self, obj):
         """Price breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT included."""
+        if self._get_tag_filter() not in (None, 'new'):
+            return ""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
 
@@ -615,7 +640,6 @@ class ProductListSerializer(serializers.ModelSerializer):
             if barcode.tag in ['new', 'returned']:
                 supplier_name = "Unknown"
                 if barcode.purchase and barcode.purchase.supplier:
-                    # Use supplier code if available, otherwise name
                     supplier_name = barcode.purchase.supplier.code or barcode.purchase.supplier.name
                 
                 # Use selling_price if available and > 0, otherwise purchase_price
@@ -639,6 +663,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ", ".join(parts)
 
     def get_supplier_breakdown(self, obj):
+        if self._get_tag_filter() not in (None, 'new'):
+            return []
         return _get_supplier_breakdown_for_product(obj, filter_shop_only=True)
 
     class Meta:
