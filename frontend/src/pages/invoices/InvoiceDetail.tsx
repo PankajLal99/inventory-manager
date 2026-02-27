@@ -96,8 +96,6 @@ export default function InvoiceDetail() {
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Repair status in checkout modal (when invoice is repair)
   const [checkoutRepairStatus, setCheckoutRepairStatus] = useState<string>('');
-  // Original repair status when checkout modal opened (used to require change when invoice type changes)
-  const [checkoutOriginalRepairStatus, setCheckoutOriginalRepairStatus] = useState<string>('');
   // Repair delivery date in checkout modal (from repair model, editable)
   const [checkoutDeliveryDate, setCheckoutDeliveryDate] = useState<string>('');
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
@@ -526,7 +524,6 @@ export default function InvoiceDetail() {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
       setCheckoutRepairStatus(inv.repair.status);
-      setCheckoutOriginalRepairStatus(inv.repair.status);
       setCheckoutDeliveryDate(inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '');
     }
   }, [showCheckoutModal, invoice?.data?.repair?.status, invoice?.data?.repair?.delivery_date]);
@@ -963,12 +960,12 @@ export default function InvoiceDetail() {
       }
     }
 
-    // Repair checkout: if invoice type changed, repair status must be changed (compare to original at modal open)
+    // Repair checkout: if finalizing invoice (changing type), ensure repair status is not left as WIP or received
     if (freshInv?.repair && checkoutInvoiceType !== freshInv.invoice_type) {
-      const originalStatus = (checkoutOriginalRepairStatus || (freshInv.repair?.status ?? '')).trim();
       const newStatus = (checkoutRepairStatus ?? '').trim();
-      if (!newStatus || newStatus === originalStatus) {
-        alert('You changed the invoice type. Please update the repair status before completing checkout.');
+
+      if (newStatus === 'received' || newStatus === 'work_in_progress') {
+        alert('You changed the invoice type. Please update the repair status to a terminal state (Done/Delivered) before completing checkout.');
         return;
       }
     }
@@ -2632,7 +2629,6 @@ export default function InvoiceDetail() {
             setParentGroupPrices({});
             setCheckoutCashAmount('');
             setCheckoutUpiAmount('');
-            setCheckoutOriginalRepairStatus('');
             setCheckoutDeliveryDate('');
           }}
           title="Checkout Invoice"
@@ -2649,7 +2645,7 @@ export default function InvoiceDetail() {
                 className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
                   ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
                   : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
-                }`}
+                  }`}
               >
                 {showPurchasePrice ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
               </button>
@@ -3315,10 +3311,10 @@ export default function InvoiceDetail() {
                                       }
                                       const rawSelling = firstItem.product_selling_price != null ? parseFloat(String(firstItem.product_selling_price)) : NaN;
                                       const rawPurchase = firstItem.product_purchase_price != null ? parseFloat(String(firstItem.product_purchase_price)) : firstItem.purchase_price != null ? parseFloat(String(firstItem.purchase_price)) : NaN;
-                                        const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
-                                        const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
-                                        if (!Number.isNaN(displayVal) && !showPurchasePrice) return <span className="text-sm text-gray-400">•••</span>;
-                                        return <span className="text-sm font-medium text-gray-900">{Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`}</span>;
+                                      const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
+                                      const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
+                                      if (!Number.isNaN(displayVal) && !showPurchasePrice) return <span className="text-sm text-gray-400">•••</span>;
+                                      return <span className="text-sm font-medium text-gray-900">{Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`}</span>;
                                     })()}
                                   </div>
                                 </div>
@@ -3763,12 +3759,12 @@ export default function InvoiceDetail() {
                     <label className="block text-xs font-medium text-gray-700 mb-1">Current</label>
                     <Badge className={
                       inv.repair.status === 'received' ? 'bg-blue-100 text-blue-800' :
-                      inv.repair.status === 'work_in_progress' ? 'bg-yellow-100 text-yellow-800' :
-                      inv.repair.status === 'done' ? 'bg-green-100 text-green-800' :
-                      inv.repair.status === 'delivered' ? 'bg-gray-100 text-gray-800' :
-                      inv.repair.status === 'not_repaired' ? 'bg-orange-100 text-orange-800' :
-                      inv.repair.status === 'cancelled' ? 'bg-red-100 text-red-800' :
-                      'bg-gray-100 text-gray-800'
+                        inv.repair.status === 'work_in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                          inv.repair.status === 'done' ? 'bg-green-100 text-green-800' :
+                            inv.repair.status === 'delivered' ? 'bg-gray-100 text-gray-800' :
+                              inv.repair.status === 'not_repaired' ? 'bg-orange-100 text-orange-800' :
+                                inv.repair.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                                  'bg-gray-100 text-gray-800'
                     }>
                       {repairStatusOptions.find((o) => o.value === inv.repair.status)?.label ?? inv.repair.status}
                     </Badge>
