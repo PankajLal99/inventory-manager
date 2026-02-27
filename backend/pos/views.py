@@ -174,18 +174,6 @@ def update_repair_status(request, pk):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Prevent marking as "done" (completed) if invoice is not paid or credit
-    if new_status == 'done':
-        invoice = repair.invoice
-        if invoice.status not in ['paid', 'credit', 'partial']:
-            return Response(
-                {
-                    'error': 'Cannot mark repair as completed',
-                    'message': f'Invoice must be marked as Paid, Credit, or Partially Paid before marking repair as Completed. Current invoice status: {invoice.get_status_display()}'
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    
     old_status = repair.status
     repair.status = new_status
     repair.updated_by = request.user
@@ -4493,17 +4481,9 @@ def replacement_replace(request):
     old_barcode = invoice_item.barcode
     invoice = invoice_item.invoice
     
-    # Validate invoice is not void, draft, or pending
-    # Replacement is only eligible for items marked 'sold' (from completed invoices)
     if invoice.status == 'void':
         return Response({
             'error': 'Cannot process replacement for void invoice'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    if invoice.status == 'draft' or invoice.invoice_type == 'pending':
-        return Response({
-            'error': 'Cannot process replacement for draft/pending invoice',
-            'message': 'Replacement is only eligible for items from completed invoices (not draft/pending).'
         }, status=status.HTTP_400_BAD_REQUEST)
     
     # Find new barcode for replacement product
@@ -4807,17 +4787,9 @@ def replacement_return(request):
     
     invoice = invoice_item.invoice
     
-    # Validate invoice is not void, draft, or pending
-    # Replacement is only eligible for items marked 'sold' (from completed invoices)
     if invoice.status == 'void':
         return Response({
             'error': 'Cannot process return for void invoice'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    if invoice.status == 'draft' or invoice.invoice_type == 'pending':
-        return Response({
-            'error': 'Cannot process return for draft/pending invoice',
-            'message': 'Replacement is only eligible for items from completed invoices (not draft/pending).'
         }, status=status.HTTP_400_BAD_REQUEST)
     
     product = invoice_item.product
@@ -5019,17 +4991,9 @@ def replacement_defective(request):
     
     invoice = invoice_item.invoice
     
-    # Validate invoice is not void, draft, or pending
-    # Replacement is only eligible for items marked 'sold' (from completed invoices)
     if invoice.status == 'void':
         return Response({
             'error': 'Cannot process defective marking for void invoice'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    if invoice.status == 'draft' or invoice.invoice_type == 'pending':
-        return Response({
-            'error': 'Cannot process defective marking for draft/pending invoice',
-            'message': 'Replacement is only eligible for items from completed invoices (not draft/pending).'
         }, status=status.HTTP_400_BAD_REQUEST)
     
     barcode_obj = invoice_item.barcode  # Save barcode before potential deletion
@@ -5178,9 +5142,7 @@ def search_invoices_by_number(request):
         invoices = Invoice.objects.filter(
             invoice_number__icontains=search
         ).exclude(
-            status__in=['void', 'draft']
-        ).exclude(
-            invoice_type='pending'
+            status='void'
         ).exclude(
             invoice_type='defective'
         ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__barcode').order_by('-created_at')[:10]  # Limit to 10 results
@@ -5212,7 +5174,7 @@ def find_invoice_by_barcode(request):
     if invoice_number:
         invoice_number_clean = str(invoice_number).strip()
         try:
-            # Try exact match first - only exclude void (allow draft/pending for Return to Stock)
+            # Try exact match first - only exclude void
             invoice = Invoice.objects.filter(
                 invoice_number__iexact=invoice_number_clean
             ).exclude(
@@ -5257,9 +5219,7 @@ def find_invoice_by_barcode(request):
             barcode__barcode=search_value_clean,
             barcode__tag='sold'
         ).exclude(
-            invoice__status__in=['void', 'draft']
-        ).exclude(
-            invoice__invoice_type='pending'
+            invoice__status='void'
         ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
 
         if not invoice_items.exists():
@@ -5267,27 +5227,21 @@ def find_invoice_by_barcode(request):
                 barcode__short_code=search_value_clean,
                 barcode__tag='sold'
             ).exclude(
-                invoice__status__in=['void', 'draft']
-            ).exclude(
-                invoice__invoice_type='pending'
+                invoice__status='void'
             ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
 
         if not invoice_items.exists():
             invoice_items = InvoiceItem.objects.filter(
                 barcode__barcode=search_value_clean
             ).exclude(
-                invoice__status__in=['void', 'draft']
-            ).exclude(
-                invoice__invoice_type='pending'
+                invoice__status='void'
             ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
 
         if not invoice_items.exists():
             invoice_items = InvoiceItem.objects.filter(
                 barcode__short_code=search_value_clean
             ).exclude(
-                invoice__status__in=['void', 'draft']
-            ).exclude(
-                invoice__invoice_type='pending'
+                invoice__status='void'
             ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
         
         # If not found by barcode, try by product SKU (for non-tracked products)
@@ -5295,9 +5249,7 @@ def find_invoice_by_barcode(request):
             invoice_items = InvoiceItem.objects.filter(
                 product__sku__iexact=search_value_clean
             ).exclude(
-                invoice__status__in=['void', 'draft']
-            ).exclude(
-                invoice__invoice_type='pending'
+                invoice__status='void'
             ).exclude(
                 product__sku__isnull=True
             ).exclude(
@@ -5309,27 +5261,18 @@ def find_invoice_by_barcode(request):
             invoice_items = InvoiceItem.objects.filter(
                 variant__sku__iexact=search_value_clean
             ).exclude(
-                invoice__status__in=['void', 'draft']
-            ).exclude(
-                invoice__invoice_type='pending'
+                invoice__status='void'
             ).select_related('invoice', 'product', 'variant', 'barcode', 'invoice__store', 'invoice__customer')
         
         if not invoice_items.exists():
             return Response({
                 'error': 'No invoice found for this barcode/SKU',
-                'message': f'No sold items found with barcode/SKU: {search_value_clean}. Replacement is only eligible for items from completed invoices (not draft/pending).'
+                'message': f'No sold items found with barcode/SKU: {search_value_clean}.'
             }, status=status.HTTP_404_NOT_FOUND)
         
         # Get the most recent invoice (or first one if multiple)
         invoice_item = invoice_items.order_by('-invoice__created_at').first()
         invoice = invoice_item.invoice
-        
-        # Double-check invoice is not draft/pending
-        if invoice.status == 'draft' or invoice.invoice_type == 'pending':
-            return Response({
-                'error': 'Invoice is in draft/pending state',
-                'message': 'Replacement is only eligible for items from completed invoices (not draft/pending).'
-            }, status=status.HTTP_400_BAD_REQUEST)
         
         # Validate barcode tag for replacement eligibility
         # For tracked products: barcode must have 'sold' tag
@@ -5402,15 +5345,10 @@ def bulk_barcodes_check(request):
             'skipped': [],
         })
 
-    # Exclude void/draft/pending - only completed invoices eligible for replacement
     invoice_items_qs = InvoiceItem.objects.filter(
         Q(barcode__barcode__isnull=False) | Q(barcode__short_code__isnull=False)
     ).exclude(
         invoice__status='void'
-    ).exclude(
-        invoice__status='draft'
-    ).exclude(
-        invoice__invoice_type='pending'
     ).select_related('invoice', 'product', 'barcode', 'invoice__customer')
 
     results = []  # sold items with customer info
@@ -5646,17 +5584,9 @@ def process_replacement(request, invoice_id):
     """Process replacement - mark items as unknown and remove/reduce items from invoice"""
     invoice = get_object_or_404(Invoice, pk=invoice_id)
     
-    # Validate invoice is not void, draft, or pending
-    # Replacement is only eligible for items marked 'sold' (from completed invoices)
     if invoice.status == 'void':
         return Response({
             'error': 'Cannot process replacement for void invoice'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    if invoice.status == 'draft' or invoice.invoice_type == 'pending':
-        return Response({
-            'error': 'Cannot process replacement for draft/pending invoice',
-            'message': 'Replacement is only eligible for items from completed invoices (not draft/pending).'
         }, status=status.HTTP_400_BAD_REQUEST)
     
     items_to_replace = request.data.get('items_to_replace', [])
@@ -5919,16 +5849,9 @@ def replacement_credit_note(request, invoice_id):
     """Process replacement with credit note - remove items from invoice, add to stock, create credit note"""
     invoice = get_object_or_404(Invoice, pk=invoice_id)
     
-    # Validate invoice is not void, draft, or pending
     if invoice.status == 'void':
         return Response({
             'error': 'Cannot process credit note replacement for void invoice'
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    if invoice.status == 'draft' or invoice.invoice_type == 'pending':
-        return Response({
-            'error': 'Cannot process credit note replacement for draft/pending invoice',
-            'message': 'Credit note replacement is only eligible for items from completed invoices (not draft/pending).'
         }, status=status.HTTP_400_BAD_REQUEST)
     
     items_to_replace = request.data.get('items_to_replace', [])

@@ -754,11 +754,19 @@ def product_barcodes(request, pk):
         # Get tag filter from query params
         tag_filter = request.query_params.get('tag', None)
         
-        if tag_filter:
+        if tag_filter == 'all':
+            # Return all barcodes (no filtering)
+            barcodes = product.barcodes.all()
+        elif tag_filter:
             # Filter by specific tag
             valid_tags = [choice[0] for choice in Barcode.TAG_CHOICES]
             if tag_filter in valid_tags:
                 barcodes = product.barcodes.filter(tag=tag_filter)
+                # For 'sold': non-tracked products may appear in the sold filter via
+                # invoice items while their barcodes keep a different tag. Fall back to
+                # all barcodes so the View SKUs modal is never empty for these products.
+                if tag_filter == 'sold' and not barcodes.exists():
+                    barcodes = product.barcodes.all()
             else:
                 # Invalid tag, return empty
                 barcodes = product.barcodes.none()

@@ -24,6 +24,7 @@ interface InvoiceItem {
   line_total: string;
   barcode_id?: number;
   barcode_value?: string;
+  barcode_full?: string;
 }
 
 interface Invoice {
@@ -97,9 +98,9 @@ export default function ReturnToStock() {
 
           response.data.invoice.items.forEach((item: InvoiceItem) => {
             const itemBarcode = item.barcode_value?.toUpperCase() || '';
-            const itemSku = item.product_sku?.toUpperCase() || '';
+            const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
 
-            if (itemBarcode === searchBarcode || itemSku === searchBarcode) {
+            if (itemBarcode === searchBarcode || itemBarcodeFull === searchBarcode) {
               initialSelected[item.id] = Math.min(1, item.available_quantity);
             } else {
               initialSelected[item.id] = 0;
@@ -473,8 +474,8 @@ export default function ReturnToStock() {
                             <div className="flex-1">
                               <div className="font-medium text-gray-900">{item.product_name}</div>
                               <div className="text-sm text-gray-600 mt-1">
-                                SKU: {item.product_sku}
-                                {item.barcode_value && ` | Short code: ${item.barcode_value}`}
+                                {item.barcode_full && <>Barcode: {item.barcode_full}</>}
+                                {item.barcode_value && item.barcode_value !== item.barcode_full && <> | Short code: {item.barcode_value}</>}
                               </div>
                               <div className="text-sm text-gray-500 mt-1">
                                 Sold: {item.quantity} | Available: {item.available_quantity}

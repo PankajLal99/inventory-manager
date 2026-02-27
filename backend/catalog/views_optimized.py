@@ -94,32 +94,34 @@ def _optimized_product_list_internal(request):
     out_of_stock = request.query_params.get('out_of_stock', None)
     include_barcodes = request.query_params.get('include_barcodes', 'false')
     
-    # Only fetch barcodes when:
-    # 1. Tag-based filters require them (defective, returned, sold, in-cart, unknown)
-    # 2. OR frontend explicitly requests them (include_barcodes=true)
+    # Determine which barcode tags to count/fetch based on filter
+    tag_to_barcode_tags = {
+        'defective': ['defective'],
+        'returned': ['returned'],
+        'sold': ['sold'],
+        'in-cart': ['in-cart'],
+        'unknown': ['unknown'],
+        'new': ['new', 'returned'],
+    }
+    barcode_tags = tag_to_barcode_tags.get(tag, ['new', 'returned'])
+
+    # Tags that need individual barcode objects in the list response
+    # 'sold' excluded: list only needs aggregate count; View SKU modal fetches details
     needs_barcode_prefetch = (
-        tag in ['new', 'defective', 'returned', 'sold', 'in-cart', 'unknown'] or
+        tag in ['new', 'defective', 'returned', 'in-cart', 'unknown'] or
         include_barcodes.lower() == 'true'
     )
-    
+
+    # Always annotate the count (cheap aggregate, used for Quantity columns)
+    queryset = queryset.annotate(
+        annotated_barcode_count=Count(
+            'barcodes',
+            filter=Q(barcodes__tag__in=barcode_tags) & ~Q(barcodes__purchase__status='draft'),
+            distinct=True
+        )
+    )
+
     if needs_barcode_prefetch:
-        # Determine which barcode tags to fetch based on filter
-        if tag == 'defective':
-            barcode_tags = ['defective']
-        elif tag == 'returned':
-            barcode_tags = ['returned']
-        elif tag == 'sold':
-            barcode_tags = ['sold']
-        elif tag == 'in-cart':
-            barcode_tags = ['in-cart']
-        elif tag == 'unknown':
-            barcode_tags = ['unknown']
-        elif tag == 'new':
-            barcode_tags = ['new', 'returned']
-        else:
-            barcode_tags = ['new', 'returned']  # Fallback for include_barcodes=true
-        
-        # Only fetch barcodes when tag filters require them
         queryset = queryset.prefetch_related(
             Prefetch(
                 'barcodes',
@@ -129,17 +131,10 @@ def _optimized_product_list_internal(request):
                     purchase__status='draft'
                 ).select_related('purchase', 'purchase__supplier')
             )
-        ).annotate(
-            annotated_barcode_count=Count(
-                'barcodes',
-                filter=Q(barcodes__tag__in=barcode_tags) & ~Q(barcodes__purchase__status='draft'),
-                distinct=True
-            )
         )
         logger.info(f"Fetching barcodes with tags {barcode_tags} (tag filter requires them)")
     else:
-        # No barcode prefetch for simple lists, searches, or stock filters
-        logger.info(f"Skipping barcode prefetch (not needed for this query type)")
+        logger.info(f"Using annotate-only for tag '{tag}' (no barcode prefetch needed)")
     
     # OPTIMIZATION 3: Apply filters using django-filter early to reduce dataset
     filterset = ProductFilter(request.query_params, queryset=queryset)
