@@ -1232,7 +1232,7 @@ class BulkBarcodesCheckTests(APITestCase):
         """When two customers have same count, one group is chosen (deterministic by id)."""
         sold_b2 = Barcode.objects.create(
             product=self.product,
-            barcode=f'BC-B2-{uuid.uuid4().hex[:6]}',
+            barcode=f'BC-B2-{uuid.uuid4().hex[:6]}'.upper(),
             tag='sold',
         )
         inv_b2 = Invoice.objects.create(
@@ -1595,3 +1595,203 @@ class CustomProductAndPurchasePriceTests(APITestCase):
         url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item.id})
         response = self.client.patch(url, {'manual_unit_price': 50}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class InvoiceItemBarcodeResolutionTests(APITestCase):
+    """Tests for adding items to invoices via barcode string or barcode_id."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'invbc_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Invoice BC Store', shop_type='retail')
+        self.category = Category.objects.create(name='Invoice BC Category')
+        self.customer = Customer.objects.create(name='Invoice BC Cust', phone='8888888888')
+        self.product = Product.objects.create(
+            name='Invoice BC Product',
+            category=self.category,
+            track_inventory=True,
+        )
+        self.bc1 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'INVBC-{uuid.uuid4().hex[:8]}'.upper(),
+            short_code=f'SC-INVBC-{uuid.uuid4().hex[:4]}'.upper(),
+            tag='new',
+        )
+        self.bc2 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'INVBC2-{uuid.uuid4().hex[:8]}'.upper(),
+            tag='new',
+        )
+
+    def _create_draft_pending_invoice(self):
+        cart = Cart.objects.create(
+            cart_number=f'CRT-INVBC-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            created_by=self.user,
+            invoice_type='pending',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=Product.objects.create(
+                name=f'Seed-{uuid.uuid4().hex[:6]}',
+                category=self.category,
+                track_inventory=False,
+            ),
+            quantity=1,
+            unit_price=Decimal('0.00'),
+        )
+        url = reverse('cart-checkout', args=[cart.id])
+        resp = self.client.post(url, {'invoice_type': 'pending'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        return resp.data['id']
+
+    def test_add_item_by_barcode_string_succeeds(self):
+        """Adding an item with raw barcode string resolves and assigns the exact barcode."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc1.barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        item = InvoiceItem.objects.get(id=response.data['id'])
+        self.assertEqual(item.barcode_id, self.bc1.id)
+
+    def test_add_item_by_short_code_succeeds(self):
+        """Adding an item with short_code string resolves to the correct barcode."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc1.short_code,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        item = InvoiceItem.objects.get(id=response.data['id'])
+        self.assertEqual(item.barcode_id, self.bc1.id)
+
+    def test_add_item_by_barcode_id_succeeds(self):
+        """Adding an item with barcode_id (FK) assigns the exact barcode."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode_id': self.bc1.id,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        item = InvoiceItem.objects.get(id=response.data['id'])
+        self.assertEqual(item.barcode_id, self.bc1.id)
+
+    def test_add_item_sold_barcode_rejected(self):
+        """Adding an item with a sold barcode returns 400."""
+        self.bc1.tag = 'sold'
+        self.bc1.save(update_fields=['tag'])
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc1.barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('not available', response.data.get('error', ''))
+
+    def test_add_item_nonexistent_barcode_returns_404(self):
+        """Adding an item with a barcode that doesn't exist returns 404."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': 'DOES-NOT-EXIST-99999',
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_add_item_duplicate_barcode_on_invoice_rejected(self):
+        """Adding the same barcode twice to one invoice returns 400 (sold after first add)."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc1.barcode,
+        }
+        resp1 = self.client.post(url, data, format='json')
+        self.assertEqual(resp1.status_code, status.HTTP_201_CREATED)
+        resp2 = self.client.post(url, data, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_400_BAD_REQUEST)
+        error_msg = resp2.data.get('error', '')
+        self.assertTrue(
+            'already on this invoice' in error_msg or 'not available' in error_msg,
+            f'Expected rejection error, got: {error_msg}'
+        )
+
+    def test_multiple_barcodes_no_error_when_barcode_specified(self):
+        """With multiple new barcodes for a product, adding by exact barcode succeeds (no 'Multiple barcodes' error)."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc2.barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        item = InvoiceItem.objects.get(id=response.data['id'])
+        self.assertEqual(item.barcode_id, self.bc2.id)
+
+    def test_void_invoice_rejects_item(self):
+        """Adding items to a void invoice returns 400."""
+        invoice_id = self._create_draft_pending_invoice()
+        invoice = Invoice.objects.get(id=invoice_id)
+        invoice.status = 'void'
+        invoice.save()
+        url = reverse('invoice-items', args=[invoice_id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc1.barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('void', response.data.get('error', '').lower())

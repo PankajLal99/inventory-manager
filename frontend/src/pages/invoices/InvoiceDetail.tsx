@@ -1014,59 +1014,37 @@ export default function InvoiceDetail() {
     const trimmedBarcode = barcode.trim();
 
     // Check if invoice is in the correct state to add items
-    if (inv?.status !== 'draft' || inv?.invoice_type !== 'pending') {
-      alert('Items can only be added to draft pending invoices. Please ensure the invoice is in draft status with pending type.');
+    const isDraft = inv?.status === 'draft';
+    const isPendingOrCredit = inv?.invoice_type === 'pending' || inv?.invoice_type === 'credit';
+    if (!isDraft || !isPendingOrCredit) {
+      alert('Items can only be added to draft pending or draft credit invoices. Please ensure the invoice is in draft status with pending/credit type.');
       return;
     }
 
-    // Try to find product by barcode (use barcode_only=true like POS.tsx)
+    // Try to find product by barcode (barcode-only, like POS strict mode)
     let product = null;
-    let matchedBarcode: string | null = null;
 
     try {
-      const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true, true);
+      const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true);
       if (barcodeResponse.data) {
-        const data = barcodeResponse.data;
-        const responseMatched = (data.matched_barcode || data.canonical_barcode || '').trim();
-        const searchUpper = trimmedBarcode.toUpperCase();
-        const matchedUpper = responseMatched.toUpperCase();
-        // Require exact match: searched value must match the barcode/short_code we actually resolved
-        if (matchedUpper !== searchUpper) {
-          product = null;
-        } else {
-          product = data;
-          matchedBarcode = data.matched_barcode || trimmedBarcode;
+        product = barcodeResponse.data;
 
-          // Check if barcode is available
-          if (product.barcode_available === false) {
-            const errorMsg = product.sold_invoice
-              ? `This item(SKU: ${matchedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
-              : `This item(SKU: ${matchedBarcode}) has already been sold and is not available in inventory.`;
-            alert(errorMsg);
-            return;
-          }
+        // Check if barcode is available
+        if (product.barcode_available === false) {
+          const errorMsg = product.sold_invoice
+            ? `This item (SKU: ${trimmedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
+            : `This item (SKU: ${trimmedBarcode}) has already been sold and is not available in inventory.`;
+          alert(errorMsg);
+          return;
         }
       }
     } catch (barcodeError: any) {
       if (barcodeError?.response?.status === 404) {
-        // Barcode not found - only allow exact SKU match from product search (never use first result)
-        const searchResponse = await productsApi.list({ search: trimmedBarcode });
-        const searchData = searchResponse.data || searchResponse;
-        let products: any[] = [];
-        if (Array.isArray(searchData.results)) {
-          products = searchData.results;
-        } else if (Array.isArray(searchData.data)) {
-          products = searchData.data;
-        } else if (Array.isArray(searchData)) {
-          products = searchData;
-        }
-
-        product = products.find((p: any) => p.sku?.toLowerCase() === trimmedBarcode.toLowerCase()) ?? null;
-        // Do NOT fall back to products[0] - only add when we have exact barcode or exact SKU match
-      } else {
-        alert(barcodeError?.response?.data?.error || 'Failed to search for product');
+        alert(`Barcode "${trimmedBarcode}" not found. Please ensure the barcode is correct or scan again.`);
         return;
       }
+      alert(barcodeError?.response?.data?.error || 'Failed to search for product');
+      return;
     }
 
     if (!product || !product.id) {
@@ -1090,10 +1068,11 @@ export default function InvoiceDetail() {
       discount_amount: discountAmount,
       tax_amount: taxAmount,
       line_total: lineTotal, // Required field - calculate it like checkout does
+      // Always send exact scanned barcode; backend will resolve and validate it
+      barcode: trimmedBarcode,
     };
 
-    // When we resolved by barcode/short_code, send barcode_id so the backend assigns this exact barcode
-    // (not another available barcode for the same product).
+    // Also include barcode_id when API provides it (backend prefers id, but barcode string is enough now)
     if (product.barcode_id != null && product.barcode_available !== false) {
       itemData.barcode_id = product.barcode_id;
     }
@@ -3807,9 +3786,6 @@ export default function InvoiceDetail() {
                         const newStatus = e.target.value;
                         setCheckoutRepairStatus(newStatus);
                         if (newStatus && newStatus !== inv.repair.status) {
-                          if (newStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial') {
-                            return;
-                          }
                           updateRepairStatusMutation.mutate({ repair_status: newStatus });
                         }
                       }}
@@ -3834,12 +3810,6 @@ export default function InvoiceDetail() {
                     )}
                   </div>
                 </div>
-                {(checkoutRepairStatus === 'done' && inv.status !== 'paid' && inv.status !== 'credit' && inv.status !== 'partial') && (
-                  <div className="text-xs text-red-600 flex items-center gap-1">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    <span>Invoice must be Paid, Credit, or Partially Paid before marking repair as Completed.</span>
-                  </div>
-                )}
               </div>
             )}
 

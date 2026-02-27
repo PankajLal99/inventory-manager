@@ -90,9 +90,9 @@ export default function Ledger() {
     return [];
   })();
 
-  // Check if user is Admin (only Admin group gets store selector)
+  // Check if user is Admin (any group containing "Admin" gets store selector)
   const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
-    (user?.groups && user.groups.includes('Admin'));
+    (user?.groups && user.groups.some((group: string) => group.includes('Admin')));
 
   // Determine the active store:
   // - For Admin: Use selectedStoreId (0 = ALL), or first active store if none selected
@@ -107,15 +107,13 @@ export default function Ledger() {
     return stores.find((s: any) => s.is_active) || stores[0];
   })();
 
-  // Update selectedStoreId when stores load and Admin hasn't selected one yet (don't overwrite 0 = ALL)
+  // Update selectedStoreId when stores/user load and Admin hasn't selected one yet
   useEffect(() => {
-    if (isAdmin && selectedStoreId == null && stores.length > 0) {
-      const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
-      if (firstActiveStore) {
-        setSelectedStoreId(firstActiveStore.id);
-      }
+    if (isAdmin && selectedStoreId == null) {
+      // Default to All for any admin-like user
+      setSelectedStoreId(0);
     }
-  }, [isAdmin, selectedStoreId, stores]);
+  }, [isAdmin, selectedStoreId]);
 
   // Close customer filter dropdown when clicking outside
   useEffect(() => {
