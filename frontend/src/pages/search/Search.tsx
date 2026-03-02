@@ -451,49 +451,6 @@ export default function Search() {
                                 {item.category_name && <span>{item.category_name}</span>}
                               </div>
 
-                              {/* Supplier Breakdown Table */}
-                              {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
-                                <div className="mt-4 overflow-x-auto border border-gray-100 rounded-md">
-                                  <table className="min-w-full divide-y divide-gray-100">
-                                    <thead className="bg-gray-50">
-                                      <tr>
-                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Supplier</th>
-                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Purchase date</th>
-                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Whse</th>
-                                        <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Shop Qty</th>
-                                        <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle">Price</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-gray-50">
-                                      {item.supplier_breakdown.map((s: any, sIdx: number) => (
-                                        <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px] align-middle">{s.supplier}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600 align-middle">{s.purchase_date ?? '—'}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_stock, 2)}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</td>
-                                          <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-
-                              {/* Fallback to simple breakdown if supplier_breakdown missing */}
-                              {!item.supplier_breakdown && (item.stock_bifurcation || item.price_bifurcation) && (
-                                <div className="space-y-0.5 mt-2">
-                                  {item.stock_bifurcation && (
-                                    <div className="text-sm font-medium text-blue-600">
-                                      Stock: {item.stock_bifurcation}
-                                    </div>
-                                  )}
-                                  {item.price_bifurcation && (
-                                    <div className="text-sm font-medium text-green-600">
-                                      Price: {item.price_bifurcation}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
                             </div>
                             <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
                               {price && (
@@ -512,6 +469,50 @@ export default function Search() {
                               <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
                             </div>
                           </div>
+
+                          {/* Supplier Breakdown Table */}
+                          {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
+                            <div className="mt-4 overflow-x-auto border border-gray-100 rounded-md">
+                              <table className="min-w-full divide-y divide-gray-100">
+                                <thead className="bg-gray-50">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Supplier</th>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Purchase date</th>
+                                    <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Whse</th>
+                                    <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Shop Qty</th>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Price</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-50">
+                                  {item.supplier_breakdown.map((s: any, sIdx: number) => (
+                                    <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px] align-middle">{s.supplier}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600 align-middle">{s.purchase_date ?? '—'}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_stock, 2)}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+
+                          {/* Fallback to simple breakdown if supplier_breakdown missing */}
+                          {!item.supplier_breakdown && (item.stock_bifurcation || item.price_bifurcation) && (
+                            <div className="space-y-0.5 mt-2">
+                              {item.stock_bifurcation && (
+                                <div className="text-sm font-medium text-blue-600">
+                                  Stock: {item.stock_bifurcation}
+                                </div>
+                              )}
+                              {item.price_bifurcation && (
+                                <div className="text-sm font-medium text-green-600">
+                                  Price: {item.price_bifurcation}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     }}
