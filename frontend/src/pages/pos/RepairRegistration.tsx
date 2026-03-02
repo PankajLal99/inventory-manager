@@ -249,7 +249,7 @@ export default function RepairRegistration() {
 
     const handleRegister = () => {
         if (!selectedCustomer) return showToast('Please select a customer', 'error');
-        if (!repairContactNo.trim() || !repairModelName.trim()) return showToast('Please fill required fields', 'error');
+        if (!repairModelName.trim()) return showToast('Please fill required fields', 'error');
         if (!currentStore) return showToast('No store selected', 'error');
 
         registerMutation.mutate({
@@ -505,7 +505,7 @@ export default function RepairRegistration() {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         <div className="space-y-2">
-                            <label className="text-xs font-black text-gray-400 uppercase tracking-widest pl-1">Contact Number *</label>
+                            <label className="text-xs font-black text-gray-400 uppercase tracking-widest pl-1">Contact Number</label>
                             <div className="relative">
                                 <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-300" />
                                 <Input
@@ -587,7 +587,7 @@ export default function RepairRegistration() {
                     <div className="pt-4">
                         <Button
                             onClick={handleRegister}
-                            disabled={registerMutation.isPending || !selectedCustomer || !repairContactNo.trim() || !repairModelName.trim()}
+                            disabled={registerMutation.isPending || !selectedCustomer || !repairModelName.trim()}
                             className="w-full h-16 text-xl font-black rounded-2xl shadow-2xl hover:shadow-blue-200 hover:-translate-y-1 transition-all bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none"
                         >
                             {registerMutation.isPending ? 'PROCESSING...' : 'REGISTER REPAIR & PRINT TICKET'}

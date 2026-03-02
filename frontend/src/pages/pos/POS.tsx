@@ -41,7 +41,7 @@ export default function POS() {
   const [showScanner, setShowScanner] = useState(false);
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed'>('cash');
+  const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed' | 'credit'>('cash');
   const [cashAmount, setCashAmount] = useState<string>('');
   const [upiAmount, setUpiAmount] = useState<string>('');
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
@@ -829,18 +829,16 @@ export default function POS() {
 
   // Helper function to convert backend invoice type to frontend invoice type
   // Backend now supports 'cash', 'upi', 'pending', and 'mixed' directly
-  const backendToFrontendInvoiceType = (backendType: string): 'cash' | 'upi' | 'pending' | 'mixed' => {
+  const backendToFrontendInvoiceType = (backendType: string): 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' => {
     if (backendType === 'pending') return 'pending';
     if (backendType === 'upi') return 'upi';
     if (backendType === 'mixed') return 'mixed';
-    // Default to 'cash' for 'cash' or any other value (backward compatibility)
+    if (backendType === 'credit') return 'credit';
     return 'cash';
   };
 
-  // Helper function to convert frontend invoice type to backend invoice type
-  // Backend now supports 'cash', 'upi', 'pending', and 'mixed' directly - no conversion needed
-  const frontendToBackendInvoiceType = (frontendType: 'cash' | 'upi' | 'pending' | 'mixed'): 'cash' | 'upi' | 'pending' | 'mixed' => {
-    return frontendType; // Direct mapping - no conversion needed
+  const frontendToBackendInvoiceType = (frontendType: 'cash' | 'upi' | 'pending' | 'mixed' | 'credit'): 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' => {
+    return frontendType;
   };
 
   // Sync carts with backend - this is the main sync function
@@ -1768,7 +1766,8 @@ export default function POS() {
       'cash': 'CASH',
       'upi': 'UPI',
       'pending': 'PENDING',
-      'mixed': 'MIXED'
+      'mixed': 'MIXED',
+      'credit': 'CREDIT'
     };
     const typeAbbr = invoiceTypeAbbr[tab.invoiceType] || 'CART';
 
@@ -2632,11 +2631,11 @@ export default function POS() {
 
   // Keyboard Shortcuts Handler
   const handleToggleInvoiceType = useCallback(() => {
-    // Cyclic toggle: cash -> upi -> mixed -> pending -> cash --> Deploy
     setInvoiceType(prev => {
       if (prev === 'cash') return 'upi';
       if (prev === 'upi') return 'mixed';
-      if (prev === 'mixed') return 'pending';
+      if (prev === 'mixed') return 'credit';
+      if (prev === 'credit') return 'pending';
       return 'cash';
     });
   }, []);
@@ -3116,7 +3115,7 @@ export default function POS() {
                   value={invoiceType}
                   onChange={(e) => {
                     if (isCartLocked) return;
-                    const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed';
+                    const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
                     setInvoiceType(newType);
                     // Clear split amounts when switching away from mixed
                     if (newType !== 'mixed') {
@@ -3131,6 +3130,7 @@ export default function POS() {
                   <option value="cash">CASH</option>
                   <option value="upi">UPI</option>
                   <option value="mixed">CASH + UPI</option>
+                  <option value="credit">CREDIT</option>
                   <option value="pending">PENDING</option>
                 </Select>
                 {defaultStore?.shop_type === 'repair' && (
@@ -4312,7 +4312,7 @@ export default function POS() {
                                   setEditingManualPrice((prev) => ({ ...prev, [item.id]: value }));
 
                                   // When can_go_below_purchase_price is false: manual_unit_price cannot be less than purchase_price
-                                  if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed')) {
+                                  if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit')) {
                                     const price = parseFloat(value);
                                     if (!isNaN(price) && price > 0) {
                                       const sellingPrice = item.product_selling_price && item.product_selling_price > 0
@@ -4386,7 +4386,7 @@ export default function POS() {
                                         return;
                                       }
 
-                                      if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed') {
+                                      if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit') {
                                         // Check selling_price first, then fall back to purchase_price
                                         const sellingPrice = item.product_selling_price && item.product_selling_price > 0
                                           ? parseFloat(item.product_selling_price)

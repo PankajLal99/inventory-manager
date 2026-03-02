@@ -102,18 +102,8 @@ export default function Invoices() {
     return true;
   })();
 
-  // When Admin: use selected store or null (ALL). When non-Admin: use selected store or first active store.
-  const defaultStore = groupContainsAdmin
-    ? (selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId) ?? null)
-    : (stores.find((s: any) => s.id === selectedStoreId) || stores.find((s: any) => s.is_active) || stores[0]) ?? null;
-
-  // For non-Admin groups: set selectedStoreId to first store when stores load. Admin keeps null (ALL) by default.
-  useEffect(() => {
-    if (!groupContainsAdmin && selectedStoreId === null && stores.length > 0) {
-      const first = stores.find((s: any) => s.is_active) || stores[0];
-      if (first) setSelectedStoreId(first.id);
-    }
-  }, [groupContainsAdmin, selectedStoreId, stores]);
+  // Use selected store or null (ALL) — all users default to "All".
+  const defaultStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId) ?? null;
 
   const currentStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId);
 
@@ -133,7 +123,7 @@ export default function Invoices() {
       page: 1,
       page_size: 500,
     }),
-    enabled: canSeeKPIStats && (groupContainsAdmin ? true : !!defaultStore),
+    enabled: canSeeKPIStats,
   });
 
   const todayInvoices: Invoice[] = (() => {
@@ -163,7 +153,7 @@ export default function Invoices() {
       search: search.trim() || undefined,
       ordering: useTypeFilterMode || dateFrom || dateTo ? 'created_at' : undefined,
     }),
-    enabled: groupContainsAdmin ? true : !!defaultStore,
+    enabled: true,
     placeholderData: keepPreviousData,
   });
 
@@ -256,7 +246,7 @@ export default function Invoices() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-sm sm:text-base font-semibold text-gray-900 truncate block">
-                      {groupContainsAdmin && selectedStoreId === null ? 'All' : (currentStore?.name || 'Select Store')}
+                      {selectedStoreId === null ? 'All' : (currentStore?.name || 'Select Store')}
                     </span>
                   </div>
                   <ChevronDown className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400 group-hover:text-blue-600 transition-colors flex-shrink-0" />
@@ -270,7 +260,7 @@ export default function Invoices() {
                 }}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
               >
-                {groupContainsAdmin && <option value="">All</option>}
+                <option value="">All</option>
                 {stores.map((store: any) => (
                   <option key={store.id} value={store.id.toString()}>
                     {store.name}

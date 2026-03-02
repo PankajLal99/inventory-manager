@@ -453,7 +453,7 @@ export default function Search() {
 
                               {/* Supplier Breakdown Table */}
                               {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
-                                <div className="mt-4 overflow-hidden border border-gray-100 rounded-md">
+                                <div className="mt-4 overflow-x-auto border border-gray-100 rounded-md">
                                   <table className="min-w-full divide-y divide-gray-100">
                                     <thead className="bg-gray-50">
                                       <tr>
