@@ -46,11 +46,11 @@ def repair_invoices_list(request):
         repair__isnull=False  # Only invoices with Repair records
     ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'payments')
 
-    ordering_param = request.query_params.get('ordering', '-created_at')
+    ordering_param = request.query_params.get('ordering', '-repair__updated_at')
     if ordering_param == 'created_at':
         queryset = queryset.order_by('created_at')
     else:
-        queryset = queryset.order_by('-created_at')
+        queryset = queryset.order_by(ordering_param, '-created_at')
 
     # Filter by store only if it's a repair store (otherwise we'd filter to retail and get 0 repairs)
     store_id = request.query_params.get('store', None)
@@ -723,9 +723,10 @@ def cart_detail(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@transaction.atomic
 def cart_items(request, pk):
     """Add item to cart - prevents duplicate items"""
-    cart = get_object_or_404(Cart, pk=pk)
+    cart = get_object_or_404(Cart.objects.select_for_update(), pk=pk)
     if getattr(cart, 'locked', False):
         return Response(
             {'error': 'Cart is locked.', 'detail': 'Unlock the cart to add items.'},
@@ -904,22 +905,22 @@ def cart_items(request, pk):
     else:
         sale_price = unit_price
     
-    # Check if an existing cart item with the same product and variant exists
-    existing_item = None
+    # Get ALL existing cart items for this product+variant (there may be multiple from different suppliers)
     variant_id = variant_id if variant_id else None
     
     if variant_id:
-        existing_item = CartItem.objects.filter(
+        existing_items = list(CartItem.objects.select_for_update().filter(
             cart=cart,
             product_id=product_id,
             variant_id=variant_id
-        ).first()
+        ))
     else:
-        existing_item = CartItem.objects.filter(
+        existing_items = list(CartItem.objects.select_for_update().filter(
             cart=cart,
             product_id=product_id,
             variant__isnull=True
-        ).first()
+        ))
+    existing_item = existing_items[0] if existing_items else None
     
     # Get invoice type and sale price for validation (used for both tracked and non-tracked products)
     invoice_type = cart.invoice_type
@@ -1401,50 +1402,56 @@ def cart_items(request, pk):
             'message': f'This is a tracked product ({product.name}). You MUST physically scan a barcode to add it to the cart.'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    # If existing item found, only merge when same supplier (same product from different suppliers = separate rows, like different brands)
-    if existing_item:
-        do_merge = True
-        if barcode_obj and (existing_item.scanned_barcodes or []):
-            new_supplier_id = _get_barcode_supplier_id(barcode_obj)
-            first_existing_bc = str((existing_item.scanned_barcodes or [])[0] or '').strip().upper()
-            first_barcode_obj = None
-            if first_existing_bc:
-                try:
-                    first_barcode_obj = Barcode.objects.get(barcode=first_existing_bc)
-                except Barcode.DoesNotExist:
-                    try:
-                        first_barcode_obj = Barcode.objects.get(short_code=first_existing_bc)
-                    except Barcode.DoesNotExist:
-                        pass
-            existing_supplier_id = _get_barcode_supplier_id(first_barcode_obj) if first_barcode_obj else None
-            if new_supplier_id is not None and existing_supplier_id is not None and new_supplier_id != existing_supplier_id:
-                do_merge = False
-        if do_merge:
-            # Add barcode to the list if not already present
-            if not existing_item.scanned_barcodes:
-                existing_item.scanned_barcodes = []
+    # Find the right existing cart item to merge into (same product + same supplier).
+    # When multiple rows exist for the same product (different suppliers), we must
+    # check ALL of them — not just .first() — to find the correct merge target.
+    if existing_items:
+        new_supplier_id = _get_barcode_supplier_id(barcode_obj) if barcode_obj else None
+        merge_target = None
 
-            if barcode_value_to_use and barcode_value_to_use not in existing_item.scanned_barcodes:
-                with transaction.atomic():
-                    existing_item.scanned_barcodes.append(barcode_value_to_use)
-                    existing_item.quantity = Decimal(len(existing_item.scanned_barcodes))
-                    existing_item.save(update_fields=['scanned_barcodes', 'quantity'])
-                    
-                    # Mark barcode as 'in-cart' when added to cart
-                    if barcode_obj and barcode_obj.tag in ['new', 'returned']:
-                        barcode_obj.tag = 'in-cart'
-                        barcode_obj.save(update_fields=['tag'])
-                    
-                    # Update stock quantity when tracked item barcode is added to existing cart item
-                    if cart.store and barcode_obj:
-                        reduce_stock_for_cart_item(product, variant_id, cart.store, Decimal('1.000'))
-                
+        for candidate in existing_items:
+            if not (candidate.scanned_barcodes or []):
+                merge_target = candidate
+                break
+            first_bc = str((candidate.scanned_barcodes or [])[0] or '').strip().upper()
+            if not first_bc:
+                merge_target = candidate
+                break
+            first_barcode_obj = None
+            try:
+                first_barcode_obj = Barcode.objects.get(barcode=first_bc)
+            except Barcode.DoesNotExist:
+                try:
+                    first_barcode_obj = Barcode.objects.get(short_code=first_bc)
+                except Barcode.DoesNotExist:
+                    pass
+            candidate_supplier_id = _get_barcode_supplier_id(first_barcode_obj) if first_barcode_obj else None
+            if new_supplier_id is None or candidate_supplier_id is None or new_supplier_id == candidate_supplier_id:
+                merge_target = candidate
+                break
+
+        if merge_target:
+            if not merge_target.scanned_barcodes:
+                merge_target.scanned_barcodes = []
+
+            if barcode_value_to_use and barcode_value_to_use not in merge_target.scanned_barcodes:
+                merge_target.scanned_barcodes.append(barcode_value_to_use)
+                merge_target.quantity = Decimal(len(merge_target.scanned_barcodes))
+                merge_target.save(update_fields=['scanned_barcodes', 'quantity'])
+
+                if barcode_obj and barcode_obj.tag in ['new', 'returned']:
+                    barcode_obj.tag = 'in-cart'
+                    barcode_obj.save(update_fields=['tag'])
+
+                if cart.store and barcode_obj:
+                    reduce_stock_for_cart_item(product, variant_id, cart.store, Decimal('1.000'))
+
                 barcode_str = barcode_value_to_use if barcode_value_to_use else None
                 create_audit_log(
                     request=request,
                     action='cart_add',
                     model_name='CartItem',
-                    object_id=str(existing_item.id),
+                    object_id=str(merge_target.id),
                     object_name=f"{product.name}",
                     object_reference=f"Cart #{cart.cart_number or cart.id}",
                     barcode=barcode_str,
@@ -1453,20 +1460,19 @@ def cart_items(request, pk):
                         'product_name': product.name,
                         'product_sku': product.sku,
                         'barcode_added': barcode_str,
-                        'new_quantity': str(existing_item.quantity),
-                        'unit_price': str(existing_item.unit_price),
+                        'new_quantity': str(merge_target.quantity),
+                        'unit_price': str(merge_target.unit_price),
                         'cart_id': cart.id,
                         'cart_number': cart.cart_number,
                         'action': 'barcode_added_to_existing_item',
                     }
                 )
-                serializer = CartItemSerializer(existing_item)
+                serializer = CartItemSerializer(merge_target)
                 return Response(serializer.data, status=status.HTTP_200_OK)
             else:
-                # Barcode already in this item
-                serializer = CartItemSerializer(existing_item)
+                serializer = CartItemSerializer(merge_target)
                 return Response(serializer.data, status=status.HTTP_200_OK)
-        # When do_merge is False (different supplier), fall through to create new cart line
+        # No merge target found (all existing rows are from different suppliers) — fall through to create new cart line
     
     # No existing item - create new one
     
@@ -2133,7 +2139,7 @@ def cart_checkout(request, pk):
 
         # 6. Validate that all items have a selling price for sale/credit invoices
         # This prevents invoices being created with line_total = 0 when the UI shows a price
-        if invoice_type in ['cash', 'upi', 'mixed']:
+        if invoice_type in ['cash', 'upi', 'mixed', 'credit']:
             items_without_price = []
             for ci in cart.items.select_related('product').all():
                 if ci.quantity <= 0:
@@ -2281,6 +2287,10 @@ def cart_checkout(request, pk):
             # Calculate paid_amount based on actual payments (e.g. repair booking)
             invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
             invoice.due_amount = invoice.total - invoice.paid_amount
+        elif invoice_type == 'credit':
+            invoice.status = 'credit'
+            invoice.paid_amount = Decimal('0.00')
+            invoice.due_amount = invoice.total
         elif invoice_type == 'mixed':
             if (cash_amount + upi_amount) != invoice.total:
                 transaction.set_rollback(True)
@@ -2304,15 +2314,16 @@ def cart_checkout(request, pk):
         invoice.save()
 
         # 11. Ledger
-        if invoice.customer and invoice_type == 'pending':
+        if invoice.customer and invoice_type in ['pending', 'credit']:
             from backend.parties.models import LedgerEntry
             # Calculate total quantity for ledger
             total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
             LedgerEntry.objects.create(
                 customer=invoice.customer, invoice=invoice, entry_type='debit',
                 amount=invoice.total, quantity=total_qty,
-                description=f'Invoice {invoice.invoice_number} (PENDING)',
-                created_by=request.user
+                description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
+                created_by=request.user,
+                created_at=timezone.now()
             )
             invoice.customer.credit_balance -= invoice.total
             invoice.customer.save()
@@ -2880,9 +2891,9 @@ def invoice_checkout(request, pk):
     
     # Get new invoice type from request (default to 'pending' for draft saving)
     new_invoice_type = request.data.get('invoice_type', 'pending')
-    if new_invoice_type not in ['cash', 'upi', 'pending', 'mixed']:
+    if new_invoice_type not in ['cash', 'upi', 'pending', 'mixed', 'credit']:
         return Response(
-            {'error': 'Invalid invoice_type. Must be cash, upi, pending, or mixed'},
+            {'error': 'Invalid invoice_type. Must be cash, upi, pending, mixed, or credit'},
             status=status.HTTP_400_BAD_REQUEST
         )
     
@@ -2941,7 +2952,7 @@ def invoice_checkout(request, pk):
                     pass
     
     # For Sale/Credit invoices, validate that all items have prices
-    if new_invoice_type in ['cash', 'upi', 'mixed']:
+    if new_invoice_type in ['cash', 'upi', 'mixed', 'credit']:
         items_without_price = []
         for item in invoice.items.all():
             effective_price = item.manual_unit_price or item.unit_price
@@ -3019,7 +3030,7 @@ def invoice_checkout(request, pk):
     # Actually, stock for BOTH tracked and non-tracked items should be deducted when added to cart.
     # So we should NOT deduct stock again here in invoice_checkout.
     # The only thing we need to do is ensure the Barcode tag is set to 'sold'.
-    if new_invoice_type in ['cash', 'upi', 'mixed']:
+    if new_invoice_type in ['cash', 'upi', 'mixed', 'credit']:
         for item in invoice.items.all():
             # Mark barcode as sold when checking out as sale/credit invoice
             if item.barcode:
@@ -3047,6 +3058,25 @@ def invoice_checkout(request, pk):
         invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         invoice.due_amount = invoice.total - invoice.paid_amount
         invoice.save()
+    elif new_invoice_type == 'credit':
+        invoice.invoice_type = new_invoice_type
+        invoice.status = 'credit'
+        invoice.paid_amount = Decimal('0.00')
+        invoice.due_amount = invoice.total
+        invoice.save()
+
+        if invoice.customer:
+            from backend.parties.models import LedgerEntry
+            total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
+            LedgerEntry.objects.create(
+                customer=invoice.customer, invoice=invoice, entry_type='debit',
+                amount=invoice.total, quantity=total_qty,
+                description=f'Invoice {invoice.invoice_number} (CREDIT)',
+                created_by=request.user,
+                created_at=timezone.now()
+            )
+            invoice.customer.credit_balance -= invoice.total
+            invoice.customer.save()
     elif new_invoice_type == 'mixed':
         # Validate split payments match total
         if cash_amount + upi_amount != invoice.total:

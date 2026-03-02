@@ -897,6 +897,22 @@ export default function InvoiceDetail() {
       return;
     }
 
+    // Validate purchase price for custom products (must be > 0)
+    const customItemsMissingPurchasePrice = freshInv.items.filter((item: any) => {
+      if (!item.product_name?.startsWith('Other -')) return false;
+      const qty = checkoutQuantities[item.id] ?? item.quantity?.toString();
+      if (parseFloat(qty) <= 0) return false;
+      const purchaseVal = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+        ? parseFloat(checkoutPurchasePrices[item.id])
+        : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
+      return Number.isNaN(purchaseVal) || purchaseVal <= 0;
+    });
+    if (customItemsMissingPurchasePrice.length > 0) {
+      const names = customItemsMissingPurchasePrice.map((i: any) => i.product_name || 'Custom Product').join(', ');
+      alert(`Purchase price is required and must be greater than 0 for: ${names}`);
+      return;
+    }
+
     // Validate that all items have prices for cash/upi/mixed invoices (not required for pending)
     if (checkoutInvoiceType !== 'pending') {
       const itemsWithoutPrice = items.filter((item: any) => !item.manual_unit_price || item.manual_unit_price <= 0);
@@ -2942,6 +2958,7 @@ export default function InvoiceDetail() {
                                       const rawPurchase = firstItem.product_purchase_price != null ? parseFloat(String(firstItem.product_purchase_price)) : firstItem.purchase_price != null ? parseFloat(String(firstItem.purchase_price)) : NaN;
                                       if (isCustom) {
                                         const purchaseVal = checkoutPurchasePrices[firstItem.id] ?? (rawPurchase > 0 ? String(rawPurchase) : '');
+                                        const isPurchaseInvalid = !purchaseVal || parseFloat(purchaseVal) <= 0;
                                         return (
                                           <div className="flex items-center justify-end gap-1">
                                             <span className="text-sm text-gray-500">₹</span>
@@ -2949,11 +2966,12 @@ export default function InvoiceDetail() {
                                               type="number"
                                               step="0.01"
                                               min={0}
-                                              placeholder="0"
+                                              placeholder="Required"
                                               value={purchaseVal}
                                               onChange={(e) => setCheckoutPurchasePrices((p) => ({ ...p, [firstItem.id]: e.target.value }))}
-                                              className="w-24 text-right text-sm"
-                                              title="Cost (purchase price)"
+                                              className={`w-24 text-right text-sm ${isPurchaseInvalid ? 'border-red-500 ring-red-500' : ''}`}
+                                              title="Cost (purchase price) - Required"
+                                              required
                                             />
                                           </div>
                                         );
@@ -3294,6 +3312,7 @@ export default function InvoiceDetail() {
                                       const isCustom = firstItem.product_name?.startsWith('Other -');
                                       if (isCustom) {
                                         const purchaseVal = checkoutPurchasePrices[firstItem.id] ?? (firstItem.product_purchase_price != null ? String(firstItem.product_purchase_price) : firstItem.purchase_price != null ? String(firstItem.purchase_price) : '');
+                                        const isPurchaseInvalid = !purchaseVal || parseFloat(purchaseVal) <= 0;
                                         return (
                                           <div className="flex items-center justify-end gap-1">
                                             <span className="text-xs text-gray-500">₹</span>
@@ -3301,10 +3320,11 @@ export default function InvoiceDetail() {
                                               type="number"
                                               step="0.01"
                                               min={0}
-                                              placeholder="0"
+                                              placeholder="Required"
                                               value={purchaseVal}
                                               onChange={(e) => setCheckoutPurchasePrices((p) => ({ ...p, [firstItem.id]: e.target.value }))}
-                                              className="w-20 text-right text-sm"
+                                              className={`w-20 text-right text-sm ${isPurchaseInvalid ? 'border-red-500 ring-red-500' : ''}`}
+                                              required
                                             />
                                           </div>
                                         );

@@ -9,7 +9,7 @@ export interface CartTab {
   storeId: number;
   customerId?: number | null;
   customerName?: string | null; // Store customer name for display
-  invoiceType: 'cash' | 'upi' | 'pending' | 'mixed';
+  invoiceType: 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
   itemCount?: number; // Store item count for display
   createdAt: string;
   updatedAt: string;

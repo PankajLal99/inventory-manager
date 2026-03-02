@@ -43,6 +43,7 @@ class Cart(models.Model):
         ('cash', 'Cash Invoice'),
         ('upi', 'UPI Invoice'),
         ('pending', 'Pending Invoice'),
+        ('credit', 'Credit Invoice'),
         ('mixed', 'Mixed Payment (Cash + UPI)'),
     ]
 
@@ -102,6 +103,7 @@ class Invoice(models.Model):
         ('upi', 'UPI Invoice'),
         ('pending', 'Pending Invoice'),
         ('defective', 'Defective Invoice'),
+        ('credit', 'Credit Invoice'),
         ('mixed', 'Mixed Payment (Cash + UPI)'),
     ]
 

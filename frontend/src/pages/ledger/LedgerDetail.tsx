@@ -1,9 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useMemo, useEffect } from 'react';
-import { customersApi, catalogApi } from '../../lib/api';
+import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/react-query';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { customersApi, catalogApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
+import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
@@ -13,8 +13,9 @@ import { toast } from '../../lib/toast';
 import {
   ArrowLeft, FileText, FileSpreadsheet, FileText as FileTextIcon,
   Printer, Filter, X, Calendar, Search, Plus, Minus, Pencil, Trash2, Package,
-  Store, ChevronDown, Receipt
+  Store, ChevronDown, Receipt, Camera
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -44,6 +45,7 @@ export default function LedgerDetail() {
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
   const [showCategorySelector, setShowCategorySelector] = useState(false);
+  const aioPreviewRef = useRef<HTMLIFrameElement>(null);
   const queryClient = useQueryClient();
 
   const { data: customerData } = useQuery({
@@ -255,6 +257,296 @@ export default function LedgerDetail() {
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
   }, [allEntries]);
+
+  // Collect unique invoice IDs from filtered (debit) entries
+  const invoiceIds = useMemo(() => {
+    const ids = new Set<number>();
+    filteredEntries.forEach((entry: any) => {
+      if (entry.invoice && entry.entry_type === 'debit') {
+        ids.add(entry.invoice);
+      }
+    });
+    return Array.from(ids);
+  }, [filteredEntries]);
+
+  // Fetch all invoice details in parallel
+  const invoiceQueries = useQueries({
+    queries: invoiceIds.map((id) => ({
+      queryKey: ['invoice-detail', id],
+      queryFn: () => posApi.invoices.get(id),
+      enabled: invoiceIds.length > 0,
+      staleTime: 5 * 60 * 1000,
+      retry: false,
+    })),
+  });
+
+  const allInvoicesLoaded = invoiceQueries.length > 0 && invoiceQueries.every((q) => q.isSuccess);
+  const anyInvoiceLoading = invoiceQueries.some((q) => q.isLoading);
+
+  const invoicesData = useMemo(() => {
+    if (!allInvoicesLoaded) return [];
+    return invoiceQueries
+      .map((q) => q.data?.data)
+      .filter(Boolean);
+  }, [allInvoicesLoaded, invoiceQueries]);
+
+  // Number to words (Indian numbering) for the AIO invoice
+  const numberToWords = (num: number): string => {
+    const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+    const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    if (num === 0) return 'Zero Rupees Only';
+    const convertHundreds = (n: number): string => {
+      if (n === 0) return '';
+      let result = '';
+      if (n >= 100) { result += ones[Math.floor(n / 100)] + ' Hundred '; n %= 100; }
+      if (n >= 20) { result += tens[Math.floor(n / 10)] + ' '; n %= 10; }
+      if (n > 0) { result += ones[n] + ' '; }
+      return result.trim();
+    };
+    const convert = (n: number): string => {
+      if (n === 0) return '';
+      if (n >= 10000000) return convertHundreds(Math.floor(n / 10000000)) + ' Crore ' + convert(n % 10000000);
+      if (n >= 100000) return convertHundreds(Math.floor(n / 100000)) + ' Lakh ' + convert(n % 100000);
+      if (n >= 1000) return convertHundreds(Math.floor(n / 1000)) + ' Thousand ' + convert(n % 1000);
+      return convertHundreds(n);
+    };
+    const integerPart = Math.floor(num);
+    const decimalPart = Math.round((num % 1) * 100);
+    let result = convert(integerPart).trim() || 'Zero';
+    result += ' Rupees';
+    if (decimalPart > 0) {
+      const paiseWords = convert(decimalPart).trim();
+      if (paiseWords) result += ' and ' + paiseWords + ' Paise';
+    }
+    return result + ' Only';
+  };
+
+  // Generate combined All-In-One invoice HTML
+  const generateAIOInvoiceHTML = (): string => {
+    if (invoicesData.length === 0) return '<html><body><p>No invoices to display.</p></body></html>';
+
+    const companyName = 'Manish Traders';
+    const companyAddress = 'Shop Number124-A Ground Floor\nChaitaniya Market Ghoda Nikkas Bhopal';
+
+    // Combine all items from all invoices
+    const allItems: any[] = [];
+    const invoiceNumbers: string[] = [];
+    let combinedTotal = 0;
+
+    invoicesData.forEach((inv: any) => {
+      if (inv.items && Array.isArray(inv.items)) {
+        allItems.push(...inv.items);
+      }
+      combinedTotal += parseFloat(inv.total || '0');
+      invoiceNumbers.push(inv.invoice_number || `#${inv.id}`);
+    });
+
+    const totalPcs = allItems.reduce((sum, item) => sum + (parseInt(item.quantity || '0') || 0), 0);
+    const amountInWords = numberToWords(combinedTotal);
+
+    // Group items by product name AND brand
+    const groupedItems: Record<string, { name: string; brand: string; totalQuantity: number; totalAmount: number }> = {};
+    allItems.forEach((item: any) => {
+      const name = item.product_name || '-';
+      const brand = item.product_brand_name || item.brand_name || '';
+      const groupKey = brand ? `${name}::${brand}` : name;
+      if (!groupedItems[groupKey]) {
+        groupedItems[groupKey] = { name, brand, totalQuantity: 0, totalAmount: 0 };
+      }
+      groupedItems[groupKey].totalQuantity += parseInt(item.quantity || '0') || 0;
+      groupedItems[groupKey].totalAmount += parseFloat(item.line_total || '0');
+    });
+
+    let itemsHtml = Object.values(groupedItems).map((group) => {
+      const avgUnitPrice = group.totalQuantity > 0 ? group.totalAmount / group.totalQuantity : 0;
+      const productDisplay = group.brand ? `${group.name} (${group.brand})` : group.name;
+      const productColor = getProductNameColor(group.name);
+      const productColorStyle = productColor ? ` color: ${productColor};` : '';
+      return `
+        <tr style="border-bottom: 1px solid #eee;">
+          <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}</td>
+          <td style="border-bottom: 1px solid #eee; text-align: center;">${formatNumber(group.totalQuantity, 3)}</td>
+          <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(avgUnitPrice, 2)}</td>
+          <td style="border-bottom: 1px solid #eee; text-align: center;">PCS</td>
+          <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(group.totalAmount, 2)}</td>
+        </tr>`;
+    }).join('');
+
+    itemsHtml += `<tr style="height: 100%;"><td style="border-bottom: none;"></td><td style="border-bottom: none;"></td><td style="border-bottom: none;"></td><td style="border-bottom: none;"></td><td style="border-bottom: none;"></td></tr>`;
+
+    const today = new Date().toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
+    const currentBalance = parseFloat(finalBalance);
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <title>Credit Invoice - ${customer?.name || 'Customer'}</title>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; padding: 10px; color: #000; line-height: 1.2; }
+    .page-container { display: flex; flex-direction: column; min-height: 277mm; padding: 10px; }
+    .content-area { flex: 1; display: flex; flex-direction: column; }
+    .footer-area { margin-top: auto; }
+    .top-section { display: flex; justify-content: space-between; margin-bottom: 10px; }
+    .top-left p, .top-right p { margin: 2px 0; font-size: 13px; }
+    .top-right { text-align: right; }
+    .company-header { text-align: center; margin-bottom: 10px; }
+    .company-name { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+    .company-address { font-size: 13px; white-space: pre-line; margin-bottom: 2px; }
+    .invoice-title { text-align: center; font-size: 20px; font-weight: bold; margin: 10px 0; text-transform: uppercase; }
+    .party-section { margin-bottom: 10px; }
+    .party-section p { margin: 2px 0; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 10px; table-layout: fixed; }
+    th, td { vertical-align: middle; }
+    th { background: #f0f0f0; padding: 6px 8px; border: 1px solid #000; font-weight: bold; font-size: 12px; }
+    td { padding: 4px 8px; border-left: 1px solid #000; border-right: 1px solid #000; font-size: 12px; }
+    .total-row td { border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 6px 8px; font-weight: bold; }
+    .amount-words { margin-top: 10px; margin-bottom: 10px; }
+    .amount-words p { margin: 2px 0; font-size: 13px; }
+    .footer { margin-top: 15px; text-align: center; border-top: 1px solid #000; padding-top: 5px; }
+    .footer p { font-size: 11px; text-decoration: underline; }
+    .watermark {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-45deg);
+      font-size: 120px;
+      font-weight: bold;
+      color: rgba(0, 0, 0, 0.08);
+      z-index: -1;
+      pointer-events: none;
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 10px;
+    }
+    @media print {
+      body { padding: 0; margin: 0; position: relative; }
+      .page-container { min-height: 297mm; padding: 20mm 15mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-container">
+    <div class="content-area">
+      <div class="watermark">CREDIT</div>
+      <div style="flex-shrink: 0;">
+        <div class="top-section">
+          <div class="top-left">
+            <p><strong>Invoices:</strong> ${invoiceNumbers.join(', ')}</p>
+          </div>
+          <div class="top-right">
+            <p><strong>Date:</strong> ${today}</p>
+          </div>
+        </div>
+        <div class="company-header">
+          <div class="company-name">${companyName}</div>
+          <div class="company-address">${companyAddress}</div>
+        </div>
+        <div class="invoice-title">CREDIT INVOICE</div>
+        <div class="party-section">
+          <p><strong>Party :</strong> ${customer?.name || 'Customer'}</p>
+          ${customer?.phone ? `<p><strong>Phone :</strong> ${customer.phone}</p>` : ''}
+          <p><strong>PAN/IT no :</strong> -</p>
+        </div>
+      </div>
+      <table style="flex: 1; border-bottom: 1px solid #000;">
+        <thead>
+          <tr>
+            <th style="width: 45%; text-align: left;">Description of Good</th>
+            <th style="width: 15%; text-align: center;">Quantity in PCS</th>
+            <th style="width: 15%; text-align: right;">Rate</th>
+            <th style="width: 10%; text-align: center;">Per (PCS)</th>
+            <th style="width: 15%; text-align: right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemsHtml}
+          <tr><td>Transport Charge</td><td></td><td></td><td></td><td style="text-align: right;">${formatNumber(0, 2)}</td></tr>
+          <tr class="total-row">
+            <td><strong>Total</strong></td>
+            <td style="text-align: center;"><strong>${formatNumber(totalPcs, 3)}</strong></td>
+            <td></td>
+            <td></td>
+            <td style="text-align: right;"><strong>${formatNumber(combinedTotal, 2)}</strong></td>
+          </tr>
+          ${currentBalance !== 0 ? `
+          <tr class="total-row" style="border-top: 1px dashed #000;">
+            <td><strong>Current Balance</strong></td>
+            <td></td><td></td><td></td>
+            <td style="text-align: right;"><strong>${currentBalance < 0 ? formatNumber(Math.abs(currentBalance), 2) + ' (Cr)' : formatNumber(currentBalance, 2)}</strong></td>
+          </tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+    <div class="footer-area">
+      <div class="amount-words">
+        <p><strong>Amount Chargeable (in words)</strong> E &amp; OE</p>
+        <p><strong>${amountInWords}</strong></p>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding-top: 4px;">
+        <div style="width: 60%;">
+          <p style="font-size: 12px; margin-bottom: 4px;"><strong>Declaration:</strong></p>
+          <p style="font-size: 11px; line-height: 1.4;">We declare that this invoice shows the actual price of the good described and that all particulars are true and correct.</p>
+        </div>
+        <div style="text-align: right; width: 40%;">
+          <p style="font-size: 13px;"><strong>for ${companyName}</strong></p>
+          <div style="margin-top: 45px;">
+            <p style="font-size: 13px;"><strong>Authorised Signatory</strong></p>
+          </div>
+        </div>
+      </div>
+      <div class="footer"><p>This is a Computer Generated Invoice</p></div>
+    </div>
+  </div>
+</body>
+</html>`;
+  };
+
+  const handlePrintAIO = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+    const html = generateAIOInvoiceHTML();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onload = () => { setTimeout(() => printWindow.print(), 250); };
+  };
+
+  const handlePhotoAIO = async () => {
+    const iframe = aioPreviewRef.current;
+    const doc = iframe?.contentDocument;
+    const body = doc?.body;
+    if (!body) {
+      toast('AIO preview is not ready. Please wait a moment and try again.', 'error');
+      return;
+    }
+    const el = doc?.documentElement;
+    const w = el?.scrollWidth ?? 794;
+    const h = el?.scrollHeight ?? 1123;
+    try {
+      const canvas = await html2canvas(body, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: w,
+        windowHeight: h,
+      });
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { toast('Failed to create image.', 'error'); return; }
+          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
+            () => toast('Combined invoice image copied to clipboard.', 'success'),
+            () => toast('Failed to copy to clipboard.', 'error')
+          );
+        },
+        'image/png',
+        1
+      );
+    } catch {
+      toast('Failed to capture AIO preview.', 'error');
+    }
+  };
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({
@@ -618,6 +910,34 @@ export default function LedgerDetail() {
               <Printer className="h-4 w-4" />
               Print
             </Button>
+            {invoiceIds.length > 0 && (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (!allInvoicesLoaded) { toast('Invoices are still loading...', 'info'); return; }
+                    handlePrintAIO();
+                  }}
+                  disabled={anyInvoiceLoading}
+                  className="flex items-center gap-2 border-purple-300 text-purple-700 hover:bg-purple-50"
+                >
+                  <Printer className="h-4 w-4" />
+                  {anyInvoiceLoading ? 'Loading...' : 'Print AIO'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (!allInvoicesLoaded) { toast('Invoices are still loading...', 'info'); return; }
+                    handlePhotoAIO();
+                  }}
+                  disabled={anyInvoiceLoading}
+                  className="flex items-center gap-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                >
+                  <Camera className="h-4 w-4" />
+                  {anyInvoiceLoading ? 'Loading...' : 'Photo AIO'}
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -764,6 +1084,68 @@ export default function LedgerDetail() {
           </div>
         )}
       </div>
+
+      {/* AIO Credit Invoice Preview - always visible when invoices are loaded */}
+      {allInvoicesLoaded && invoicesData.length > 0 && (
+        <div className="bg-white rounded-2xl shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold flex items-center gap-2">
+              <FileText className="h-5 w-5 text-purple-600" />
+              Credit Invoice Preview
+              <span className="text-sm font-normal text-gray-500">
+                ({invoicesData.length} invoice{invoicesData.length !== 1 ? 's' : ''} combined)
+              </span>
+            </h2>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={handlePrintAIO}
+                className="flex items-center gap-2 border-purple-300 text-purple-700 hover:bg-purple-50"
+              >
+                <Printer className="h-4 w-4" />
+                Print
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handlePhotoAIO}
+                className="flex items-center gap-2 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+              >
+                <Camera className="h-4 w-4" />
+                Copy as Image
+              </Button>
+            </div>
+          </div>
+          <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-100 shadow-lg">
+            <div className="bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-700">A4 Credit Invoice Preview</span>
+              <span className="text-xs text-gray-500 hidden sm:inline">All credit invoices combined into one</span>
+            </div>
+            <div className="bg-gray-200 p-4 sm:p-8 flex justify-center overflow-auto" style={{ maxHeight: '900px' }}>
+              <div
+                className="bg-white shadow-2xl mx-auto"
+                style={{ width: '210mm', minHeight: '297mm', maxWidth: '100%', boxShadow: '0 0 20px rgba(0,0,0,0.3)' }}
+              >
+                <iframe
+                  ref={aioPreviewRef}
+                  title="AIO Invoice Preview"
+                  srcDoc={generateAIOInvoiceHTML()}
+                  className="w-full border-0 block"
+                  style={{ width: '100%', minHeight: '297mm', border: 'none', display: 'block' }}
+                  onLoad={(e) => {
+                    const iframe = e.target as HTMLIFrameElement;
+                    if (iframe.contentWindow?.document?.body) {
+                      const body = iframe.contentWindow.document.body;
+                      const html = iframe.contentWindow.document.documentElement;
+                      const height = Math.max(body.scrollHeight, body.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight);
+                      iframe.style.height = (height + 40) + 'px';
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Entry Modal (Admin only) */}
       <Modal isOpen={!!editingEntry} onClose={() => { setEditingEntry(null); setEditEntryData({ amount: '', description: '', date: '', entryType: 'credit' }); }} title="Edit Ledger Entry">

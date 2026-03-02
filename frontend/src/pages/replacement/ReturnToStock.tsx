@@ -77,7 +77,30 @@ export default function ReturnToStock() {
     retry: false,
   });
 
-  // Find invoice by barcode/SKU or invoice number
+  const applyInvoiceResult = (foundInvoice: Invoice, searchBarcode: string) => {
+    setInvoice(foundInvoice);
+    setSearchError(null);
+    setSearchValue('');
+    const initialSelected: Record<number, number> = {};
+    foundInvoice.items.forEach((item: InvoiceItem) => {
+      const itemBarcode = item.barcode_value?.toUpperCase() || '';
+      const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
+      const searchUpper = searchBarcode.toUpperCase();
+      if (itemBarcode === searchUpper || itemBarcodeFull === searchUpper) {
+        initialSelected[item.id] = Math.min(1, item.available_quantity);
+      } else {
+        initialSelected[item.id] = 0;
+      }
+    });
+    setSelectedItems(initialSelected);
+    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+    foundInvoice.items.forEach((item: InvoiceItem) => {
+      initialTags[item.id] = 'unknown';
+    });
+    setItemTags(initialTags);
+  };
+
+  // Find invoice by barcode/SKU or invoice number (no side effects)
   const findInvoiceQuery = useQuery({
     queryKey: ['find-invoice', searchValue],
     queryFn: async () => {
@@ -91,36 +114,17 @@ export default function ReturnToStock() {
           invoice_number: isInvoiceNumber ? searchValue.trim() : undefined,
         });
         if (response.data?.invoice) {
-          setInvoice(response.data.invoice);
-          setSearchError(null);
-          const initialSelected: Record<number, number> = {};
-          const searchBarcode = searchValue.trim().toUpperCase();
-
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            const itemBarcode = item.barcode_value?.toUpperCase() || '';
-            const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
-
-            if (itemBarcode === searchBarcode || itemBarcodeFull === searchBarcode) {
-              initialSelected[item.id] = Math.min(1, item.available_quantity);
-            } else {
-              initialSelected[item.id] = 0;
-            }
-          });
-          setSelectedItems(initialSelected);
-
-          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-          response.data.invoice.items.forEach((item: InvoiceItem) => {
-            initialTags[item.id] = 'unknown';
-          });
-          setItemTags(initialTags);
-
           return response.data;
         }
         return null;
       } catch (error: any) {
-        const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to find invoice';
+        const status = error?.response?.status;
+        const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
+        const errorMsg = status === 404 || serverMsg?.toLowerCase().includes('no invoice')
+          ? 'Barcode not sold or not in this invoice'
+          : serverMsg || 'Failed to find invoice';
         setSearchError(errorMsg);
-        setInvoice(null);
+        setSearchValue('');
         return null;
       }
     },
@@ -142,20 +146,65 @@ export default function ReturnToStock() {
     },
   });
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!searchValue.trim()) {
       setSearchError('Please enter a barcode / short code, SKU, or invoice number');
       return;
     }
     setShowInvoiceDropdown(false);
-    findInvoiceQuery.refetch();
+    const { data } = await findInvoiceQuery.refetch();
+    if (!data?.invoice) return;
+
+    const foundInvoice = data.invoice as Invoice;
+    const matchingItems = foundInvoice.items as InvoiceItem[];
+
+    if (invoice && foundInvoice.id !== invoice.id) {
+      const switchConfirmed = window.confirm(
+        `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+      );
+      if (!switchConfirmed) return;
+      applyInvoiceResult(foundInvoice, searchValue.trim());
+      showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process return.`, 'success');
+      return;
+    }
+
+    if (invoice && foundInvoice.id === invoice.id) {
+      setInvoice((prev) => {
+        if (!prev) return prev;
+        const existingIds = new Set(prev.items.map((i) => i.id));
+        const newItems = matchingItems.filter((item) => !existingIds.has(item.id));
+        return { ...prev, items: newItems.length > 0 ? [...prev.items, ...newItems] : prev.items };
+      });
+      setSelectedItems((prev) => {
+        const next = { ...prev };
+        for (const item of matchingItems) {
+          const current = next[item.id] || 0;
+          next[item.id] = Math.min(current + 1, item.available_quantity);
+        }
+        return next;
+      });
+      setItemTags((prev) => {
+        const next = { ...prev };
+        for (const item of matchingItems) {
+          if (next[item.id] === undefined) next[item.id] = 'unknown';
+        }
+        return next;
+      });
+      setSearchError(null);
+      setSearchValue('');
+      showToast(`Added ${matchingItems.length} item(s) to return list`, 'success');
+      return;
+    }
+
+    applyInvoiceResult(foundInvoice, searchValue.trim());
+    showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process return.`, 'success');
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
-    setSearchValue(selectedInvoice.invoice_number);
     setShowInvoiceDropdown(false);
     setInvoice(selectedInvoice);
     setSearchError(null);
+    setSearchValue('');
 
     const initialSelected: Record<number, number> = {};
     selectedInvoice.items.forEach((item: InvoiceItem) => {
@@ -170,14 +219,96 @@ export default function ReturnToStock() {
     setItemTags(initialTags);
   };
 
-  const handleBarcodeScan = (barcode: string) => {
-    setSearchValue(barcode);
-    setShowScanner(false);
-    setTimeout(() => {
-      if (barcode.trim()) {
-        findInvoiceQuery.refetch();
+  const handleBarcodeScan = async (barcode: string) => {
+    if (!barcode.trim()) return;
+
+    try {
+      const isInvoiceNumber = /^[A-Z0-9-]+$/i.test(barcode.trim()) && barcode.trim().length >= 3;
+      const response = await posApi.replacement.findInvoiceByBarcode({
+        barcode: isInvoiceNumber ? undefined : barcode.trim(),
+        sku: isInvoiceNumber ? undefined : barcode.trim(),
+        invoice_number: isInvoiceNumber ? barcode.trim() : undefined,
+      });
+
+      const data = response.data;
+      if (!data?.invoice) return;
+
+      const foundInvoice = data.invoice as Invoice;
+      const matchingItems = foundInvoice.items as InvoiceItem[];
+
+      if (invoice) {
+        if (foundInvoice.id !== invoice.id) {
+          const switchConfirmed = window.confirm(
+            `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+          );
+          if (!switchConfirmed) return;
+
+          setInvoice(foundInvoice);
+          setSearchError(null);
+          setSearchValue('');
+          const initialSelected: Record<number, number> = {};
+          matchingItems.forEach((item: InvoiceItem) => {
+            initialSelected[item.id] = Math.min(1, item.available_quantity);
+          });
+          setSelectedItems(initialSelected);
+          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+          matchingItems.forEach((item: InvoiceItem) => {
+            initialTags[item.id] = 'unknown';
+          });
+          setItemTags(initialTags);
+          showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process return.`, 'success');
+          return;
+        }
+
+        setInvoice((prev) => {
+          if (!prev) return prev;
+          const existingIds = new Set(prev.items.map((i) => i.id));
+          const newItems = matchingItems.filter((item) => !existingIds.has(item.id));
+          return { ...prev, items: newItems.length > 0 ? [...prev.items, ...newItems] : prev.items };
+        });
+        setSelectedItems((prev) => {
+          const next = { ...prev };
+          for (const item of matchingItems) {
+            const current = next[item.id] || 0;
+            next[item.id] = Math.min(current + 1, item.available_quantity);
+          }
+          return next;
+        });
+        setItemTags((prev) => {
+          const next = { ...prev };
+          for (const item of matchingItems) {
+            if (next[item.id] === undefined) next[item.id] = 'unknown';
+          }
+          return next;
+        });
+        showToast(`Added ${matchingItems.length} item(s) to return list`, 'success');
+        setSearchValue('');
+        return;
       }
-    }, 100);
+
+      setInvoice(foundInvoice);
+      setSearchError(null);
+      setSearchValue('');
+      const initialSelected: Record<number, number> = {};
+      matchingItems.forEach((item: InvoiceItem) => {
+        initialSelected[item.id] = Math.min(1, item.available_quantity);
+      });
+      setSelectedItems(initialSelected);
+      const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
+      matchingItems.forEach((item: InvoiceItem) => {
+        initialTags[item.id] = 'unknown';
+      });
+      setItemTags(initialTags);
+      showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process return.`, 'success');
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
+      const message = status === 404 || serverMsg?.toLowerCase().includes('no invoice')
+        ? 'Barcode not sold or not in this invoice'
+        : serverMsg || 'Barcode not sold or not in this invoice';
+      showToast(message, 'error');
+      setSearchValue('');
+    }
   };
 
   const handleItemToggle = (itemId: number) => {

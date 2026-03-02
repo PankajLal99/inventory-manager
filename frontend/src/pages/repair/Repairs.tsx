@@ -127,8 +127,8 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   old_repair: 'bg-violet-600', // static UI section: repairs not from today and not delivered
 };
 
-/** Sort repair invoices by status for table display: not_repaired at the end (actual status row-wise). */
-function sortRepairsByRowStatusOrder<T extends { repair?: { status: string } | null }>(items: T[]): T[] {
+/** Sort repair invoices by status for table display, then by most recently updated within each status. */
+function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; updated_at?: string } | null; created_at?: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => {
     const statusA = a.repair?.status ?? '';
     const statusB = b.repair?.status ?? '';
@@ -136,7 +136,10 @@ function sortRepairsByRowStatusOrder<T extends { repair?: { status: string } | n
     const idxB = ROW_STATUS_ORDER.indexOf(statusB);
     const i = idxA === -1 ? ROW_STATUS_ORDER.length : idxA;
     const j = idxB === -1 ? ROW_STATUS_ORDER.length : idxB;
-    return i - j;
+    if (i !== j) return i - j;
+    const dateA = a.repair?.updated_at || (a as any).created_at || '';
+    const dateB = b.repair?.updated_at || (b as any).created_at || '';
+    return dateB.localeCompare(dateA);
   });
 }
 
