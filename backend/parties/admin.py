@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     CustomerGroup, Customer, Supplier, LedgerEntry,
     PersonalCustomer, PersonalLedgerEntry,
-    InternalCustomer, InternalLedgerEntry
+    InternalCustomer, InternalLedgerEntry, PaymentReminder
 )
 
 
@@ -74,3 +74,11 @@ class InternalLedgerEntryAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at']
     ordering = ['-created_at']
     date_hierarchy = 'created_at'
+
+
+@admin.register(PaymentReminder)
+class PaymentReminderAdmin(admin.ModelAdmin):
+    list_display = ['id', 'customer', 'due_date', 'due_amount', 'is_settled', 'settled_payment', 'settled_at', 'created_at']
+    list_filter = ['is_settled', 'due_date', 'customer__customer_group', 'created_at']
+    search_fields = ['customer__name', 'customer__phone']
+    ordering = ['due_date', 'customer__name']

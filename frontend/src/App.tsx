@@ -42,6 +42,8 @@ import VendorPurchases from './pages/purchases/VendorPurchases';
 import VendorPurchaseDetail from './pages/purchases/VendorPurchaseDetail';
 import Vendors from './pages/vendors/Vendors';
 import DefectiveMoveOuts from './pages/defective/DefectiveMoveOuts';
+import PaymentReminders from './pages/payment-reminders/PaymentReminders';
+import Expenses from './pages/expenses/Expenses';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -122,6 +124,8 @@ function App() {
                 <Route path="personal-ledger/:customerId" element={<PersonalLedgerDetail />} />
                 <Route path="internal-ledger" element={<InternalLedger />} />
                 <Route path="internal-ledger/:customerId" element={<InternalLedgerDetail />} />
+                <Route path="payment-reminders" element={<PaymentReminders />} />
+                <Route path="expenses" element={<Expenses />} />
                 <Route path="stores" element={<Stores />} />
                 <Route path="search" element={<Search />} />
                 <Route path="vendors" element={<Vendors />} />

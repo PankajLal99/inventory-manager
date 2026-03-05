@@ -24,11 +24,17 @@ interface InvoiceItem {
   barcode_id?: number;
   barcode_value?: string;
   barcode_full?: string;
+  source_invoice_id?: number;
+  source_invoice_number?: string;
+  source_store?: number;
+  source_customer?: number | null;
+  source_customer_name?: string;
 }
 
 interface Invoice {
   id: number;
   invoice_number: string;
+  customer?: number | null;
   customer_name?: string;
   store_name?: string;
   created_at: string;
@@ -41,6 +47,9 @@ interface ReplacementItem {
   item_id: number;
   new_product_id: number | null;
   new_product_name: string;
+  selected_short_code?: string | null;
+  reserved_barcode_id?: number | null;
+  reserved_restore_tag?: 'new' | 'returned';
   quantity: number;
   new_unit_price?: number | null;
   manual_unit_price?: number | null;
@@ -65,6 +74,23 @@ export default function ReplaceProduct() {
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode like POS
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+  const normalizeCustomerName = (name?: string) => (name || '').trim().toLowerCase();
+  const isSameCustomer = (a: Invoice, b: Invoice) => {
+    if (a.customer !== null && a.customer !== undefined && b.customer !== null && b.customer !== undefined) {
+      return a.customer === b.customer;
+    }
+    if ((a.customer ?? null) !== (b.customer ?? null)) return false;
+    return normalizeCustomerName(a.customer_name) === normalizeCustomerName(b.customer_name);
+  };
+  const withInvoiceContext = (items: InvoiceItem[], sourceInvoice: Invoice): InvoiceItem[] =>
+    items.map((item) => ({
+      ...item,
+      source_invoice_id: sourceInvoice.id,
+      source_invoice_number: sourceInvoice.invoice_number,
+      source_store: sourceInvoice.store,
+      source_customer: sourceInvoice.customer ?? null,
+      source_customer_name: sourceInvoice.customer_name,
+    }));
 
   // Helper function to check if input looks like a barcode
   const looksLikeBarcode = (input: string): boolean => {
@@ -107,6 +133,35 @@ export default function ReplaceProduct() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const releaseReservedBarcode = async (replacement?: ReplacementItem) => {
+    if (!replacement?.reserved_barcode_id) return;
+    try {
+      await posApi.replacement.reserveBarcode({
+        barcode_id: replacement.reserved_barcode_id,
+        action: 'release',
+        restore_tag: replacement.reserved_restore_tag || 'new',
+      });
+    } catch (_error) {
+      // Ignore release failures here; backend tag checks still protect final processing.
+    }
+  };
+
+  const releaseAllReservedBarcodes = async () => {
+    const releaseJobs = Object.values(replacements)
+      .filter((replacement) => replacement.reserved_barcode_id)
+      .map((replacement) => releaseReservedBarcode(replacement));
+    if (releaseJobs.length > 0) {
+      await Promise.allSettled(releaseJobs);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      // Best-effort cleanup when user leaves this screen.
+      void releaseAllReservedBarcodes();
+    };
+  }, [replacements]);
+
   // Search invoices by partial invoice number
   const searchInvoicesQuery = useQuery({
     queryKey: ['search-invoices', searchValue],
@@ -124,14 +179,15 @@ export default function ReplaceProduct() {
   });
 
   const applyInvoiceResult = (foundInvoice: Invoice, searchBarcode: string) => {
-    setInvoice(foundInvoice);
+    const contextualItems = withInvoiceContext(foundInvoice.items, foundInvoice);
+    setInvoice({ ...foundInvoice, items: contextualItems });
     setSearchError(null);
     setSearchValue('');
     const initialReplacements: Record<number, ReplacementItem> = {};
     const initialProductSearch: Record<number, string> = {};
     const searchUpper = searchBarcode.toUpperCase();
 
-    foundInvoice.items.forEach((item: InvoiceItem) => {
+    contextualItems.forEach((item: InvoiceItem) => {
       const itemBarcode = item.barcode_value?.toUpperCase() || '';
       const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
       if (itemBarcode === searchUpper || itemBarcodeFull === searchUpper) {
@@ -224,14 +280,14 @@ export default function ReplaceProduct() {
 
   // Process replacement mutation
   const processReplacementMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> }) => {
+    mutationFn: async (data: { invoiceIds: number[]; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> }) => {
       const results = [];
       for (const replacement of data.replacements) {
         console.log('Calling API with:', replacement);
         const result = await posApi.replacement.replace({
           invoice_item_id: replacement.invoice_item_id,
           new_product_id: replacement.new_product_id,
-          store_id: replacement.store_id || data.invoice_id, // Use invoice store if not provided
+          store_id: replacement.store_id,
           new_unit_price: replacement.new_unit_price,
           manual_unit_price: replacement.manual_unit_price,
           scanned_barcode: replacement.scanned_barcode, // Pass the scanned barcode!
@@ -239,15 +295,20 @@ export default function ReplaceProduct() {
         });
         results.push(result.data);
       }
-      return { results, invoice_id: data.invoice_id };
+      return { results, invoiceIds: data.invoiceIds };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['cart'] });
       showToast('Product replacement processed successfully', 'success');
-      // Navigate to invoice page after successful replacement
-      navigate(`/invoices/${data.invoice_id}`);
+      if (data.invoiceIds.length === 1) {
+        navigate(`/invoices/${data.invoiceIds[0]}`);
+      } else {
+        setInvoice(null);
+        setReplacements({});
+        setProductSearch({});
+      }
     },
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to process replacement';
@@ -265,19 +326,20 @@ export default function ReplaceProduct() {
     if (!data?.invoice) return;
 
     const foundInvoice = data.invoice as Invoice;
-    const matchingItems = foundInvoice.items as InvoiceItem[];
+    const matchingItems = withInvoiceContext(foundInvoice.items as InvoiceItem[], foundInvoice);
 
-    if (invoice && foundInvoice.id !== invoice.id) {
+    if (invoice && !isSameCustomer(foundInvoice, invoice)) {
       const switchConfirmed = window.confirm(
-        `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+        `This barcode belongs to customer ${foundInvoice.customer_name || 'N/A'}, while current selection is for ${invoice.customer_name || 'N/A'}. Do you want to clear current selection and switch customer?`
       );
       if (!switchConfirmed) return;
+      await releaseAllReservedBarcodes();
       applyInvoiceResult(foundInvoice, searchValue.trim());
-      showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process replacement.`, 'success');
+      showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
       return;
     }
 
-    if (invoice && foundInvoice.id === invoice.id) {
+    if (invoice && isSameCustomer(foundInvoice, invoice)) {
       setInvoice((prev) => {
         if (!prev) return prev;
         const existingIds = new Set(prev.items.map((i) => i.id));
@@ -301,17 +363,24 @@ export default function ReplaceProduct() {
       });
       setSearchError(null);
       setSearchValue('');
-      showToast(`Added ${matchingItems.length} item(s) to replacement list`, 'success');
+      showToast(
+        foundInvoice.id === invoice.id
+          ? `Added ${matchingItems.length} item(s) to replacement list`
+          : `Added ${matchingItems.length} item(s) from invoice ${foundInvoice.invoice_number}`,
+        'success'
+      );
       return;
     }
 
     applyInvoiceResult(foundInvoice, searchValue.trim());
-    showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process replacement.`, 'success');
+    showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process replacement.`, 'success');
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
+    await releaseAllReservedBarcodes();
+    const contextualItems = withInvoiceContext(selectedInvoice.items, selectedInvoice);
     setShowInvoiceDropdown(false);
-    setInvoice(selectedInvoice);
+    setInvoice({ ...selectedInvoice, items: contextualItems });
     setSearchError(null);
     setSearchValue('');
     setReplacements({});
@@ -333,16 +402,17 @@ export default function ReplaceProduct() {
       if (!data?.invoice) return;
 
       const foundInvoice = data.invoice as Invoice;
-      const matchingItems = foundInvoice.items as InvoiceItem[];
+      const matchingItems = withInvoiceContext(foundInvoice.items as InvoiceItem[], foundInvoice);
 
       if (invoice) {
-        if (foundInvoice.id !== invoice.id) {
+        if (!isSameCustomer(foundInvoice, invoice)) {
           const switchConfirmed = window.confirm(
-            `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+            `This barcode belongs to customer ${foundInvoice.customer_name || 'N/A'}, while current selection is for ${invoice.customer_name || 'N/A'}. Do you want to clear current selection and switch customer?`
           );
           if (!switchConfirmed) return;
 
-          setInvoice(foundInvoice);
+          await releaseAllReservedBarcodes();
+          setInvoice({ ...foundInvoice, items: matchingItems });
           setSearchError(null);
           setSearchValue('');
           const initialReplacements: Record<number, ReplacementItem> = {};
@@ -357,7 +427,7 @@ export default function ReplaceProduct() {
           });
           setReplacements(initialReplacements);
           setProductSearch({});
-          showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process replacement.`, 'success');
+          showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
           return;
         }
 
@@ -382,12 +452,17 @@ export default function ReplaceProduct() {
           }
           return next;
         });
-        showToast(`Added ${matchingItems.length} item(s) to replacement list`, 'success');
+        showToast(
+          foundInvoice.id === invoice.id
+            ? `Added ${matchingItems.length} item(s) to replacement list`
+            : `Added ${matchingItems.length} item(s) from invoice ${foundInvoice.invoice_number}`,
+          'success'
+        );
         setSearchValue('');
         return;
       }
 
-      setInvoice(foundInvoice);
+      setInvoice({ ...foundInvoice, items: matchingItems });
       setSearchError(null);
       setSearchValue('');
       const initialReplacements: Record<number, ReplacementItem> = {};
@@ -402,7 +477,7 @@ export default function ReplaceProduct() {
       });
       setReplacements(initialReplacements);
       setProductSearch({});
-      showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process replacement.`, 'success');
+      showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process replacement.`, 'success');
     } catch (error: any) {
       const status = error?.response?.status;
       const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
@@ -415,6 +490,11 @@ export default function ReplaceProduct() {
   };
 
   const handleItemToggle = (itemId: number) => {
+    const existingReplacement = replacements[itemId];
+    if (existingReplacement) {
+      void releaseReservedBarcode(existingReplacement);
+    }
+
     setReplacements(prev => {
       if (prev[itemId]) {
         const newReplacements = { ...prev };
@@ -449,7 +529,7 @@ export default function ReplaceProduct() {
     }
   };
 
-  const handleProductSelect = (itemId: number, product: any, searchedValue?: string) => {
+  const handleProductSelect = async (itemId: number, product: any, searchedValue?: string) => {
     // Get price from product (selling_price or purchase_price)
     const productPrice = product.selling_price || product.purchase_price || product.unit_price || 0;
 
@@ -457,6 +537,51 @@ export default function ReplaceProduct() {
     // Priority: searchedValue (what user typed) > matched_barcode (from API) > product.barcode
     // We want the EXACT barcode the user searched for, not what the API matched
     const barcodeToUse = searchedValue || product.matched_barcode || product.barcode || null;
+    const normalizedSelectedCode = (barcodeToUse || '').trim().toUpperCase();
+
+    if (normalizedSelectedCode) {
+      const alreadyUsed = Object.entries(replacements).some(([existingItemId, existingReplacement]) => {
+        if (Number(existingItemId) === itemId) return false;
+        const existingCode = (existingReplacement.scanned_barcode || '').trim().toUpperCase();
+        return Boolean(existingReplacement.new_product_id) && existingCode === normalizedSelectedCode;
+      });
+
+      if (alreadyUsed) {
+        showToast(
+          `Barcode/short code ${barcodeToUse} is already selected for another item. Please scan a different piece.`,
+          'error'
+        );
+        return;
+      }
+    }
+
+    const barcodeIdToReserve = product.barcode_id;
+    if (!barcodeIdToReserve) {
+      showToast('Could not reserve this barcode. Please scan/select a specific available barcode.', 'error');
+      return;
+    }
+
+    const existingReplacement = replacements[itemId];
+    let reserveResponse: any = null;
+
+    if (existingReplacement?.reserved_barcode_id && existingReplacement.reserved_barcode_id !== barcodeIdToReserve) {
+      await releaseReservedBarcode(existingReplacement);
+    }
+
+    if (existingReplacement?.reserved_barcode_id !== barcodeIdToReserve) {
+      try {
+        reserveResponse = await posApi.replacement.reserveBarcode({
+          barcode_id: barcodeIdToReserve,
+          action: 'reserve',
+        });
+      } catch (error: any) {
+        const errorMsg = error?.response?.data?.error || 'Failed to reserve barcode for replacement';
+        showToast(errorMsg, 'error');
+        return;
+      }
+    }
+
+    const restoreTag = (reserveResponse?.data?.previous_tag || product.barcode_tag || 'new') as 'new' | 'returned';
 
     console.log('handleProductSelect:', { itemId, searchedValue, matched_barcode: product.matched_barcode, barcodeToUse });
 
@@ -466,6 +591,9 @@ export default function ReplaceProduct() {
         ...prev[itemId],
         new_product_id: product.id,
         new_product_name: product.name,
+        selected_short_code: product.matched_barcode || searchedValue || null,
+        reserved_barcode_id: barcodeIdToReserve,
+        reserved_restore_tag: restoreTag === 'returned' ? 'returned' : 'new',
         new_unit_price: productPrice,
         manual_unit_price: null, // Will be set if user manually adjusts
         scanned_barcode: barcodeToUse, // Store the exact barcode that was searched
@@ -539,14 +667,14 @@ export default function ReplaceProduct() {
       if (productSearchSelectedIndex[itemId] >= 0 && products.length > 0) {
         const product = products[productSearchSelectedIndex[itemId]];
         if (product) {
-          handleProductSelect(itemId, product);
+          await handleProductSelect(itemId, product);
           return;
         }
       }
 
       // If barcode check found a product, select it
       if (barcodeCheckQuery.data?.product && !barcodeCheckQuery.data.isUnavailable && activeProductSearchItemId === itemId) {
-        handleProductSelect(itemId, barcodeCheckQuery.data.product, searchValue.trim());
+        await handleProductSelect(itemId, barcodeCheckQuery.data.product, searchValue.trim());
         return;
       }
 
@@ -555,7 +683,7 @@ export default function ReplaceProduct() {
         try {
           const barcodeCheck = await productsApi.byBarcode(searchValue.trim(), strictBarcodeMode);
           if (barcodeCheck.data && barcodeCheck.data.barcode_available) {
-            handleProductSelect(itemId, barcodeCheck.data, searchValue.trim());
+            await handleProductSelect(itemId, barcodeCheck.data, searchValue.trim());
             setProductSearch(prev => ({ ...prev, [itemId]: '' }));
             return;
           }
@@ -586,15 +714,20 @@ export default function ReplaceProduct() {
     console.log('All replacements:', replacements);
 
     const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag: string }> = [];
+    const involvedInvoiceIds = new Set<number>();
 
     Object.values(replacements).forEach(replacement => {
       console.log('Processing replacement:', replacement);
 
       if (replacement.new_product_id && replacement.quantity > 0) {
+        const sourceItem = invoice.items.find((item) => item.id === replacement.item_id);
+        if (sourceItem?.source_invoice_id) {
+          involvedInvoiceIds.add(sourceItem.source_invoice_id);
+        }
         const replacementData: any = {
           invoice_item_id: replacement.item_id,
           new_product_id: replacement.new_product_id,
-          store_id: invoice.store,
+          store_id: sourceItem?.source_store ?? invoice.store,
           return_tag: replacement.return_tag,
         };
 
@@ -625,20 +758,36 @@ export default function ReplaceProduct() {
       return;
     }
 
+    const barcodeUsage = new Map<string, number>();
+    for (const replacement of replacementsToProcess) {
+      const key = (replacement.scanned_barcode || '').trim().toUpperCase();
+      if (!key) continue;
+      barcodeUsage.set(key, (barcodeUsage.get(key) || 0) + 1);
+    }
+    const duplicateCodes = [...barcodeUsage.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([code]) => code);
+    if (duplicateCodes.length > 0) {
+      showToast(
+        `Duplicate replacement barcode/short code selected: ${duplicateCodes.join(', ')}. Use a unique code per item.`,
+        'error'
+      );
+      return;
+    }
+
     if (!confirm('Are you sure you want to process this replacement? Old items will be returned to stock and new items will be added to the invoice.')) {
       return;
     }
 
-    const invoiceId = invoice.id; // Capture invoice ID before mutation
-
     // Process replacements one by one
     processReplacementMutation.mutate({
-      invoice_id: invoiceId,
+      invoiceIds: Array.from(involvedInvoiceIds),
       replacements: replacementsToProcess,
     });
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
+    await releaseAllReservedBarcodes();
     setSearchValue('');
     setInvoice(null);
     setReplacements({});
@@ -649,7 +798,15 @@ export default function ReplaceProduct() {
     }
   };
 
-  const hasReplacements = Object.values(replacements).some(r => r.new_product_id !== null && r.quantity > 0);
+  const selectedReplacementRows = Object.values(replacements).filter((r) => r.quantity > 0);
+  const hasReplacements = selectedReplacementRows.length > 0;
+  const allSelectedHaveReplacementProduct = selectedReplacementRows.every((r) => r.new_product_id !== null);
+  const selectedReplacementItemIds = new Set(Object.keys(replacements).map((id) => Number(id)));
+  const involvedInvoiceNumbers = invoice
+    ? [...new Set(invoice.items
+      .filter((item) => selectedReplacementItemIds.has(item.id))
+      .map((item) => item.source_invoice_number || invoice.invoice_number))]
+    : [];
 
   // Get products for each item
   const getProductsForItem = (itemId: number) => {
@@ -690,7 +847,10 @@ export default function ReplaceProduct() {
       <div className="flex items-center gap-4">
         <Button
           variant="outline"
-          onClick={() => navigate('/replacement')}
+          onClick={async () => {
+            await handleReset();
+            navigate('/replacement');
+          }}
           className="flex items-center gap-2"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -830,16 +990,18 @@ export default function ReplaceProduct() {
               <div className="bg-gray-50 p-4 rounded-lg">
                 <div className="flex items-center gap-2 mb-3">
                   <FileText className="h-5 w-5 text-gray-600" />
-                  <h3 className="font-semibold text-lg">Invoice Details</h3>
+                  <h3 className="font-semibold text-lg">Customer Context</h3>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                   <div>
-                    <span className="text-gray-600 block text-xs">Invoice Number</span>
-                    <span className="font-medium">{invoice.invoice_number}</span>
-                  </div>
-                  <div>
                     <span className="text-gray-600 block text-xs">Customer</span>
                     <span className="font-medium">{invoice.customer_name || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 block text-xs">Invoices in Selection</span>
+                    <span className="font-medium">
+                      {involvedInvoiceNumbers.length > 0 ? involvedInvoiceNumbers.join(', ') : invoice.invoice_number}
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600 block text-xs">Store</span>
@@ -894,53 +1056,9 @@ export default function ReplaceProduct() {
                               </div>
                             </div>
                           </div>
-                        </div>
-
-                        {isSelected && (
-                          <div className="mt-3 ml-7 space-y-4">
-                            {/* Return Condition (Traffic Signals) */}
-                            <div className="flex items-center gap-3 py-2 border-y border-gray-100">
-                              <span className="text-sm font-medium text-gray-700">Return Condition:</span>
-                              <div className="flex items-center gap-3">
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'returned')}
-                                  className={`w-6 h-6 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'returned'
-                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-green-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Returned (Good condition)"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'defective')}
-                                  className={`w-6 h-6 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'defective'
-                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-red-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Defective"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => handleReturnTagChange(item.id, 'unknown')}
-                                  className={`w-6 h-6 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'unknown'
-                                    ? 'border-gray-900 scale-110 shadow-md ring-2 ring-yellow-200'
-                                    : 'border-transparent opacity-30 hover:opacity-60'
-                                    }`}
-                                  title="Unknown (Default)"
-                                />
-                              </div>
-                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${replacement.return_tag === 'returned' ? 'text-green-700 bg-green-50' :
-                                replacement.return_tag === 'defective' ? 'text-red-700 bg-red-50' :
-                                  'text-yellow-700 bg-yellow-50'
-                                }`}>
-                                {replacement.return_tag}
-                              </span>
-                            </div>
-
-                            {/* Quantity Selection */}
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm text-gray-700">Quantity:</span>
+                          {isSelected && (
+                            <div className="flex items-center gap-2 self-start">
+                              <span className="text-sm text-gray-700">Qty:</span>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -960,7 +1078,7 @@ export default function ReplaceProduct() {
                                 onChange={(e) => handleQuantityChange(item.id, e.target.value, maxQuantity)}
                                 min={1}
                                 max={maxQuantity}
-                                className="w-20 text-center"
+                                className="w-16 text-center"
                               />
                               <Button
                                 variant="outline"
@@ -975,7 +1093,48 @@ export default function ReplaceProduct() {
                                 <Plus className="h-4 w-4" />
                               </Button>
                             </div>
+                          )}
+                          {isSelected && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleReturnTagChange(item.id, 'returned')}
+                                className={`w-5 h-5 rounded-full bg-green-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'returned'
+                                  ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-green-200'
+                                  : 'border-transparent opacity-30 hover:opacity-60'
+                                  }`}
+                                title="Returned (Good condition)"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleReturnTagChange(item.id, 'defective')}
+                                className={`w-5 h-5 rounded-full bg-red-500 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'defective'
+                                  ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-red-200'
+                                  : 'border-transparent opacity-30 hover:opacity-60'
+                                  }`}
+                                title="Defective"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleReturnTagChange(item.id, 'unknown')}
+                                className={`w-5 h-5 rounded-full bg-yellow-400 border-2 transition-all hover:scale-110 ${replacement.return_tag === 'unknown'
+                                  ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
+                                  : 'border-transparent opacity-30 hover:opacity-60'
+                                  }`}
+                                title="Unknown (Default)"
+                              />
+                              <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${replacement.return_tag === 'returned' ? 'text-green-700 bg-green-50' :
+                                replacement.return_tag === 'defective' ? 'text-red-700 bg-red-50' :
+                                  'text-yellow-700 bg-yellow-50'
+                                }`}>
+                                {replacement.return_tag}
+                              </span>
+                            </div>
+                          )}
+                        </div>
 
+                        {isSelected && (
+                          <div className="mt-3 ml-7 space-y-4">
                             {/* Product Search */}
                             <div className="relative">
                               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1042,7 +1201,7 @@ export default function ReplaceProduct() {
                                         <button
                                           key={product.id}
                                           type="button"
-                                          onClick={() => handleProductSelect(item.id, product, productSearch[item.id])}
+                                          onClick={() => { void handleProductSelect(item.id, product, productSearch[item.id]); }}
                                           className={`w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors ${isSelected ? 'bg-blue-50' : ''
                                             }`}
                                         >
@@ -1078,6 +1237,11 @@ export default function ReplaceProduct() {
                                   <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
                                     <Package className="h-4 w-4" />
                                     Selected: {replacement.new_product_name}
+                                    {replacement.selected_short_code && (
+                                      <span className="text-gray-600">
+                                        (short: {replacement.selected_short_code})
+                                      </span>
+                                    )}
                                   </div>
 
                                   {/* Price Adjustment */}
@@ -1218,7 +1382,7 @@ export default function ReplaceProduct() {
                 <Button
                   variant="primary"
                   onClick={handleProcessReplacement}
-                  disabled={!hasReplacements || processReplacementMutation.isPending}
+                  disabled={!hasReplacements || !allSelectedHaveReplacementProduct || processReplacementMutation.isPending}
                 >
                   {processReplacementMutation.isPending ? 'Processing...' : 'Process Replacement'}
                 </Button>

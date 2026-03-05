@@ -205,6 +205,7 @@ export const posApi = {
     checkout: (id: number, data?: any) => api.post(`/pos/invoices/${id}/checkout/`, data),
     markCredit: (id: number, data?: any) => api.post(`/pos/invoices/${id}/mark-credit/`, data),
     payments: (id: number, data: any) => api.post(`/pos/invoices/${id}/payments/`, data),
+    updatePayment: (id: number, data: any) => api.patch(`/pos/invoices/${id}/payments/`, data),
     addItem: (id: number, data: any) => api.post(`/pos/invoices/${id}/items/`, data),
     updateItem: (id: number, itemId: number, data: any) => api.patch(`/pos/invoices/${id}/items/${itemId}/`, data),
     deleteItem: (id: number, itemId: number) => api.delete(`/pos/invoices/${id}/items/${itemId}/`),
@@ -214,6 +215,8 @@ export const posApi = {
   replacement: {
     check: (data: any) => api.post('/pos/replacement/check/', data),
     create: (data: any) => api.post('/pos/replacement/create/', data),
+    reserveBarcode: (data: { barcode_id: number; action?: 'reserve' | 'release'; restore_tag?: 'new' | 'returned' }) =>
+      api.post('/pos/replacement/reserve-barcode/', data),
     updateTag: (barcodeId: number, data: any) => api.post(`/pos/replacement/barcode/${barcodeId}/update-tag/`, data),
     replace: (data: any) => api.post('/pos/replacement/replace/', data),
     return: (data: any) => api.post('/pos/replacement/return/', data),
@@ -239,6 +242,15 @@ export const posApi = {
   creditNotes: {
     list: (params?: any) => api.get('/credit-notes/', { params }),
     get: (id: number) => api.get(`/credit-notes/${id}/`),
+  },
+  expenses: {
+    list: (params?: any) => api.get('/expenses/', { params }),
+    types: (params?: any) => api.get('/expenses/types/', { params }),
+    borrowers: (params?: any) => api.get('/expenses/borrowers/', { params }),
+    get: (id: number) => api.get(`/expenses/${id}/`),
+    create: (data: any) => api.post('/expenses/', data),
+    update: (id: number, data: any) => api.patch(`/expenses/${id}/`, data),
+    delete: (id: number) => api.delete(`/expenses/${id}/`),
   },
 };
 
@@ -306,6 +318,14 @@ export const customersApi = {
     },
     summary: (params?: any) => api.get('/internal-ledger/summary/', { params }),
     customerDetail: (customerId: number, params?: any) => api.get(`/internal-ledger/customers/${customerId}/`, { params }),
+  },
+  paymentReminders: {
+    list: (params?: any) => api.get('/payment-reminders/', { params }),
+    get: (id: number) => api.get(`/payment-reminders/${id}/`),
+    calendar: (params?: any) => api.get('/payment-reminders/calendar/', { params }),
+    create: (data: any) => api.post('/payment-reminders/', data),
+    update: (id: number, data: any) => api.patch(`/payment-reminders/${id}/`, data),
+    delete: (id: number) => api.delete(`/payment-reminders/${id}/`),
   },
 };
 

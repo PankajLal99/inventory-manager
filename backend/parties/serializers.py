@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry
+from backend.pos.models import Payment
+from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry, PaymentReminder
 
 
 class CustomerGroupSerializer(serializers.ModelSerializer):
@@ -86,3 +87,20 @@ class InternalLedgerEntrySerializer(serializers.ModelSerializer):
             'entry_type', 'amount', 'description', 'created_by', 'created_by_username', 'created_at'
         ]
 
+
+class PaymentReminderSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    customer_group = serializers.IntegerField(source='customer.customer_group_id', read_only=True)
+    customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
+    settled_payment = serializers.PrimaryKeyRelatedField(queryset=Payment.objects.all(), required=False, allow_null=True)
+    settled_payment_amount = serializers.CharField(source='settled_payment.amount', read_only=True)
+    settled_payment_method = serializers.CharField(source='settled_payment.payment_method', read_only=True)
+
+    class Meta:
+        model = PaymentReminder
+        fields = [
+            'id', 'customer', 'customer_name', 'customer_group', 'customer_group_name',
+            'due_date', 'due_amount', 'is_settled', 'settled_at',
+            'settled_payment', 'settled_payment_amount', 'settled_payment_method',
+            'created_at', 'updated_at'
+        ]

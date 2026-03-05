@@ -409,7 +409,7 @@ export default function Dashboard() {
 
               {/* 12. Pending Invoices */}
               <KpiCard
-                title="Pending Invoices"
+                title={`Pending Invoice Amount (${kpis.pending_invoices_count || 0})`}
                 value={kpis.pending_invoices_total || 0}
                 icon={FileText}
                 bgColor="bg-gradient-to-br from-amber-50 to-amber-100"
@@ -429,7 +429,7 @@ export default function Dashboard() {
 
               {/* 14. Today's Loss (Manish Traders Loss Loss Loss) */}
               <KpiCard
-                title="Today's Loss"
+                title={`Selected Day Loss (${formatDateMMDDYYYY(new Date(dateTo))})`}
                 value={kpis.todays_loss || 0}
                 icon={TrendingDown}
                 bgColor="bg-gradient-to-br from-rose-50 to-rose-100"

@@ -56,6 +56,7 @@ export default function CreditNoteReplacement() {
     error?: string;
     customers?: Array<{ id: number; name: string }>;
     processable?: Array<{ barcode: string; barcode_full?: string | null; short_code?: string | null; invoice_id: number; invoice_number: string; item_id: number; product_name: string; customer_name: string }>;
+    fresh_processable?: Array<{ barcode: string; barcode_id: number; barcode_full?: string | null; short_code?: string | null; product_name: string; tag?: string | null }>;
     skipped?: Array<{ barcode: string; barcode_full?: string | null; short_code?: string | null; reason: 'not_found' | 'not_sold' | 'different_customer'; current_tag?: string | null }>;
   } | null>(null);
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
@@ -470,10 +471,12 @@ export default function CreditNoteReplacement() {
       setBulkCheckResult(response.data);
       const skippedCount = response.data.skipped?.length ?? 0;
       const processableCount = response.data.processable?.length ?? 0;
+      const freshCount = response.data.fresh_processable?.length ?? 0;
+      const actionableCount = processableCount + (bulkReturnTag === 'defective' ? freshCount : 0);
       if (response.data.valid) {
         showToast(
-          processableCount > 0
-            ? `${processableCount} barcode(s) will be marked returned.${skippedCount > 0 ? ` ${skippedCount} skipped (no action).` : ''}`
+          actionableCount > 0
+            ? `${actionableCount} barcode(s) can be marked as ${bulkReturnTag}.${bulkReturnTag !== 'defective' && freshCount > 0 ? ` ${freshCount} fresh barcode(s) are only available for defective.` : ''}${skippedCount > 0 ? ` ${skippedCount} skipped (no action).` : ''}`
             : 'No barcodes could be processed. Check skipped list.',
           skippedCount > 0 ? 'info' : 'success'
         );
@@ -496,7 +499,9 @@ export default function CreditNoteReplacement() {
 
   const handleBulkMarkReturned = async () => {
     const processable = bulkCheckResult?.processable ?? [];
-    if (!bulkCheckResult?.valid || processable.length === 0) return;
+    const freshProcessable = bulkCheckResult?.fresh_processable ?? [];
+    const freshToDefective = bulkReturnTag === 'defective' ? freshProcessable : [];
+    if (!bulkCheckResult?.valid || (processable.length === 0 && freshToDefective.length === 0)) return;
     setBulkApplyLoading(true);
     const byInvoice = new Map<number, typeof processable>();
     for (const row of processable) {
@@ -504,7 +509,8 @@ export default function CreditNoteReplacement() {
       list.push(row);
       byInvoice.set(row.invoice_id, list);
     }
-    let done = 0;
+    let doneSold = 0;
+    let doneFresh = 0;
     try {
       for (const [invoiceId, items] of byInvoice) {
         const items_to_replace = items.map((b) => ({
@@ -516,12 +522,24 @@ export default function CreditNoteReplacement() {
           items_to_replace,
           notes: notes || 'Bulk return',
         });
-        done += items.length;
+        doneSold += items.length;
       }
+
+      for (const row of freshToDefective) {
+        const barcodeValue = row.barcode_full || row.short_code || row.barcode;
+        await posApi.replacement.create({ barcode: barcodeValue });
+        await posApi.replacement.updateTag(row.barcode_id, { tag: 'defective' });
+        doneFresh += 1;
+      }
+
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['credit-notes'] });
-      showToast(`Marked ${done} barcode(s) as ${bulkReturnTag} across ${byInvoice.size} invoice(s).`, 'success');
+      const doneTotal = doneSold + doneFresh;
+      const soldMessage = doneSold > 0 ? `${doneSold} sold barcode(s) across ${byInvoice.size} invoice(s)` : null;
+      const freshMessage = doneFresh > 0 ? `${doneFresh} fresh barcode(s)` : null;
+      const detail = [soldMessage, freshMessage].filter(Boolean).join(' + ');
+      showToast(`Marked ${doneTotal} barcode(s) as ${bulkReturnTag}${detail ? ` (${detail})` : ''}.`, 'success');
       setShowBulkModal(false);
       setBulkInput('');
       setBulkCheckResult(null);
@@ -533,6 +551,10 @@ export default function CreditNoteReplacement() {
       setBulkApplyLoading(false);
     }
   };
+
+  const soldBulkCount = bulkCheckResult?.processable?.length ?? 0;
+  const freshBulkCount = bulkCheckResult?.fresh_processable?.length ?? 0;
+  const canApplyBulk = soldBulkCount > 0 || (bulkReturnTag === 'defective' && freshBulkCount > 0);
 
   const handleReset = () => {
     setSearchValue('');
@@ -995,7 +1017,7 @@ export default function CreditNoteReplacement() {
                 >
                   {bulkCheckLoading ? 'Checking...' : 'Check status'}
                 </Button>
-                {bulkCheckResult?.valid && (
+                {bulkCheckResult && canApplyBulk && (
                   <Button
                     variant="primary"
                     onClick={handleBulkMarkReturned}
@@ -1005,6 +1027,11 @@ export default function CreditNoteReplacement() {
                   </Button>
                 )}
               </div>
+              {bulkCheckResult && (bulkCheckResult.fresh_processable?.length ?? 0) > 0 && bulkReturnTag !== 'defective' && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Fresh barcodes were found. To process them in bulk, select the red <span className="font-semibold">defective</span> tag.
+                </div>
+              )}
               {bulkCheckResult && (
                 <div className="border rounded-lg p-3 bg-gray-50 text-sm space-y-3">
                   {(bulkCheckResult.processable?.length ?? 0) > 0 && (
@@ -1027,6 +1054,24 @@ export default function CreditNoteReplacement() {
                         ))}
                       </ul>
                     </>
+                  )}
+                  {(bulkCheckResult.fresh_processable?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="font-medium text-blue-700">
+                        ✓ {(bulkCheckResult.fresh_processable ?? []).length} fresh barcode(s) ready for defective flow
+                      </p>
+                      <p className="text-gray-600">
+                        These are currently fresh and can be processed when the red defective tag is selected.
+                      </p>
+                      <ul className="list-disc list-inside text-gray-700 space-y-0.5 max-h-28 overflow-y-auto mt-1">
+                        {(bulkCheckResult.fresh_processable ?? []).map((p, idx) => (
+                          <li key={p.barcode_id ?? idx}>
+                            <span className="font-mono text-sm">{formatBarcodeDisplay(p)}</span>
+                            {p.product_name && <span className="text-gray-500 ml-1">· {p.product_name}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                   {(bulkCheckResult.skipped?.length ?? 0) > 0 && (
                     <div>

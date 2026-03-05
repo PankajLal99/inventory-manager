@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Q, DecimalField, Prefetch
+from django.db.models import Sum, Count, Q, DecimalField, Prefetch, F, Value, Case, When, ExpressionWrapper
 from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -21,7 +21,7 @@ from backend.core.cache_utils import (
     cache_dashboard_kpis,
     DASHBOARD_KPI_CACHE_TTL
 )
-from backend.pos.models import Invoice, InvoiceItem, Payment, CartItem
+from backend.pos.models import Invoice, InvoiceItem, Payment, CartItem, Expenses
 from backend.catalog.models import Product, Barcode
 import logging
 
@@ -164,7 +164,9 @@ def optimized_dashboard_kpis(request):
     
     # OPTIMIZATION 5: Calculate pending profit with batch query
     credit_invoices = Invoice.objects.filter(
-        Q(status='credit') | Q(invoice_type='pending')
+        Q(status='credit') | Q(invoice_type='pending'),
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to
     ).exclude(
         status='void'
     ).exclude(
@@ -209,11 +211,20 @@ def optimized_dashboard_kpis(request):
         
         profit = (sale_price - purchase_price) * item.quantity
         pending_profit += profit
+
+    # Expenses for the selected dashboard date range
+    expenses_queryset = Expenses.objects.filter(
+        expense_date__gte=date_from,
+        expense_date__lte=date_to
+    )
+    total_expenses = expenses_queryset.aggregate(
+        total=Sum('expense_amount')
+    )['total'] or Decimal('0.00')
     
-    # OPTIMIZATION 6: Monthly profit calculation (optimized date range)
+    # OPTIMIZATION 6: Monthly profit calculation (10th to 10th)
     now = timezone.now()
     current_day = now.day
-    
+
     if current_day < 10:
         if now.month == 1:
             monthly_start = now.replace(month=12, day=10, year=now.year-1, hour=0, minute=0, second=0, microsecond=0)
@@ -226,16 +237,15 @@ def optimized_dashboard_kpis(request):
             monthly_end = now.replace(month=1, day=10, year=now.year+1, hour=23, minute=59, second=59, microsecond=999999)
         else:
             monthly_end = now.replace(month=now.month+1, day=10, hour=23, minute=59, second=59, microsecond=999999)
-    
+
     monthly_invoices = Invoice.objects.filter(
         created_at__gte=monthly_start,
         created_at__lte=monthly_end,
         status__in=['paid', 'partial']
     ).exclude(status='void').exclude(customer__name__iexact='Manish Traders Loss')
-    
     if store_id:
         monthly_invoices = monthly_invoices.filter(store_id=store_id)
-    
+
     monthly_items = InvoiceItem.objects.filter(
         invoice__in=monthly_invoices
     ).select_related('barcode', 'product')
@@ -291,42 +301,74 @@ def optimized_dashboard_kpis(request):
     for barcode in available_barcodes.select_related('purchase', 'purchase_item'):
         total_stock_value += barcode.get_purchase_price()
     
-    # OPTIMIZATION 8: Pending invoices aggregation
-    pending_invoices_summary = credit_invoices.aggregate(
-        count=Count('id'),
-        total=Sum('total', output_field=DecimalField())
-    )
-    pending_invoices_count = pending_invoices_summary['count'] or 0
-    pending_invoices_total = pending_invoices_summary['total'] or Decimal('0.00')
-    
-    # OPTIMIZATION 9: Loss calculations with aggregation
-    today = timezone.now().date()
-    todays_loss = Invoice.objects.filter(
-        created_at__date=today,
-        customer__name__icontains='Manish Traders Loss'
+    # OPTIMIZATION 8: Pending invoices aggregation (same basis as invoices list KPI)
+    pending_invoice_queryset = Invoice.objects.filter(
+        invoice_type='pending',
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to
     ).exclude(
         status='void'
+    ).exclude(
+        customer__name__iexact='Manish Traders Loss'
+    )
+
+    if store_id:
+        pending_invoice_queryset = pending_invoice_queryset.filter(store_id=store_id)
+
+    pending_invoices_count = pending_invoice_queryset.count()
+
+    # Match pending amount logic used by invoice serializer (display_total):
+    # include only unpriced items and fallback to barcode purchase-item unit price.
+    effective_pending_purchase_price = Case(
+        When(purchase_price__gt=0, then=F('purchase_price')),
+        When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
+        default=Value(Decimal('0.00')),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    pending_item_amount_expr = ExpressionWrapper(
+        F('quantity') * effective_pending_purchase_price,
+        output_field=DecimalField(max_digits=18, decimal_places=2),
+    )
+    pending_invoices_total = InvoiceItem.objects.filter(
+        invoice__in=pending_invoice_queryset,
+        quantity__gt=0
+    ).filter(
+        Q(manual_unit_price__isnull=True) | Q(manual_unit_price__lte=0),
+        Q(unit_price__isnull=True) | Q(unit_price__lte=0),
     ).aggregate(
-        total=Sum('total', output_field=DecimalField())
+        total=Sum(pending_item_amount_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
     )['total'] or Decimal('0.00')
     
-    monthly_loss = Invoice.objects.filter(
+    # OPTIMIZATION 9: Loss calculations with selected-date responsiveness
+    todays_loss_qs = Invoice.objects.filter(
+        created_at__date=date_to,
+        customer__name__icontains='Manish Traders Loss'
+    ).exclude(status='void')
+    if store_id:
+        todays_loss_qs = todays_loss_qs.filter(store_id=store_id)
+    todays_loss = todays_loss_qs.aggregate(
+        total=Sum('total', output_field=DecimalField())
+    )['total'] or Decimal('0.00')
+
+    monthly_loss_qs = Invoice.objects.filter(
         created_at__gte=monthly_start,
         created_at__lte=monthly_end,
         customer__name__icontains='Manish Traders Loss'
-    ).exclude(
-        status='void'
-    ).aggregate(
+    ).exclude(status='void')
+    if store_id:
+        monthly_loss_qs = monthly_loss_qs.filter(store_id=store_id)
+    monthly_loss = monthly_loss_qs.aggregate(
         total=Sum('total', output_field=DecimalField())
     )['total'] or Decimal('0.00')
-    
-    total_loss = Invoice.objects.filter(
+
+    total_loss_qs = Invoice.objects.filter(
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
         customer__name__icontains='Manish Traders Loss'
-    ).exclude(
-        status='void'
-    ).aggregate(
+    ).exclude(status='void')
+    if store_id:
+        total_loss_qs = total_loss_qs.filter(store_id=store_id)
+    total_loss = total_loss_qs.aggregate(
         total=Sum('total', output_field=DecimalField())
     )['total'] or Decimal('0.00')
     
@@ -378,7 +420,7 @@ def optimized_dashboard_kpis(request):
         'kpis': {
             'total_cash': float(total_cash),
             'total_online': float(total_online),
-            'total_expenses': 0.0,
+            'total_expenses': float(total_expenses),
             'total_inhand': float(total_inhand),
             'repairing_profit': float(repairing_profit),
             'counter_profit': float(counter_profit),
