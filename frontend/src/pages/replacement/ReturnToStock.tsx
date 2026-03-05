@@ -25,11 +25,17 @@ interface InvoiceItem {
   barcode_id?: number;
   barcode_value?: string;
   barcode_full?: string;
+  source_invoice_id?: number;
+  source_invoice_number?: string;
+  source_store?: number;
+  source_customer?: number | null;
+  source_customer_name?: string;
 }
 
 interface Invoice {
   id: number;
   invoice_number: string;
+  customer?: number | null;
   customer_name?: string;
   store_name?: string;
   created_at: string;
@@ -50,6 +56,24 @@ export default function ReturnToStock() {
   const [showInvoiceDropdown, setShowInvoiceDropdown] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+
+  const normalizeCustomerName = (name?: string) => (name || '').trim().toLowerCase();
+  const isSameCustomer = (a: Invoice, b: Invoice) => {
+    if (a.customer !== null && a.customer !== undefined && b.customer !== null && b.customer !== undefined) {
+      return a.customer === b.customer;
+    }
+    if ((a.customer ?? null) !== (b.customer ?? null)) return false;
+    return normalizeCustomerName(a.customer_name) === normalizeCustomerName(b.customer_name);
+  };
+  const withInvoiceContext = (items: InvoiceItem[], sourceInvoice: Invoice): InvoiceItem[] =>
+    items.map((item) => ({
+      ...item,
+      source_invoice_id: sourceInvoice.id,
+      source_invoice_number: sourceInvoice.invoice_number,
+      source_store: sourceInvoice.store,
+      source_customer: sourceInvoice.customer ?? null,
+      source_customer_name: sourceInvoice.customer_name,
+    }));
 
   // Toast helper function
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -78,11 +102,12 @@ export default function ReturnToStock() {
   });
 
   const applyInvoiceResult = (foundInvoice: Invoice, searchBarcode: string) => {
-    setInvoice(foundInvoice);
+    const contextualItems = withInvoiceContext(foundInvoice.items, foundInvoice);
+    setInvoice({ ...foundInvoice, items: contextualItems });
     setSearchError(null);
     setSearchValue('');
     const initialSelected: Record<number, number> = {};
-    foundInvoice.items.forEach((item: InvoiceItem) => {
+    contextualItems.forEach((item: InvoiceItem) => {
       const itemBarcode = item.barcode_value?.toUpperCase() || '';
       const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
       const searchUpper = searchBarcode.toUpperCase();
@@ -94,7 +119,7 @@ export default function ReturnToStock() {
     });
     setSelectedItems(initialSelected);
     const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    foundInvoice.items.forEach((item: InvoiceItem) => {
+    contextualItems.forEach((item: InvoiceItem) => {
       initialTags[item.id] = 'unknown';
     });
     setItemTags(initialTags);
@@ -156,19 +181,19 @@ export default function ReturnToStock() {
     if (!data?.invoice) return;
 
     const foundInvoice = data.invoice as Invoice;
-    const matchingItems = foundInvoice.items as InvoiceItem[];
+    const matchingItems = withInvoiceContext(foundInvoice.items as InvoiceItem[], foundInvoice);
 
-    if (invoice && foundInvoice.id !== invoice.id) {
+    if (invoice && !isSameCustomer(foundInvoice, invoice)) {
       const switchConfirmed = window.confirm(
-        `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+        `This barcode belongs to customer ${foundInvoice.customer_name || 'N/A'}, while current selection is for ${invoice.customer_name || 'N/A'}. Do you want to clear current selection and switch customer?`
       );
       if (!switchConfirmed) return;
       applyInvoiceResult(foundInvoice, searchValue.trim());
-      showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process return.`, 'success');
+      showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
       return;
     }
 
-    if (invoice && foundInvoice.id === invoice.id) {
+    if (invoice && isSameCustomer(foundInvoice, invoice)) {
       setInvoice((prev) => {
         if (!prev) return prev;
         const existingIds = new Set(prev.items.map((i) => i.id));
@@ -192,7 +217,12 @@ export default function ReturnToStock() {
       });
       setSearchError(null);
       setSearchValue('');
-      showToast(`Added ${matchingItems.length} item(s) to return list`, 'success');
+      showToast(
+        foundInvoice.id === invoice.id
+          ? `Added ${matchingItems.length} item(s) to return list`
+          : `Added ${matchingItems.length} item(s) from invoice ${foundInvoice.invoice_number}`,
+        'success'
+      );
       return;
     }
 
@@ -201,19 +231,20 @@ export default function ReturnToStock() {
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
+    const contextualItems = withInvoiceContext(selectedInvoice.items, selectedInvoice);
     setShowInvoiceDropdown(false);
-    setInvoice(selectedInvoice);
+    setInvoice({ ...selectedInvoice, items: contextualItems });
     setSearchError(null);
     setSearchValue('');
 
     const initialSelected: Record<number, number> = {};
-    selectedInvoice.items.forEach((item: InvoiceItem) => {
+    contextualItems.forEach((item: InvoiceItem) => {
       initialSelected[item.id] = 0;
     });
     setSelectedItems(initialSelected);
 
     const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    selectedInvoice.items.forEach((item: InvoiceItem) => {
+    contextualItems.forEach((item: InvoiceItem) => {
       initialTags[item.id] = 'unknown';
     });
     setItemTags(initialTags);
@@ -234,16 +265,16 @@ export default function ReturnToStock() {
       if (!data?.invoice) return;
 
       const foundInvoice = data.invoice as Invoice;
-      const matchingItems = foundInvoice.items as InvoiceItem[];
+      const matchingItems = withInvoiceContext(foundInvoice.items as InvoiceItem[], foundInvoice);
 
       if (invoice) {
-        if (foundInvoice.id !== invoice.id) {
+        if (!isSameCustomer(foundInvoice, invoice)) {
           const switchConfirmed = window.confirm(
-            `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+            `This barcode belongs to customer ${foundInvoice.customer_name || 'N/A'}, while current selection is for ${invoice.customer_name || 'N/A'}. Do you want to clear current selection and switch customer?`
           );
           if (!switchConfirmed) return;
 
-          setInvoice(foundInvoice);
+          setInvoice({ ...foundInvoice, items: matchingItems });
           setSearchError(null);
           setSearchValue('');
           const initialSelected: Record<number, number> = {};
@@ -256,7 +287,7 @@ export default function ReturnToStock() {
             initialTags[item.id] = 'unknown';
           });
           setItemTags(initialTags);
-          showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process return.`, 'success');
+          showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
           return;
         }
 
@@ -281,12 +312,17 @@ export default function ReturnToStock() {
           }
           return next;
         });
-        showToast(`Added ${matchingItems.length} item(s) to return list`, 'success');
+        showToast(
+          foundInvoice.id === invoice.id
+            ? `Added ${matchingItems.length} item(s) to return list`
+            : `Added ${matchingItems.length} item(s) from invoice ${foundInvoice.invoice_number}`,
+          'success'
+        );
         setSearchValue('');
         return;
       }
 
-      setInvoice(foundInvoice);
+      setInvoice({ ...foundInvoice, items: matchingItems });
       setSearchError(null);
       setSearchValue('');
       const initialSelected: Record<number, number> = {};
@@ -299,7 +335,7 @@ export default function ReturnToStock() {
         initialTags[item.id] = 'unknown';
       });
       setItemTags(initialTags);
-      showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process return.`, 'success');
+      showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process return.`, 'success');
     } catch (error: any) {
       const status = error?.response?.status;
       const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
@@ -352,14 +388,19 @@ export default function ReturnToStock() {
     if (!invoice) return;
 
     const itemsToReturn: Array<{ invoice_item_id: number; quantity: number; store_id?: number; return_tag: string }> = [];
+    const involvedInvoiceIds = new Set<number>();
     Object.entries(selectedItems).forEach(([itemIdStr, quantity]) => {
       const quantityNum = Number(quantity);
       if (quantityNum > 0) {
         const itemId = parseInt(itemIdStr);
+        const sourceItem = invoice.items.find((item) => item.id === itemId);
+        if (sourceItem?.source_invoice_id) {
+          involvedInvoiceIds.add(sourceItem.source_invoice_id);
+        }
         itemsToReturn.push({
           invoice_item_id: itemId,
           quantity: quantityNum,
-          store_id: invoice.store,
+          store_id: sourceItem?.source_store ?? invoice.store,
           return_tag: itemTags[itemId] || 'unknown',
         });
       }
@@ -374,8 +415,6 @@ export default function ReturnToStock() {
       return;
     }
 
-    const invoiceId = invoice.id; // Capture invoice ID before processing
-
     // Process returns one by one
     try {
       for (const item of itemsToReturn) {
@@ -386,7 +425,11 @@ export default function ReturnToStock() {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['cart'] });
       showToast('Items returned to stock successfully', 'success');
-      navigate(`/invoices/${invoiceId}`);
+      if (involvedInvoiceIds.size === 1) {
+        navigate(`/invoices/${Array.from(involvedInvoiceIds)[0]}`);
+      } else {
+        handleReset();
+      }
     } catch (error) {
       // Error handling is done in onError callback
     }
@@ -405,6 +448,11 @@ export default function ReturnToStock() {
 
   const hasSelectedItems = Object.values(selectedItems).some(qty => qty > 0);
   const totalItemsToReturn = Object.values(selectedItems).reduce((sum, qty) => sum + Number(qty), 0);
+  const involvedInvoiceNumbers = invoice
+    ? [...new Set(invoice.items
+      .filter((item) => (selectedItems[item.id] || 0) > 0)
+      .map((item) => item.source_invoice_number || invoice.invoice_number))]
+    : [];
 
   // Calculate estimated refund amount
   const estimatedRefundAmount = invoice ? Object.entries(selectedItems).reduce((sum, [itemId, quantity]) => {
@@ -555,16 +603,18 @@ export default function ReturnToStock() {
               <div className="bg-gray-50 p-4 rounded-lg">
                 <div className="flex items-center gap-2 mb-3">
                   <FileText className="h-5 w-5 text-gray-600" />
-                  <h3 className="font-semibold text-lg">Invoice Details</h3>
+                  <h3 className="font-semibold text-lg">Customer Context</h3>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                   <div>
-                    <span className="text-gray-600 block text-xs">Invoice Number</span>
-                    <span className="font-medium">{invoice.invoice_number}</span>
-                  </div>
-                  <div>
                     <span className="text-gray-600 block text-xs">Customer</span>
                     <span className="font-medium">{invoice.customer_name || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 block text-xs">Invoices in Selection</span>
+                    <span className="font-medium">
+                      {involvedInvoiceNumbers.length > 0 ? involvedInvoiceNumbers.join(', ') : invoice.invoice_number}
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600 block text-xs">Store</span>

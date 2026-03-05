@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
-import { formatNumber, getStockInfo, getProductNameColor } from '../../lib/utils';
+import { formatNumber, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   loadUserCarts,
@@ -42,6 +42,7 @@ export default function POS() {
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed' | 'credit'>('cash');
+  const [invoiceDate, setInvoiceDate] = useState<string>(() => toLocalDateString(new Date()));
   const [cashAmount, setCashAmount] = useState<string>('');
   const [upiAmount, setUpiAmount] = useState<string>('');
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
@@ -1919,6 +1920,11 @@ export default function POS() {
   };
 
   const handleCheckout = () => {
+    if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
+      alert('Please select a valid invoice date');
+      return;
+    }
+
     if (!cart?.data?.items || cart.data.items.length === 0) {
       alert('Cart is empty');
       return;
@@ -1988,6 +1994,7 @@ export default function POS() {
     const checkoutData: any = {
       invoice_type: frontendToBackendInvoiceType(finalInvoiceType),
       customer: selectedCustomer?.id || null,
+      created_at: dateStringWithCurrentTimeISO(invoiceDate),
     };
 
     // Add repair data if it's a repair shop (regardless of invoice type)
@@ -2216,6 +2223,11 @@ export default function POS() {
   });
 
   const handleCheckoutAndPrintThermal = () => {
+    if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
+      alert('Please select a valid invoice date');
+      return;
+    }
+
     if (!cart?.data?.items || cart.data.items.length === 0) {
       alert('Cart is empty');
       return;
@@ -2271,6 +2283,7 @@ export default function POS() {
     const checkoutData: any = {
       invoice_type: frontendToBackendInvoiceType(invoiceType),
       customer: selectedCustomer?.id || null,
+      created_at: dateStringWithCurrentTimeISO(invoiceDate),
     };
 
     // Add split payment amounts for mixed type
@@ -3133,6 +3146,23 @@ export default function POS() {
                   <option value="credit">CREDIT</option>
                   <option value="pending">PENDING</option>
                 </Select>
+
+                <div className="mt-3">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                    Invoice Date
+                  </label>
+                  <Input
+                    type="date"
+                    value={invoiceDate}
+                    onChange={(e) => setInvoiceDate(e.target.value)}
+                    className="w-full h-11 text-sm font-medium border-2 rounded-lg"
+                    disabled={isCartLocked}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Time stays current; only the invoice date changes.
+                  </p>
+                </div>
+
                 {defaultStore?.shop_type === 'repair' && (
                   <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
                     <div className="flex items-center gap-2 mb-3">

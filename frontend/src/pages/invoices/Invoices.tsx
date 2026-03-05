@@ -9,6 +9,7 @@ import {
   Eye,
   CheckCircle,
   Coins,
+  Clock,
   User,
   Store,
   ChevronDown,
@@ -40,6 +41,7 @@ interface Invoice {
   discount_amount: string;
   tax_amount: string;
   total: string;
+  display_total?: string | number;
   paid_amount: string;
   due_amount: string;
   created_at: string;
@@ -48,6 +50,11 @@ interface Invoice {
   edited_on?: string | null;
   repair?: { id: number; [key: string]: unknown } | null;
 }
+
+const parseAmount = (value: unknown) => {
+  const parsed = parseFloat(String(value ?? '0'));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 export default function Invoices() {
   const navigate = useNavigate();
@@ -183,6 +190,11 @@ export default function Invoices() {
     return true;
   });
 
+  const getDisplayInvoiceTotal = (invoice: Invoice) => {
+    if (invoice.invoice_type === 'pending') return parseAmount(invoice.display_total ?? invoice.total);
+    return parseAmount(invoice.total ?? invoice.display_total);
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleString('en-IN', {
@@ -198,7 +210,10 @@ export default function Invoices() {
   // KPI: today's summary only
   const totalRevenue = todayInvoices
     .filter(inv => inv.status === 'paid')
-    .reduce((sum, inv) => sum + parseFloat(inv.total || '0'), 0);
+    .reduce((sum, inv) => sum + parseAmount(inv.total), 0);
+  const totalPendingInvoiceAmount = todayInvoices
+    .filter(inv => inv.invoice_type === 'pending')
+    .reduce((sum, inv) => sum + parseAmount(inv.display_total ?? inv.total), 0);
   const totalInvoices = todayInvoices.length;
   const paidInvoices = todayInvoices.filter(inv => inv.status === 'paid').length;
 
@@ -276,7 +291,7 @@ export default function Invoices() {
       {canSeeKPIStats && (
         <div className="space-y-2">
           <p className="text-sm font-medium text-gray-500">Today&apos;s summary</p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <Card>
               <div className="flex items-center justify-between">
                 <div>
@@ -290,6 +305,19 @@ export default function Invoices() {
               </div>
             </div>
           </Card>
+            <Card>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Pending Invoice Amount</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">
+                    ₹{formatNumber(totalPendingInvoiceAmount)}
+                  </p>
+                </div>
+                <div className="p-3 bg-amber-100 rounded-lg">
+                  <Clock className="h-6 w-6 text-amber-600" />
+                </div>
+              </div>
+            </Card>
           <Card>
             <div className="flex items-center justify-between">
               <div>
@@ -484,7 +512,7 @@ export default function Invoices() {
                     </TableCell>
                     <TableCell align="right">
                       <span className="font-semibold text-gray-900">
-                        ₹{formatNumber(invoice.total)}
+                        ₹{formatNumber(getDisplayInvoiceTotal(invoice))}
                       </span>
                     </TableCell>
                     <TableCell align="right">
@@ -562,7 +590,7 @@ export default function Invoices() {
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
-                          <div className="text-base font-bold text-gray-900">₹{formatNumber(invoice.total)}</div>
+                          <div className="text-base font-bold text-gray-900">₹{formatNumber(getDisplayInvoiceTotal(invoice))}</div>
                         </div>
                         {parseFloat(invoice.paid_amount || '0') > 0 && (
                           <div>

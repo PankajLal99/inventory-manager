@@ -1,5 +1,7 @@
+from decimal import Decimal
 from rest_framework import serializers
-from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair
+from django.db.models import Q, F, Value, Case, When, Sum, DecimalField, ExpressionWrapper
+from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair, Expenses
 
 
 class CartItemSerializer(serializers.ModelSerializer):
@@ -249,6 +251,30 @@ class PaymentSerializer(serializers.ModelSerializer):
         fields = ['id', 'invoice', 'payment_method', 'amount', 'reference', 'notes', 'created_by', 'created_at']
 
 
+class ExpenseSerializer(serializers.ModelSerializer):
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    last_updated_by_username = serializers.CharField(source='last_updated_by.username', read_only=True)
+
+    class Meta:
+        model = Expenses
+        fields = [
+            'id',
+            'expense_date',
+            'expense_type',
+            'lender_name',
+            'borrower_name',
+            'payment_choices_type',
+            'expense_amount',
+            'created_on',
+            'created_by',
+            'created_by_username',
+            'last_updated_on',
+            'last_updated_by',
+            'last_updated_by_username',
+        ]
+        read_only_fields = ['created_on', 'created_by', 'last_updated_on', 'last_updated_by']
+
+
 class RepairSerializer(serializers.ModelSerializer):
     invoice_number = serializers.CharField(source='invoice.invoice_number', read_only=True)
     customer_name = serializers.CharField(source='invoice.customer.name', read_only=True)
@@ -271,6 +297,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
+    display_total = serializers.SerializerMethodField()
 
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Invoice._meta.get_field('customer').related_model.objects.all(),
@@ -282,9 +309,40 @@ class InvoiceSerializer(serializers.ModelSerializer):
         model = Invoice
         fields = [
             'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name', 'status',
-            'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'paid_amount', 'due_amount',
+            'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'paid_amount', 'due_amount',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on', 'items', 'payments'
         ]
+
+    def get_display_total(self, obj):
+        """
+        Pending invoice amount for UI:
+        - include ONLY unpriced items (no entered manual/unit price)
+        - for unpriced items, fallback to purchase price
+        """
+        if obj.invoice_type != 'pending':
+            return float(obj.total or Decimal('0.00'))
+
+        effective_pending_purchase_price = Case(
+            When(purchase_price__gt=0, then=F('purchase_price')),
+            When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
+            default=Value(Decimal('0.00')),
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        )
+        pending_item_amount_expr = ExpressionWrapper(
+            F('quantity') * effective_pending_purchase_price,
+            output_field=DecimalField(max_digits=18, decimal_places=2),
+        )
+        pending_total = InvoiceItem.objects.filter(
+            invoice=obj,
+            quantity__gt=0
+        ).filter(
+            Q(manual_unit_price__isnull=True) | Q(manual_unit_price__lte=0),
+            Q(unit_price__isnull=True) | Q(unit_price__lte=0),
+        ).aggregate(
+            total=Sum(pending_item_amount_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
+        )['total'] or Decimal('0.00')
+
+        return float(pending_total)
 
 
 class ReturnItemSerializer(serializers.ModelSerializer):

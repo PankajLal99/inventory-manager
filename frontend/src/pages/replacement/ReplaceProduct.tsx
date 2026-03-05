@@ -24,11 +24,17 @@ interface InvoiceItem {
   barcode_id?: number;
   barcode_value?: string;
   barcode_full?: string;
+  source_invoice_id?: number;
+  source_invoice_number?: string;
+  source_store?: number;
+  source_customer?: number | null;
+  source_customer_name?: string;
 }
 
 interface Invoice {
   id: number;
   invoice_number: string;
+  customer?: number | null;
   customer_name?: string;
   store_name?: string;
   created_at: string;
@@ -65,6 +71,23 @@ export default function ReplaceProduct() {
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode like POS
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+  const normalizeCustomerName = (name?: string) => (name || '').trim().toLowerCase();
+  const isSameCustomer = (a: Invoice, b: Invoice) => {
+    if (a.customer !== null && a.customer !== undefined && b.customer !== null && b.customer !== undefined) {
+      return a.customer === b.customer;
+    }
+    if ((a.customer ?? null) !== (b.customer ?? null)) return false;
+    return normalizeCustomerName(a.customer_name) === normalizeCustomerName(b.customer_name);
+  };
+  const withInvoiceContext = (items: InvoiceItem[], sourceInvoice: Invoice): InvoiceItem[] =>
+    items.map((item) => ({
+      ...item,
+      source_invoice_id: sourceInvoice.id,
+      source_invoice_number: sourceInvoice.invoice_number,
+      source_store: sourceInvoice.store,
+      source_customer: sourceInvoice.customer ?? null,
+      source_customer_name: sourceInvoice.customer_name,
+    }));
 
   // Helper function to check if input looks like a barcode
   const looksLikeBarcode = (input: string): boolean => {
@@ -124,14 +147,15 @@ export default function ReplaceProduct() {
   });
 
   const applyInvoiceResult = (foundInvoice: Invoice, searchBarcode: string) => {
-    setInvoice(foundInvoice);
+    const contextualItems = withInvoiceContext(foundInvoice.items, foundInvoice);
+    setInvoice({ ...foundInvoice, items: contextualItems });
     setSearchError(null);
     setSearchValue('');
     const initialReplacements: Record<number, ReplacementItem> = {};
     const initialProductSearch: Record<number, string> = {};
     const searchUpper = searchBarcode.toUpperCase();
 
-    foundInvoice.items.forEach((item: InvoiceItem) => {
+    contextualItems.forEach((item: InvoiceItem) => {
       const itemBarcode = item.barcode_value?.toUpperCase() || '';
       const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
       if (itemBarcode === searchUpper || itemBarcodeFull === searchUpper) {
@@ -224,14 +248,14 @@ export default function ReplaceProduct() {
 
   // Process replacement mutation
   const processReplacementMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> }) => {
+    mutationFn: async (data: { invoiceIds: number[]; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> }) => {
       const results = [];
       for (const replacement of data.replacements) {
         console.log('Calling API with:', replacement);
         const result = await posApi.replacement.replace({
           invoice_item_id: replacement.invoice_item_id,
           new_product_id: replacement.new_product_id,
-          store_id: replacement.store_id || data.invoice_id, // Use invoice store if not provided
+          store_id: replacement.store_id,
           new_unit_price: replacement.new_unit_price,
           manual_unit_price: replacement.manual_unit_price,
           scanned_barcode: replacement.scanned_barcode, // Pass the scanned barcode!
@@ -239,15 +263,20 @@ export default function ReplaceProduct() {
         });
         results.push(result.data);
       }
-      return { results, invoice_id: data.invoice_id };
+      return { results, invoiceIds: data.invoiceIds };
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['cart'] });
       showToast('Product replacement processed successfully', 'success');
-      // Navigate to invoice page after successful replacement
-      navigate(`/invoices/${data.invoice_id}`);
+      if (data.invoiceIds.length === 1) {
+        navigate(`/invoices/${data.invoiceIds[0]}`);
+      } else {
+        setInvoice(null);
+        setReplacements({});
+        setProductSearch({});
+      }
     },
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to process replacement';
@@ -265,19 +294,19 @@ export default function ReplaceProduct() {
     if (!data?.invoice) return;
 
     const foundInvoice = data.invoice as Invoice;
-    const matchingItems = foundInvoice.items as InvoiceItem[];
+    const matchingItems = withInvoiceContext(foundInvoice.items as InvoiceItem[], foundInvoice);
 
-    if (invoice && foundInvoice.id !== invoice.id) {
+    if (invoice && !isSameCustomer(foundInvoice, invoice)) {
       const switchConfirmed = window.confirm(
-        `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+        `This barcode belongs to customer ${foundInvoice.customer_name || 'N/A'}, while current selection is for ${invoice.customer_name || 'N/A'}. Do you want to clear current selection and switch customer?`
       );
       if (!switchConfirmed) return;
       applyInvoiceResult(foundInvoice, searchValue.trim());
-      showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process replacement.`, 'success');
+      showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
       return;
     }
 
-    if (invoice && foundInvoice.id === invoice.id) {
+    if (invoice && isSameCustomer(foundInvoice, invoice)) {
       setInvoice((prev) => {
         if (!prev) return prev;
         const existingIds = new Set(prev.items.map((i) => i.id));
@@ -301,17 +330,23 @@ export default function ReplaceProduct() {
       });
       setSearchError(null);
       setSearchValue('');
-      showToast(`Added ${matchingItems.length} item(s) to replacement list`, 'success');
+      showToast(
+        foundInvoice.id === invoice.id
+          ? `Added ${matchingItems.length} item(s) to replacement list`
+          : `Added ${matchingItems.length} item(s) from invoice ${foundInvoice.invoice_number}`,
+        'success'
+      );
       return;
     }
 
     applyInvoiceResult(foundInvoice, searchValue.trim());
-    showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process replacement.`, 'success');
+    showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process replacement.`, 'success');
   };
 
   const handleInvoiceSelect = async (selectedInvoice: Invoice) => {
+    const contextualItems = withInvoiceContext(selectedInvoice.items, selectedInvoice);
     setShowInvoiceDropdown(false);
-    setInvoice(selectedInvoice);
+    setInvoice({ ...selectedInvoice, items: contextualItems });
     setSearchError(null);
     setSearchValue('');
     setReplacements({});
@@ -333,16 +368,16 @@ export default function ReplaceProduct() {
       if (!data?.invoice) return;
 
       const foundInvoice = data.invoice as Invoice;
-      const matchingItems = foundInvoice.items as InvoiceItem[];
+      const matchingItems = withInvoiceContext(foundInvoice.items as InvoiceItem[], foundInvoice);
 
       if (invoice) {
-        if (foundInvoice.id !== invoice.id) {
+        if (!isSameCustomer(foundInvoice, invoice)) {
           const switchConfirmed = window.confirm(
-            `This barcode is found in invoice ${foundInvoice.invoice_number}, not the current invoice (${invoice.invoice_number}). Do you want to clear the current selection and switch to invoice ${foundInvoice.invoice_number}?`
+            `This barcode belongs to customer ${foundInvoice.customer_name || 'N/A'}, while current selection is for ${invoice.customer_name || 'N/A'}. Do you want to clear current selection and switch customer?`
           );
           if (!switchConfirmed) return;
 
-          setInvoice(foundInvoice);
+          setInvoice({ ...foundInvoice, items: matchingItems });
           setSearchError(null);
           setSearchValue('');
           const initialReplacements: Record<number, ReplacementItem> = {};
@@ -357,7 +392,7 @@ export default function ReplaceProduct() {
           });
           setReplacements(initialReplacements);
           setProductSearch({});
-          showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or process replacement.`, 'success');
+          showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
           return;
         }
 
@@ -382,12 +417,17 @@ export default function ReplaceProduct() {
           }
           return next;
         });
-        showToast(`Added ${matchingItems.length} item(s) to replacement list`, 'success');
+        showToast(
+          foundInvoice.id === invoice.id
+            ? `Added ${matchingItems.length} item(s) to replacement list`
+            : `Added ${matchingItems.length} item(s) from invoice ${foundInvoice.invoice_number}`,
+          'success'
+        );
         setSearchValue('');
         return;
       }
 
-      setInvoice(foundInvoice);
+      setInvoice({ ...foundInvoice, items: matchingItems });
       setSearchError(null);
       setSearchValue('');
       const initialReplacements: Record<number, ReplacementItem> = {};
@@ -402,7 +442,7 @@ export default function ReplaceProduct() {
       });
       setReplacements(initialReplacements);
       setProductSearch({});
-      showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or process replacement.`, 'success');
+      showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process replacement.`, 'success');
     } catch (error: any) {
       const status = error?.response?.status;
       const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
@@ -586,15 +626,20 @@ export default function ReplaceProduct() {
     console.log('All replacements:', replacements);
 
     const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag: string }> = [];
+    const involvedInvoiceIds = new Set<number>();
 
     Object.values(replacements).forEach(replacement => {
       console.log('Processing replacement:', replacement);
 
       if (replacement.new_product_id && replacement.quantity > 0) {
+        const sourceItem = invoice.items.find((item) => item.id === replacement.item_id);
+        if (sourceItem?.source_invoice_id) {
+          involvedInvoiceIds.add(sourceItem.source_invoice_id);
+        }
         const replacementData: any = {
           invoice_item_id: replacement.item_id,
           new_product_id: replacement.new_product_id,
-          store_id: invoice.store,
+          store_id: sourceItem?.source_store ?? invoice.store,
           return_tag: replacement.return_tag,
         };
 
@@ -629,11 +674,9 @@ export default function ReplaceProduct() {
       return;
     }
 
-    const invoiceId = invoice.id; // Capture invoice ID before mutation
-
     // Process replacements one by one
     processReplacementMutation.mutate({
-      invoice_id: invoiceId,
+      invoiceIds: Array.from(involvedInvoiceIds),
       replacements: replacementsToProcess,
     });
   };
@@ -650,6 +693,11 @@ export default function ReplaceProduct() {
   };
 
   const hasReplacements = Object.values(replacements).some(r => r.new_product_id !== null && r.quantity > 0);
+  const involvedInvoiceNumbers = invoice
+    ? [...new Set(invoice.items
+      .filter((item) => replacements[item.id]?.new_product_id)
+      .map((item) => item.source_invoice_number || invoice.invoice_number))]
+    : [];
 
   // Get products for each item
   const getProductsForItem = (itemId: number) => {
@@ -830,16 +878,18 @@ export default function ReplaceProduct() {
               <div className="bg-gray-50 p-4 rounded-lg">
                 <div className="flex items-center gap-2 mb-3">
                   <FileText className="h-5 w-5 text-gray-600" />
-                  <h3 className="font-semibold text-lg">Invoice Details</h3>
+                  <h3 className="font-semibold text-lg">Customer Context</h3>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                   <div>
-                    <span className="text-gray-600 block text-xs">Invoice Number</span>
-                    <span className="font-medium">{invoice.invoice_number}</span>
-                  </div>
-                  <div>
                     <span className="text-gray-600 block text-xs">Customer</span>
                     <span className="font-medium">{invoice.customer_name || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600 block text-xs">Invoices in Selection</span>
+                    <span className="font-medium">
+                      {involvedInvoiceNumbers.length > 0 ? involvedInvoiceNumbers.join(', ') : invoice.invoice_number}
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600 block text-xs">Store</span>
