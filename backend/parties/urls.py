@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     customer_group_list_create, customer_group_detail,
     customer_list_create, customer_detail, customer_balance, customer_adjust_credit,
+    payment_reminder_list_create, payment_reminder_detail, payment_reminder_calendar,
     supplier_list_create, supplier_detail,
     ledger_entry_list_create, ledger_entry_retrieve_update_destroy, ledger_summary, ledger_by_customer, ledger_customer_detail, ledger_customer_invoice_items_by_category,
     personal_customer_list_create, personal_customer_detail,
@@ -20,6 +21,11 @@ urlpatterns = [
     path('customers/<int:pk>/', customer_detail, name='customer-detail'),
     path('customers/<int:pk>/balance/', customer_balance, name='customer-balance'),
     path('customers/<int:pk>/adjust-credit/', customer_adjust_credit, name='customer-adjust-credit'),
+
+    # Payment reminder endpoints
+    path('payment-reminders/', payment_reminder_list_create, name='payment-reminder-list-create'),
+    path('payment-reminders/<int:reminder_id>/', payment_reminder_detail, name='payment-reminder-detail'),
+    path('payment-reminders/calendar/', payment_reminder_calendar, name='payment-reminder-calendar'),
     
     # Supplier endpoints
     path('suppliers/', supplier_list_create, name='supplier-list-create'),

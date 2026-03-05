@@ -559,7 +559,9 @@ def dashboard_kpis(request):
     # Include invoices with status='credit' OR invoice_type='pending'
     # Exclude Manish Traders Loss customer (internal shop usage, not actual sales)
     credit_invoices = Invoice.objects.filter(
-        Q(status='credit') | Q(invoice_type='pending')
+        Q(status='credit') | Q(invoice_type='pending'),
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to
     ).exclude(status='void').exclude(customer__name__iexact='Manish Traders Loss')
     
     if store_id:
@@ -603,10 +605,9 @@ def dashboard_kpis(request):
     overall_profit = counter_profit + repairing_profit
     
     # 9. Monthly Profit - Profit for custom month period (10th to 10th)
-    # Custom month: from 10th of one month to 10th of next month
     now = timezone.now()
     current_day = now.day
-    
+
     if current_day < 10:
         # Before 10th: use previous month's 10th to current month's 10th
         if now.month == 1:
@@ -623,7 +624,7 @@ def dashboard_kpis(request):
             monthly_end = now.replace(month=1, day=10, year=now.year+1, hour=23, minute=59, second=59, microsecond=999999)
         else:
             monthly_end = now.replace(month=now.month+1, day=10, hour=23, minute=59, second=59, microsecond=999999)
-    
+
     monthly_invoices = Invoice.objects.filter(
         created_at__gte=monthly_start,
         created_at__lte=monthly_end,
@@ -678,7 +679,9 @@ def dashboard_kpis(request):
     # Include invoices with status='credit' OR invoice_type='pending'
     # Exclude Manish Traders Loss customer (internal shop usage, not actual sales)
     all_credit_invoices = Invoice.objects.filter(
-        Q(status='credit') | Q(invoice_type='pending')
+        Q(status='credit') | Q(invoice_type='pending'),
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to
     ).exclude(status='void').exclude(customer__name__iexact='Manish Traders Loss')
     
     if store_id:
@@ -695,13 +698,10 @@ def dashboard_kpis(request):
     # Calculate yesterday's date for comparison
     yesterday = date_from - timedelta(days=1)
     
-    # 14. Loss Calculations - Total from Manish Traders Loss invoices (items used in shop, not sold)
-    # Today's Loss - Loss for today only
-    # Include all statuses except void
-    # Use icontains for more flexible name matching in case of variations
-    today = timezone.now().date()
+    # 14. Loss Calculations - responsive to selected date filters
+    # "Today's Loss" follows selected end date instead of system today.
     todays_loss_invoices = Invoice.objects.filter(
-        created_at__date=today,
+        created_at__date=date_to,
         customer__name__icontains='Manish Traders Loss'
     ).exclude(status='void')
     
@@ -712,30 +712,9 @@ def dashboard_kpis(request):
         total=Sum('total', output_field=DecimalField())
     )['total'] or Decimal('0.00')
     
-    # Monthly Loss - Loss for custom month period (10th to 10th, same as monthly profit)
-    now = timezone.now()
-    current_day = now.day
-    
-    if current_day < 10:
-        # Before 10th: use previous month's 10th to current month's 10th
-        if now.month == 1:
-            # January: use December 10 to January 10
-            monthly_loss_start = now.replace(month=12, day=10, year=now.year-1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            monthly_loss_start = now.replace(month=now.month-1, day=10, hour=0, minute=0, second=0, microsecond=0)
-        monthly_loss_end = now.replace(day=10, hour=23, minute=59, second=59, microsecond=999999)
-    else:
-        # On or after 10th: use current month's 10th to next month's 10th
-        monthly_loss_start = now.replace(day=10, hour=0, minute=0, second=0, microsecond=0)
-        if now.month == 12:
-            # December: use December 10 to January 10 of next year
-            monthly_loss_end = now.replace(month=1, day=10, year=now.year+1, hour=23, minute=59, second=59, microsecond=999999)
-        else:
-            monthly_loss_end = now.replace(month=now.month+1, day=10, hour=23, minute=59, second=59, microsecond=999999)
-    
     monthly_loss_invoices = Invoice.objects.filter(
-        created_at__gte=monthly_loss_start,
-        created_at__lte=monthly_loss_end,
+        created_at__gte=monthly_start,
+        created_at__lte=monthly_end,
         customer__name__icontains='Manish Traders Loss'
     ).exclude(status='void')
     

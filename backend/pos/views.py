@@ -3,21 +3,22 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.db.models.functions import TruncDate
 from django.conf import settings
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
 import uuid
-from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair
+from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses
 from backend.catalog.models import Barcode, Product, ProductVariant
 from backend.inventory.models import Stock
 from backend.core.utils import create_audit_log
 from .serializers import (
     POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
-    InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer
+    InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
 )
 from backend.catalog.label_generator import generate_label_image
 
@@ -44,7 +45,7 @@ def repair_invoices_list(request):
     queryset = Invoice.objects.filter(
         store__in=repair_stores,
         repair__isnull=False  # Only invoices with Repair records
-    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'payments')
+    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'items__barcode', 'payments')
 
     ordering_param = request.query_params.get('ordering', '-repair__updated_at')
     if ordering_param == 'created_at':
@@ -2111,6 +2112,20 @@ def cart_checkout(request, pk):
         # 4. Extract and Validate Input
         invoice_type = request.data.get('invoice_type', cart.invoice_type or 'cash')
         customer_id = request.data.get('customer', cart.customer_id if cart.customer else None)
+        created_at_raw = request.data.get('created_at')
+
+        # Optional POS-provided invoice datetime:
+        # apply only when selected date is not today; otherwise keep server current time.
+        created_at_override = None
+        if created_at_raw not in (None, ''):
+            parsed_created_at = parse_datetime(str(created_at_raw))
+            if parsed_created_at is None:
+                return Response({'error': 'Invalid created_at datetime format'}, status=status.HTTP_400_BAD_REQUEST)
+            if timezone.is_naive(parsed_created_at):
+                parsed_created_at = timezone.make_aware(parsed_created_at, timezone.get_current_timezone())
+            parsed_local_date = timezone.localtime(parsed_created_at).date()
+            if parsed_local_date != timezone.localdate():
+                created_at_override = parsed_created_at
         
         # Mixed payment validation
         cash_amount = Decimal(str(request.data.get('cash_amount', '0'))) if invoice_type == 'mixed' else Decimal('0')
@@ -2171,6 +2186,9 @@ def cart_checkout(request, pk):
             status='draft',
             created_by=request.user
         )
+        if created_at_override is not None:
+            invoice.created_at = created_at_override
+            invoice.save(update_fields=['created_at'])
 
         # 9. Handle Repairs
         if is_repair_shop:
@@ -2370,7 +2388,7 @@ def cart_checkout(request, pk):
 def invoice_list_create(request):
     """List all invoices or create a new invoice"""
     if request.method == 'GET':
-        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').prefetch_related('items', 'payments').all()
+        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').prefetch_related('items', 'items__barcode', 'payments').all()
         date = request.query_params.get('date', None)
         store = request.query_params.get('store', None)
         customer = request.query_params.get('customer', None)
@@ -2770,11 +2788,86 @@ def invoice_detail(request, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-@api_view(['POST'])
+@api_view(['POST', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def invoice_payments(request, pk):
-    """Add payment to invoice"""
+    """Add payment to invoice or update an existing payment."""
     invoice = get_object_or_404(Invoice, pk=pk)
+    if request.method == 'PATCH':
+        payment_id = request.data.get('payment_id')
+        if not payment_id:
+            return Response(
+                {'error': 'payment_id is required to update a payment'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        payment = get_object_or_404(Payment, pk=payment_id, invoice=invoice)
+        old_amount = payment.amount or Decimal('0.00')
+        old_method = payment.payment_method
+        old_reference = payment.reference
+        old_notes = payment.notes
+        old_paid_amount = invoice.paid_amount or Decimal('0.00')
+        old_due_amount = invoice.due_amount or Decimal('0.00')
+        old_status = invoice.status
+
+        serializer = PaymentSerializer(payment, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        payment.refresh_from_db()
+
+        # Keep invoice summary fields in sync with edited payment amount.
+        invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        invoice.due_amount = invoice.total - invoice.paid_amount
+        if invoice.due_amount <= Decimal('0.00'):
+            invoice.status = 'paid'
+        elif invoice.paid_amount > Decimal('0.00'):
+            invoice.status = 'partial'
+        else:
+            invoice.status = 'draft'
+        invoice.save(update_fields=['paid_amount', 'due_amount', 'status'])
+
+        amount_delta = payment.amount - old_amount
+        if invoice.customer and amount_delta != Decimal('0.00'):
+            from backend.parties.models import LedgerEntry
+            entry_type = 'credit' if amount_delta > Decimal('0.00') else 'debit'
+            LedgerEntry.objects.create(
+                customer=invoice.customer,
+                invoice=invoice,
+                entry_type=entry_type,
+                amount=abs(amount_delta),
+                description=f'Payment adjustment for Invoice {invoice.invoice_number}',
+                created_by=request.user,
+                created_at=timezone.now()
+            )
+            # Credit entry increases balance, debit entry decreases it.
+            invoice.customer.credit_balance += amount_delta
+            invoice.customer.save(update_fields=['credit_balance'])
+
+        create_audit_log(
+            request=request,
+            action='payment_update',
+            model_name='Payment',
+            object_id=str(payment.id),
+            object_name=f"Payment for Invoice {invoice.invoice_number}",
+            object_reference=invoice.invoice_number,
+            barcode=None,
+            changes={
+                'payment_id': payment.id,
+                'invoice_id': invoice.id,
+                'amount': {'old': str(old_amount), 'new': str(payment.amount)},
+                'payment_method': {'old': old_method, 'new': payment.payment_method},
+                'reference': {'old': old_reference, 'new': payment.reference},
+                'notes': {'old': old_notes, 'new': payment.notes},
+                'invoice_status': {'old': old_status, 'new': invoice.status},
+                'paid_amount': {'old': str(old_paid_amount), 'new': str(invoice.paid_amount)},
+                'due_amount': {'old': str(old_due_amount), 'new': str(invoice.due_amount)},
+            }
+        )
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     serializer = PaymentSerializer(data={**request.data, 'invoice': invoice.id})
     if serializer.is_valid():
         payment = serializer.save(created_by=request.user)
@@ -3429,7 +3522,15 @@ def invoice_update(request, pk):
         invoice.discount_amount = discount_total
         invoice.tax_amount = tax_total
         invoice.total = subtotal - discount_total + tax_total
+
+        # Keep payment rows and invoice summary in sync after item edits.
+        if invoice.invoice_type in ('cash', 'upi', 'mixed') and invoice.status in ('paid', 'partial'):
+            synced_paid_amount = sync_invoice_payments_to_total(invoice)
+            if synced_paid_amount > Decimal('0.00'):
+                invoice.paid_amount = synced_paid_amount
+
         invoice.due_amount = invoice.total - invoice.paid_amount
+        invoice.status = 'paid' if invoice.due_amount <= Decimal('0.00') else 'partial'
         invoice.save()
     # Do not call update_invoice_totals here: for draft pending it would zero totals;
     # we have already set subtotal/total/due_amount from the new items above.
@@ -4049,6 +4150,47 @@ def update_invoice_totals(invoice):
     invoice.save()
 
 
+def sync_invoice_payments_to_total(invoice):
+    """Scale non-refund payment rows to match invoice.total exactly."""
+    sale_payments = list(
+        invoice.payments.exclude(payment_method='refund').order_by('created_at', 'id')
+    )
+    if not sale_payments:
+        return Decimal('0.00')
+
+    old_total = sum((payment.amount for payment in sale_payments), Decimal('0.00'))
+    target_total = (invoice.total or Decimal('0.00')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    if old_total <= Decimal('0.00'):
+        # Fallback: set the first row to the full amount and zero out the rest.
+        first_payment, *remaining_payments = sale_payments
+        if first_payment.amount != target_total:
+            first_payment.amount = target_total
+            first_payment.save(update_fields=['amount'])
+        for payment in remaining_payments:
+            if payment.amount != Decimal('0.00'):
+                payment.amount = Decimal('0.00')
+                payment.save(update_fields=['amount'])
+        return target_total
+
+    running_total = Decimal('0.00')
+    for payment in sale_payments[:-1]:
+        scaled_amount = (
+            payment.amount * target_total / old_total
+        ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        running_total += scaled_amount
+        if payment.amount != scaled_amount:
+            payment.amount = scaled_amount
+            payment.save(update_fields=['amount'])
+
+    last_payment = sale_payments[-1]
+    last_amount = (target_total - running_total).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    if last_payment.amount != last_amount:
+        last_payment.amount = last_amount
+        last_payment.save(update_fields=['amount'])
+
+    return target_total
+
+
 # Credit Note views
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -4135,6 +4277,92 @@ def return_detail(request, pk):
     else:  # DELETE
         return_obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def expense_list_create(request):
+    """List all expenses or create a new expense."""
+    if request.method == 'GET':
+        queryset = Expenses.objects.select_related('created_by', 'last_updated_by').order_by('-expense_date', '-created_on')
+        search = (request.query_params.get('search') or '').strip()
+        payment_type = (request.query_params.get('payment_type') or '').strip().upper()
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+
+        if search:
+            queryset = queryset.filter(
+                Q(expense_type__icontains=search)
+                | Q(lender_name__icontains=search)
+                | Q(borrower_name__icontains=search)
+            )
+        if payment_type in {'CASH', 'ONLINE'}:
+            queryset = queryset.filter(payment_choices_type=payment_type)
+        if date_from:
+            queryset = queryset.filter(expense_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(expense_date__lte=date_to)
+
+        serializer = ExpenseSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    serializer = ExpenseSerializer(data=request.data)
+    if serializer.is_valid():
+        expense = serializer.save(created_by=request.user, last_updated_by=request.user)
+        return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def expense_type_suggestions(request):
+    """Return distinct expense types for autocomplete suggestions."""
+    q = (request.query_params.get('q') or '').strip()
+    queryset = Expenses.objects.exclude(expense_type__isnull=True).exclude(expense_type__exact='')
+    if q:
+        queryset = queryset.filter(expense_type__icontains=q)
+
+    suggestions = list(
+        queryset.order_by('expense_type').values_list('expense_type', flat=True).distinct()[:10]
+    )
+    return Response({'results': suggestions})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def expense_borrower_suggestions(request):
+    """Return distinct borrower names for autocomplete suggestions."""
+    q = (request.query_params.get('q') or '').strip()
+    queryset = Expenses.objects.exclude(borrower_name__isnull=True).exclude(borrower_name__exact='')
+    if q:
+        queryset = queryset.filter(borrower_name__icontains=q)
+
+    suggestions = list(
+        queryset.order_by('borrower_name').values_list('borrower_name', flat=True).distinct()[:10]
+    )
+    return Response({'results': suggestions})
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def expense_detail(request, pk):
+    """Retrieve, update, or delete an expense."""
+    expense = get_object_or_404(Expenses.objects.select_related('created_by', 'last_updated_by'), pk=pk)
+
+    if request.method == 'GET':
+        serializer = ExpenseSerializer(expense)
+        return Response(serializer.data)
+
+    if request.method == 'DELETE':
+        expense.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    partial = request.method == 'PATCH'
+    serializer = ExpenseSerializer(expense, data=request.data, partial=partial)
+    if serializer.is_valid():
+        serializer.save(last_updated_by=request.user)
+        return Response(serializer.data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['POST'])
@@ -4485,6 +4713,94 @@ def replacement_update_tag(request, barcode_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def replacement_reserve_barcode(request):
+    """Reserve/release replacement barcode by toggling tag to/from in-cart."""
+    barcode_id = request.data.get('barcode_id')
+    action = (request.data.get('action') or 'reserve').strip().lower()
+    restore_tag = (request.data.get('restore_tag') or 'new').strip().lower()
+
+    if not barcode_id:
+        return Response({'error': 'barcode_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if action not in ['reserve', 'release']:
+        return Response({'error': 'action must be "reserve" or "release"'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if restore_tag not in ['new', 'returned']:
+        restore_tag = 'new'
+
+    with transaction.atomic():
+        try:
+            # Lock only Barcode row here; select_related on nullable FK can generate
+            # an outer join that PostgreSQL rejects with FOR UPDATE.
+            barcode_obj = Barcode.objects.select_for_update().get(pk=barcode_id)
+        except Barcode.DoesNotExist:
+            return Response({'error': 'Barcode not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        old_tag = barcode_obj.tag
+
+        if action == 'reserve':
+            if old_tag not in ['new', 'returned']:
+                return Response({
+                    'error': f'Barcode is not available for replacement (current tag: {old_tag})',
+                    'barcode_tag': old_tag,
+                }, status=status.HTTP_400_BAD_REQUEST)
+            barcode_obj.tag = 'in-cart'
+            barcode_obj.save(update_fields=['tag'])
+            create_audit_log(
+                request=request,
+                action='barcode_tag_change',
+                model_name='Barcode',
+                object_id=str(barcode_obj.id),
+                object_name=barcode_obj.product.name if barcode_obj.product else 'Unknown Product',
+                object_reference=barcode_obj.product.sku if barcode_obj.product else None,
+                barcode=barcode_obj.barcode,
+                changes={
+                    'tag': {'old': old_tag, 'new': 'in-cart'},
+                    'context': 'replacement_reserve_barcode',
+                }
+            )
+            return Response({
+                'message': 'Barcode reserved for replacement',
+                'barcode_id': barcode_obj.id,
+                'barcode': barcode_obj.barcode,
+                'tag': barcode_obj.tag,
+                'previous_tag': old_tag,
+            })
+
+        # action == 'release'
+        if old_tag == 'in-cart':
+            barcode_obj.tag = restore_tag
+            barcode_obj.save(update_fields=['tag'])
+            create_audit_log(
+                request=request,
+                action='barcode_tag_change',
+                model_name='Barcode',
+                object_id=str(barcode_obj.id),
+                object_name=barcode_obj.product.name if barcode_obj.product else 'Unknown Product',
+                object_reference=barcode_obj.product.sku if barcode_obj.product else None,
+                barcode=barcode_obj.barcode,
+                changes={
+                    'tag': {'old': old_tag, 'new': restore_tag},
+                    'context': 'replacement_release_barcode',
+                }
+            )
+            return Response({
+                'message': 'Barcode released from replacement cart',
+                'barcode_id': barcode_obj.id,
+                'barcode': barcode_obj.barcode,
+                'tag': barcode_obj.tag,
+            })
+
+        return Response({
+            'message': 'Barcode already released',
+            'barcode_id': barcode_obj.id,
+            'barcode': barcode_obj.barcode,
+            'tag': barcode_obj.tag,
+        })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def replacement_replace(request):
     """Replace a sold item with another item - update invoice and inventory"""
     invoice_item_id = request.data.get('invoice_item_id')
@@ -4521,7 +4837,7 @@ def replacement_replace(request):
     scanned_barcode = request.data.get('scanned_barcode')  # Get the exact barcode scanned/searched
     
     if new_product:
-        # Only allow barcodes with tag='new' or tag='returned' (available inventory)
+        # Only allow barcodes that are available or reserved for this flow
         if scanned_barcode:
             from django.db.models import Q
             scanned_clean = str(scanned_barcode).strip().upper()
@@ -4531,7 +4847,7 @@ def replacement_replace(request):
                     barcode=scanned_clean,
                     product=new_product,
                     variant=invoice_item.variant,
-                    tag__in=['new', 'returned']
+                    tag__in=['new', 'returned', 'in-cart']
                 )
             except Barcode.DoesNotExist:
                 try:
@@ -4539,27 +4855,27 @@ def replacement_replace(request):
                         short_code=scanned_clean,
                         product=new_product,
                         variant=invoice_item.variant,
-                        tag__in=['new', 'returned']
+                        tag__in=['new', 'returned', 'in-cart']
                     )
                 except Barcode.DoesNotExist:
                     try:
                         new_barcode = Barcode.objects.get(
                             barcode=scanned_clean,
                             product=new_product,
-                            tag__in=['new', 'returned']
+                            tag__in=['new', 'returned', 'in-cart']
                         )
                     except Barcode.DoesNotExist:
                         try:
                             new_barcode = Barcode.objects.get(
                                 short_code=scanned_clean,
                                 product=new_product,
-                                tag__in=['new', 'returned']
+                                tag__in=['new', 'returned', 'in-cart']
                             )
                         except Barcode.DoesNotExist:
-                                # Exact barcode not found or not available
-                                return Response({
+                            # Exact barcode not found or not available
+                            return Response({
                                 'error': f'Barcode {scanned_barcode} not found or not available for sale',
-                                'message': f'The barcode {scanned_barcode} is either not found, already sold, or not in available inventory (must be tagged as "new" or "returned").'
+                                'message': f'The barcode {scanned_barcode} is either not found, already sold, or not reserved/available for replacement (must be tagged as "new", "returned", or "in-cart").'
                             }, status=status.HTTP_400_BAD_REQUEST)
         else:
             # No scanned barcode provided - this should not happen in normal flow
@@ -5384,6 +5700,7 @@ def bulk_barcodes_check(request):
     results = []  # sold items with customer info
     not_found = []  # barcode strings with no eligible invoice item
     invalid_tag = []  # list of {'barcode': str, 'tag': str} for not-sold
+    fresh_processable = []  # barcodes currently tagged as "new" (can be marked defective in bulk flow)
     customer_names = {}
 
     for barcode_str in barcode_strings:
@@ -5399,6 +5716,19 @@ def bulk_barcodes_check(request):
 
         barcode_obj = item.barcode
         tag = barcode_obj.tag if barcode_obj else None
+        if tag == 'new':
+            barcode_full = barcode_obj.barcode if barcode_obj else None
+            short_code = getattr(barcode_obj, 'short_code', None) if barcode_obj else None
+            fresh_processable.append({
+                'barcode': barcode_str,
+                'barcode_id': barcode_obj.id if barcode_obj else None,
+                'barcode_full': barcode_full,
+                'short_code': short_code,
+                'tag': tag,
+                'product_name': item.product.name if item.product else 'N/A',
+            })
+            continue
+
         if tag != 'sold':
             invalid_tag.append({'barcode': barcode_str, 'tag': tag or 'unknown'})
             continue
@@ -5482,7 +5812,7 @@ def bulk_barcodes_check(request):
     else:
         processable = []
 
-    valid = len(processable) > 0
+    valid = len(processable) > 0 or len(fresh_processable) > 0
     customers_list = [{'id': cid, 'name': customer_names.get(cid, 'N/A')} for cid in sorted(customer_names.keys())]
 
     return Response({
@@ -5490,6 +5820,7 @@ def bulk_barcodes_check(request):
         'error': None if valid else 'none_processable',
         'customers': customers_list,
         'processable': processable,
+        'fresh_processable': fresh_processable,
         'skipped': skipped,
     })
 
