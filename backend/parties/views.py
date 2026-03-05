@@ -333,7 +333,8 @@ def payment_reminder_calendar(request):
     if customer_group:
         customers_qs = customers_qs.filter(customer_group_id=customer_group)
 
-    # Always derive outstanding amounts from ledger credit entries, not reminder due_amount.
+    # Match Ledger (Vyapaar) "Credit Only" behavior:
+    # use only credit-invoice ledger entries and compute due as debit - credit.
     ledger_grouped = LedgerEntry.objects.filter(
         customer__in=customers_qs,
         customer__isnull=False,
@@ -348,7 +349,7 @@ def payment_reminder_calendar(request):
     for row in ledger_grouped:
         total_credit = row.get('total_credit') or Decimal('0.00')
         total_debit = row.get('total_debit') or Decimal('0.00')
-        outstanding = total_credit - total_debit
+        outstanding = total_debit - total_credit
         if outstanding > 0:
             customer_id = row['customer']
             eligible_customer_ids.append(customer_id)
@@ -376,6 +377,18 @@ def payment_reminder_calendar(request):
         existing = reminders_by_customer[key].get(due_key, Decimal('0.00'))
         # Show outstanding ledger amount on each due date cell.
         reminders_by_customer[key][due_key] = outstanding_amount if outstanding_amount > existing else existing
+
+    # If customer has ledger outstanding but no reminder in visible range,
+    # place the amount on a fallback day so it is visible in calendar.
+    fallback_day = today if visible_start <= today <= visible_end else visible_start
+    fallback_day_key = fallback_day.isoformat()
+    for customer_id in eligible_customer_ids:
+        if outstanding_by_customer.get(customer_id, Decimal('0.00')) <= 0:
+            continue
+        customer_days = reminders_by_customer.setdefault(customer_id, {})
+        if customer_days:
+            continue
+        customer_days[fallback_day_key] = outstanding_by_customer[customer_id]
 
     days = []
     cursor = visible_start
