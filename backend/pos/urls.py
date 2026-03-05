@@ -10,7 +10,7 @@ from .views import (
     expense_list_create, expense_type_suggestions, expense_borrower_suggestions, expense_detail,
     credit_note_list, credit_note_detail,
     replacement_check, replacement_create, replacement_update_tag,
-    replacement_replace, replacement_return, replacement_defective,
+    replacement_replace, replacement_return, replacement_defective, replacement_reserve_barcode,
     find_invoice_by_barcode, bulk_barcodes_check, process_replacement, search_invoices_by_number,
     replacement_credit_note,
     repair_invoices_list, repair_status_choices, repair_device_models, find_repair_invoice_by_barcode, update_repair_status, update_repair, generate_repair_label
@@ -67,6 +67,7 @@ urlpatterns = [
     # Replacement endpoints
     path('pos/replacement/check/', replacement_check, name='replacement-check'),
     path('pos/replacement/create/', replacement_create, name='replacement-create'),
+    path('pos/replacement/reserve-barcode/', replacement_reserve_barcode, name='replacement-reserve-barcode'),
     path('pos/replacement/barcode/<int:barcode_id>/update-tag/', replacement_update_tag, name='replacement-update-tag'),
     path('pos/replacement/replace/', replacement_replace, name='replacement-replace'),
     path('pos/replacement/return/', replacement_return, name='replacement-return'),

@@ -215,6 +215,8 @@ export const posApi = {
   replacement: {
     check: (data: any) => api.post('/pos/replacement/check/', data),
     create: (data: any) => api.post('/pos/replacement/create/', data),
+    reserveBarcode: (data: { barcode_id: number; action?: 'reserve' | 'release'; restore_tag?: 'new' | 'returned' }) =>
+      api.post('/pos/replacement/reserve-barcode/', data),
     updateTag: (barcodeId: number, data: any) => api.post(`/pos/replacement/barcode/${barcodeId}/update-tag/`, data),
     replace: (data: any) => api.post('/pos/replacement/replace/', data),
     return: (data: any) => api.post('/pos/replacement/return/', data),
