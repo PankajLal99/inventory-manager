@@ -294,3 +294,23 @@ class Exchange(models.Model):
 
     class Meta:
         db_table = 'exchanges'
+
+class Expenses(models.Model):
+    """
+        Expenses -- This model will contain the expense informations for all 
+                            entries
+    """
+    payment_choices = (('CASH','CASH'),('ONLINE','ONLINE'))
+    expense_date = models.DateField(auto_now=False, auto_now_add=False)
+    expense_type = models.CharField(max_length=100)
+    lender_name = models.CharField(max_length=50,default="Manish Traders")
+    borrower_name = models.CharField(max_length=100)
+    payment_choices_type = models.CharField(max_length=100,choices=payment_choices,default='CASH')
+    expense_amount = models.FloatField()
+    created_on = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='expenses')
+    last_updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='expenses_updated')
+    last_updated_on = models.DateTimeField(auto_now=True)
+
+    class Meta:
+         verbose_name = "Expense"

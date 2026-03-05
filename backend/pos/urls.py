@@ -7,6 +7,7 @@ from .views import (
     invoice_list_create, invoice_detail, invoice_payments, invoice_void,
     invoice_checkout, invoice_edit, invoice_update, invoice_mark_credit, invoice_return, invoice_exchange, invoice_items, invoice_item_detail,
     return_list_create, return_detail, return_credit_note, return_refund,
+    expense_list_create, expense_type_suggestions, expense_borrower_suggestions, expense_detail,
     credit_note_list, credit_note_detail,
     replacement_check, replacement_create, replacement_update_tag,
     replacement_replace, replacement_return, replacement_defective,
@@ -52,6 +53,12 @@ urlpatterns = [
     path('returns/<int:pk>/', return_detail, name='return-detail'),
     path('returns/<int:pk>/credit-note/', return_credit_note, name='return-credit-note'),
     path('returns/<int:pk>/refund/', return_refund, name='return-refund'),
+
+    # Expense endpoints
+    path('expenses/', expense_list_create, name='expense-list-create'),
+    path('expenses/types/', expense_type_suggestions, name='expense-type-suggestions'),
+    path('expenses/borrowers/', expense_borrower_suggestions, name='expense-borrower-suggestions'),
+    path('expenses/<int:pk>/', expense_detail, name='expense-detail'),
     
     # Credit Note endpoints
     path('credit-notes/', credit_note_list, name='credit-note-list'),

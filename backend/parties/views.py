@@ -5,9 +5,11 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q, Sum, Count, F, Case, When, Value, Subquery, OuterRef
 from django.shortcuts import get_object_or_404
 from django.core.cache import cache
+from datetime import date, datetime
+from calendar import monthrange
 from decimal import Decimal
-from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry
-from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer
+from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry, PaymentReminder
+from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer, PaymentReminderSerializer
 
 
 def is_admin_user(user):
@@ -201,6 +203,214 @@ def customer_adjust_credit(request, pk):
     customer.credit_balance += amount
     customer.save()
     return Response({'credit_balance': customer.credit_balance})
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def payment_reminder_list_create(request):
+    """List payment reminders or create a new reminder."""
+    if request.method == 'GET':
+        queryset = PaymentReminder.objects.select_related('customer', 'customer__customer_group').all()
+        search = request.query_params.get('search')
+        customer_group = request.query_params.get('customer_group')
+        customer_id = request.query_params.get('customer')
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        month = request.query_params.get('month')
+        include_settled = request.query_params.get('include_settled', 'false').lower() == 'true'
+
+        if not include_settled:
+            queryset = queryset.filter(is_settled=False)
+
+        if search:
+            queryset = queryset.filter(
+                Q(customer__name__icontains=search) |
+                Q(customer__phone__icontains=search) |
+                Q(customer__email__icontains=search)
+            )
+        if customer_group:
+            queryset = queryset.filter(customer__customer_group_id=customer_group)
+        if customer_id:
+            queryset = queryset.filter(customer_id=customer_id)
+        if date_from:
+            queryset = queryset.filter(due_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(due_date__lte=date_to)
+        if month:
+            try:
+                month_start = datetime.strptime(f"{month}-01", "%Y-%m-%d").date()
+                month_end = date(month_start.year, month_start.month, monthrange(month_start.year, month_start.month)[1])
+                queryset = queryset.filter(due_date__gte=month_start, due_date__lte=month_end)
+            except ValueError:
+                return Response({'error': 'Invalid month format. Use YYYY-MM.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = queryset.order_by('due_date', 'customer__name')
+        serializer = PaymentReminderSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    else:
+        serializer = PaymentReminderSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def payment_reminder_detail(request, reminder_id):
+    """Retrieve, update, or delete a payment reminder."""
+    reminder = get_object_or_404(PaymentReminder, pk=reminder_id)
+    if request.method == 'GET':
+        return Response(PaymentReminderSerializer(reminder).data)
+    if request.method == 'PATCH':
+        serializer = PaymentReminderSerializer(reminder, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_reminder = serializer.save()
+            if updated_reminder.is_settled and not updated_reminder.settled_at:
+                from django.utils import timezone
+                updated_reminder.settled_at = timezone.now()
+                updated_reminder.save(update_fields=['settled_at'])
+            if not updated_reminder.is_settled and (updated_reminder.settled_at or updated_reminder.settled_payment_id):
+                updated_reminder.settled_at = None
+                updated_reminder.settled_payment = None
+                updated_reminder.save(update_fields=['settled_at', 'settled_payment'])
+            return Response(PaymentReminderSerializer(updated_reminder).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    reminder.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def payment_reminder_calendar(request):
+    """Calendar data for payment reminders with customer/date/group filters."""
+    month_param = request.query_params.get('month')
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    search = request.query_params.get('search')
+    customer_group = request.query_params.get('customer_group')
+
+    today = date.today()
+    if month_param:
+        try:
+            month_start = datetime.strptime(f"{month_param}-01", "%Y-%m-%d").date()
+        except ValueError:
+            return Response({'error': 'Invalid month format. Use YYYY-MM.'}, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        month_start = date(today.year, today.month, 1)
+
+    month_end = date(month_start.year, month_start.month, monthrange(month_start.year, month_start.month)[1])
+    visible_start = month_start
+    visible_end = month_end
+
+    if date_from:
+        try:
+            from_date = datetime.strptime(date_from, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({'error': 'Invalid date_from format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+        if from_date > visible_start:
+            visible_start = from_date
+
+    if date_to:
+        try:
+            to_date = datetime.strptime(date_to, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({'error': 'Invalid date_to format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+        if to_date < visible_end:
+            visible_end = to_date
+
+    if visible_start > visible_end:
+        return Response({'error': 'date_from cannot be greater than date_to.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    customers_qs = Customer.objects.select_related('customer_group').all()
+    if search:
+        customers_qs = customers_qs.filter(
+            Q(name__icontains=search) |
+            Q(phone__icontains=search) |
+            Q(email__icontains=search)
+        )
+    if customer_group:
+        customers_qs = customers_qs.filter(customer_group_id=customer_group)
+
+    # Always derive outstanding amounts from ledger credit entries, not reminder due_amount.
+    ledger_grouped = LedgerEntry.objects.filter(
+        customer__in=customers_qs,
+        customer__isnull=False,
+        invoice__status='credit',
+    ).values('customer').annotate(
+        total_credit=Sum(Case(When(entry_type='credit', then=F('amount')), default=Value(Decimal('0.00')))),
+        total_debit=Sum(Case(When(entry_type='debit', then=F('amount')), default=Value(Decimal('0.00')))),
+    )
+
+    outstanding_by_customer = {}
+    eligible_customer_ids = []
+    for row in ledger_grouped:
+        total_credit = row.get('total_credit') or Decimal('0.00')
+        total_debit = row.get('total_debit') or Decimal('0.00')
+        outstanding = total_credit - total_debit
+        if outstanding > 0:
+            customer_id = row['customer']
+            eligible_customer_ids.append(customer_id)
+            outstanding_by_customer[customer_id] = outstanding
+
+    customers_qs = customers_qs.filter(id__in=eligible_customer_ids).order_by('name')
+
+    reminders_qs = PaymentReminder.objects.select_related('customer', 'customer__customer_group').filter(
+        customer__in=customers_qs,
+        due_date__gte=visible_start,
+        due_date__lte=visible_end,
+        is_settled=False,
+    )
+
+    reminders = list(reminders_qs)
+    reminders_by_customer = {}
+    for reminder in reminders:
+        key = reminder.customer_id
+        due_key = reminder.due_date.isoformat()
+        if key not in reminders_by_customer:
+            reminders_by_customer[key] = {}
+        outstanding_amount = outstanding_by_customer.get(key, Decimal('0.00'))
+        if outstanding_amount <= 0:
+            continue
+        existing = reminders_by_customer[key].get(due_key, Decimal('0.00'))
+        # Show outstanding ledger amount on each due date cell.
+        reminders_by_customer[key][due_key] = outstanding_amount if outstanding_amount > existing else existing
+
+    days = []
+    cursor = visible_start
+    while cursor <= visible_end:
+        days.append(cursor.isoformat())
+        cursor = cursor.fromordinal(cursor.toordinal() + 1)
+
+    customers = []
+    total_due = Decimal('0.00')
+    for customer in customers_qs:
+        daily_totals = reminders_by_customer.get(customer.id, {})
+        customer_total = outstanding_by_customer.get(customer.id, Decimal('0.00'))
+        total_due += customer_total
+        customers.append({
+            'id': customer.id,
+            'name': customer.name,
+            'customer_group': customer.customer_group_id,
+            'customer_group_name': customer.customer_group.name if customer.customer_group else '',
+            'daily_totals': {k: str(v) for k, v in daily_totals.items()},
+            'total_due': str(customer_total),
+        })
+
+    reminder_data = PaymentReminderSerializer(reminders, many=True).data
+    return Response({
+        'month': month_start.strftime('%Y-%m'),
+        'month_start': visible_start.isoformat(),
+        'month_end': visible_end.isoformat(),
+        'calendar_month_start': month_start.isoformat(),
+        'calendar_month_end': month_end.isoformat(),
+        'days': days,
+        'total_due': str(total_due),
+        'customers_count': len(customers),
+        'customers': customers,
+        'reminders': reminder_data,
+    })
 
 
 # Supplier views

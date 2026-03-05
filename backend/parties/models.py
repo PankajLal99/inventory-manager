@@ -39,6 +39,25 @@ class Customer(models.Model):
         db_table = 'customers'
 
 
+class PaymentReminder(models.Model):
+    """Payment reminders linked to customers."""
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='payment_reminders')
+    due_date = models.DateField()
+    due_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    is_settled = models.BooleanField(default=False)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    settled_payment = models.ForeignKey('pos.Payment', on_delete=models.SET_NULL, null=True, blank=True, related_name='settled_payment_reminders')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.customer.name} - {self.due_date} - {self.due_amount}"
+
+    class Meta:
+        db_table = 'payment_reminders'
+        ordering = ['due_date', 'customer__name']
+
+
 class Supplier(models.Model):
     """Suppliers"""
     name = models.CharField(max_length=200)

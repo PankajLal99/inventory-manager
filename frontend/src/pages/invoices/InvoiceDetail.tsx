@@ -60,6 +60,12 @@ export default function InvoiceDetail() {
   const [showRepairStatusModal, setShowRepairStatusModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showEditPaymentModal, setShowEditPaymentModal] = useState(false);
+  const [editingPaymentId, setEditingPaymentId] = useState<number | null>(null);
+  const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'upi' | 'card' | 'bank_transfer' | 'credit' | 'other' | 'refund'>('cash');
+  const [editPaymentAmount, setEditPaymentAmount] = useState<string>('');
+  const [editPaymentReference, setEditPaymentReference] = useState<string>('');
+  const [editPaymentNotes, setEditPaymentNotes] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'upi' | 'card' | 'bank_transfer' | 'credit' | 'other'>('cash');
   const [paymentAmount, setPaymentAmount] = useState<string>('');
   const [paymentReference, setPaymentReference] = useState<string>('');
@@ -326,6 +332,34 @@ export default function InvoiceDetail() {
     },
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to record payment';
+      alert(errorMsg);
+    },
+  });
+
+  const resetEditPaymentState = () => {
+    setShowEditPaymentModal(false);
+    setEditingPaymentId(null);
+    setEditPaymentMethod('cash');
+    setEditPaymentAmount('');
+    setEditPaymentReference('');
+    setEditPaymentNotes('');
+  };
+
+  const updatePaymentMutation = useMutation({
+    mutationFn: (data: { payment_id: number; payment_method: string; amount: number; reference?: string; notes?: string }) =>
+      posApi.invoices.updatePayment(invoiceId, data),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+      await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      if (invoice?.data?.customer) {
+        queryClient.invalidateQueries({ queryKey: ['customer', invoice.data.customer] });
+      }
+      resetEditPaymentState();
+      alert('Payment updated successfully!');
+    },
+    onError: (error: any) => {
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to update payment';
       alert(errorMsg);
     },
   });
@@ -2496,7 +2530,7 @@ export default function InvoiceDetail() {
           </h3>
           {/* Desktop Table View */}
           <div className="hidden md:block">
-            <Table headers={['Payment Method', 'Amount', 'Reference', 'Date']}>
+            <Table headers={['Payment Method', 'Amount', 'Reference', 'Date', 'Action']}>
               {inv.payments.map((payment: any) => (
                 <TableRow key={payment.id}>
                   <TableCell>
@@ -2510,6 +2544,23 @@ export default function InvoiceDetail() {
                   </TableCell>
                   <TableCell>
                     <span className="text-gray-600">{formatDate(payment.created_at)}</span>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingPaymentId(payment.id);
+                        setEditPaymentMethod((payment.payment_method || 'cash') as any);
+                        setEditPaymentAmount(String(payment.amount ?? ''));
+                        setEditPaymentReference(payment.reference || '');
+                        setEditPaymentNotes(payment.notes || '');
+                        setShowEditPaymentModal(true);
+                      }}
+                      className="!px-2"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -2538,6 +2589,24 @@ export default function InvoiceDetail() {
                       <div className="text-sm font-medium text-gray-900 break-all">{payment.reference}</div>
                     </div>
                   )}
+                  <div className="pt-3 mt-3 border-t border-gray-100 flex justify-end">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditingPaymentId(payment.id);
+                        setEditPaymentMethod((payment.payment_method || 'cash') as any);
+                        setEditPaymentAmount(String(payment.amount ?? ''));
+                        setEditPaymentReference(payment.reference || '');
+                        setEditPaymentNotes(payment.notes || '');
+                        setShowEditPaymentModal(true);
+                      }}
+                      className="inline-flex items-center gap-2"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -4128,6 +4197,111 @@ export default function InvoiceDetail() {
           </Modal>
         );
       })()}
+
+      {/* Edit Payment Modal */}
+      <Modal
+        isOpen={showEditPaymentModal}
+        onClose={resetEditPaymentState}
+        title="Edit Payment"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Payment Method <span className="text-red-500">*</span>
+            </label>
+            <Select
+              value={editPaymentMethod}
+              onChange={(e) => setEditPaymentMethod(e.target.value as any)}
+              className="w-full"
+            >
+              <option value="cash">Cash</option>
+              <option value="upi">UPI</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="credit">Credit</option>
+              <option value="other">Other</option>
+              <option value="refund">Refund</option>
+            </Select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Amount <span className="text-red-500">*</span>
+            </label>
+            <Input
+              type="number"
+              step="0.01"
+              min="0"
+              value={editPaymentAmount}
+              onChange={(e) => setEditPaymentAmount(e.target.value)}
+              placeholder="Enter amount"
+              className="w-full"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Reference (Optional)
+            </label>
+            <Input
+              type="text"
+              value={editPaymentReference}
+              onChange={(e) => setEditPaymentReference(e.target.value)}
+              placeholder="Transaction ID, Check Number, etc."
+              className="w-full"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Notes (Optional)
+            </label>
+            <textarea
+              value={editPaymentNotes}
+              onChange={(e) => setEditPaymentNotes(e.target.value)}
+              placeholder="Additional notes about this payment"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              rows={3}
+            />
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <Button
+              onClick={resetEditPaymentState}
+              variant="outline"
+              className="flex-1"
+              disabled={updatePaymentMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const amount = parseFloat(editPaymentAmount);
+                if (!editingPaymentId) {
+                  alert('Invalid payment selected');
+                  return;
+                }
+                if (!amount || amount <= 0) {
+                  alert('Please enter a valid payment amount');
+                  return;
+                }
+                updatePaymentMutation.mutate({
+                  payment_id: editingPaymentId,
+                  payment_method: editPaymentMethod,
+                  amount,
+                  reference: editPaymentReference || undefined,
+                  notes: editPaymentNotes || undefined,
+                });
+              }}
+              disabled={updatePaymentMutation.isPending || !editPaymentAmount || parseFloat(editPaymentAmount) <= 0}
+              className="flex-1"
+            >
+              {updatePaymentMutation.isPending ? 'Saving...' : 'Update Payment'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal
