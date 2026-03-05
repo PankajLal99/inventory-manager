@@ -9,7 +9,7 @@ from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.db.models.functions import TruncDate
 from django.conf import settings
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses
@@ -3522,7 +3522,15 @@ def invoice_update(request, pk):
         invoice.discount_amount = discount_total
         invoice.tax_amount = tax_total
         invoice.total = subtotal - discount_total + tax_total
+
+        # Keep payment rows and invoice summary in sync after item edits.
+        if invoice.invoice_type in ('cash', 'upi', 'mixed') and invoice.status in ('paid', 'partial'):
+            synced_paid_amount = sync_invoice_payments_to_total(invoice)
+            if synced_paid_amount > Decimal('0.00'):
+                invoice.paid_amount = synced_paid_amount
+
         invoice.due_amount = invoice.total - invoice.paid_amount
+        invoice.status = 'paid' if invoice.due_amount <= Decimal('0.00') else 'partial'
         invoice.save()
     # Do not call update_invoice_totals here: for draft pending it would zero totals;
     # we have already set subtotal/total/due_amount from the new items above.
@@ -4142,6 +4150,47 @@ def update_invoice_totals(invoice):
     invoice.save()
 
 
+def sync_invoice_payments_to_total(invoice):
+    """Scale non-refund payment rows to match invoice.total exactly."""
+    sale_payments = list(
+        invoice.payments.exclude(payment_method='refund').order_by('created_at', 'id')
+    )
+    if not sale_payments:
+        return Decimal('0.00')
+
+    old_total = sum((payment.amount for payment in sale_payments), Decimal('0.00'))
+    target_total = (invoice.total or Decimal('0.00')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    if old_total <= Decimal('0.00'):
+        # Fallback: set the first row to the full amount and zero out the rest.
+        first_payment, *remaining_payments = sale_payments
+        if first_payment.amount != target_total:
+            first_payment.amount = target_total
+            first_payment.save(update_fields=['amount'])
+        for payment in remaining_payments:
+            if payment.amount != Decimal('0.00'):
+                payment.amount = Decimal('0.00')
+                payment.save(update_fields=['amount'])
+        return target_total
+
+    running_total = Decimal('0.00')
+    for payment in sale_payments[:-1]:
+        scaled_amount = (
+            payment.amount * target_total / old_total
+        ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        running_total += scaled_amount
+        if payment.amount != scaled_amount:
+            payment.amount = scaled_amount
+            payment.save(update_fields=['amount'])
+
+    last_payment = sale_payments[-1]
+    last_amount = (target_total - running_total).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    if last_payment.amount != last_amount:
+        last_payment.amount = last_amount
+        last_payment.save(update_fields=['amount'])
+
+    return target_total
+
+
 # Credit Note views
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -4664,6 +4713,94 @@ def replacement_update_tag(request, barcode_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def replacement_reserve_barcode(request):
+    """Reserve/release replacement barcode by toggling tag to/from in-cart."""
+    barcode_id = request.data.get('barcode_id')
+    action = (request.data.get('action') or 'reserve').strip().lower()
+    restore_tag = (request.data.get('restore_tag') or 'new').strip().lower()
+
+    if not barcode_id:
+        return Response({'error': 'barcode_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if action not in ['reserve', 'release']:
+        return Response({'error': 'action must be "reserve" or "release"'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if restore_tag not in ['new', 'returned']:
+        restore_tag = 'new'
+
+    with transaction.atomic():
+        try:
+            # Lock only Barcode row here; select_related on nullable FK can generate
+            # an outer join that PostgreSQL rejects with FOR UPDATE.
+            barcode_obj = Barcode.objects.select_for_update().get(pk=barcode_id)
+        except Barcode.DoesNotExist:
+            return Response({'error': 'Barcode not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        old_tag = barcode_obj.tag
+
+        if action == 'reserve':
+            if old_tag not in ['new', 'returned']:
+                return Response({
+                    'error': f'Barcode is not available for replacement (current tag: {old_tag})',
+                    'barcode_tag': old_tag,
+                }, status=status.HTTP_400_BAD_REQUEST)
+            barcode_obj.tag = 'in-cart'
+            barcode_obj.save(update_fields=['tag'])
+            create_audit_log(
+                request=request,
+                action='barcode_tag_change',
+                model_name='Barcode',
+                object_id=str(barcode_obj.id),
+                object_name=barcode_obj.product.name if barcode_obj.product else 'Unknown Product',
+                object_reference=barcode_obj.product.sku if barcode_obj.product else None,
+                barcode=barcode_obj.barcode,
+                changes={
+                    'tag': {'old': old_tag, 'new': 'in-cart'},
+                    'context': 'replacement_reserve_barcode',
+                }
+            )
+            return Response({
+                'message': 'Barcode reserved for replacement',
+                'barcode_id': barcode_obj.id,
+                'barcode': barcode_obj.barcode,
+                'tag': barcode_obj.tag,
+                'previous_tag': old_tag,
+            })
+
+        # action == 'release'
+        if old_tag == 'in-cart':
+            barcode_obj.tag = restore_tag
+            barcode_obj.save(update_fields=['tag'])
+            create_audit_log(
+                request=request,
+                action='barcode_tag_change',
+                model_name='Barcode',
+                object_id=str(barcode_obj.id),
+                object_name=barcode_obj.product.name if barcode_obj.product else 'Unknown Product',
+                object_reference=barcode_obj.product.sku if barcode_obj.product else None,
+                barcode=barcode_obj.barcode,
+                changes={
+                    'tag': {'old': old_tag, 'new': restore_tag},
+                    'context': 'replacement_release_barcode',
+                }
+            )
+            return Response({
+                'message': 'Barcode released from replacement cart',
+                'barcode_id': barcode_obj.id,
+                'barcode': barcode_obj.barcode,
+                'tag': barcode_obj.tag,
+            })
+
+        return Response({
+            'message': 'Barcode already released',
+            'barcode_id': barcode_obj.id,
+            'barcode': barcode_obj.barcode,
+            'tag': barcode_obj.tag,
+        })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def replacement_replace(request):
     """Replace a sold item with another item - update invoice and inventory"""
     invoice_item_id = request.data.get('invoice_item_id')
@@ -4700,7 +4837,7 @@ def replacement_replace(request):
     scanned_barcode = request.data.get('scanned_barcode')  # Get the exact barcode scanned/searched
     
     if new_product:
-        # Only allow barcodes with tag='new' or tag='returned' (available inventory)
+        # Only allow barcodes that are available or reserved for this flow
         if scanned_barcode:
             from django.db.models import Q
             scanned_clean = str(scanned_barcode).strip().upper()
@@ -4710,7 +4847,7 @@ def replacement_replace(request):
                     barcode=scanned_clean,
                     product=new_product,
                     variant=invoice_item.variant,
-                    tag__in=['new', 'returned']
+                    tag__in=['new', 'returned', 'in-cart']
                 )
             except Barcode.DoesNotExist:
                 try:
@@ -4718,27 +4855,27 @@ def replacement_replace(request):
                         short_code=scanned_clean,
                         product=new_product,
                         variant=invoice_item.variant,
-                        tag__in=['new', 'returned']
+                        tag__in=['new', 'returned', 'in-cart']
                     )
                 except Barcode.DoesNotExist:
                     try:
                         new_barcode = Barcode.objects.get(
                             barcode=scanned_clean,
                             product=new_product,
-                            tag__in=['new', 'returned']
+                            tag__in=['new', 'returned', 'in-cart']
                         )
                     except Barcode.DoesNotExist:
                         try:
                             new_barcode = Barcode.objects.get(
                                 short_code=scanned_clean,
                                 product=new_product,
-                                tag__in=['new', 'returned']
+                                tag__in=['new', 'returned', 'in-cart']
                             )
                         except Barcode.DoesNotExist:
-                                # Exact barcode not found or not available
-                                return Response({
+                            # Exact barcode not found or not available
+                            return Response({
                                 'error': f'Barcode {scanned_barcode} not found or not available for sale',
-                                'message': f'The barcode {scanned_barcode} is either not found, already sold, or not in available inventory (must be tagged as "new" or "returned").'
+                                'message': f'The barcode {scanned_barcode} is either not found, already sold, or not reserved/available for replacement (must be tagged as "new", "returned", or "in-cart").'
                             }, status=status.HTTP_400_BAD_REQUEST)
         else:
             # No scanned barcode provided - this should not happen in normal flow
