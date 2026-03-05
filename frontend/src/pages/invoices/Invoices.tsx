@@ -114,39 +114,6 @@ export default function Invoices() {
 
   const currentStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId);
 
-  // Today's date in YYYY-MM-DD for KPI summary
-  const todayStr = (() => {
-    const d = new Date();
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  })();
-
-  // Fetch today's invoices for KPI stats only (independent of table filters)
-  const { data: todayData } = useQuery({
-    queryKey: ['invoices', 'today', todayStr, defaultStore?.id ?? 'all'],
-    queryFn: () => posApi.invoices.list({
-      date_from: todayStr,
-      date_to: todayStr,
-      store: defaultStore?.id ?? undefined,
-      page: 1,
-      page_size: 500,
-    }),
-    enabled: canSeeKPIStats,
-  });
-
-  const todayInvoices: Invoice[] = (() => {
-    const raw = todayData?.data;
-    if (!raw || typeof raw !== 'object') return [];
-    if (Array.isArray((raw as any).results)) return (raw as any).results;
-    if (Array.isArray((raw as any).data)) return (raw as any).data;
-    if (Array.isArray(raw)) return raw;
-    return [];
-  })().filter((inv: Invoice) => {
-    if (inv.invoice_type === 'defective') return false;
-    if (inv.repair) return false;
-    if (inv.status === 'credit') return false;
-    return true;
-  });
-
   // When invoice type filter is selected: no pagination, all invoices, date ascending (old first).
   const useTypeFilterMode = !!invoiceTypeFilter;
   const { data, isLoading, isFetching, error } = useQuery({
@@ -207,15 +174,15 @@ export default function Invoices() {
   };
 
 
-  // KPI: today's summary only
-  const totalRevenue = todayInvoices
+  // KPI summary based on currently loaded/visible invoice results
+  const totalRevenue = filteredInvoices
     .filter(inv => inv.status === 'paid')
     .reduce((sum, inv) => sum + parseAmount(inv.total), 0);
-  const totalPendingInvoiceAmount = todayInvoices
+  const totalPendingInvoiceAmount = filteredInvoices
     .filter(inv => inv.invoice_type === 'pending')
     .reduce((sum, inv) => sum + parseAmount(inv.display_total ?? inv.total), 0);
-  const totalInvoices = todayInvoices.length;
-  const paidInvoices = todayInvoices.filter(inv => inv.status === 'paid').length;
+  const totalInvoices = filteredInvoices.length;
+  const paidInvoices = filteredInvoices.filter(inv => inv.status === 'paid').length;
 
   if (isLoading) {
     return <LoadingState message="Loading invoices..." />;
@@ -287,10 +254,10 @@ export default function Invoices() {
         )}
       </div>
 
-      {/* Stats Cards - Today's summary only; hidden from Retail and Repair groups */}
+      {/* Stats Cards - live summary of currently loaded invoices; hidden from Retail and Repair groups */}
       {canSeeKPIStats && (
         <div className="space-y-2">
-          <p className="text-sm font-medium text-gray-500">Today&apos;s summary</p>
+          <p className="text-sm font-medium text-gray-500">Live summary</p>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <Card>
               <div className="flex items-center justify-between">
