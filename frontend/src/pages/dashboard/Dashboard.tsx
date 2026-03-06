@@ -2,15 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { reportsApi } from '../../lib/api';
-import { formatNumber, toLocalDateString, formatDateMMDDYYYY } from '../../lib/utils';
+import { DateRangePreset, formatNumber, formatDateMMDDYYYY, getDateRangeByPreset } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   Package, FileText, ShoppingBag, Calendar,
   DollarSign, CreditCard, Wallet, TrendingUp, TrendingDown, Wrench, Store, Clock,
   BarChart3, Box, RefreshCw, ArrowUp, ArrowDown, Lock
 } from 'lucide-react';
-import Button from '../../components/ui/Button';
-import Input from '../../components/ui/Input';
+import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 const PIN_LENGTH = 6;
 const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070';
@@ -18,8 +17,9 @@ const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070'
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(auth.getUser());
-  const [dateFrom, setDateFrom] = useState(toLocalDateString(new Date()));
-  const [dateTo, setDateTo] = useState(toLocalDateString(new Date()));
+  const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
+  const [dateRange, setDateRange] = useState(() => getDateRangeByPreset('one_day'));
+  const { startDate: dateFrom, endDate: dateTo } = dateRange;
 
   // 6-digit PIN lock; always locked when entering dashboard (auto-lock when leaving)
   const [unlocked, setUnlocked] = useState(false);
@@ -243,36 +243,15 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-gray-700 whitespace-nowrap">From:</label>
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="w-full sm:w-auto"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-gray-700 whitespace-nowrap">To:</label>
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="w-full sm:w-auto"
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const today = toLocalDateString(new Date());
-                setDateFrom(today);
-                setDateTo(today);
+            <DateRangeSelector
+              preset={datePreset}
+              value={dateRange}
+              onChange={({ preset, range }) => {
+                setDatePreset(preset);
+                setDateRange(range);
               }}
-              className="whitespace-nowrap"
-            >
-              Today
-            </Button>
+              className="w-full sm:w-[360px]"
+            />
           </div>
         </div>
       </div>

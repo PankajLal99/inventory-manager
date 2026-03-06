@@ -1,12 +1,13 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useEffect } from 'react';
 import { customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
+import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import Select from '../../components/ui/Select';
 import Modal from '../../components/ui/Modal';
 import { toast } from '../../lib/toast';
@@ -22,6 +23,11 @@ import { format } from 'date-fns';
 export default function PersonalLedgerDetail() {
   const { customerId } = useParams<{ customerId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const personalLedgerListPath = (() => {
+    const query = searchParams.toString();
+    return query ? `/personal-ledger?${query}` : '/personal-ledger';
+  })();
 
   const [filters, setFilters] = useState({
     dateFrom: '',
@@ -30,6 +36,7 @@ export default function PersonalLedgerDetail() {
     search: '',
   });
   const [showFilters, setShowFilters] = useState(false);
+  const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
   const [entryData, setEntryData] = useState({
@@ -296,6 +303,7 @@ export default function PersonalLedgerDetail() {
       entryType: '',
       search: '',
     });
+    setDatePreset('custom');
   };
 
   const hasActiveFilters = filters.entryType || filters.search || filters.dateFrom || filters.dateTo;
@@ -306,7 +314,13 @@ export default function PersonalLedgerDetail() {
         <div className="flex items-center gap-4">
           <Button
             variant="outline"
-            onClick={() => navigate('/personal-ledger')}
+            onClick={() => {
+              if (window.history.length > 1) {
+                navigate(-1);
+                return;
+              }
+              navigate(personalLedgerListPath);
+            }}
             size="sm"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
@@ -402,24 +416,18 @@ export default function PersonalLedgerDetail() {
         {showFilters && (
           <div className="border-t pt-4 mt-4 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   <Calendar className="h-4 w-4 inline mr-1" />
-                  Date From
+                  Date Range
                 </label>
-                <DatePicker
-                  value={filters.dateFrom}
-                  onChange={(date) => setFilters({ ...filters, dateFrom: date })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  <Calendar className="h-4 w-4 inline mr-1" />
-                  Date To
-                </label>
-                <DatePicker
-                  value={filters.dateTo}
-                  onChange={(date) => setFilters({ ...filters, dateTo: date })}
+                <DateRangeSelector
+                  preset={datePreset}
+                  value={{ startDate: filters.dateFrom, endDate: filters.dateTo }}
+                  onChange={({ preset, range }) => {
+                    setDatePreset(preset);
+                    setFilters({ ...filters, dateFrom: range.startDate, dateTo: range.endDate });
+                  }}
                 />
               </div>
               <div>

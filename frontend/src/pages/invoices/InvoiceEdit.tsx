@@ -10,6 +10,7 @@ import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Input from '../../components/ui/Input';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
+import Modal from '../../components/ui/Modal';
 import { ArrowLeft, Trash2, Plus, Check, Barcode, Search, Package, XCircle } from 'lucide-react';
 
 export default function InvoiceEdit() {
@@ -52,6 +53,8 @@ export default function InvoiceEdit() {
   const [itemPrices, setItemPrices] = useState<Record<number, string>>({});
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
   const [priceErrors, setPriceErrors] = useState<Record<number, string>>({});
+  const [showCustomProductModal, setShowCustomProductModal] = useState(false);
+  const [customProductName, setCustomProductName] = useState('');
 
   // Debounce barcode input for search
   useEffect(() => {
@@ -233,6 +236,25 @@ export default function InvoiceEdit() {
     onError: (e: any) => alert(e?.response?.data?.error || 'Apply failed'),
   });
 
+  const handleApply = () => {
+    const customItemsMissingPP = items.filter((item: any) => {
+      if (!item.product_name?.startsWith('Other -')) return false;
+      const qty = parseFloat(itemQuantities[item.id] ?? item.quantity) || 0;
+      if (qty <= 0) return false;
+      const inlineVal = editingPurchasePrice[item.id];
+      const purchaseVal = inlineVal !== undefined && inlineVal !== ''
+        ? parseFloat(inlineVal)
+        : (item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : item.purchase_price != null ? parseFloat(String(item.purchase_price)) : NaN);
+      return Number.isNaN(purchaseVal) || purchaseVal <= 0;
+    });
+    if (customItemsMissingPP.length > 0) {
+      const names = customItemsMissingPP.map((i: any) => i.product_name || 'Custom Product').join(', ');
+      alert(`Purchase price (cost) is required and must be greater than 0 for: ${names}`);
+      return;
+    }
+    applyMutation.mutate();
+  };
+
   const handleQuantityBlur = (item: any) => {
     const raw = itemQuantities[item.id] ?? item.quantity;
     const qty = Math.max(0, parseFloat(raw) || 0);
@@ -317,7 +339,7 @@ export default function InvoiceEdit() {
         </div>
         <Button
           variant="primary"
-          onClick={() => applyMutation.mutate()}
+          onClick={handleApply}
           disabled={applyMutation.isPending || items.length === 0}
         >
           <Check className="h-4 w-4 mr-2" />
@@ -348,29 +370,40 @@ export default function InvoiceEdit() {
                   if (searchedBarcodeStatus) setSearchedBarcodeStatus(null);
                 }}
                 onKeyDown={async (e) => {
+                  const inputVal = barcodeInput.trim();
+                  const searchLower = inputVal.toLowerCase();
+                  const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
+
+                  const productList = (() => {
+                    const list: any[] = [];
+                    if (_barcodeCheck?.product && !_barcodeCheck?.isUnavailable) list.push(_barcodeCheck.product);
+                    if (searchResults?.results) {
+                      const ids = new Set(list.map(p => p.id));
+                      list.push(...searchResults.results.filter((p: any) => !ids.has(p.id)));
+                    }
+                    return list;
+                  })();
+                  const totalOptions = (showCustomOption ? 1 : 0) + productList.length;
+
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    const inputVal = barcodeInput.trim();
                     if (!inputVal) return;
 
-                    // Clear typed status if it's a barcode
+                    if (showCustomOption && productSearchSelectedIndex === 0) {
+                      setShowCustomProductModal(true);
+                      setBarcodeInput('');
+                      setProductSearchSelectedIndex(-1);
+                      setIsSearchTyped(false);
+                      return;
+                    }
+
                     if (looksLikeBarcode(inputVal)) {
                       setIsSearchTyped(false);
                     }
 
-                    // If a product is selected in dropdown
                     if (productSearchSelectedIndex >= 0) {
-                      const productList = (() => {
-                        const list: any[] = [];
-                        if (_barcodeCheck?.product && !_barcodeCheck?.isUnavailable) list.push(_barcodeCheck.product);
-                        if (searchResults?.results) {
-                          const ids = new Set(list.map(p => p.id));
-                          list.push(...searchResults.results.filter((p: any) => !ids.has(p.id)));
-                        }
-                        return list;
-                      })();
-
-                      const product = productList[productSearchSelectedIndex];
+                      const idx = showCustomOption ? productSearchSelectedIndex - 1 : productSearchSelectedIndex;
+                      const product = productList[idx];
                       if (product) {
                         addItemMutation.mutate({
                           product: product.id,
@@ -383,11 +416,9 @@ export default function InvoiceEdit() {
                       }
                     }
 
-                    // Flexible handling for Enter key
                     if (looksLikeBarcode(inputVal)) {
                       handleBarcodeScan(inputVal);
                     } else if (inputVal) {
-                      // If it's not a barcode but there are search results, pick the first one
                       const firstProduct = _barcodeCheck?.product || (searchResults?.results?.[0]);
                       if (firstProduct) {
                         addItemMutation.mutate({
@@ -400,10 +431,11 @@ export default function InvoiceEdit() {
                     }
                   } else if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    setProductSearchSelectedIndex(prev => prev + 1);
+                    if (totalOptions > 0) setProductSearchSelectedIndex(prev => Math.min(prev + 1, totalOptions - 1));
                   } else if (e.key === 'ArrowUp') {
                     e.preventDefault();
-                    setProductSearchSelectedIndex(prev => Math.max(-1, prev - 1));
+                    if (productSearchSelectedIndex > 0) setProductSearchSelectedIndex(prev => prev - 1);
+                    else setProductSearchSelectedIndex(-1);
                   } else if (e.key === 'Escape') {
                     setBarcodeInput('');
                     setIsSearchTyped(false);
@@ -438,19 +470,27 @@ export default function InvoiceEdit() {
               variant="primary"
               onClick={() => {
                 const b = barcodeInput.trim();
-                if (b) {
-                  if (looksLikeBarcode(b)) {
-                    handleBarcodeScan(b);
-                  } else {
-                    const firstProduct = _barcodeCheck?.product || (searchResults?.results?.[0]);
-                    if (firstProduct) {
-                      addItemMutation.mutate({
-                        product: firstProduct.id,
-                        quantity: 1,
-                        unit_price: 0,
-                        manual_unit_price: firstProduct.selling_price ?? 0,
-                      });
-                    }
+                if (!b) return;
+                const lower = b.toLowerCase();
+                const isCustomSearch = lower === 'other' || lower === 'custom' || lower.startsWith('other ') || lower.startsWith('custom ');
+                if (isCustomSearch) {
+                  setShowCustomProductModal(true);
+                  setBarcodeInput('');
+                  setIsSearchTyped(false);
+                  setProductSearchSelectedIndex(-1);
+                  return;
+                }
+                if (looksLikeBarcode(b)) {
+                  handleBarcodeScan(b);
+                } else {
+                  const firstProduct = _barcodeCheck?.product || (searchResults?.results?.[0]);
+                  if (firstProduct) {
+                    addItemMutation.mutate({
+                      product: firstProduct.id,
+                      quantity: 1,
+                      unit_price: 0,
+                      manual_unit_price: firstProduct.selling_price ?? 0,
+                    });
                   }
                 }
               }}
@@ -461,50 +501,84 @@ export default function InvoiceEdit() {
           </div>
 
           {/* Search Dropdown */}
-          {isSearchTyped && !searchedBarcodeStatus?.isUnavailable && (
-            <div className="absolute top-full left-4 right-4 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto">
-              {(() => {
-                const list: any[] = [];
-                if (_barcodeCheck?.product && !_barcodeCheck?.isUnavailable) list.push(_barcodeCheck.product);
-                if (searchResults) {
-                  const results = Array.isArray(searchResults.results) ? searchResults.results :
-                    Array.isArray(searchResults.data) ? searchResults.data :
-                      Array.isArray(searchResults) ? searchResults : [];
-                  const ids = new Set(list.map(p => p.id));
-                  list.push(...results.filter((p: any) => !ids.has(p.id)));
-                }
+          {(() => {
+            const searchLower = barcodeInput.trim().toLowerCase();
+            const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
+            if (!isSearchTyped || searchedBarcodeStatus?.isUnavailable) return null;
+            if (!showCustomOption && !_barcodeCheck?.product && !searchResults) return null;
 
-                if (list.length === 0) {
-                  return <div className="p-4 text-center text-gray-500 text-sm">No products found</div>;
-                }
+            const list: any[] = [];
+            if (_barcodeCheck?.product && !_barcodeCheck?.isUnavailable) list.push(_barcodeCheck.product);
+            if (searchResults) {
+              const results = Array.isArray(searchResults.results) ? searchResults.results :
+                Array.isArray(searchResults.data) ? searchResults.data :
+                  Array.isArray(searchResults) ? searchResults : [];
+              const ids = new Set(list.map(p => p.id));
+              list.push(...results.filter((p: any) => !ids.has(p.id)));
+            }
 
-                return list.map((product: any, index: number) => (
+            if (list.length === 0 && !showCustomOption) {
+              return (
+                <div className="absolute top-full left-4 right-4 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
+                  <div className="p-4 text-center text-gray-500 text-sm">No products found</div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="absolute top-full left-4 right-4 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto">
+                {showCustomOption && (
                   <button
-                    key={product.id}
-                    className={`w-full text-left px-4 py-3 flex items-center justify-between hover:bg-blue-50 transition-colors border-b last:border-0 ${index === productSearchSelectedIndex ? 'bg-blue-100' : ''}`}
+                    type="button"
                     onClick={() => {
-                      addItemMutation.mutate({
-                        product: product.id,
-                        quantity: 1,
-                        unit_price: 0,
-                        manual_unit_price: product.selling_price ?? 0,
-                        barcode: product.matched_barcode || (looksLikeBarcode(barcodeInput.trim()) ? barcodeInput.trim() : undefined)
-                      });
+                      setShowCustomProductModal(true);
+                      setBarcodeInput('');
+                      setProductSearchSelectedIndex(-1);
+                      setIsSearchTyped(false);
                     }}
-                    onMouseEnter={() => setProductSearchSelectedIndex(index)}
+                    onMouseEnter={() => setProductSearchSelectedIndex(0)}
+                    className={`w-full text-left px-4 py-3 transition-colors border-b border-gray-100 ${productSearchSelectedIndex === 0 ? 'bg-blue-100 border-l-2 border-l-blue-500' : 'hover:bg-blue-50'}`}
                   >
                     <div className="flex items-center gap-3">
-                      <Package className="h-5 w-5 text-blue-500" />
+                      <Package className="h-5 w-5 text-blue-600" />
                       <div>
-                        <div className="font-medium text-gray-900 text-sm">{product.name}</div>
-                        <div className="text-[10px] text-gray-500 font-mono">SKU: {product.sku}</div>
+                        <div className="font-medium text-gray-900 text-sm">Add Custom Product (Other)</div>
+                        <div className="text-[10px] text-gray-500">Enter a product name not in inventory</div>
                       </div>
                     </div>
                   </button>
-                ));
-              })()}
-            </div>
-          )}
+                )}
+                {list.map((product: any, index: number) => {
+                  const adjustedIndex = showCustomOption ? index + 1 : index;
+                  const isSelected = adjustedIndex === productSearchSelectedIndex;
+                  return (
+                    <button
+                      key={product.id}
+                      className={`w-full text-left px-4 py-3 flex items-center justify-between hover:bg-blue-50 transition-colors border-b last:border-0 ${isSelected ? 'bg-blue-100 border-l-2 border-l-blue-500' : ''}`}
+                      onClick={() => {
+                        addItemMutation.mutate({
+                          product: product.id,
+                          quantity: 1,
+                          unit_price: 0,
+                          manual_unit_price: product.selling_price ?? 0,
+                          barcode: product.matched_barcode || (looksLikeBarcode(barcodeInput.trim()) ? barcodeInput.trim() : undefined)
+                        });
+                      }}
+                      onMouseEnter={() => setProductSearchSelectedIndex(adjustedIndex)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Package className="h-5 w-5 text-blue-500" />
+                        <div>
+                          <div className="font-medium text-gray-900 text-sm">{product.name}</div>
+                          <div className="text-[10px] text-gray-500 font-mono">SKU: {product.sku}</div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
 
           {/* Error Message for Unavailable Barcode */}
           {searchedBarcodeStatus?.isUnavailable && (
@@ -653,6 +727,68 @@ export default function InvoiceEdit() {
           </div>
         )}
       </Card>
+
+      {/* Custom Product Modal */}
+      <Modal
+        isOpen={showCustomProductModal}
+        onClose={() => {
+          setShowCustomProductModal(false);
+          setCustomProductName('');
+        }}
+        title="Add Custom Product"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Product Name <span className="text-red-500">*</span>
+            </label>
+            <Input
+              type="text"
+              placeholder="Enter product name"
+              value={customProductName}
+              onChange={(e) => setCustomProductName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && customProductName.trim()) {
+                  addItemMutation.mutate(
+                    { custom_product_name: customProductName.trim(), quantity: 1, unit_price: 0 },
+                    { onSuccess: () => { setShowCustomProductModal(false); setCustomProductName(''); } }
+                  );
+                }
+              }}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Saved as &quot;Other - {customProductName || '[name]'}&quot;. Enter cost (purchase price) in the cart row after adding.
+            </p>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <Button
+              onClick={() => {
+                if (!customProductName.trim()) {
+                  alert('Product name is required');
+                  return;
+                }
+                addItemMutation.mutate(
+                  { custom_product_name: customProductName.trim(), quantity: 1, unit_price: 0 },
+                  { onSuccess: () => { setShowCustomProductModal(false); setCustomProductName(''); } }
+                );
+              }}
+              disabled={addItemMutation.isPending || !customProductName.trim()}
+              className="flex-1"
+            >
+              {addItemMutation.isPending ? 'Adding...' : 'Add to Cart'}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => { setShowCustomProductModal(false); setCustomProductName(''); }}
+              disabled={addItemMutation.isPending}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

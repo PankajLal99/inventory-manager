@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { posApi } from '../../lib/api';
 import { formatNumber } from '../../lib/utils';
 import {
@@ -11,7 +11,7 @@ import {
   Calendar,
   IndianRupee,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -35,7 +35,8 @@ interface CreditNote {
 
 export default function CreditNotes() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['credit-notes', search],
@@ -51,6 +52,21 @@ export default function CreditNotes() {
   });
 
   const creditNotes: CreditNote[] = data || [];
+
+  const buildCreditNoteDetailPath = (creditNoteId: number) => {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set('search', search.trim());
+    const query = params.toString();
+    return query ? `/credit-notes/${creditNoteId}?${query}` : `/credit-notes/${creditNoteId}`;
+  };
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+    if (search.trim()) nextParams.set('search', search.trim());
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [search, searchParams, setSearchParams]);
 
 
   const formatDate = (dateString: string) => {
@@ -177,7 +193,7 @@ export default function CreditNotes() {
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => navigate(`/credit-notes/${creditNote.id}`)}
+                        onClick={() => navigate(buildCreditNoteDetailPath(creditNote.id))}
                         className="text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
                       >
                         <Eye className="h-4 w-4" />

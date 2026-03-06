@@ -12,6 +12,11 @@ from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCust
 from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer, PaymentReminderSerializer
 
 
+def _credit_invoice_plus_manual_payment_filter():
+    """Credit-ledger view = credit invoices + manual received payments."""
+    return Q(invoice__status='credit') | Q(invoice__isnull=True, entry_type='credit')
+
+
 def is_admin_user(user):
     """
     Check if user is an admin user.
@@ -338,7 +343,8 @@ def payment_reminder_calendar(request):
     ledger_grouped = LedgerEntry.objects.filter(
         customer__in=customers_qs,
         customer__isnull=False,
-        invoice__status='credit',
+    ).filter(
+        _credit_invoice_plus_manual_payment_filter()
     ).values('customer').annotate(
         total_credit=Sum(Case(When(entry_type='credit', then=F('amount')), default=Value(Decimal('0.00')))),
         total_debit=Sum(Case(When(entry_type='debit', then=F('amount')), default=Value(Decimal('0.00')))),
@@ -488,12 +494,17 @@ def _ledger_entries_base_queryset(request):
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     entry_type = request.query_params.get('entry_type', None)
+    payment_mode = request.query_params.get('payment_mode', None)
     search = request.query_params.get('search', None)
     store_id = request.query_params.get('store', None)
     invoice_status = request.query_params.get('invoice_status', None)
+    manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
 
     if invoice_status:
-        queryset = queryset.filter(invoice__status=invoice_status)
+        if invoice_status == 'credit':
+            queryset = queryset.filter(_credit_invoice_plus_manual_payment_filter())
+        else:
+            queryset = queryset.filter(invoice__status=invoice_status)
     if store_id:
         queryset = queryset.filter(
             Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
@@ -513,6 +524,10 @@ def _ledger_entries_base_queryset(request):
         queryset = queryset.filter(date_filter)
     if entry_type:
         queryset = queryset.filter(entry_type=entry_type)
+    if payment_mode:
+        queryset = queryset.filter(payment_mode=payment_mode)
+    if manual_only:
+        queryset = queryset.filter(invoice__isnull=True)
     if search:
         queryset = queryset.filter(
             Q(customer__name__icontains=search) |
@@ -570,13 +585,18 @@ def ledger_entry_list_create(request):
         date_from = request.query_params.get('date_from', None)
         date_to = request.query_params.get('date_to', None)
         entry_type = request.query_params.get('entry_type', None)
+        payment_mode = request.query_params.get('payment_mode', None)
         search = request.query_params.get('search', None)
         store_id = request.query_params.get('store', None)
         invoice_status = request.query_params.get('invoice_status', None)
+        manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
         
         # Filter by invoice status if provided (only show entries from invoices with this status)
         if invoice_status:
-            queryset = queryset.filter(invoice__status=invoice_status)
+            if invoice_status == 'credit':
+                queryset = queryset.filter(_credit_invoice_plus_manual_payment_filter())
+            else:
+                queryset = queryset.filter(invoice__status=invoice_status)
         
         # Filter by store if provided (through invoice relationship)
         if store_id:
@@ -599,6 +619,10 @@ def ledger_entry_list_create(request):
             queryset = queryset.filter(date_filter)
         if entry_type:
             queryset = queryset.filter(entry_type=entry_type)
+        if payment_mode:
+            queryset = queryset.filter(payment_mode=payment_mode)
+        if manual_only:
+            queryset = queryset.filter(invoice__isnull=True)
         if search:
             queryset = queryset.filter(
                 Q(customer__name__icontains=search) |
@@ -667,7 +691,7 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
         # Reverse old balance, update, then apply new balance
         _reverse_ledger_entry_balance(entry)
         partial_data = request.data
-        allowed = {'entry_type', 'amount', 'description', 'created_at'}
+        allowed = {'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'description', 'created_at'}
         update_data = {k: v for k, v in partial_data.items() if k in allowed}
         serializer = LedgerEntrySerializer(entry, data=update_data, partial=True)
         if serializer.is_valid():
@@ -699,7 +723,10 @@ def ledger_summary(request):
     
     # Filter by invoice status if provided (only show entries from invoices with this status)
     if invoice_status:
-        base_queryset = base_queryset.filter(invoice__status=invoice_status)
+        if invoice_status == 'credit':
+            base_queryset = base_queryset.filter(_credit_invoice_plus_manual_payment_filter())
+        else:
+            base_queryset = base_queryset.filter(invoice__status=invoice_status)
     
     if store_id:
         # Include entries that have invoices from the specified store OR manual entries (no invoice)
@@ -757,7 +784,10 @@ def ledger_customer_detail(request, customer_id):
     
     # Filter by invoice status if provided (e.g. only entries from invoices with status='credit')
     if invoice_status:
-        entries = entries.filter(invoice__status=invoice_status)
+        if invoice_status == 'credit':
+            entries = entries.filter(_credit_invoice_plus_manual_payment_filter())
+        else:
+            entries = entries.filter(invoice__status=invoice_status)
     
     # Filter by store if provided (through invoice relationship)
     if store_id:

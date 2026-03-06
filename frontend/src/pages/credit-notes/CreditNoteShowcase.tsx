@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { posApi } from '../../lib/api';
 import { formatNumber } from '../../lib/utils';
@@ -22,7 +22,12 @@ import {
 export default function CreditNoteShowcase() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const creditNoteId = parseInt(id || '0');
+    const creditNotesListPath = (() => {
+        const query = searchParams.toString();
+        return query ? `/credit-notes?${query}` : '/credit-notes';
+    })();
 
     const { data: response, isLoading, error } = useQuery({
         queryKey: ['credit-note', creditNoteId],
@@ -61,7 +66,7 @@ export default function CreditNoteShowcase() {
         return (
             <ErrorState
                 message="Credit note not found or failed to load"
-                onRetry={() => navigate('/credit-notes')}
+                onRetry={() => navigate(creditNotesListPath)}
             />
         );
     }
@@ -344,7 +349,13 @@ export default function CreditNoteShowcase() {
             <div className="space-y-4">
                 <Button
                     variant="outline"
-                    onClick={() => navigate('/credit-notes')}
+                    onClick={() => {
+                        if (window.history.length > 1) {
+                            navigate(-1);
+                            return;
+                        }
+                        navigate(creditNotesListPath);
+                    }}
                     className="w-full sm:w-auto"
                 >
                     <ArrowLeft className="h-4 w-4 mr-2" />

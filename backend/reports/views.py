@@ -12,7 +12,7 @@ from decimal import Decimal
 from backend.pos.models import Invoice, InvoiceItem, Payment, CartItem
 from backend.catalog.models import Product, Barcode
 from backend.inventory.models import Stock
-from backend.parties.models import Customer
+from backend.parties.models import Customer, LedgerEntry
 
 logger = logging.getLogger('backend.reports')
 
@@ -484,15 +484,31 @@ def dashboard_kpis(request):
     # Exclude payments from void invoices and Manish Traders Loss customer
     payments = payments.exclude(invoice__status='void').exclude(invoice__customer__name__iexact='Manish Traders Loss')
     
-    # 1. Total Cash - Sum of all cash payments in the date range
-    total_cash = payments.filter(payment_method='cash').aggregate(
+    # 1. Total Cash - POS cash payments + manual cash receipts from ledger
+    pos_cash = payments.filter(payment_method='cash').aggregate(
         total=Sum('amount', output_field=DecimalField())
     )['total'] or Decimal('0.00')
-    
-    # 2. Total Online (UPI) - Sum of all UPI payments in the date range
-    total_online = payments.filter(payment_method='upi').aggregate(
+
+    # 2. Total Online (UPI) - POS UPI payments + manual UPI receipts from ledger
+    pos_online = payments.filter(payment_method='upi').aggregate(
         total=Sum('amount', output_field=DecimalField())
     )['total'] or Decimal('0.00')
+
+    ledger_payments = LedgerEntry.objects.filter(
+        entry_type='credit',
+        invoice__isnull=True,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+    )
+    ledger_cash = ledger_payments.filter(payment_mode='cash').aggregate(
+        total=Sum('amount', output_field=DecimalField())
+    )['total'] or Decimal('0.00')
+    ledger_online = ledger_payments.filter(payment_mode='upi').aggregate(
+        total=Sum('amount', output_field=DecimalField())
+    )['total'] or Decimal('0.00')
+
+    total_cash = pos_cash + ledger_cash
+    total_online = pos_online + ledger_online
     
     # 3. Total Expenses - Default 0 (coming soon)
     total_expenses = Decimal('0.00')
@@ -763,13 +779,27 @@ def dashboard_kpis(request):
     if store_id:
         yesterday_payments = yesterday_payments.filter(invoice__store_id=store_id)
     
-    yesterday_cash = yesterday_payments.filter(payment_method='cash').aggregate(
+    yesterday_pos_cash = yesterday_payments.filter(payment_method='cash').aggregate(
         total=Sum('amount', output_field=DecimalField())
     )['total'] or Decimal('0.00')
-    
-    yesterday_online = yesterday_payments.filter(payment_method='upi').aggregate(
+    yesterday_pos_online = yesterday_payments.filter(payment_method='upi').aggregate(
         total=Sum('amount', output_field=DecimalField())
     )['total'] or Decimal('0.00')
+
+    yesterday_ledger_payments = LedgerEntry.objects.filter(
+        entry_type='credit',
+        invoice__isnull=True,
+        created_at__date=yesterday,
+    )
+    yesterday_ledger_cash = yesterday_ledger_payments.filter(payment_mode='cash').aggregate(
+        total=Sum('amount', output_field=DecimalField())
+    )['total'] or Decimal('0.00')
+    yesterday_ledger_online = yesterday_ledger_payments.filter(payment_mode='upi').aggregate(
+        total=Sum('amount', output_field=DecimalField())
+    )['total'] or Decimal('0.00')
+
+    yesterday_cash = yesterday_pos_cash + yesterday_ledger_cash
+    yesterday_online = yesterday_pos_online + yesterday_ledger_online
     
     # Yesterday Total Inhand - Cash only (not including UPI)
     yesterday_inhand = yesterday_cash
