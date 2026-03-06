@@ -4,7 +4,13 @@ import { Coins, Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
-import { formatNumber } from '../../lib/utils';
+import {
+  DateRangePreset,
+  formatDateDDMMYYYY,
+  formatNumber,
+  getDateRangeByPreset,
+  getTodayDateString,
+} from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
@@ -12,11 +18,14 @@ import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
+import DatePicker from '../../components/ui/DatePicker';
+import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 
 type PaymentMode = 'CASH' | 'ONLINE';
+type GroupBy = 'none' | 'date' | 'expense_type' | 'lender' | 'borrower' | 'payment_type';
 
 interface Expense {
   id: number;
@@ -41,16 +50,8 @@ interface ExpenseFormState {
   expense_amount: string;
 }
 
-const getTodayDateValue = (): string => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
 const getDefaultFormState = (): ExpenseFormState => ({
-  expense_date: getTodayDateValue(),
+  expense_date: getTodayDateString(),
   expense_type: '',
   lender_name: 'Manish Traders',
   borrower_name: '',
@@ -64,8 +65,11 @@ export default function Expenses() {
   const [isUserLoaded, setIsUserLoaded] = useState(false);
   const [search, setSearch] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [groupBy, setGroupBy] = useState<GroupBy>('none');
+  const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
+  const initialDateRange = getDateRangeByPreset('one_day');
+  const [dateFrom, setDateFrom] = useState(initialDateRange.startDate || getTodayDateString());
+  const [dateTo, setDateTo] = useState(initialDateRange.endDate || getTodayDateString());
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
@@ -164,6 +168,36 @@ export default function Expenses() {
     () => expenses.reduce((sum, expense) => sum + Number(expense.expense_amount || 0), 0),
     [expenses]
   );
+
+  const groupedRows = useMemo(() => {
+    if (groupBy === 'none') return [];
+    const groups = new Map<string, { label: string; count: number; total: number }>();
+    expenses.forEach((expense) => {
+      let key = '';
+      let label = '';
+      if (groupBy === 'date') {
+        key = expense.expense_date || 'No Date';
+        label = key === 'No Date' ? key : formatDateDDMMYYYY(key);
+      } else if (groupBy === 'expense_type') {
+        key = expense.expense_type || 'Unknown Type';
+        label = key;
+      } else if (groupBy === 'lender') {
+        key = expense.lender_name || 'Unknown Lender';
+        label = key;
+      } else if (groupBy === 'borrower') {
+        key = expense.borrower_name || 'Unknown Borrower';
+        label = key;
+      } else {
+        key = expense.payment_choices_type || 'UNKNOWN';
+        label = key;
+      }
+      const prev = groups.get(key) || { label, count: 0, total: 0 };
+      prev.count += 1;
+      prev.total += Number(expense.expense_amount || 0);
+      groups.set(key, prev);
+    });
+    return Array.from(groups.values()).sort((a, b) => b.total - a.total);
+  }, [expenses, groupBy]);
 
   const closeModal = () => {
     setIsModalOpen(false);
@@ -294,18 +328,28 @@ export default function Expenses() {
                 <option value="CASH">Cash</option>
                 <option value="ONLINE">Online</option>
               </Select>
-              <Input
-                type="date"
-                label="From date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-              />
-              <Input
-                type="date"
-                label="To date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Date Range</label>
+                <DateRangeSelector
+                  preset={datePreset}
+                  value={{ startDate: dateFrom, endDate: dateTo }}
+                  onChange={({ preset, range }) => {
+                    setDatePreset(preset);
+                    setDateFrom(range.startDate);
+                    setDateTo(range.endDate);
+                  }}
+                />
+              </div>
+            </div>
+            <div className="mt-4">
+              <Select label="Group by" value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
+                <option value="none">No Grouping</option>
+                <option value="date">Date</option>
+                <option value="expense_type">Expense Type</option>
+                <option value="lender">Lender</option>
+                <option value="borrower">Borrower</option>
+                <option value="payment_type">Payment Type</option>
+              </Select>
             </div>
           </Card>
 
@@ -320,6 +364,26 @@ export default function Expenses() {
             </div>
           </Card>
 
+          {groupBy !== 'none' && (
+            <Card>
+              <div className="space-y-2">
+                {groupedRows.map((row) => (
+                  <div
+                    key={row.label}
+                    className="flex items-center justify-between text-base border-b border-gray-100 pb-3 last:border-0"
+                  >
+                    <span className="font-semibold text-gray-800">{row.label}</span>
+                    <span className="text-gray-600 font-medium">{row.count} entries</span>
+                    <span className="text-lg font-bold text-red-600">₹{formatNumber(row.total)}</span>
+                  </div>
+                ))}
+                {groupedRows.length === 0 && (
+                  <p className="text-base text-gray-500">No grouped data available for selected filters.</p>
+                )}
+              </div>
+            </Card>
+          )}
+
           {expenses.length === 0 ? (
             <Card>
               <EmptyState
@@ -332,7 +396,7 @@ export default function Expenses() {
             <Table headers={['Date', 'Expense Type', 'Lender', 'Borrower', 'Payment', 'Amount', 'Actions']}>
               {expenses.map((expense) => (
                 <TableRow key={expense.id}>
-                  <TableCell>{expense.expense_date}</TableCell>
+                  <TableCell>{formatDateDDMMYYYY(expense.expense_date)}</TableCell>
                   <TableCell className="font-medium">{expense.expense_type}</TableCell>
                   <TableCell>{expense.lender_name}</TableCell>
                   <TableCell>{expense.borrower_name}</TableCell>
@@ -390,11 +454,10 @@ export default function Expenses() {
         size="md"
       >
         <form className="space-y-4" onSubmit={handleSubmit}>
-          <Input
-            type="date"
+          <DatePicker
             label="Expense Date *"
             value={form.expense_date}
-            onChange={(e) => setForm((prev) => ({ ...prev, expense_date: e.target.value }))}
+            onChange={(date) => setForm((prev) => ({ ...prev, expense_date: date }))}
             required
           />
           <Input
