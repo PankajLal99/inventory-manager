@@ -1721,9 +1721,9 @@ export default function POS() {
     // Check if current store is a Repair shop (lowercase as per backend)
     const isRepairShop = defaultStore?.shop_type === 'repair';
 
-    // For repair shops, validate repair data regardless of invoice type
+    // For repair shops, validate required repair data regardless of invoice type
     if (isRepairShop) {
-      if (!repairContactNo.trim() || !repairModelName.trim()) {
+      if (!repairModelName.trim()) {
         // Show modal if repair data not entered
         setShowRepairModal(true);
         return;
@@ -3849,25 +3849,15 @@ export default function POS() {
                                   if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed')) {
                                     const price = parseFloat(value);
                                     if (!isNaN(price) && price > 0) {
-                                      // Check selling_price first, then fall back to purchase_price
-                                      const sellingPrice = item.product_selling_price && item.product_selling_price > 0
-                                        ? parseFloat(item.product_selling_price)
-                                        : null;
-                                      // Ensure we have a valid purchase price - if it's 0 or undefined, it might be cached
                                       let purchasePrice = parseFloat(item.product_purchase_price || '0');
-                                      // Use selling_price if available and > 0, otherwise use purchase_price
-                                      const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
+                                      const minPrice = purchasePrice;
                                       const canGoBelow = item.product_can_go_below_purchase_price || false;
 
-                                      // Validate if canGoBelow is false
-                                      // Note: If minPrice is 0, we can't validate on frontend, but backend will catch it
                                       if (!canGoBelow) {
                                         if (minPrice > 0 && price < minPrice) {
-                                          // Price is below minimum - show error
-                                          const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
                                           setPriceErrors({
                                             ...priceErrors,
-                                            [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
+                                            [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
                                           });
                                         } else if (minPrice === 0) {
                                           // Purchase price not available - clear error but backend will validate
@@ -3921,24 +3911,15 @@ export default function POS() {
                                       }
 
                                       if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed') {
-                                        // Check selling_price first, then fall back to purchase_price
-                                        const sellingPrice = item.product_selling_price && item.product_selling_price > 0
-                                          ? parseFloat(item.product_selling_price)
-                                          : null;
-                                        // Ensure we have a valid purchase price - if it's 0 or undefined, it might be cached
                                         let purchasePrice = parseFloat(item.product_purchase_price || '0');
-                                        // Use selling_price if available and > 0, otherwise use purchase_price
-                                        const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
+                                        const minPrice = purchasePrice;
                                         const canGoBelow = item.product_can_go_below_purchase_price || false;
 
-                                        // Validate if canGoBelow is false
                                         if (!canGoBelow) {
                                           if (minPrice > 0 && price < minPrice) {
-                                            // Price is below minimum - show error and don't save
-                                            const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
                                             setPriceErrors({
                                               ...priceErrors,
-                                              [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
+                                              [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
                                             });
                                             // Don't save if validation fails - clear editing state to revert to saved value
                                             const newEditingPrices = { ...editingManualPrice };

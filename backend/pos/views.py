@@ -95,6 +95,31 @@ def repair_invoices_list(request):
     elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
     
+    unpaginated_param = str(request.query_params.get('unpaginated', '')).strip().lower()
+    force_unpaginated = unpaginated_param in ('1', 'true', 'yes')
+
+    has_active_filters = any([
+        date_from,
+        date_to,
+        repair_status,
+        repair_barcode,
+        search,
+        invoice_number,
+    ])
+
+    # Default view stays paginated; filtered or explicitly unpaginated view returns full result set.
+    if has_active_filters or force_unpaginated:
+        serializer = InvoiceSerializer(queryset, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': len(serializer.data),
+            'next': None,
+            'previous': None,
+            'page': 1,
+            'page_size': None,
+            'total_pages': 1,
+        })
+
     # Pagination
     from django.core.paginator import Paginator
     page = int(request.query_params.get('page', 1))
@@ -1118,32 +1143,23 @@ def cart_items(request, pk):
         if invoice_type != 'pending' and sale_price:
             try:
                 sale_price_decimal = Decimal(str(sale_price))
-                # Check selling_price first, then fall back to purchase_price
-                selling_price = None
+                # Use purchase_price as the floor — selling at cost (break even) is allowed
                 purchase_price = Decimal('0.00')
-                # For non-tracked products, use product_barcode (already retrieved above)
                 if product_barcode:
-                    selling_price = product_barcode.get_selling_price()
                     purchase_price = product_barcode.get_purchase_price()
                 
-                # Use selling_price if available and > 0, otherwise use purchase_price
-                min_price = selling_price if selling_price and selling_price > Decimal('0.00') else purchase_price
+                min_price = purchase_price
                 can_go_below = product.can_go_below_purchase_price
-                price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
 
-                # If can_go_below_purchase_price is False, price cannot be below min_price
-                # IMPORTANT: If min_price is 0, it means purchase price couldn't be retrieved - this should not happen for valid products
-                # For safety, if min_price is 0 and can_go_below is False, we should still validate (treat as error case)
                 if not can_go_below and sale_price_decimal > 0:
                     if min_price > 0 and sale_price_decimal < min_price:
                         return Response({
-                            'error': f'Sale price (₹{sale_price_decimal}) cannot be less than {price_type} (₹{min_price})',
-                            'message': f'Sale price cannot be less than {price_type} of ₹{min_price}',
+                            'error': f'Sale price (₹{sale_price_decimal}) cannot be less than purchase price (₹{min_price})',
+                            'message': f'Sale price cannot be less than purchase price of ₹{min_price}',
                             'purchase_price': str(purchase_price),
                             'sale_price': str(sale_price_decimal)
                         }, status=status.HTTP_400_BAD_REQUEST)
                     elif min_price == 0:
-                        # Purchase price is 0 - this shouldn't happen for valid products, but block the sale as a safety measure
                         return Response({
                             'error': 'Purchase price not available',
                             'message': 'Cannot determine purchase price for this product. Please ensure the product has been purchased and has a valid purchase price.',
@@ -1500,37 +1516,27 @@ def cart_items(request, pk):
     if invoice_type != 'pending' and sale_price is not None:
         try:
             sale_price_decimal = Decimal(str(sale_price))
-            # Check selling_price first, then fall back to purchase_price
-            selling_price = None
+            # Use purchase_price as the floor — selling at cost (break even) is allowed
             purchase_price = Decimal('0.00')
             if barcode_obj:
-                selling_price = barcode_obj.get_selling_price()
                 purchase_price = barcode_obj.get_purchase_price()
             elif product.track_inventory:
-                # Fallback for tracked products if barcode_obj is None (edge case): Get barcode from product's first barcode
                 product_barcode = product.barcodes.first()
                 if product_barcode:
-                    selling_price = product_barcode.get_selling_price()
                     purchase_price = product_barcode.get_purchase_price()
             
-            # Use selling_price if available and > 0, otherwise use purchase_price
-            min_price = selling_price if selling_price and selling_price > Decimal('0.00') else purchase_price
+            min_price = purchase_price
             can_go_below = product.can_go_below_purchase_price
-            price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
 
-            # If can_go_below_purchase_price is False, price cannot be below min_price
-            # IMPORTANT: If min_price is 0, it means purchase price couldn't be retrieved - this should not happen for valid products
-            # For safety, if min_price is 0 and can_go_below is False, we should still validate (treat as error case)
             if not can_go_below and sale_price_decimal > 0:
                 if min_price > 0 and sale_price_decimal < min_price:
                     return Response({
-                        'error': f'Sale price (₹{sale_price_decimal}) cannot be less than {price_type} (₹{min_price})',
-                        'message': f'Sale price cannot be less than {price_type} of ₹{min_price}',
+                        'error': f'Sale price (₹{sale_price_decimal}) cannot be less than purchase price (₹{min_price})',
+                        'message': f'Sale price cannot be less than purchase price of ₹{min_price}',
                         'purchase_price': str(purchase_price),
                         'sale_price': str(sale_price_decimal)
                     }, status=status.HTTP_400_BAD_REQUEST)
                 elif min_price == 0:
-                    # Purchase price is 0 - this shouldn't happen for valid products, but block the sale as a safety measure
                     return Response({
                         'error': 'Purchase price not available',
                         'message': 'Cannot determine purchase price for this product. Please ensure the product has been purchased and has a valid purchase price.',
@@ -1836,53 +1842,40 @@ def cart_item_update(request, pk, item_id):
     if invoice_type != 'pending' and sale_price is not None:
         try:
             sale_price_decimal = Decimal(str(sale_price))
-            # Check selling_price first, then fall back to purchase_price
-            selling_price = None
+            # Use purchase_price as the floor — selling at cost (break even) is allowed
             purchase_price = Decimal('0.00')
-            # For custom/other products: use cart item's stored purchase_price
             if cart_item.product.name and cart_item.product.name.startswith('Other -') and cart_item.purchase_price is not None and cart_item.purchase_price > 0:
                 purchase_price = cart_item.purchase_price
             elif cart_item.scanned_barcodes and len(cart_item.scanned_barcodes) > 0:
-                # For tracked products: Get selling_price and purchase_price from first barcode (standardize .upper())
                 try:
                     b_upper = str(cart_item.scanned_barcodes[0] or '').strip().upper()
                     try:
                         first_barcode = Barcode.objects.get(barcode=b_upper)
                     except Barcode.DoesNotExist:
                         first_barcode = Barcode.objects.get(short_code=b_upper)
-                    selling_price = first_barcode.get_selling_price()
                     purchase_price = first_barcode.get_purchase_price()
                 except Barcode.DoesNotExist:
-                    # Barcode not found - fallback to product's first barcode for tracked products
                     if cart_item.product.track_inventory:
                         product_barcode = cart_item.product.barcodes.first()
                         if product_barcode:
-                            selling_price = product_barcode.get_selling_price()
                             purchase_price = product_barcode.get_purchase_price()
             elif not cart_item.product.track_inventory:
-                # For non-tracked products: Get barcode from product's first barcode
                 product_barcode = cart_item.product.barcodes.first()
                 if product_barcode:
-                    selling_price = product_barcode.get_selling_price()
                     purchase_price = product_barcode.get_purchase_price()
             elif cart_item.product.track_inventory:
-                # For tracked products with no scanned_barcodes (edge case): Get barcode from product's first barcode
                 product_barcode = cart_item.product.barcodes.first()
                 if product_barcode:
-                    selling_price = product_barcode.get_selling_price()
                     purchase_price = product_barcode.get_purchase_price()
             
-            # Use selling_price if available and > 0, otherwise use purchase_price
-            min_price = selling_price if selling_price and selling_price > Decimal('0.00') else purchase_price
+            min_price = purchase_price
             can_go_below = cart_item.product.can_go_below_purchase_price
-            price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
 
-            # When can_go_below_purchase_price is False: manual_unit_price cannot be less than purchase_price
             if not can_go_below and sale_price_decimal > 0:
                 if min_price > 0 and sale_price_decimal < min_price:
                     return Response({
-                        'error': f'Sale price (₹{sale_price_decimal}) cannot be less than {price_type} (₹{min_price})',
-                        'message': f'Sale price cannot be less than {price_type} of ₹{min_price}',
+                        'error': f'Sale price (₹{sale_price_decimal}) cannot be less than purchase price (₹{min_price})',
+                        'message': f'Sale price cannot be less than purchase price of ₹{min_price}',
                         'purchase_price': str(purchase_price),
                         'sale_price': str(sale_price_decimal)
                     }, status=status.HTTP_400_BAD_REQUEST)
@@ -1894,7 +1887,6 @@ def cart_item_update(request, pk, item_id):
                         'sale_price': str(sale_price_decimal)
                     }, status=status.HTTP_400_BAD_REQUEST)
         except (ValueError, TypeError) as e:
-            # Log the error for debugging but let serializer handle validation
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(f'Price validation error for cart_item {cart_item.id}: {str(e)}')
@@ -1919,7 +1911,6 @@ def cart_item_update(request, pk, item_id):
             try:
                 final_price_decimal = Decimal(str(final_sale_price))
                 if final_price_decimal > 0:
-                    selling_price = None
                     purchase_price = Decimal('0.00')
                     if cart_item.product.name and cart_item.product.name.startswith('Other -') and cart_item.purchase_price is not None and cart_item.purchase_price > 0:
                         purchase_price = cart_item.purchase_price
@@ -1930,33 +1921,27 @@ def cart_item_update(request, pk, item_id):
                                 first_barcode = Barcode.objects.get(barcode=b_upper)
                             except Barcode.DoesNotExist:
                                 first_barcode = Barcode.objects.get(short_code=b_upper)
-                            selling_price = first_barcode.get_selling_price()
                             purchase_price = first_barcode.get_purchase_price()
                         except Barcode.DoesNotExist:
                             if cart_item.product.track_inventory:
                                 product_barcode = cart_item.product.barcodes.first()
                                 if product_barcode:
-                                    selling_price = product_barcode.get_selling_price()
                                     purchase_price = product_barcode.get_purchase_price()
                     elif not cart_item.product.track_inventory:
                         product_barcode = cart_item.product.barcodes.first()
                         if product_barcode:
-                            selling_price = product_barcode.get_selling_price()
                             purchase_price = product_barcode.get_purchase_price()
                     elif cart_item.product.track_inventory:
                         product_barcode = cart_item.product.barcodes.first()
                         if product_barcode:
-                            selling_price = product_barcode.get_selling_price()
                             purchase_price = product_barcode.get_purchase_price()
                     
-                    min_price = selling_price if selling_price and selling_price > Decimal('0.00') else purchase_price
+                    min_price = purchase_price
                     can_go_below = cart_item.product.can_go_below_purchase_price
-                    price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
-                    # When can_go_below_purchase_price is False: manual_unit_price cannot be less than purchase_price
                     if not can_go_below and min_price > 0 and final_price_decimal < min_price:
                         return Response({
-                            'error': f'Sale price (₹{final_price_decimal}) cannot be less than {price_type} (₹{min_price})',
-                            'message': f'Sale price cannot be less than {price_type} of ₹{min_price}',
+                            'error': f'Sale price (₹{final_price_decimal}) cannot be less than purchase price (₹{min_price})',
+                            'message': f'Sale price cannot be less than purchase price of ₹{min_price}',
                             'purchase_price': str(purchase_price),
                             'sale_price': str(final_price_decimal)
                         }, status=status.HTTP_400_BAD_REQUEST)
@@ -2113,6 +2098,22 @@ def cart_checkout(request, pk):
         invoice_type = request.data.get('invoice_type', cart.invoice_type or 'cash')
         customer_id = request.data.get('customer', cart.customer_id if cart.customer else None)
         created_at_raw = request.data.get('created_at')
+        repair_contact_no = ''
+        repair_model_name = ''
+
+        # For repair stores, model is mandatory.
+        # Without this guard, checkout could succeed without creating a Repair record.
+        if is_repair_shop:
+            repair_contact_no = str(request.data.get('repair_contact_no', '')).strip()
+            repair_model_name = str(request.data.get('repair_model_name', '')).strip()
+            if not repair_model_name:
+                return Response(
+                    {
+                        'error': 'Repair model name is required for repair checkout',
+                        'missing_fields': ['repair_model_name'],
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Optional POS-provided invoice datetime:
         # apply only when selected date is not today; otherwise keep server current time.
@@ -2192,44 +2193,44 @@ def cart_checkout(request, pk):
 
         # 9. Handle Repairs
         if is_repair_shop:
-            contact_no = request.data.get('repair_contact_no', '').strip()
-            model_name = request.data.get('repair_model_name', '').strip()
-            if contact_no and model_name:
-                repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-                booking_amt = request.data.get('repair_booking_amount')
-                booking_amt_decimal = Decimal(str(booking_amt)) if booking_amt else Decimal('0.00')
-                Repair.objects.create(
-                    invoice=invoice, contact_no=contact_no, model_name=model_name,
-                    description=request.data.get('repair_description', ''),
-                    booking_amount=booking_amt_decimal if booking_amt_decimal > 0 else None,
-                    status='received', barcode=repair_barcode
+            repair_barcode = f"REP-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+            booking_amt = request.data.get('repair_booking_amount')
+            booking_amt_decimal = Decimal(str(booking_amt)) if booking_amt else Decimal('0.00')
+            Repair.objects.create(
+                invoice=invoice,
+                contact_no=repair_contact_no,
+                model_name=repair_model_name,
+                description=request.data.get('repair_description', ''),
+                booking_amount=booking_amt_decimal if booking_amt_decimal > 0 else None,
+                status='received',
+                barcode=repair_barcode
+            )
+
+            # If booking amount provided, create initial payment
+            if booking_amt_decimal > 0:
+                from backend.pos.models import Payment
+                payment = Payment.objects.create(
+                    invoice=invoice,
+                    payment_method=invoice_type if invoice_type in ['cash', 'upi'] else 'cash',
+                    amount=booking_amt_decimal,
+                    notes='Booking amount for repair',
+                    created_by=request.user
                 )
-                
-                # If booking amount provided, create initial payment
-                if booking_amt_decimal > 0:
-                    from backend.pos.models import Payment
-                    payment = Payment.objects.create(
+
+                # Create ledger credit entry if customer exists
+                if invoice.customer:
+                    from backend.parties.models import LedgerEntry
+                    LedgerEntry.objects.create(
+                        customer=invoice.customer,
                         invoice=invoice,
-                        payment_method=invoice_type if invoice_type in ['cash', 'upi'] else 'cash',
+                        entry_type='credit',
                         amount=booking_amt_decimal,
-                        notes='Booking amount for repair',
-                        created_by=request.user
+                        description=f'Booking payment for Repair {repair_barcode}',
+                        created_by=request.user,
+                        created_at=timezone.now()
                     )
-                    
-                    # Create ledger credit entry if customer exists
-                    if invoice.customer:
-                        from backend.parties.models import LedgerEntry
-                        LedgerEntry.objects.create(
-                            customer=invoice.customer,
-                            invoice=invoice,
-                            entry_type='credit',
-                            amount=booking_amt_decimal,
-                            description=f'Booking payment for Repair {repair_barcode}',
-                            created_by=request.user,
-                            created_at=timezone.now()
-                        )
-                        invoice.customer.credit_balance += booking_amt_decimal
-                        invoice.customer.save()
+                    invoice.customer.credit_balance += booking_amt_decimal
+                    invoice.customer.save()
 
         # 10. Process Items
         subtotal = Decimal('0.00')
@@ -2425,8 +2426,20 @@ def invoice_list_create(request):
         # Exclude repair invoices (they appear on the Repairs page only)
         queryset = queryset.filter(repair__isnull=True)
 
-        # When invoice type filter is set: show all invoices, no date pagination, old first (ascending).
-        if invoice_type_filter:
+        # In filtered mode, return all matching invoices without date-based pagination.
+        # Default (unfiltered) mode keeps one-day-per-page behavior.
+        has_active_filters = any([
+            invoice_type_filter,
+            date,
+            search,
+            date_from,
+            date_to,
+            store,
+            customer,
+            status_filter,
+        ])
+
+        if has_active_filters:
             order_by = 'created_at'
             queryset = queryset.order_by(order_by)
             serializer = InvoiceSerializer(queryset, many=True)
@@ -3070,29 +3083,20 @@ def invoice_checkout(request, pk):
         effective_price = item.manual_unit_price or item.unit_price
         # Only validate if price is set and greater than 0
         if effective_price and effective_price > 0:
-            # Get selling_price first, then fall back to purchase_price
-            selling_price = None
+            # Use purchase_price as the floor — selling at cost (break even) is allowed
             purchase_price = Decimal('0.00')
-            # For custom/other products: use invoice item's purchase_price
             if item.product.name and item.product.name.startswith('Other -') and item.purchase_price is not None and item.purchase_price > 0:
                 purchase_price = item.purchase_price
             elif item.barcode:
-                # For tracked products: Get price from item's barcode
-                selling_price = item.barcode.get_selling_price()
                 purchase_price = item.barcode.get_purchase_price()
             elif not item.product.track_inventory:
-                # For non-tracked products: Get barcode from product's first barcode
                 product_barcode = item.product.barcodes.first()
                 if product_barcode:
-                    selling_price = product_barcode.get_selling_price()
                     purchase_price = product_barcode.get_purchase_price()
             
-            # Use selling_price if available and > 0, otherwise use purchase_price
-            min_price = selling_price if selling_price and selling_price > Decimal('0.00') else purchase_price
+            min_price = purchase_price
             can_go_below = item.product.can_go_below_purchase_price
-            price_type = 'selling price' if (selling_price and selling_price > Decimal('0.00')) else 'purchase price'
             
-            # Validate price threshold if product doesn't allow going below purchase/selling price
             if not can_go_below and min_price > 0 and effective_price < min_price:
                 price_validation_errors.append({
                     'id': item.id,
@@ -3100,7 +3104,7 @@ def invoice_checkout(request, pk):
                     'product_sku': item.product.sku,
                     'sale_price': str(effective_price),
                     'min_price': str(min_price),
-                    'price_type': price_type
+                    'price_type': 'purchase price'
                 })
     
     if price_validation_errors:
@@ -4284,6 +4288,9 @@ def return_detail(request, pk):
 def expense_list_create(request):
     """List all expenses or create a new expense."""
     if request.method == 'GET':
+        if not request.user.groups.filter(name='Super').exists():
+            return Response({'error': 'Only Super group can view expense listings.'}, status=status.HTTP_403_FORBIDDEN)
+
         queryset = Expenses.objects.select_related('created_by', 'last_updated_by').order_by('-expense_date', '-created_on')
         search = (request.query_params.get('search') or '').strip()
         payment_type = (request.query_params.get('payment_type') or '').strip().upper()
@@ -4317,6 +4324,9 @@ def expense_list_create(request):
 @permission_classes([IsAuthenticated])
 def expense_type_suggestions(request):
     """Return distinct expense types for autocomplete suggestions."""
+    if not request.user.groups.filter(name='Super').exists():
+        return Response({'results': []})
+
     q = (request.query_params.get('q') or '').strip()
     queryset = Expenses.objects.exclude(expense_type__isnull=True).exclude(expense_type__exact='')
     if q:
@@ -4332,6 +4342,9 @@ def expense_type_suggestions(request):
 @permission_classes([IsAuthenticated])
 def expense_borrower_suggestions(request):
     """Return distinct borrower names for autocomplete suggestions."""
+    if not request.user.groups.filter(name='Super').exists():
+        return Response({'results': []})
+
     q = (request.query_params.get('q') or '').strip()
     queryset = Expenses.objects.exclude(borrower_name__isnull=True).exclude(borrower_name__exact='')
     if q:
@@ -4347,6 +4360,9 @@ def expense_borrower_suggestions(request):
 @permission_classes([IsAuthenticated])
 def expense_detail(request, pk):
     """Retrieve, update, or delete an expense."""
+    if request.method == 'GET' and not request.user.groups.filter(name='Super').exists():
+        return Response({'error': 'Only Super group can view expense listings.'}, status=status.HTTP_403_FORBIDDEN)
+
     expense = get_object_or_404(Expenses.objects.select_related('created_by', 'last_updated_by'), pk=pk)
 
     if request.method == 'GET':

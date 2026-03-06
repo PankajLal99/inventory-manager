@@ -83,10 +83,19 @@ class LedgerEntry(models.Model):
         ('credit', 'Credit'),
         ('debit', 'Debit'),
     ]
+    PAYMENT_MODE_CHOICES = [
+        ('cash', 'Cash'),
+        ('upi', 'UPI'),
+        ('mixed', 'Mixed (Cash + UPI)'),
+        ('other', 'Other'),
+    ]
     
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='ledger_entries', null=True, blank=True)
     invoice = models.ForeignKey('pos.Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='ledger_entries')
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
+    payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES, default='other')
+    cash_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    upi_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'), help_text='Total quantity associated with this entry (e.g. sum of invoice items)')
     description = models.TextField(blank=True)

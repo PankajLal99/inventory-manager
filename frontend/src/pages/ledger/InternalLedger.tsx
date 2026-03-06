@@ -1,12 +1,13 @@
-import { useState, useMemo } from 'react';
-import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { useState, useMemo, useEffect } from 'react';
+import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { customersApi } from '../../lib/api';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
+import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
 import {
@@ -21,6 +22,7 @@ import 'jspdf-autotable';
 import { format } from 'date-fns';
 
 export default function InternalLedger() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
@@ -38,13 +40,20 @@ export default function InternalLedger() {
 
   // Filters - default to no date filter so all entries are shown until user selects dates
   const [filters, setFilters] = useState({
-    dateFrom: '',
-    dateTo: '',
-    entryType: '',
-    customer: '',
-    search: '',
+    dateFrom: searchParams.get('date_from') ?? '',
+    dateTo: searchParams.get('date_to') ?? '',
+    entryType: searchParams.get('entry_type') ?? '',
+    customer: searchParams.get('customer') ?? '',
+    search: searchParams.get('search') ?? '',
   });
   const [showFilters, setShowFilters] = useState(false);
+  const [datePreset, setDatePreset] = useState<DateRangePreset>(() => {
+    const preset = searchParams.get('preset');
+    if (preset === 'one_day' || preset === 'last_7_days' || preset === 'last_30_days' || preset === 'custom') {
+      return preset;
+    }
+    return 'custom';
+  });
   const [sortConfig, _setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
@@ -52,6 +61,30 @@ export default function InternalLedger() {
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const buildInternalLedgerDetailPath = (customerId: number) => {
+    const params = new URLSearchParams();
+    if (filters.search.trim()) params.set('search', filters.search.trim());
+    if (filters.dateFrom) params.set('date_from', filters.dateFrom);
+    if (filters.dateTo) params.set('date_to', filters.dateTo);
+    if (filters.entryType) params.set('entry_type', filters.entryType);
+    if (filters.customer) params.set('customer', filters.customer);
+    if (datePreset !== 'custom') params.set('preset', datePreset);
+    const query = params.toString();
+    return query ? `/internal-ledger/${customerId}?${query}` : `/internal-ledger/${customerId}`;
+  };
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+    if (filters.search.trim()) nextParams.set('search', filters.search.trim());
+    if (filters.dateFrom) nextParams.set('date_from', filters.dateFrom);
+    if (filters.dateTo) nextParams.set('date_to', filters.dateTo);
+    if (filters.entryType) nextParams.set('entry_type', filters.entryType);
+    if (filters.customer) nextParams.set('customer', filters.customer);
+    if (datePreset !== 'custom') nextParams.set('preset', datePreset);
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [filters, datePreset, searchParams, setSearchParams]);
 
   // MTSHOP group: Shop Boys Ledger uses only Customer with this group
   const MTSHOP_GROUP_NAME = 'MTSHOP';
@@ -465,9 +498,10 @@ export default function InternalLedger() {
       customer: '',
       search: '',
     });
+    setDatePreset('custom');
   };
 
-  const hasActiveFilters = filters.entryType || filters.customer || filters.search;
+  const hasActiveFilters = filters.entryType || filters.customer || filters.search || filters.dateFrom || filters.dateTo;
 
   return (
     <div className="space-y-6">
@@ -566,7 +600,7 @@ export default function InternalLedger() {
               <span className="hidden sm:inline">Filters</span>
               {hasActiveFilters && (
                 <span className="bg-blue-600 text-white rounded-full w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center text-xs flex-shrink-0">
-                  {[filters.entryType, filters.customer, filters.search].filter(Boolean).length}
+                  {[filters.entryType, filters.customer, filters.search, filters.dateFrom, filters.dateTo].filter(Boolean).length}
                 </span>
               )}
             </Button>
@@ -601,24 +635,18 @@ export default function InternalLedger() {
         {showFilters && (
           <div className="border-t pt-4 mt-4 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   <Calendar className="h-4 w-4 inline mr-1" />
-                  Date From
+                  Date Range
                 </label>
-                <DatePicker
-                  value={filters.dateFrom}
-                  onChange={(date) => setFilters({ ...filters, dateFrom: date })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  <Calendar className="h-4 w-4 inline mr-1" />
-                  Date To
-                </label>
-                <DatePicker
-                  value={filters.dateTo}
-                  onChange={(date) => setFilters({ ...filters, dateTo: date })}
+                <DateRangeSelector
+                  preset={datePreset}
+                  value={{ startDate: filters.dateFrom, endDate: filters.dateTo }}
+                  onChange={({ preset, range }) => {
+                    setDatePreset(preset);
+                    setFilters({ ...filters, dateFrom: range.startDate, dateTo: range.endDate });
+                  }}
                 />
               </div>
               <div>
@@ -708,7 +736,7 @@ export default function InternalLedger() {
                                   {canNavigate ? (
                                     <button
                                       type="button"
-                                      onClick={() => navigate(`/internal-ledger/${group.customer.id}`)}
+                                      onClick={() => navigate(buildInternalLedgerDetailPath(group.customer.id))}
                                       className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                                     >
                                       {group.customer.name}
@@ -809,7 +837,7 @@ export default function InternalLedger() {
                             {canNavigate ? (
                               <button
                                 type="button"
-                                onClick={() => navigate(`/internal-ledger/${group.customer.id}`)}
+                                onClick={() => navigate(buildInternalLedgerDetailPath(group.customer.id))}
                                 className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                               >
                                 {group.customer.name}

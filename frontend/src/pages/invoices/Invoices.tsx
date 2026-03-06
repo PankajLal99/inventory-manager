@@ -1,5 +1,5 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import {
@@ -15,13 +15,14 @@ import {
   ChevronDown,
   Loader2,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { formatNumber } from '../../lib/utils';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { DateRangePreset, formatNumber } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
+import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -49,7 +50,61 @@ interface Invoice {
   is_edited?: boolean;
   edited_on?: string | null;
   repair?: { id: number; [key: string]: unknown } | null;
+  items?: InvoiceItem[];
 }
+
+interface InvoiceItem {
+  quantity?: string | number | null;
+  unit_price?: string | number | null;
+  manual_unit_price?: string | number | null;
+  line_total?: string | number | null;
+  product_purchase_price?: string | number | null;
+  product_selling_price?: string | number | null;
+}
+
+const INVOICES_LIST_STATE_KEY = 'invoices:list-state:v1';
+
+type InvoicesListState = {
+  search: string;
+  invoiceTypeFilter: string;
+  datePreset: DateRangePreset;
+  dateRange: { startDate: string; endDate: string };
+  selectedStoreId: number | null;
+  currentPage: number;
+};
+
+const readPersistedInvoicesListState = (): InvoicesListState | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(INVOICES_LIST_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<InvoicesListState>;
+    const preset = parsed.datePreset;
+    const safePreset: DateRangePreset =
+      preset === 'one_day' || preset === 'last_7_days' || preset === 'last_30_days' || preset === 'custom'
+        ? preset
+        : 'custom';
+    return {
+      search: typeof parsed.search === 'string' ? parsed.search : '',
+      invoiceTypeFilter: typeof parsed.invoiceTypeFilter === 'string' ? parsed.invoiceTypeFilter : '',
+      datePreset: safePreset,
+      dateRange: {
+        startDate: typeof parsed.dateRange?.startDate === 'string' ? parsed.dateRange.startDate : '',
+        endDate: typeof parsed.dateRange?.endDate === 'string' ? parsed.dateRange.endDate : '',
+      },
+      selectedStoreId:
+        typeof parsed.selectedStoreId === 'number' && Number.isFinite(parsed.selectedStoreId)
+          ? parsed.selectedStoreId
+          : null,
+      currentPage:
+        typeof parsed.currentPage === 'number' && Number.isFinite(parsed.currentPage) && parsed.currentPage > 0
+          ? parsed.currentPage
+          : 1,
+    };
+  } catch {
+    return null;
+  }
+};
 
 const parseAmount = (value: unknown) => {
   const parsed = parseFloat(String(value ?? '0'));
@@ -58,13 +113,34 @@ const parseAmount = (value: unknown) => {
 
 export default function Invoices() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
-  const [invoiceTypeFilter, setInvoiceTypeFilter] = useState<string>('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const persistedListStateRef = useRef<InvoicesListState | null>(readPersistedInvoicesListState());
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? persistedListStateRef.current?.search ?? '');
+  const [invoiceTypeFilter, setInvoiceTypeFilter] = useState<string>(
+    () => searchParams.get('invoice_type') ?? persistedListStateRef.current?.invoiceTypeFilter ?? ''
+  );
+  const [datePreset, setDatePreset] = useState<DateRangePreset>(() => {
+    const preset = searchParams.get('preset');
+    if (preset === 'one_day' || preset === 'last_7_days' || preset === 'last_30_days' || preset === 'custom') {
+      return preset;
+    }
+    return persistedListStateRef.current?.datePreset ?? 'custom';
+  });
+  const [dateRange, setDateRange] = useState(() => ({
+    startDate: searchParams.get('date_from') ?? persistedListStateRef.current?.dateRange.startDate ?? '',
+    endDate: searchParams.get('date_to') ?? persistedListStateRef.current?.dateRange.endDate ?? '',
+  }));
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => {
+    const storeParam = searchParams.get('store');
+    if (!storeParam) return persistedListStateRef.current?.selectedStoreId ?? null;
+    const parsed = parseInt(storeParam, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  });
   const [user, setUser] = useState<any>(null);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(() => {
+    const pageParam = parseInt(searchParams.get('page') ?? String(persistedListStateRef.current?.currentPage ?? 1), 10);
+    return Number.isNaN(pageParam) || pageParam < 1 ? 1 : pageParam;
+  });
 
   // Load user on mount
   useEffect(() => {
@@ -100,41 +176,75 @@ export default function Invoices() {
   // Only if group name contains "Admin" (Admin, RetailAdmin, WholesaleAdmin) → show all stores. Else → store selector like POS.
   const groupContainsAdmin = (user?.groups || []).some((g: string) => String(g).includes('Admin'));
 
-  // Check if user can see KPI stats (hide from Retail and Repair groups)
-  const canSeeKPIStats = (() => {
-    const userGroups = user?.groups || [];
-    if (userGroups.includes('Retail') || userGroups.includes('Repair')) {
-      return false;
-    }
-    return true;
-  })();
+  const canSeeSuperMetrics = (user?.groups || []).includes('Super');
+  const canSeeKPIStats = canSeeSuperMetrics;
+  const canSeeTotalColumn = canSeeSuperMetrics;
 
   // Use selected store or null (ALL) — all users default to "All".
   const defaultStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId) ?? null;
 
   const currentStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId);
 
-  // When invoice type filter is selected: no pagination, all invoices, date ascending (old first).
-  const useTypeFilterMode = !!invoiceTypeFilter;
+  const { startDate: dateFrom, endDate: dateTo } = dateRange;
+  // Default view uses date-based pagination; any active filter returns full filtered data.
+  const useFilteredMode = !!invoiceTypeFilter || !!dateFrom || !!dateTo || !!search.trim() || !!defaultStore?.id;
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', useTypeFilterMode ? 1 : currentPage, search],
+    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', useFilteredMode ? 1 : currentPage, search],
     queryFn: () => posApi.invoices.list({
       invoice_type: invoiceTypeFilter || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       store: defaultStore?.id ?? undefined,
-      page: useTypeFilterMode ? 1 : currentPage,
+      page: useFilteredMode ? undefined : currentPage,
       search: search.trim() || undefined,
-      ordering: useTypeFilterMode || dateFrom || dateTo ? 'created_at' : undefined,
+      ordering: useFilteredMode ? 'created_at' : undefined,
     }),
     enabled: true,
     placeholderData: keepPreviousData,
   });
 
-  // Reset to page 1 when filters change
   useEffect(() => {
-    setCurrentPage(1);
-  }, [invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', search]);
+    const nextParams = new URLSearchParams();
+    const trimmedSearch = search.trim();
+    if (trimmedSearch) nextParams.set('search', trimmedSearch);
+    if (invoiceTypeFilter) nextParams.set('invoice_type', invoiceTypeFilter);
+    if (datePreset && datePreset !== 'custom') nextParams.set('preset', datePreset);
+    if (dateFrom) nextParams.set('date_from', dateFrom);
+    if (dateTo) nextParams.set('date_to', dateTo);
+    if (selectedStoreId !== null) nextParams.set('store', String(selectedStoreId));
+    if (!useFilteredMode && currentPage > 1) nextParams.set('page', String(currentPage));
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [
+    search,
+    invoiceTypeFilter,
+    datePreset,
+    dateFrom,
+    dateTo,
+    selectedStoreId,
+    currentPage,
+    useFilteredMode,
+    searchParams,
+    setSearchParams,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const snapshot: InvoicesListState = {
+      search,
+      invoiceTypeFilter,
+      datePreset,
+      dateRange: {
+        startDate: dateFrom,
+        endDate: dateTo,
+      },
+      selectedStoreId,
+      currentPage,
+    };
+    window.sessionStorage.setItem(INVOICES_LIST_STATE_KEY, JSON.stringify(snapshot));
+  }, [search, invoiceTypeFilter, datePreset, dateFrom, dateTo, selectedStoreId, currentPage]);
 
   const invoices: Invoice[] = data?.data?.results || data?.data?.results || data?.data || [];
   const rawData = data?.data && typeof data.data === 'object' ? data.data : null;
@@ -157,9 +267,33 @@ export default function Invoices() {
     return true;
   });
 
-  const getDisplayInvoiceTotal = (invoice: Invoice) => {
-    if (invoice.invoice_type === 'pending') return parseAmount(invoice.display_total ?? invoice.total);
-    return parseAmount(invoice.total ?? invoice.display_total);
+  const getInvoiceTotalFromPurchaseModel = (invoice: Invoice) => {
+    const items = Array.isArray(invoice.items) ? invoice.items : [];
+    if (items.length === 0) return 0;
+
+    return items.reduce((sum, item) => {
+      const quantity = parseAmount(item.quantity);
+      const sellingPrice = parseAmount(item.product_selling_price);
+      const purchasePrice = parseAmount(item.product_purchase_price);
+      const effectiveRate = sellingPrice > 0 ? sellingPrice : purchasePrice;
+      return sum + quantity * effectiveRate;
+    }, 0);
+  };
+
+  const getInvoicePaidFromSoldItems = (invoice: Invoice) => {
+    const items = Array.isArray(invoice.items) ? invoice.items : [];
+    if (items.length === 0) return parseAmount(invoice.total);
+
+    return items.reduce((sum, item) => {
+      const lineTotal = parseAmount(item.line_total);
+      if (lineTotal > 0) return sum + lineTotal;
+
+      const quantity = parseAmount(item.quantity);
+      const manualUnitPrice = parseAmount(item.manual_unit_price);
+      const unitPrice = parseAmount(item.unit_price);
+      const soldRate = manualUnitPrice > 0 ? manualUnitPrice : unitPrice;
+      return sum + quantity * soldRate;
+    }, 0);
   };
 
   const formatDate = (dateString: string) => {
@@ -183,6 +317,20 @@ export default function Invoices() {
     .reduce((sum, inv) => sum + parseAmount(inv.display_total ?? inv.total), 0);
   const totalInvoices = filteredInvoices.length;
   const paidInvoices = filteredInvoices.filter(inv => inv.status === 'paid').length;
+
+  const buildInvoiceDetailPath = (invoiceId: number) => {
+    const params = new URLSearchParams();
+    const trimmedSearch = search.trim();
+    if (trimmedSearch) params.set('search', trimmedSearch);
+    if (invoiceTypeFilter) params.set('invoice_type', invoiceTypeFilter);
+    if (datePreset && datePreset !== 'custom') params.set('preset', datePreset);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    if (selectedStoreId !== null) params.set('store', String(selectedStoreId));
+    if (!useFilteredMode && currentPage > 1) params.set('page', String(currentPage));
+    const query = params.toString();
+    return query ? `/invoices/${invoiceId}?${query}` : `/invoices/${invoiceId}`;
+  };
 
   if (isLoading) {
     return <LoadingState message="Loading invoices..." />;
@@ -238,6 +386,7 @@ export default function Invoices() {
                 value={selectedStoreId === null ? '' : selectedStoreId.toString()}
                 onChange={(e) => {
                   const val = e.target.value;
+                  setCurrentPage(1);
                   setSelectedStoreId(val === '' ? null : parseInt(val, 10));
                 }}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
@@ -320,13 +469,19 @@ export default function Invoices() {
               type="text"
               placeholder="Search invoices..."
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setCurrentPage(1);
+                setSearch(e.target.value);
+              }}
               className="pl-10"
             />
           </div>
           <Select
             value={invoiceTypeFilter}
-            onChange={(e) => setInvoiceTypeFilter(e.target.value)}
+            onChange={(e) => {
+              setCurrentPage(1);
+              setInvoiceTypeFilter(e.target.value);
+            }}
             icon={<Filter className="h-4 w-4" />}
           >
             <option value="">All Invoice Types</option>
@@ -334,32 +489,21 @@ export default function Invoices() {
             <option value="upi">UPI</option>
             <option value="pending">Pending</option>
           </Select>
-          <div>
-            <Input
-              id="invoices-date-from"
-              type="date"
-              label="Start date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              aria-label="Filter invoices from this date (inclusive)"
-            />
-          </div>
-          <div>
-            <Input
-              id="invoices-date-to"
-              type="date"
-              label="End date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              aria-label="Filter invoices until this date (inclusive)"
+          <div className="lg:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Date range
+            </label>
+            <DateRangeSelector
+              preset={datePreset}
+              value={dateRange}
+              onChange={({ preset, range }) => {
+                setCurrentPage(1);
+                setDatePreset(preset);
+                setDateRange(range);
+              }}
             />
           </div>
         </div>
-        {(dateFrom && dateTo && dateTo < dateFrom) && (
-          <p className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="alert">
-            End date must be on or after start date. Adjust the dates to see results.
-          </p>
-        )}
       </Card>
 
       {/* Color Legend */}
@@ -387,7 +531,7 @@ export default function Invoices() {
       </div>
 
       {/* Page date label (date-based pagination: each page = one day; hidden when type filter is on) */}
-      {paginationInfo && pageDate && !invoiceTypeFilter && (
+      {paginationInfo && pageDate && !useFilteredMode && (
         <p className="text-sm text-gray-600 font-medium">
           Invoices for{' '}
           <span className="text-gray-900">
@@ -427,7 +571,7 @@ export default function Invoices() {
               { label: 'Date & time', align: 'left' },
               { label: 'Customer', align: 'left' },
               { label: 'Invoice Type', align: 'left' },
-              { label: 'Total', align: 'right' },
+              ...(canSeeTotalColumn ? [{ label: 'Total', align: 'right' as const }] : []),
               { label: 'Paid', align: 'right' },
               { label: '', align: 'right' },
             ]}>
@@ -435,7 +579,7 @@ export default function Invoices() {
                 return (
                   <TableRow
                     key={invoice.id}
-                    onClick={() => navigate(`/invoices/${invoice.id}`)}
+                    onClick={() => navigate(buildInvoiceDetailPath(invoice.id))}
                     className={`cursor-pointer transition-colors hover:opacity-80 ${invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
@@ -477,14 +621,16 @@ export default function Invoices() {
                               invoice.invoice_type || 'Cash'}
                       </span>
                     </TableCell>
-                    <TableCell align="right">
-                      <span className="font-semibold text-gray-900">
-                        ₹{formatNumber(getDisplayInvoiceTotal(invoice))}
-                      </span>
-                    </TableCell>
+                    {canSeeTotalColumn && (
+                      <TableCell align="right">
+                        <span className="font-semibold text-gray-900">
+                          ₹{formatNumber(getInvoiceTotalFromPurchaseModel(invoice))}
+                        </span>
+                      </TableCell>
+                    )}
                     <TableCell align="right">
                       <span className="text-green-600 font-medium">
-                        ₹{formatNumber(invoice.paid_amount)}
+                        ₹{formatNumber(getInvoicePaidFromSoldItems(invoice))}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -493,7 +639,7 @@ export default function Invoices() {
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/invoices/${invoice.id}`);
+                          navigate(buildInvoiceDetailPath(invoice.id));
                         }}
                         className="gap-1.5"
                       >
@@ -512,7 +658,7 @@ export default function Invoices() {
               return (
                 <div
                   key={invoice.id}
-                  onClick={() => navigate(`/invoices/${invoice.id}`)}
+                  onClick={() => navigate(buildInvoiceDetailPath(invoice.id))}
                   className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
@@ -554,17 +700,17 @@ export default function Invoices() {
                       </div>
                     </div>
                     <div className="pt-3 border-t border-gray-100">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
-                          <div className="text-base font-bold text-gray-900">₹{formatNumber(getDisplayInvoiceTotal(invoice))}</div>
-                        </div>
-                        {parseFloat(invoice.paid_amount || '0') > 0 && (
+                      <div className={`grid ${canSeeTotalColumn ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
+                        {canSeeTotalColumn && (
                           <div>
-                            <div className="text-xs font-medium text-green-600 uppercase tracking-wide mb-1">Paid</div>
-                            <div className="text-sm font-semibold text-green-600">₹{formatNumber(invoice.paid_amount)}</div>
+                            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
+                            <div className="text-base font-bold text-gray-900">₹{formatNumber(getInvoiceTotalFromPurchaseModel(invoice))}</div>
                           </div>
                         )}
+                        <div>
+                          <div className="text-xs font-medium text-green-600 uppercase tracking-wide mb-1">Paid</div>
+                          <div className="text-sm font-semibold text-green-600">₹{formatNumber(getInvoicePaidFromSoldItems(invoice))}</div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -574,7 +720,7 @@ export default function Invoices() {
           </div>
         </>
       )}
-      {paginationInfo && !invoiceTypeFilter && (
+      {paginationInfo && !useFilteredMode && (
         <Card>
           <Pagination
             currentPage={paginationInfo.currentPage}
