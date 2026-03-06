@@ -826,13 +826,54 @@ export default function InvoiceDetail() {
       : parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0');
 
     const minPrice = purchasePrice;
+    const isCustomOtherProduct = item.product_name?.startsWith('Other -');
     const canGoBelow = item.product_can_go_below_purchase_price || false;
+    // For custom "Other -" items, never allow below-cost sale from UI.
+    const shouldEnforcePurchaseFloor = isCustomOtherProduct || !canGoBelow;
 
-    if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
+    if (shouldEnforcePurchaseFloor && minPrice > 0 && salePrice < minPrice) {
       return `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`;
     }
 
     return null;
+  };
+
+  const getItemPurchasePriceForValidation = (item: any): number => {
+    if (item.product_name?.startsWith('Other -')) {
+      const rawCustomPurchase = checkoutPurchasePrices[item.id];
+      if (rawCustomPurchase != null && rawCustomPurchase !== '') {
+        const parsedCustomPurchase = parseFloat(rawCustomPurchase);
+        if (!Number.isNaN(parsedCustomPurchase)) return parsedCustomPurchase;
+      }
+    }
+
+    const fallbackPurchase = parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0');
+    return Number.isNaN(fallbackPurchase) ? 0 : fallbackPurchase;
+  };
+
+  const getCheckoutPriceValidationErrors = (sourceItems: any[]): string[] => {
+    const priceValidationErrors: string[] = [];
+
+    sourceItems.forEach((item: any) => {
+      const salePrice = checkoutPrices[item.id]
+        ? parseFloat(checkoutPrices[item.id])
+        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+
+      if (salePrice > 0) {
+        const minPrice = getItemPurchasePriceForValidation(item);
+        const isCustomOtherProduct = item.product_name?.startsWith('Other -');
+        const canGoBelow = item.product_can_go_below_purchase_price || false;
+        const shouldEnforcePurchaseFloor = isCustomOtherProduct || !canGoBelow;
+
+        if (shouldEnforcePurchaseFloor && minPrice > 0 && salePrice < minPrice) {
+          priceValidationErrors.push(
+            `${item.product_name || 'Product'}: Sale price(₹${formatNumber(salePrice)}) cannot be less than purchase price (₹${formatNumber(minPrice)})`
+          );
+        }
+      }
+    });
+
+    return priceValidationErrors;
   };
 
   const handleCheckout = () => {
@@ -955,30 +996,8 @@ export default function InvoiceDetail() {
     }
 
     // Validate price threshold for all invoice types (including pending/draft)
-    // Check if sale price is below purchase/selling price threshold
-    // Use freshInv instead of inv to ensure we have the latest data
-    const priceValidationErrors: string[] = [];
-    freshInv.items.forEach((item: any) => {
-      const salePrice = checkoutPrices[item.id]
-        ? parseFloat(checkoutPrices[item.id])
-        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
-
-      // Only validate if price is set and greater than 0
-      if (salePrice > 0) {
-        const purchasePrice = item.product_name?.startsWith('Other -')
-          ? (checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== '' ? parseFloat(checkoutPurchasePrices[item.id]) : parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0'))
-          : parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0');
-
-        const minPrice = purchasePrice;
-        const canGoBelow = item.product_can_go_below_purchase_price || false;
-
-        if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
-          priceValidationErrors.push(
-            `${item.product_name || 'Product'}: Sale price(₹${formatNumber(salePrice)}) cannot be less than purchase price (₹${formatNumber(minPrice)})`
-          );
-        }
-      }
-    });
+    // Use freshInv to ensure latest purchase/sale inputs are checked at submit time
+    const priceValidationErrors = getCheckoutPriceValidationErrors(freshInv.items);
 
     if (priceValidationErrors.length > 0) {
       alert(`Price validation failed: \n\n${priceValidationErrors.join('\n')} `);
@@ -4070,6 +4089,13 @@ export default function InvoiceDetail() {
                   if (customItemsMissingPP.length > 0) {
                     const names = customItemsMissingPP.map((i: any) => i.product_name || 'Custom Product').join(', ');
                     alert(`Purchase price is required and must be greater than 0 for: ${names}`);
+                    return;
+                  }
+
+                  // Final UI-level guard: block below-cost pricing at submit time as well
+                  const priceValidationErrors = getCheckoutPriceValidationErrors(inv.items);
+                  if (priceValidationErrors.length > 0) {
+                    alert(`Price validation failed: \n\n${priceValidationErrors.join('\n')} `);
                     return;
                   }
 

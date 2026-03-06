@@ -181,7 +181,7 @@ export default function Ledger() {
   const { data: customersResponse } = useQuery({
     queryKey: ['customers', customerSearch],
     queryFn: async () => {
-      const response = await customersApi.list({ search: customerSearch });
+      const response = await customersApi.list({ search: customerSearch, exclude_group_name: 'Repair' });
       return response.data;
     },
     enabled: customerSearch.trim().length > 0,
@@ -191,7 +191,7 @@ export default function Ledger() {
   const { data: allCustomers } = useQuery({
     queryKey: ['all-customers'],
     queryFn: async () => {
-      const response = await customersApi.list();
+      const response = await customersApi.list({ exclude_group_name: 'Repair' });
       return response.data;
     },
     retry: false,
