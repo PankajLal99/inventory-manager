@@ -278,6 +278,7 @@ export default function Layout() {
         { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/expenses', icon: Coins, label: 'Expenses', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin','Temp','Retail','Wholesale'] },
+        { path: '/payments', icon: Coins, label: 'Payments', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Retail', 'Wholesale'] },
       ],
     },
     {

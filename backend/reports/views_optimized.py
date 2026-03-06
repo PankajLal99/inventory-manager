@@ -22,6 +22,7 @@ from backend.core.cache_utils import (
     DASHBOARD_KPI_CACHE_TTL
 )
 from backend.pos.models import Invoice, InvoiceItem, Payment, CartItem, Expenses
+from backend.parties.models import LedgerEntry
 from backend.catalog.models import Product, Barcode
 import logging
 
@@ -94,15 +95,30 @@ def optimized_dashboard_kpis(request):
     if store_id:
         payments = payments.filter(invoice__store_id=store_id)
     
-    # Aggregate payments by method in single query
+    # Aggregate POS payments by method in single query
     payment_summary = payments.values('payment_method').annotate(
         total=Sum('amount', output_field=DecimalField())
     )
     payment_dict = {item['payment_method']: item['total'] for item in payment_summary}
-    
-    total_cash = payment_dict.get('cash', Decimal('0.00'))
-    total_online = payment_dict.get('upi', Decimal('0.00'))
-    total_inhand = total_cash
+
+    # Include manual payment receipts recorded through ledger (Payments page).
+    ledger_credits = LedgerEntry.objects.filter(
+        entry_type='credit',
+        invoice__isnull=True,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+    )
+    ledger_summary = ledger_credits.values('payment_mode').annotate(
+        total=Sum('amount', output_field=DecimalField())
+    )
+    ledger_dict = {item['payment_mode']: item['total'] for item in ledger_summary}
+
+    total_cash = (payment_dict.get('cash', Decimal('0.00')) or Decimal('0.00')) + (
+        ledger_dict.get('cash', Decimal('0.00')) or Decimal('0.00')
+    )
+    total_online = (payment_dict.get('upi', Decimal('0.00')) or Decimal('0.00')) + (
+        ledger_dict.get('upi', Decimal('0.00')) or Decimal('0.00')
+    )
     
     # OPTIMIZATION 3: Get invoice items with barcodes in bulk (prefetch related)
     paid_invoices = invoices.filter(status__in=['paid', 'partial'])
@@ -218,8 +234,11 @@ def optimized_dashboard_kpis(request):
         expense_date__lte=date_to
     )
     total_expenses = expenses_queryset.aggregate(
-        total=Sum('expense_amount')
+        total=Sum('expense_amount', output_field=DecimalField(max_digits=18, decimal_places=2))
     )['total'] or Decimal('0.00')
+
+    # In-hand is cash in period minus expenses in the same period.
+    total_inhand = total_cash - total_expenses
     
     # OPTIMIZATION 6: Monthly profit calculation (10th to 10th)
     now = timezone.now()
@@ -389,10 +408,29 @@ def optimized_dashboard_kpis(request):
         total=Sum('amount', output_field=DecimalField())
     )
     yesterday_payment_dict = {item['payment_method']: item['total'] for item in yesterday_payment_summary}
-    
-    yesterday_cash = yesterday_payment_dict.get('cash', Decimal('0.00'))
-    yesterday_online = yesterday_payment_dict.get('upi', Decimal('0.00'))
-    yesterday_inhand = yesterday_cash
+
+    yesterday_ledger_credits = LedgerEntry.objects.filter(
+        entry_type='credit',
+        invoice__isnull=True,
+        created_at__date=yesterday,
+    )
+    yesterday_ledger_summary = yesterday_ledger_credits.values('payment_mode').annotate(
+        total=Sum('amount', output_field=DecimalField())
+    )
+    yesterday_ledger_dict = {item['payment_mode']: item['total'] for item in yesterday_ledger_summary}
+
+    yesterday_cash = (yesterday_payment_dict.get('cash', Decimal('0.00')) or Decimal('0.00')) + (
+        yesterday_ledger_dict.get('cash', Decimal('0.00')) or Decimal('0.00')
+    )
+    yesterday_online = (yesterday_payment_dict.get('upi', Decimal('0.00')) or Decimal('0.00')) + (
+        yesterday_ledger_dict.get('upi', Decimal('0.00')) or Decimal('0.00')
+    )
+    yesterday_expenses = Expenses.objects.filter(
+        expense_date=yesterday
+    ).aggregate(
+        total=Sum('expense_amount', output_field=DecimalField(max_digits=18, decimal_places=2))
+    )['total'] or Decimal('0.00')
+    yesterday_inhand = yesterday_cash - yesterday_expenses
     
     # Yesterday profit (simplified, no loop)
     yesterday_invoices = Invoice.objects.filter(

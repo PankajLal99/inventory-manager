@@ -132,6 +132,31 @@ export function formatDateMMDDYYYY(date: Date | string | null | undefined): stri
 }
 
 /**
+ * Formats a date for display as DD/MM/YYYY (day month year).
+ * Accepts Date or YYYY-MM-DD string. Parses as local date.
+ */
+export function formatDateDDMMYYYY(date: Date | string | null | undefined): string {
+  if (date == null) return '';
+  let d: Date;
+  if (typeof date === 'string') {
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      const [, y, m, day] = match.map(Number);
+      d = new Date(y, m - 1, day);
+    } else {
+      d = new Date(date);
+    }
+  } else {
+    d = date;
+  }
+  if (isNaN(d.getTime())) return '';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+/**
  * Formats a date-only string (YYYY-MM-DD) for display in the user's locale.
  * Parses as local date so the shown day doesn't shift (e.g. in timezones behind UTC).
  */
@@ -164,6 +189,69 @@ export function dateStringToLocalMidnightISO(dateStr: string): string {
     const [y, m, d] = dateStr.split('-').map(Number);
     const date = new Date(y, m - 1, d);
     return date.toISOString();
+}
+
+export type DateRangePreset = 'one_day' | 'last_7_days' | 'last_30_days' | 'custom';
+
+export interface DateRangeValue {
+    startDate: string;
+    endDate: string;
+}
+
+/**
+ * Returns today's local date in YYYY-MM-DD.
+ */
+export function getTodayDateString(referenceDate: Date = new Date()): string {
+    return toLocalDateString(referenceDate);
+}
+
+/**
+ * Returns a date string shifted by N calendar days in local time.
+ */
+export function getShiftedLocalDateString(daysOffset: number, referenceDate: Date = new Date()): string {
+    const date = new Date(referenceDate);
+    date.setDate(date.getDate() + daysOffset);
+    return toLocalDateString(date);
+}
+
+/**
+ * Builds a local date range for common presets.
+ * Ranges are inclusive on both start and end dates.
+ */
+export function getDateRangeByPreset(
+    preset: Exclude<DateRangePreset, 'custom'>,
+    referenceDate: Date = new Date(),
+): DateRangeValue {
+    const today = getTodayDateString(referenceDate);
+
+    if (preset === 'one_day') {
+        return { startDate: today, endDate: today };
+    }
+
+    if (preset === 'last_7_days') {
+        return {
+            startDate: getShiftedLocalDateString(-6, referenceDate),
+            endDate: today,
+        };
+    }
+
+    return {
+        startDate: getShiftedLocalDateString(-29, referenceDate),
+        endDate: today,
+    };
+}
+
+/**
+ * Ensures start date is not after end date.
+ */
+export function normalizeDateRange(range: DateRangeValue): DateRangeValue {
+    const { startDate, endDate } = range;
+    if (!startDate || !endDate) return range;
+    if (startDate <= endDate) return range;
+    return {
+        startDate: endDate,
+        endDate: startDate,
+    };
 }
 
 /**

@@ -88,14 +88,13 @@ export default function RepairModal({
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-2">
             <Phone className="h-4 w-4 inline mr-1.5" />
-            Contact Number <span className="text-red-500">*</span>
+            Contact Number
           </label>
           <Input
             type="tel"
             placeholder="Enter contact number"
             value={contactNo}
             onChange={(e) => setContactNo(e.target.value)}
-            required
             className="w-full"
           />
         </div>
@@ -147,7 +146,7 @@ export default function RepairModal({
           <Button
             type="submit"
             variant="default"
-            disabled={isLoading || !contactNo.trim() || !modelName.trim()}
+            disabled={isLoading || !modelName.trim()}
           >
             {isLoading ? 'Processing...' : 'Complete Checkout'}
           </Button>

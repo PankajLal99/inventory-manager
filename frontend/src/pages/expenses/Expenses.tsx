@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Coins, Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { posApi } from '../../lib/api';
+import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
 import { formatNumber } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
@@ -59,6 +60,8 @@ const getDefaultFormState = (): ExpenseFormState => ({
 
 export default function Expenses() {
   const queryClient = useQueryClient();
+  const [user, setUser] = useState<any>(null);
+  const [isUserLoaded, setIsUserLoaded] = useState(false);
   const [search, setSearch] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -68,6 +71,21 @@ export default function Expenses() {
   const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
   const [debouncedExpenseType, setDebouncedExpenseType] = useState('');
   const [debouncedBorrowerName, setDebouncedBorrowerName] = useState('');
+  const canSeeExpenseListing = (user?.groups || []).includes('Super');
+
+  useEffect(() => {
+    const loadUser = async () => {
+      try {
+        await auth.loadUser();
+        setUser(auth.getUser());
+      } catch (e) {
+        setUser(auth.getUser());
+      } finally {
+        setIsUserLoaded(true);
+      }
+    };
+    loadUser();
+  }, []);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['expenses', search, paymentFilter, dateFrom, dateTo],
@@ -80,6 +98,7 @@ export default function Expenses() {
       const response = await posApi.expenses.list(params);
       return response.data;
     },
+    enabled: isUserLoaded && canSeeExpenseListing,
     retry: false,
   });
 
@@ -214,7 +233,6 @@ export default function Expenses() {
     e.preventDefault();
     if (!form.expense_date) return toast('Expense date is required', 'error');
     if (!form.expense_type.trim()) return toast('Expense type is required', 'error');
-    if (!form.borrower_name.trim()) return toast('Borrower name is required', 'error');
     if (!form.expense_amount.trim() || Number(form.expense_amount) <= 0) return toast('Enter a valid amount', 'error');
 
     const payload: ExpenseFormState = {
@@ -232,8 +250,9 @@ export default function Expenses() {
     }
   };
 
+  if (!isUserLoaded) return <LoadingState message="Loading expenses..." />;
   if (isLoading) return <LoadingState message="Loading expenses..." />;
-  if (error) {
+  if (canSeeExpenseListing && error) {
     return (
       <ErrorState
         message="Error loading expenses. Please try again."
@@ -256,102 +275,112 @@ export default function Expenses() {
         }
       />
 
-      <Card>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <Input
-              type="text"
-              placeholder="Search by type/lender/borrower"
-              className="pl-10"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <Select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)}>
-            <option value="">All Payment Types</option>
-            <option value="CASH">Cash</option>
-            <option value="ONLINE">Online</option>
-          </Select>
-          <Input
-            type="date"
-            label="From date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-          />
-          <Input
-            type="date"
-            label="To date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-          />
-        </div>
-      </Card>
+      {canSeeExpenseListing ? (
+        <>
+          <Card>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <Input
+                  type="text"
+                  placeholder="Search by type/lender/borrower"
+                  className="pl-10"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <Select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)}>
+                <option value="">All Payment Types</option>
+                <option value="CASH">Cash</option>
+                <option value="ONLINE">Online</option>
+              </Select>
+              <Input
+                type="date"
+                label="From date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+              <Input
+                type="date"
+                label="To date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
+            </div>
+          </Card>
 
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm text-gray-600">
-            Entries: <span className="font-semibold text-gray-900">{expenses.length}</span>
-          </div>
-          <div className="text-sm text-gray-600">
-            Total amount: <span className="font-semibold text-red-600">₹{formatNumber(totalAmount)}</span>
-          </div>
-        </div>
-      </Card>
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-gray-600">
+                Entries: <span className="font-semibold text-gray-900">{expenses.length}</span>
+              </div>
+              <div className="text-sm text-gray-600">
+                Total amount: <span className="font-semibold text-red-600">₹{formatNumber(totalAmount)}</span>
+              </div>
+            </div>
+          </Card>
 
-      {expenses.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={Coins}
-            title="No expenses found"
-            message="Add your first expense entry to start tracking."
-          />
-        </Card>
+          {expenses.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon={Coins}
+                title="No expenses found"
+                message="Add your first expense entry to start tracking."
+              />
+            </Card>
+          ) : (
+            <Table headers={['Date', 'Expense Type', 'Lender', 'Borrower', 'Payment', 'Amount', 'Actions']}>
+              {expenses.map((expense) => (
+                <TableRow key={expense.id}>
+                  <TableCell>{expense.expense_date}</TableCell>
+                  <TableCell className="font-medium">{expense.expense_type}</TableCell>
+                  <TableCell>{expense.lender_name}</TableCell>
+                  <TableCell>{expense.borrower_name}</TableCell>
+                  <TableCell>
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        expense.payment_choices_type === 'ONLINE'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-blue-100 text-blue-800'
+                      }`}
+                    >
+                      {expense.payment_choices_type}
+                    </span>
+                  </TableCell>
+                  <TableCell align="right" className="font-semibold text-red-600">
+                    ₹{formatNumber(expense.expense_amount)}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center justify-end gap-2">
+                      <Button variant="outline" size="sm" onClick={() => openEditModal(expense)} className="gap-1.5">
+                        <Pencil className="h-4 w-4" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => {
+                          const shouldDelete = window.confirm('Delete this expense entry?');
+                          if (shouldDelete) deleteExpenseMutation.mutate(expense.id);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </Table>
+          )}
+        </>
       ) : (
-        <Table headers={['Date', 'Expense Type', 'Lender', 'Borrower', 'Payment', 'Amount', 'Actions']}>
-          {expenses.map((expense) => (
-            <TableRow key={expense.id}>
-              <TableCell>{expense.expense_date}</TableCell>
-              <TableCell className="font-medium">{expense.expense_type}</TableCell>
-              <TableCell>{expense.lender_name}</TableCell>
-              <TableCell>{expense.borrower_name}</TableCell>
-              <TableCell>
-                <span
-                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                    expense.payment_choices_type === 'ONLINE'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-blue-100 text-blue-800'
-                  }`}
-                >
-                  {expense.payment_choices_type}
-                </span>
-              </TableCell>
-              <TableCell align="right" className="font-semibold text-red-600">
-                ₹{formatNumber(expense.expense_amount)}
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center justify-end gap-2">
-                  <Button variant="outline" size="sm" onClick={() => openEditModal(expense)} className="gap-1.5">
-                    <Pencil className="h-4 w-4" />
-                    Edit
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
-                    onClick={() => {
-                      const shouldDelete = window.confirm('Delete this expense entry?');
-                      if (shouldDelete) deleteExpenseMutation.mutate(expense.id);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </Table>
+        <Card>
+          <p className="text-sm text-gray-600">
+            Expense listing is only available to users in the Super group. You can still add expenses.
+          </p>
+        </Card>
       )}
 
       <Modal
@@ -390,11 +419,10 @@ export default function Expenses() {
           />
           <Input
             type="text"
-            label="Borrower Name *"
+            label="Borrower Name"
             list="borrower-name-suggestions"
             value={form.borrower_name}
             onChange={(e) => setForm((prev) => ({ ...prev, borrower_name: e.target.value }))}
-            required
           />
           <datalist id="borrower-name-suggestions">
             {borrowerSuggestions.map((suggestion) => (

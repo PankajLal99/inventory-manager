@@ -53,6 +53,10 @@ export default function InvoiceDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const invoicesListPath = (() => {
+    const query = searchParams.toString();
+    return query ? `/invoices?${query}` : '/invoices';
+  })();
   const invoiceId = parseInt(id || '0');
   const queryClient = useQueryClient();
   const [showEditModal, setShowEditModal] = useState(false);
@@ -450,7 +454,7 @@ export default function InvoiceDetail() {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['products'] }); // Refresh products to show updated stock
       setShowDeleteModal(false);
-      navigate('/invoices');
+      navigate(invoicesListPath);
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || 'Failed to delete invoice');
@@ -571,7 +575,7 @@ export default function InvoiceDetail() {
     return (
       <ErrorState
         message="Invoice not found or failed to load"
-        onRetry={() => navigate('/invoices')}
+        onRetry={() => navigate(invoicesListPath)}
       />
     );
   }
@@ -816,25 +820,60 @@ export default function InvoiceDetail() {
       return null;
     }
 
-    // Get selling_price first, then fall back to purchase_price (use effectivePurchasePrice for custom products in checkout)
-    const sellingPrice = item.product_selling_price && item.product_selling_price > 0
-      ? parseFloat(item.product_selling_price)
-      : null;
+    // Use purchase_price as the floor — selling at cost (break even) is always allowed
     const purchasePrice = effectivePurchasePrice !== undefined && effectivePurchasePrice !== null && !Number.isNaN(effectivePurchasePrice)
       ? effectivePurchasePrice
       : parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0');
 
-    // Use selling_price if available and > 0, otherwise use purchase_price
-    const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
+    const minPrice = purchasePrice;
+    const isCustomOtherProduct = item.product_name?.startsWith('Other -');
     const canGoBelow = item.product_can_go_below_purchase_price || false;
+    // For custom "Other -" items, never allow below-cost sale from UI.
+    const shouldEnforcePurchaseFloor = isCustomOtherProduct || !canGoBelow;
 
-    // Validate price threshold if product doesn't allow going below purchase/selling price
-    if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
-      const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
-      return `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`;
+    if (shouldEnforcePurchaseFloor && minPrice > 0 && salePrice < minPrice) {
+      return `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`;
     }
 
     return null;
+  };
+
+  const getItemPurchasePriceForValidation = (item: any): number => {
+    if (item.product_name?.startsWith('Other -')) {
+      const rawCustomPurchase = checkoutPurchasePrices[item.id];
+      if (rawCustomPurchase != null && rawCustomPurchase !== '') {
+        const parsedCustomPurchase = parseFloat(rawCustomPurchase);
+        if (!Number.isNaN(parsedCustomPurchase)) return parsedCustomPurchase;
+      }
+    }
+
+    const fallbackPurchase = parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0');
+    return Number.isNaN(fallbackPurchase) ? 0 : fallbackPurchase;
+  };
+
+  const getCheckoutPriceValidationErrors = (sourceItems: any[]): string[] => {
+    const priceValidationErrors: string[] = [];
+
+    sourceItems.forEach((item: any) => {
+      const salePrice = checkoutPrices[item.id]
+        ? parseFloat(checkoutPrices[item.id])
+        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+
+      if (salePrice > 0) {
+        const minPrice = getItemPurchasePriceForValidation(item);
+        const isCustomOtherProduct = item.product_name?.startsWith('Other -');
+        const canGoBelow = item.product_can_go_below_purchase_price || false;
+        const shouldEnforcePurchaseFloor = isCustomOtherProduct || !canGoBelow;
+
+        if (shouldEnforcePurchaseFloor && minPrice > 0 && salePrice < minPrice) {
+          priceValidationErrors.push(
+            `${item.product_name || 'Product'}: Sale price(₹${formatNumber(salePrice)}) cannot be less than purchase price (₹${formatNumber(minPrice)})`
+          );
+        }
+      }
+    });
+
+    return priceValidationErrors;
   };
 
   const handleCheckout = () => {
@@ -957,34 +996,8 @@ export default function InvoiceDetail() {
     }
 
     // Validate price threshold for all invoice types (including pending/draft)
-    // Check if sale price is below purchase/selling price threshold
-    // Use freshInv instead of inv to ensure we have the latest data
-    const priceValidationErrors: string[] = [];
-    freshInv.items.forEach((item: any) => {
-      const salePrice = checkoutPrices[item.id]
-        ? parseFloat(checkoutPrices[item.id])
-        : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
-
-      // Only validate if price is set and greater than 0
-      if (salePrice > 0) {
-        const sellingPrice = item.product_selling_price && item.product_selling_price > 0
-          ? parseFloat(item.product_selling_price)
-          : null;
-        const purchasePrice = item.product_name?.startsWith('Other -')
-          ? (checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== '' ? parseFloat(checkoutPurchasePrices[item.id]) : parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0'))
-          : parseFloat(item.product_purchase_price ?? item.purchase_price ?? '0');
-
-        const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
-        const canGoBelow = item.product_can_go_below_purchase_price || false;
-
-        if (!canGoBelow && minPrice > 0 && salePrice < minPrice) {
-          const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
-          priceValidationErrors.push(
-            `${item.product_name || 'Product'}: Sale price(₹${formatNumber(salePrice)}) cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
-          );
-        }
-      }
-    });
+    // Use freshInv to ensure latest purchase/sale inputs are checked at submit time
+    const priceValidationErrors = getCheckoutPriceValidationErrors(freshInv.items);
 
     if (priceValidationErrors.length > 0) {
       alert(`Price validation failed: \n\n${priceValidationErrors.join('\n')} `);
@@ -1792,7 +1805,13 @@ export default function InvoiceDetail() {
         {/* Back Button */}
         <Button
           variant="outline"
-          onClick={() => navigate('/invoices')}
+          onClick={() => {
+            if (window.history.length > 1) {
+              navigate(-1);
+              return;
+            }
+            navigate(invoicesListPath);
+          }}
           className="w-full sm:w-auto"
         >
           <ArrowLeft className="h-4 w-4 mr-2" />
@@ -3325,6 +3344,46 @@ export default function InvoiceDetail() {
                           });
                         })()}
                       </tbody>
+                      <tfoot className="bg-gray-100 border-t-2 border-gray-300">
+                        {(() => {
+                          const activeItems = inv.items.filter((item: any) => {
+                            const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
+                            return parseFloat(qty) > 0;
+                          });
+                          let totalPurchaseAmount = 0;
+                          let totalQty = 0;
+                          activeItems.forEach((item: any) => {
+                            const qty = parseFloat(checkoutQuantities[item.id] ?? item.quantity.toString()) || 0;
+                            totalQty += qty;
+                            const isCustom = item.product_name?.startsWith('Other -');
+                            let pp: number;
+                            if (isCustom) {
+                              const val = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+                                ? parseFloat(checkoutPurchasePrices[item.id])
+                                : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
+                              pp = !Number.isNaN(val) ? val : 0;
+                            } else {
+                              const rawPurchase = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : item.purchase_price != null ? parseFloat(String(item.purchase_price)) : NaN;
+                              pp = !Number.isNaN(rawPurchase) ? rawPurchase : 0;
+                            }
+                            totalPurchaseAmount += qty * pp;
+                          });
+                          const totalSaleAmount = calculateCheckoutTotal();
+                          return (
+                            <tr>
+                              <td className="px-4 py-3 text-left text-sm font-bold text-gray-900" colSpan={2}>Total</td>
+                              <td className="px-4 py-3 text-right text-sm font-bold text-gray-900">
+                                {!showPurchasePrice && totalPurchaseAmount > 0
+                                  ? <span className="text-gray-400">•••</span>
+                                  : `₹${formatNumber(totalPurchaseAmount)}`}
+                              </td>
+                              <td className="px-4 py-3 text-center text-sm font-bold text-gray-900">{totalQty}</td>
+                              <td className="px-4 py-3"></td>
+                              <td className="px-4 py-3 text-right text-sm font-bold text-blue-600">₹{formatNumber(totalSaleAmount)}</td>
+                            </tr>
+                          );
+                        })()}
+                      </tfoot>
                     </table>
                   </div>
 
@@ -3692,6 +3751,52 @@ export default function InvoiceDetail() {
                         );
                       });
                     })()}
+                    {/* Mobile Totals */}
+                    {(() => {
+                      const activeItems = inv.items.filter((item: any) => {
+                        const qty = checkoutQuantities[item.id] ?? item.quantity.toString();
+                        return parseFloat(qty) > 0;
+                      });
+                      let totalPurchaseAmount = 0;
+                      let totalQty = 0;
+                      activeItems.forEach((item: any) => {
+                        const qty = parseFloat(checkoutQuantities[item.id] ?? item.quantity.toString()) || 0;
+                        totalQty += qty;
+                        const isCustom = item.product_name?.startsWith('Other -');
+                        let pp: number;
+                        if (isCustom) {
+                          const val = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+                            ? parseFloat(checkoutPurchasePrices[item.id])
+                            : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
+                          pp = !Number.isNaN(val) ? val : 0;
+                        } else {
+                          const rawPurchase = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : item.purchase_price != null ? parseFloat(String(item.purchase_price)) : NaN;
+                          pp = !Number.isNaN(rawPurchase) ? rawPurchase : 0;
+                        }
+                        totalPurchaseAmount += qty * pp;
+                      });
+                      const totalSaleAmount = calculateCheckoutTotal();
+                      return (
+                        <div className="bg-gray-100 border-t-2 border-gray-300 p-3 flex justify-between items-center text-sm">
+                          <div className="flex gap-4">
+                            <div>
+                              <span className="text-gray-500 text-xs">Purchase</span>
+                              <div className="font-bold text-gray-900">
+                                {!showPurchasePrice && totalPurchaseAmount > 0 ? '•••' : `₹${formatNumber(totalPurchaseAmount)}`}
+                              </div>
+                            </div>
+                            <div>
+                              <span className="text-gray-500 text-xs">Qty</span>
+                              <div className="font-bold text-gray-900">{totalQty}</div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-gray-500 text-xs">Sale Total</span>
+                            <div className="font-bold text-blue-600">₹{formatNumber(totalSaleAmount)}</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               ) : (
@@ -3712,13 +3817,42 @@ export default function InvoiceDetail() {
 
               if (activeItems.length > 0) {
                 const subtotal = calculateCheckoutTotal();
+                let totalPurchase = 0;
+                activeItems.forEach((item: any) => {
+                  const qty = parseFloat(checkoutQuantities[item.id] ?? item.quantity.toString()) || 0;
+                  const isCustom = item.product_name?.startsWith('Other -');
+                  let pp: number;
+                  if (isCustom) {
+                    const val = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+                      ? parseFloat(checkoutPurchasePrices[item.id])
+                      : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
+                    pp = !Number.isNaN(val) ? val : 0;
+                  } else {
+                    const rawPurchase = item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : item.purchase_price != null ? parseFloat(String(item.purchase_price)) : NaN;
+                    pp = !Number.isNaN(rawPurchase) ? rawPurchase : 0;
+                  }
+                  totalPurchase += qty * pp;
+                });
+                const margin = subtotal - totalPurchase;
                 return (
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                     <h4 className="text-sm font-semibold text-gray-900 mb-3">Summary</h4>
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Subtotal:</span>
+                        <span className="text-gray-600">Purchase Total:</span>
+                        <span className="font-semibold text-gray-900">
+                          {!showPurchasePrice && totalPurchase > 0 ? '•••' : `₹${formatNumber(totalPurchase)}`}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Sale Total:</span>
                         <span className="font-semibold text-gray-900">₹{formatNumber(subtotal)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Margin:</span>
+                        <span className={`font-semibold ${margin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {!showPurchasePrice && totalPurchase > 0 ? '•••' : `₹${formatNumber(margin)}`}
+                        </span>
                       </div>
                       <div className="pt-2 border-t border-gray-200 flex justify-between">
                         <span className="text-base font-bold text-gray-900">Total:</span>
@@ -3942,6 +4076,29 @@ export default function InvoiceDetail() {
                     }
                   }
 
+                  // Validate purchase price for custom products (must be > 0)
+                  const customItemsMissingPP = inv.items.filter((item: any) => {
+                    if (!item.product_name?.startsWith('Other -')) return false;
+                    const qty = checkoutQuantities[item.id] ?? item.quantity?.toString();
+                    if (parseFloat(qty) <= 0) return false;
+                    const purchaseVal = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+                      ? parseFloat(checkoutPurchasePrices[item.id])
+                      : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
+                    return Number.isNaN(purchaseVal) || purchaseVal <= 0;
+                  });
+                  if (customItemsMissingPP.length > 0) {
+                    const names = customItemsMissingPP.map((i: any) => i.product_name || 'Custom Product').join(', ');
+                    alert(`Purchase price is required and must be greater than 0 for: ${names}`);
+                    return;
+                  }
+
+                  // Final UI-level guard: block below-cost pricing at submit time as well
+                  const priceValidationErrors = getCheckoutPriceValidationErrors(inv.items);
+                  if (priceValidationErrors.length > 0) {
+                    alert(`Price validation failed: \n\n${priceValidationErrors.join('\n')} `);
+                    return;
+                  }
+
                   // Prepare items with updated quantities and prices (same as handleCheckoutSubmit)
                   // Filter out items with quantity 0 (they will be deleted by backend)
                   const items = inv.items
@@ -3953,7 +4110,7 @@ export default function InvoiceDetail() {
                         ? parseFloat(checkoutPrices[item.id])
                         : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
 
-                      return {
+                      const payload: any = {
                         id: item.id,
                         quantity: quantity,
                         unit_price: item.unit_price,
@@ -3961,6 +4118,15 @@ export default function InvoiceDetail() {
                         discount_amount: item.discount_amount || 0,
                         tax_amount: item.tax_amount || 0,
                       };
+                      if (item.product_name?.startsWith('Other -')) {
+                        const purchaseVal = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+                          ? parseFloat(checkoutPurchasePrices[item.id])
+                          : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : null);
+                        if (purchaseVal != null && !Number.isNaN(purchaseVal) && purchaseVal > 0) {
+                          payload.purchase_price = purchaseVal;
+                        }
+                      }
+                      return payload;
                     })
                     .filter((item: any) => item.quantity > 0); // Remove items with quantity 0
 

@@ -1,13 +1,14 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { customersApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
+import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import Modal from '../../components/ui/Modal';
 import Select from '../../components/ui/Select';
 import {
@@ -22,12 +23,18 @@ import 'jspdf-autotable';
 import { format } from 'date-fns';
 
 export default function Ledger() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
-  const [entryData, setEntryData] = useState({ amount: '', description: '', date: toLocalDateString(new Date()) });
+  const [entryData, setEntryData] = useState({ amount: '', description: '', paymentMode: 'cash', date: toLocalDateString(new Date()) });
   const [customerSearch, setCustomerSearch] = useState('');
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null); // 0 = ALL (no shop filter)
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => {
+    const rawStore = searchParams.get('store');
+    if (!rawStore) return null;
+    const parsed = parseInt(rawStore, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }); // 0 = ALL (no shop filter)
   const [user, setUser] = useState<any>(null);
   const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false);
   const [newCustomerData, setNewCustomerData] = useState({
@@ -39,15 +46,26 @@ export default function Ledger() {
 
   // Filters - Default to all time (no date filter) to show all entries
   const [filters, setFilters] = useState({
-    dateFrom: '',
-    dateTo: '',
-    entryType: '',
-    customer: '',
-    customerGroup: '',
-    search: '',
+    dateFrom: searchParams.get('date_from') ?? '',
+    dateTo: searchParams.get('date_to') ?? '',
+    entryType: searchParams.get('entry_type') ?? '',
+    customer: searchParams.get('customer') ?? '',
+    customerGroup: searchParams.get('customer_group') ?? '',
+    search: searchParams.get('search') ?? '',
   });
-  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(true); // Default enabled
+  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(() => {
+    const value = searchParams.get('credit_only');
+    if (value == null) return true;
+    return value !== '0';
+  }); // Default enabled
   const [showFilters, setShowFilters] = useState(false);
+  const [datePreset, setDatePreset] = useState<DateRangePreset>(() => {
+    const preset = searchParams.get('preset');
+    if (preset === 'one_day' || preset === 'last_7_days' || preset === 'last_30_days' || preset === 'custom') {
+      return preset;
+    }
+    return 'custom';
+  });
   const [sortConfig, _setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [customerFilterOpen, setCustomerFilterOpen] = useState(false);
   const [customerFilterSearch, setCustomerFilterSearch] = useState('');
@@ -58,6 +76,20 @@ export default function Ledger() {
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const buildLedgerDetailPath = (customerId: number) => {
+    const params = new URLSearchParams();
+    if (filters.search.trim()) params.set('search', filters.search.trim());
+    if (filters.dateFrom) params.set('date_from', filters.dateFrom);
+    if (filters.dateTo) params.set('date_to', filters.dateTo);
+    if (filters.entryType) params.set('entry_type', filters.entryType);
+    if (filters.customer) params.set('customer', filters.customer);
+    if (filters.customerGroup) params.set('customer_group', filters.customerGroup);
+    if (datePreset !== 'custom') params.set('preset', datePreset);
+    if (selectedStoreId !== null) params.set('store', String(selectedStoreId));
+    if (!showCreditInvoicesOnly) params.set('credit_only', '0');
+    const query = params.toString();
+    return query ? `/ledger/${customerId}?${query}` : `/ledger/${customerId}`;
+  };
 
   // Load user on mount
   useEffect(() => {
@@ -115,6 +147,23 @@ export default function Ledger() {
     }
   }, [isAdmin, selectedStoreId]);
 
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+    if (filters.search.trim()) nextParams.set('search', filters.search.trim());
+    if (filters.dateFrom) nextParams.set('date_from', filters.dateFrom);
+    if (filters.dateTo) nextParams.set('date_to', filters.dateTo);
+    if (filters.entryType) nextParams.set('entry_type', filters.entryType);
+    if (filters.customer) nextParams.set('customer', filters.customer);
+    if (filters.customerGroup) nextParams.set('customer_group', filters.customerGroup);
+    if (datePreset !== 'custom') nextParams.set('preset', datePreset);
+    if (selectedStoreId !== null) nextParams.set('store', String(selectedStoreId));
+    if (!showCreditInvoicesOnly) nextParams.set('credit_only', '0');
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [filters, datePreset, selectedStoreId, showCreditInvoicesOnly, searchParams, setSearchParams]);
+
   // Close customer filter dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -132,7 +181,7 @@ export default function Ledger() {
   const { data: customersResponse } = useQuery({
     queryKey: ['customers', customerSearch],
     queryFn: async () => {
-      const response = await customersApi.list({ search: customerSearch });
+      const response = await customersApi.list({ search: customerSearch, exclude_group_name: 'Repair' });
       return response.data;
     },
     enabled: customerSearch.trim().length > 0,
@@ -142,7 +191,7 @@ export default function Ledger() {
   const { data: allCustomers } = useQuery({
     queryKey: ['all-customers'],
     queryFn: async () => {
-      const response = await customersApi.list();
+      const response = await customersApi.list({ exclude_group_name: 'Repair' });
       return response.data;
     },
     retry: false,
@@ -219,7 +268,7 @@ export default function Ledger() {
       queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
       setShowEntryForm(false);
       setSelectedCustomer(null);
-      setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
+      setEntryData({ amount: '', description: '', paymentMode: 'cash', date: toLocalDateString(new Date()) });
       toast('Ledger entry created successfully', 'success');
     },
     onError: (error: any) => {
@@ -292,6 +341,7 @@ export default function Ledger() {
     createEntryMutation.mutate({
       customer: selectedCustomer.id,
       entry_type: entryType,
+      payment_mode: entryData.paymentMode,
       amount: parseFloat(entryData.amount),
       description: (entryData.description || '').trim(),
       created_at: entryData.date ? dateStringWithCurrentTimeISO(entryData.date) : undefined,
@@ -651,6 +701,7 @@ export default function Ledger() {
       customerGroup: '',
       search: '',
     });
+    setDatePreset('custom');
   };
 
   const customerGroups = (() => {
@@ -661,7 +712,7 @@ export default function Ledger() {
     return [];
   })();
 
-  const hasActiveFilters = filters.entryType || filters.customer || filters.customerGroup || filters.search;
+  const hasActiveFilters = filters.entryType || filters.customer || filters.customerGroup || filters.search || filters.dateFrom || filters.dateTo;
 
   if (!defaultStore && stores.length === 0) {
     return (
@@ -808,7 +859,7 @@ export default function Ledger() {
               <span className="hidden sm:inline">Filters</span>
               {hasActiveFilters && (
                 <span className="bg-blue-600 text-white rounded-full w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center text-xs flex-shrink-0">
-                  {[filters.entryType, filters.customer, filters.customerGroup, filters.search].filter(Boolean).length}
+                  {[filters.entryType, filters.customer, filters.customerGroup, filters.search, filters.dateFrom, filters.dateTo].filter(Boolean).length}
                 </span>
               )}
             </Button>
@@ -843,24 +894,18 @@ export default function Ledger() {
         {showFilters && (
           <div className="border-t pt-4 mt-4 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   <Calendar className="h-4 w-4 inline mr-1" />
-                  Date From
+                  Date Range
                 </label>
-                <DatePicker
-                  value={filters.dateFrom}
-                  onChange={(date) => setFilters({ ...filters, dateFrom: date })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  <Calendar className="h-4 w-4 inline mr-1" />
-                  Date To
-                </label>
-                <DatePicker
-                  value={filters.dateTo}
-                  onChange={(date) => setFilters({ ...filters, dateTo: date })}
+                <DateRangeSelector
+                  preset={datePreset}
+                  value={{ startDate: filters.dateFrom, endDate: filters.dateTo }}
+                  onChange={({ preset, range }) => {
+                    setDatePreset(preset);
+                    setFilters({ ...filters, dateFrom: range.startDate, dateTo: range.endDate });
+                  }}
                 />
               </div>
               <div>
@@ -1061,7 +1106,7 @@ export default function Ledger() {
                                   {canNavigate ? (
                                     <button
                                       type="button"
-                                      onClick={() => navigate(`/ledger/${group.customer.id}`)}
+                                      onClick={() => navigate(buildLedgerDetailPath(group.customer.id))}
                                       className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                                     >
                                       {group.customer.name}
@@ -1164,7 +1209,7 @@ export default function Ledger() {
                             {canNavigate ? (
                               <button
                                 type="button"
-                                onClick={() => navigate(`/ledger/${group.customer.id}`)}
+                                onClick={() => navigate(buildLedgerDetailPath(group.customer.id))}
                                 className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                               >
                                 {group.customer.name}
@@ -1341,7 +1386,7 @@ export default function Ledger() {
         onClose={() => {
           setShowEntryForm(false);
           setSelectedCustomer(null);
-          setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
+          setEntryData({ amount: '', description: '', paymentMode: 'cash', date: toLocalDateString(new Date()) });
         }}
         title={entryType === 'credit' ? 'Add Credit Entry' : 'Add Debit Entry'}
       >
@@ -1467,6 +1512,20 @@ export default function Ledger() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
+              Payment Mode
+            </label>
+            <Select
+              value={entryData.paymentMode}
+              onChange={(e) => setEntryData({ ...entryData, paymentMode: e.target.value })}
+            >
+              <option value="cash">Cash</option>
+              <option value="upi">UPI</option>
+              <option value="other">Other</option>
+            </Select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               Description
             </label>
             <textarea
@@ -1485,7 +1544,7 @@ export default function Ledger() {
               onClick={() => {
                 setShowEntryForm(false);
                 setSelectedCustomer(null);
-                setEntryData({ amount: '', description: '', date: toLocalDateString(new Date()) });
+                setEntryData({ amount: '', description: '', paymentMode: 'cash', date: toLocalDateString(new Date()) });
               }}
             >
               Cancel

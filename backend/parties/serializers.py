@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from decimal import Decimal
 from backend.pos.models import Payment
 from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry, PaymentReminder
 
@@ -37,8 +38,32 @@ class LedgerEntrySerializer(serializers.ModelSerializer):
         model = LedgerEntry
         fields = [
             'id', 'customer', 'customer_name', 'customer_group_name', 'invoice', 'invoice_number',
-            'entry_type', 'amount', 'quantity', 'description', 'created_by', 'created_by_username', 'created_at'
+            'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'quantity', 'description', 'created_by', 'created_by_username', 'created_at'
         ]
+
+    def validate(self, attrs):
+        instance = getattr(self, 'instance', None)
+        payment_mode = attrs.get('payment_mode', getattr(instance, 'payment_mode', 'other'))
+        amount = attrs.get('amount', getattr(instance, 'amount', None))
+        cash_amount = attrs.get('cash_amount', getattr(instance, 'cash_amount', None))
+        upi_amount = attrs.get('upi_amount', getattr(instance, 'upi_amount', None))
+
+        if payment_mode == 'mixed':
+            if cash_amount is None or upi_amount is None:
+                raise serializers.ValidationError('For mixed payment mode, both cash_amount and upi_amount are required.')
+            if Decimal(str(cash_amount)) < Decimal('0.00') or Decimal(str(upi_amount)) < Decimal('0.00'):
+                raise serializers.ValidationError('cash_amount and upi_amount cannot be negative.')
+            if amount is None:
+                raise serializers.ValidationError('Amount is required for mixed payment mode.')
+            split_total = Decimal(str(cash_amount)) + Decimal(str(upi_amount))
+            if split_total != Decimal(str(amount)):
+                raise serializers.ValidationError('For mixed payment mode, cash_amount + upi_amount must match amount.')
+        else:
+            # Keep non-mixed entries clean; split values should not persist accidentally.
+            attrs['cash_amount'] = None
+            attrs['upi_amount'] = None
+
+        return attrs
 
 
 class PersonalCustomerSerializer(serializers.ModelSerializer):

@@ -1960,12 +1960,31 @@ export default function POS() {
       }
     }
 
+    // Validate purchase price for custom products (must be > 0 regardless of invoice type)
+    const customItemsMissingPurchasePrice = cart.data.items?.filter((item: any) => {
+      if (!item.product_name?.startsWith('Other -')) return false;
+      const qty = parseFloat(item.quantity) || 0;
+      if (qty <= 0) return false;
+      const inlineVal = editingPurchasePrice[item.id];
+      const purchaseVal = inlineVal !== undefined && inlineVal !== ''
+        ? parseFloat(inlineVal)
+        : (item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : NaN);
+      return Number.isNaN(purchaseVal) || purchaseVal <= 0;
+    }) || [];
+    if (customItemsMissingPurchasePrice.length > 0) {
+      const names = customItemsMissingPurchasePrice
+        .map((item: any) => item.product_name || 'Custom Product')
+        .join(', ');
+      alert(`Purchase price (cost) is required and must be greater than 0 for: ${names}`);
+      return;
+    }
+
     // Check if current store is a Repair shop (lowercase as per backend)
     const isRepairShop = defaultStore?.shop_type === 'repair';
 
-    // For repair shops, validate repair data regardless of invoice type
+    // For repair shops, validate required repair data regardless of invoice type
     if (isRepairShop) {
-      if (!repairContactNo.trim() || !repairModelName.trim()) {
+      if (!repairModelName.trim()) {
         // Show modal if repair data not entered
         setShowRepairModal(true);
         return;
@@ -2261,6 +2280,25 @@ export default function POS() {
         );
         return;
       }
+    }
+
+    // Validate purchase price for custom products (must be > 0 regardless of invoice type)
+    const customItemsMissingPP = cart.data.items?.filter((item: any) => {
+      if (!item.product_name?.startsWith('Other -')) return false;
+      const qty = parseFloat(item.quantity) || 0;
+      if (qty <= 0) return false;
+      const inlineVal = editingPurchasePrice[item.id];
+      const purchaseVal = inlineVal !== undefined && inlineVal !== ''
+        ? parseFloat(inlineVal)
+        : (item.product_purchase_price != null ? parseFloat(String(item.product_purchase_price)) : NaN);
+      return Number.isNaN(purchaseVal) || purchaseVal <= 0;
+    }) || [];
+    if (customItemsMissingPP.length > 0) {
+      const names = customItemsMissingPP
+        .map((item: any) => item.product_name || 'Custom Product')
+        .join(', ');
+      alert(`Purchase price (cost) is required and must be greater than 0 for: ${names}`);
+      return;
     }
 
     // Validate split payments for mixed type
@@ -4345,25 +4383,20 @@ export default function POS() {
                                   if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit')) {
                                     const price = parseFloat(value);
                                     if (!isNaN(price) && price > 0) {
-                                      const sellingPrice = item.product_selling_price && item.product_selling_price > 0
-                                        ? parseFloat(item.product_selling_price)
-                                        : null;
                                       let purchasePrice = parseFloat(item.product_purchase_price || '0');
-                                      // For custom products, use the cost in the inline input when present (avoids stale API value)
                                       if (item.product_name?.startsWith('Other -')) {
                                         const inlineCost = editingPurchasePrice[item.id];
                                         if (inlineCost !== undefined && inlineCost !== '' && !Number.isNaN(parseFloat(inlineCost))) {
                                           purchasePrice = parseFloat(inlineCost);
                                         }
                                       }
-                                      const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
-                                      const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
+                                      const minPrice = purchasePrice;
                                       const canGoBelow = item.product_can_go_below_purchase_price || false;
 
                                       if (!canGoBelow && minPrice > 0 && price < minPrice) {
                                         setPriceErrors((prev) => ({
                                           ...prev,
-                                          [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
+                                          [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
                                         }));
                                       } else {
                                         setPriceErrors((prev) => {
@@ -4417,29 +4450,21 @@ export default function POS() {
                                       }
 
                                       if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit') {
-                                        // Check selling_price first, then fall back to purchase_price
-                                        const sellingPrice = item.product_selling_price && item.product_selling_price > 0
-                                          ? parseFloat(item.product_selling_price)
-                                          : null;
                                         let purchasePrice = parseFloat(item.product_purchase_price || '0');
-                                        // For custom products, use the cost in the inline input when present (avoids stale API value)
                                         if (item.product_name?.startsWith('Other -')) {
                                           const inlineCost = editingPurchasePrice[item.id];
                                           if (inlineCost !== undefined && inlineCost !== '' && !Number.isNaN(parseFloat(inlineCost))) {
                                             purchasePrice = parseFloat(inlineCost);
                                           }
                                         }
-                                        const minPrice = sellingPrice !== null && sellingPrice > 0 ? sellingPrice : purchasePrice;
+                                        const minPrice = purchasePrice;
                                         const canGoBelow = item.product_can_go_below_purchase_price || false;
 
-                                        // Validate if canGoBelow is false
                                         if (!canGoBelow) {
                                           if (minPrice > 0 && price < minPrice) {
-                                            // Price is below minimum - show error and don't save
-                                            const priceType = sellingPrice !== null && sellingPrice > 0 ? 'selling price' : 'purchase price';
                                             setPriceErrors((prev) => ({
                                               ...prev,
-                                              [item.id]: `Price cannot be less than ${priceType} (₹${formatNumber(minPrice)})`
+                                              [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
                                             }));
                                             // Don't save if validation fails - clear editing state to revert to saved value
                                             setEditingManualPrice((prev) => {

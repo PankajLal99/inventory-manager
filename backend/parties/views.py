@@ -12,6 +12,18 @@ from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCust
 from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer, PaymentReminderSerializer
 
 
+def _credit_invoice_plus_manual_payment_filter():
+    """Credit-ledger view = credit invoices + manual received payments."""
+    return Q(invoice__status='credit') | Q(invoice__isnull=True, entry_type='credit')
+
+
+def _exclude_repair_group_entries(queryset):
+    """Exclude ledger entries belonging to customers in Repair group."""
+    return queryset.filter(
+        Q(customer__isnull=True) | ~Q(customer__customer_group__name__iexact='Repair')
+    )
+
+
 def is_admin_user(user):
     """
     Check if user is an admin user.
@@ -95,11 +107,15 @@ def customer_list_create(request):
         search = request.query_params.get('search', None)
         customer_group = request.query_params.get('customer_group', None)
         exclude_group = request.query_params.get('exclude_group', None)
+        exclude_group_name = request.query_params.get('exclude_group_name', None)
         
         # Try cache first
         from backend.core.model_cache import get_customer_list_cache_key, CUSTOMER_LIST_CACHE_TTL
         # Incorporate exclude_group into cache key
-        cache_key = f"{get_customer_list_cache_key(search or '', customer_group or '')}_excl_{exclude_group or ''}"
+        cache_key = (
+            f"{get_customer_list_cache_key(search or '', customer_group or '')}"
+            f"_excl_{exclude_group or ''}_excl_name_{(exclude_group_name or '').strip().lower()}"
+        )
         cached_data = cache.get(cache_key)
         if cached_data:
             response = Response(cached_data)
@@ -120,6 +136,8 @@ def customer_list_create(request):
             queryset = queryset.filter(customer_group_id=customer_group)
         if exclude_group:
             queryset = queryset.exclude(customer_group_id=exclude_group)
+        if exclude_group_name:
+            queryset = queryset.exclude(customer_group__name__iexact=exclude_group_name.strip())
         queryset = queryset[:100]  # Limit results for search performance
         serializer = CustomerSerializer(queryset, many=True)
         response_data = serializer.data
@@ -338,7 +356,8 @@ def payment_reminder_calendar(request):
     ledger_grouped = LedgerEntry.objects.filter(
         customer__in=customers_qs,
         customer__isnull=False,
-        invoice__status='credit',
+    ).filter(
+        _credit_invoice_plus_manual_payment_filter()
     ).values('customer').annotate(
         total_credit=Sum(Case(When(entry_type='credit', then=F('amount')), default=Value(Decimal('0.00')))),
         total_debit=Sum(Case(When(entry_type='debit', then=F('amount')), default=Value(Decimal('0.00')))),
@@ -482,18 +501,23 @@ def supplier_detail(request, pk):
 
 def _ledger_entries_base_queryset(request):
     """Build base LedgerEntry queryset from request query params (same filters as list view)."""
-    queryset = LedgerEntry.objects.all()
+    queryset = _exclude_repair_group_entries(LedgerEntry.objects.all())
     customer_id = request.query_params.get('customer', None)
     customer_group_id = request.query_params.get('customer_group', None)
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     entry_type = request.query_params.get('entry_type', None)
+    payment_mode = request.query_params.get('payment_mode', None)
     search = request.query_params.get('search', None)
     store_id = request.query_params.get('store', None)
     invoice_status = request.query_params.get('invoice_status', None)
+    manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
 
     if invoice_status:
-        queryset = queryset.filter(invoice__status=invoice_status)
+        if invoice_status == 'credit':
+            queryset = queryset.filter(_credit_invoice_plus_manual_payment_filter())
+        else:
+            queryset = queryset.filter(invoice__status=invoice_status)
     if store_id:
         queryset = queryset.filter(
             Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
@@ -513,6 +537,10 @@ def _ledger_entries_base_queryset(request):
         queryset = queryset.filter(date_filter)
     if entry_type:
         queryset = queryset.filter(entry_type=entry_type)
+    if payment_mode:
+        queryset = queryset.filter(payment_mode=payment_mode)
+    if manual_only:
+        queryset = queryset.filter(invoice__isnull=True)
     if search:
         queryset = queryset.filter(
             Q(customer__name__icontains=search) |
@@ -564,19 +592,26 @@ def ledger_entry_list_create(request):
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
     if request.method == 'GET':
-        queryset = LedgerEntry.objects.select_related('customer', 'customer__customer_group', 'invoice', 'created_by').all()
+        queryset = _exclude_repair_group_entries(
+            LedgerEntry.objects.select_related('customer', 'customer__customer_group', 'invoice', 'created_by').all()
+        )
         customer_id = request.query_params.get('customer', None)
         customer_group_id = request.query_params.get('customer_group', None)
         date_from = request.query_params.get('date_from', None)
         date_to = request.query_params.get('date_to', None)
         entry_type = request.query_params.get('entry_type', None)
+        payment_mode = request.query_params.get('payment_mode', None)
         search = request.query_params.get('search', None)
         store_id = request.query_params.get('store', None)
         invoice_status = request.query_params.get('invoice_status', None)
+        manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
         
         # Filter by invoice status if provided (only show entries from invoices with this status)
         if invoice_status:
-            queryset = queryset.filter(invoice__status=invoice_status)
+            if invoice_status == 'credit':
+                queryset = queryset.filter(_credit_invoice_plus_manual_payment_filter())
+            else:
+                queryset = queryset.filter(invoice__status=invoice_status)
         
         # Filter by store if provided (through invoice relationship)
         if store_id:
@@ -599,6 +634,10 @@ def ledger_entry_list_create(request):
             queryset = queryset.filter(date_filter)
         if entry_type:
             queryset = queryset.filter(entry_type=entry_type)
+        if payment_mode:
+            queryset = queryset.filter(payment_mode=payment_mode)
+        if manual_only:
+            queryset = queryset.filter(invoice__isnull=True)
         if search:
             queryset = queryset.filter(
                 Q(customer__name__icontains=search) |
@@ -659,7 +698,7 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
     """Retrieve, update or delete a ledger entry (Admin only)."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can edit/delete ledger entries'}, status=status.HTTP_403_FORBIDDEN)
-    entry = get_object_or_404(LedgerEntry, pk=entry_id)
+    entry = get_object_or_404(_exclude_repair_group_entries(LedgerEntry.objects.all()), pk=entry_id)
     if request.method == 'GET':
         serializer = LedgerEntrySerializer(entry)
         return Response(serializer.data)
@@ -667,7 +706,7 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
         # Reverse old balance, update, then apply new balance
         _reverse_ledger_entry_balance(entry)
         partial_data = request.data
-        allowed = {'entry_type', 'amount', 'description', 'created_at'}
+        allowed = {'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'description', 'created_at'}
         update_data = {k: v for k, v in partial_data.items() if k in allowed}
         serializer = LedgerEntrySerializer(entry, data=update_data, partial=True)
         if serializer.is_valid():
@@ -695,11 +734,14 @@ def ledger_summary(request):
     # Base queryset - filter by store if provided (through invoice relationship)
     # Note: LedgerEntry doesn't have direct store field, but can filter via invoice__store
     # Include manual entries (without invoices) OR entries with invoices from the selected store
-    base_queryset = LedgerEntry.objects.all()
+    base_queryset = _exclude_repair_group_entries(LedgerEntry.objects.all())
     
     # Filter by invoice status if provided (only show entries from invoices with this status)
     if invoice_status:
-        base_queryset = base_queryset.filter(invoice__status=invoice_status)
+        if invoice_status == 'credit':
+            base_queryset = base_queryset.filter(_credit_invoice_plus_manual_payment_filter())
+        else:
+            base_queryset = base_queryset.filter(invoice__status=invoice_status)
     
     if store_id:
         # Include entries that have invoices from the specified store OR manual entries (no invoice)
@@ -743,7 +785,10 @@ def ledger_customer_detail(request, customer_id):
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
-    customer = get_object_or_404(Customer, pk=customer_id)
+    customer = get_object_or_404(
+        Customer.objects.exclude(customer_group__name__iexact='Repair'),
+        pk=customer_id
+    )
     store_id = request.query_params.get('store', None)
     date_from = request.query_params.get('date_from', None)
     print(f"[Ledger] customer_detail customer_id={customer_id} store={store_id} date_from={date_from} date_to={request.query_params.get('date_to')}")
@@ -757,7 +802,10 @@ def ledger_customer_detail(request, customer_id):
     
     # Filter by invoice status if provided (e.g. only entries from invoices with status='credit')
     if invoice_status:
-        entries = entries.filter(invoice__status=invoice_status)
+        if invoice_status == 'credit':
+            entries = entries.filter(_credit_invoice_plus_manual_payment_filter())
+        else:
+            entries = entries.filter(invoice__status=invoice_status)
     
     # Filter by store if provided (through invoice relationship)
     if store_id:
