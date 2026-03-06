@@ -58,6 +58,7 @@ interface RepairInvoice {
   total: string;
   display_total?: string | number;
   paid_amount?: string;
+  items?: RepairInvoiceItem[];
   status?: 'draft' | 'paid' | 'partial' | 'credit' | 'void';
   repair?: {
     id: number;
@@ -71,6 +72,15 @@ interface RepairInvoice {
     created_at: string;
     updated_at: string;
   };
+}
+
+interface RepairInvoiceItem {
+  quantity?: string | number | null;
+  unit_price?: string | number | null;
+  manual_unit_price?: string | number | null;
+  line_total?: string | number | null;
+  product_purchase_price?: string | number | null;
+  product_selling_price?: string | number | null;
 }
 
 // Matches backend pos.models.Repair.STATUS_CHOICES
@@ -508,11 +518,37 @@ export default function Repairs() {
     });
   };
 
-  const getRepairTotalAmount = (invoice: RepairInvoice) => parseAmount(invoice.display_total ?? invoice.total);
+  const getRepairTotalAmount = (invoice: RepairInvoice) => {
+    const items = Array.isArray(invoice.items) ? invoice.items : [];
+    if (items.length === 0) return parseAmount(invoice.display_total ?? invoice.total);
+
+    return items.reduce((sum, item) => {
+      const quantity = parseAmount(item.quantity);
+      const sellingPrice = parseAmount(item.product_selling_price);
+      const purchasePrice = parseAmount(item.product_purchase_price);
+      const effectiveRate = sellingPrice > 0 ? sellingPrice : purchasePrice;
+      return sum + quantity * effectiveRate;
+    }, 0);
+  };
+
   const getRepairPaidAmount = (invoice: RepairInvoice) => {
-    const paid = parseAmount(invoice.paid_amount);
-    if (paid > 0) return paid;
-    return invoice.status === 'paid' ? getRepairTotalAmount(invoice) : 0;
+    const items = Array.isArray(invoice.items) ? invoice.items : [];
+    if (items.length === 0) {
+      const paid = parseAmount(invoice.paid_amount);
+      if (paid > 0) return paid;
+      return parseAmount(invoice.total);
+    }
+
+    return items.reduce((sum, item) => {
+      const lineTotal = parseAmount(item.line_total);
+      if (lineTotal > 0) return sum + lineTotal;
+
+      const quantity = parseAmount(item.quantity);
+      const manualUnitPrice = parseAmount(item.manual_unit_price);
+      const unitPrice = parseAmount(item.unit_price);
+      const soldRate = manualUnitPrice > 0 ? manualUnitPrice : unitPrice;
+      return sum + quantity * soldRate;
+    }, 0);
   };
 
 
