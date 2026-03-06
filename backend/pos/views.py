@@ -2206,31 +2206,8 @@ def cart_checkout(request, pk):
                 barcode=repair_barcode
             )
 
-            # If booking amount provided, create initial payment
-            if booking_amt_decimal > 0:
-                from backend.pos.models import Payment
-                payment = Payment.objects.create(
-                    invoice=invoice,
-                    payment_method=invoice_type if invoice_type in ['cash', 'upi'] else 'cash',
-                    amount=booking_amt_decimal,
-                    notes='Booking amount for repair',
-                    created_by=request.user
-                )
-
-                # Create ledger credit entry if customer exists
-                if invoice.customer:
-                    from backend.parties.models import LedgerEntry
-                    LedgerEntry.objects.create(
-                        customer=invoice.customer,
-                        invoice=invoice,
-                        entry_type='credit',
-                        amount=booking_amt_decimal,
-                        description=f'Booking payment for Repair {repair_barcode}',
-                        created_by=request.user,
-                        created_at=timezone.now()
-                    )
-                    invoice.customer.credit_balance += booking_amt_decimal
-                    invoice.customer.save()
+            # Booking amount is stored on repair metadata only.
+            # Do not auto-create a payment row at registration time.
 
         # 10. Process Items
         subtotal = Decimal('0.00')

@@ -78,10 +78,19 @@ export default function DateRangeSelector({
   };
 
   const applyCustomRange = () => {
-    const normalized = normalizeDateRange({
+    let nextRange: DateRangeValue = {
       startDate: draftStartDate,
       endDate: draftEndDate,
-    });
+    };
+
+    // If only one date is provided, treat it as a one-day custom range.
+    if (nextRange.startDate && !nextRange.endDate) {
+      nextRange = { startDate: nextRange.startDate, endDate: nextRange.startDate };
+    } else if (!nextRange.startDate && nextRange.endDate) {
+      nextRange = { startDate: nextRange.endDate, endDate: nextRange.endDate };
+    }
+
+    const normalized = normalizeDateRange(nextRange);
     onChange({
       preset: 'custom',
       range: normalized,
@@ -171,6 +180,11 @@ export default function DateRangeSelector({
                   End date is before start date. It will be fixed automatically on apply.
                 </p>
               )}
+              {(draftStartDate && !draftEndDate) || (!draftStartDate && draftEndDate) ? (
+                <p className="text-xs text-gray-600">
+                  Single date selected: it will be applied as a one-day range.
+                </p>
+              ) : null}
               <div className="flex justify-end gap-2 pt-1">
                 <Button type="button" size="sm" onClick={applyCustomRange}>
                   Apply
