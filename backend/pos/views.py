@@ -2833,7 +2833,10 @@ def invoice_payments(request, pk):
         # Keep invoice summary fields in sync with edited payment amount.
         invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         invoice.due_amount = invoice.total - invoice.paid_amount
-        if invoice.due_amount <= Decimal('0.00'):
+        if invoice.status == 'credit' or invoice.invoice_type in ('pending', 'credit'):
+            # Invoices moved to ledger should remain credit while dues are settled.
+            invoice.status = 'credit'
+        elif invoice.due_amount <= Decimal('0.00'):
             invoice.status = 'paid'
         elif invoice.paid_amount > Decimal('0.00'):
             invoice.status = 'partial'
@@ -2892,7 +2895,10 @@ def invoice_payments(request, pk):
         
         # Update invoice status
         old_status = invoice.status
-        if invoice.due_amount <= Decimal('0.00'):
+        if invoice.status == 'credit' or invoice.invoice_type in ('pending', 'credit'):
+            # Invoices moved to ledger should remain credit while dues are settled.
+            invoice.status = 'credit'
+        elif invoice.due_amount <= Decimal('0.00'):
             invoice.status = 'paid'
         elif invoice.paid_amount > Decimal('0.00'):
             invoice.status = 'partial'
