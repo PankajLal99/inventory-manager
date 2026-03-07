@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatNumber, getProductNameColor, getTodayDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -699,14 +699,21 @@ export default function InvoiceDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoice?.data, searchParams]);
 
-  // Sync repair status and delivery date in checkout modal when modal opens or invoice repair changes
+  // Sync repair status in checkout modal when modal opens or invoice repair changes
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
       setCheckoutRepairStatus(inv.repair.status);
-      setCheckoutDeliveryDate(inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '');
     }
-  }, [showCheckoutModal, invoice?.data?.repair?.status, invoice?.data?.repair?.delivery_date]);
+  }, [showCheckoutModal, invoice?.data?.repair?.status]);
+
+  // Always prefill repair delivery date to today when checkout opens
+  useEffect(() => {
+    const inv = invoice?.data;
+    if (showCheckoutModal && inv?.repair) {
+      setCheckoutDeliveryDate(getTodayDateString());
+    }
+  }, [showCheckoutModal, invoice?.data?.repair?.id]);
 
   // Early returns after all hooks
   if (isLoading) {
@@ -751,7 +758,6 @@ export default function InvoiceDetail() {
       minute: '2-digit',
     });
   };
-
 
   // Convert number to words (Indian numbering system)
   const numberToWords = (num: number): string => {
