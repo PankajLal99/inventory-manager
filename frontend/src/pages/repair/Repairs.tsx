@@ -425,6 +425,14 @@ export default function Repairs() {
     regenerateLabelMutation.mutate(invoice.id);
   };
 
+  const handleRepairStatusAction = (invoice: RepairInvoice) => {
+    if (!invoice.repair) {
+      showToast('This invoice does not have a repair record', 'error');
+      return;
+    }
+    navigate(`/invoices/${invoice.id}?openCheckout=1`);
+  };
+
   const isRegenerateDisabled = (invoiceId: number) => {
     const last = lastRegenerateAt[invoiceId] ?? 0;
     return Date.now() - last < REGENERATE_COOLDOWN_MS;
@@ -816,7 +824,7 @@ export default function Repairs() {
                     </Button>
                     <Button
                       variant="primary"
-                      onClick={() => navigate(`/invoices/${selectedInvoice.id}?openCheckout=1`)}
+                      onClick={() => handleRepairStatusAction(selectedInvoice)}
                     >
                       <Edit className="h-4 w-4 mr-2" />
                       Update Status
@@ -1063,11 +1071,7 @@ export default function Repairs() {
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (invoice.repair) {
-                                  navigate(`/invoices/${invoice.id}?openCheckout=1`);
-                                } else {
-                                  showToast('This invoice does not have a repair record', 'error');
-                                }
+                                handleRepairStatusAction(invoice);
                               }}
                               className="gap-1.5"
                               disabled={!invoice.repair}
@@ -1242,11 +1246,7 @@ export default function Repairs() {
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (invoice.repair) {
-                                navigate(`/invoices/${invoice.id}?openCheckout=1`);
-                              } else {
-                                showToast('This invoice does not have a repair record', 'error');
-                              }
+                              handleRepairStatusAction(invoice);
                             }}
                             className="w-full gap-1.5"
                             disabled={!invoice.repair}

@@ -5704,6 +5704,28 @@ def bulk_barcodes_check(request):
 
     for barcode_str in barcode_strings:
         # Exact match only: try barcode then short_code
+        barcode_obj = None
+        try:
+            barcode_obj = Barcode.objects.get(barcode=barcode_str)
+        except Barcode.DoesNotExist:
+            try:
+                barcode_obj = Barcode.objects.get(short_code=barcode_str)
+            except Barcode.DoesNotExist:
+                pass
+
+        # Fresh barcodes can be directly marked as defective in replacement bulk flow,
+        # even when they are not linked to any eligible invoice item.
+        if barcode_obj and barcode_obj.tag == 'new':
+            fresh_processable.append({
+                'barcode': barcode_str,
+                'barcode_id': barcode_obj.id,
+                'barcode_full': barcode_obj.barcode,
+                'short_code': barcode_obj.short_code,
+                'tag': barcode_obj.tag,
+                'product_name': barcode_obj.product.name if barcode_obj.product else 'N/A',
+            })
+            continue
+
         items = invoice_items_qs.filter(barcode__barcode=barcode_str).order_by('-invoice__created_at')
         if not items.exists():
             items = invoice_items_qs.filter(barcode__short_code=barcode_str).order_by('-invoice__created_at')
@@ -5715,18 +5737,6 @@ def bulk_barcodes_check(request):
 
         barcode_obj = item.barcode
         tag = barcode_obj.tag if barcode_obj else None
-        if tag == 'new':
-            barcode_full = barcode_obj.barcode if barcode_obj else None
-            short_code = getattr(barcode_obj, 'short_code', None) if barcode_obj else None
-            fresh_processable.append({
-                'barcode': barcode_str,
-                'barcode_id': barcode_obj.id if barcode_obj else None,
-                'barcode_full': barcode_full,
-                'short_code': short_code,
-                'tag': tag,
-                'product_name': item.product.name if item.product else 'N/A',
-            })
-            continue
 
         if tag != 'sold':
             invalid_tag.append({'barcode': barcode_str, 'tag': tag or 'unknown'})

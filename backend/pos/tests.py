@@ -1180,8 +1180,8 @@ class BulkBarcodesCheckTests(APITestCase):
         self.assertEqual(skip['barcode'], 'DOES-NOT-EXIST-ANYWHERE')
         self.assertEqual(skip['reason'], 'not_found')
 
-    def test_not_sold_tags_skipped(self):
-        """Barcodes with tag new, returned, defective, unknown, in-cart are skipped as not_sold."""
+    def test_not_sold_tags_skipped_except_fresh(self):
+        """Fresh (new) is processable via defective flow; other non-sold tags are skipped."""
         barcodes = [
             self.barcode_new.barcode,
             self.barcode_returned.barcode,
@@ -1191,11 +1191,32 @@ class BulkBarcodesCheckTests(APITestCase):
         ]
         response = self.client.post(self._url(), {'barcodes': barcodes}, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertFalse(response.data['valid'])
+        self.assertTrue(response.data['valid'])
         self.assertEqual(len(response.data['processable']), 0)
-        self.assertEqual(len(response.data['skipped']), 5)
+        self.assertEqual(len(response.data['fresh_processable']), 1)
+        self.assertEqual(response.data['fresh_processable'][0]['barcode_id'], self.barcode_new.id)
+        self.assertEqual(len(response.data['skipped']), 4)
         reasons = {s['reason'] for s in response.data['skipped']}
         self.assertEqual(reasons, {'not_sold'})
+
+    def test_fresh_without_invoice_item_is_processable(self):
+        """Fresh barcode without invoice item is still processable in replacement bulk flow."""
+        fresh_only = Barcode.objects.create(
+            product=self.product,
+            barcode=f'BC-FRESH-ONLY-{uuid.uuid4().hex[:6]}'.upper(),
+            tag='new',
+        )
+        response = self.client.post(
+            self._url(),
+            {'barcodes': [fresh_only.barcode]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['valid'])
+        self.assertEqual(len(response.data['processable']), 0)
+        self.assertEqual(len(response.data['fresh_processable']), 1)
+        self.assertEqual(response.data['fresh_processable'][0]['barcode_id'], fresh_only.id)
+        self.assertEqual(len(response.data['skipped']), 0)
 
     def test_all_sold_single_customer_processable(self):
         """All barcodes sold and same customer -> valid, all processable, none skipped."""
@@ -1282,10 +1303,11 @@ class BulkBarcodesCheckTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['valid'])
         self.assertEqual(len(response.data['processable']), 2)
-        self.assertEqual(len(response.data['skipped']), 2)
+        self.assertEqual(len(response.data['fresh_processable']), 1)
+        self.assertEqual(response.data['fresh_processable'][0]['barcode_id'], self.barcode_new.id)
+        self.assertEqual(len(response.data['skipped']), 1)
         reasons = {s['reason'] for s in response.data['skipped']}
         self.assertIn('not_found', reasons)
-        self.assertIn('not_sold', reasons)
 
     def test_lookup_by_short_code(self):
         """Barcode can be resolved by short_code when provided in input."""

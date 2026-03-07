@@ -11,6 +11,7 @@ export default function ShortcutsHelpModal({ isOpen, onClose }: ShortcutsHelpMod
         { key: 'F2', description: 'Focus Search / Barcode Input' },
         { key: 'F3', description: 'New Sale (Create New Cart)' },
         { key: 'F4', description: 'Toggle Payment Mode (Cash -> UPI -> Mixed -> Pending)' },
+        { key: 'F6', description: 'Add Custom Product (Other/Custom)' },
         { key: 'F8', description: 'Complete Order (No Print)' },
         { key: 'F9', description: 'Checkout & Print (Thermal)' },
         { key: 'Shift + Del', description: 'Delete Current Cart' },

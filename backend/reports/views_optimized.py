@@ -16,17 +16,108 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 from django.core.cache import cache
-from backend.core.cache_utils import (
-    get_cached_dashboard_kpis,
-    cache_dashboard_kpis,
-    DASHBOARD_KPI_CACHE_TTL
-)
 from backend.pos.models import Invoice, InvoiceItem, Payment, CartItem, Expenses
 from backend.parties.models import LedgerEntry
 from backend.catalog.models import Product, Barcode
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _decimal_or_zero(value):
+    return value if value is not None else Decimal('0.00')
+
+
+def _build_payment_contribution_rows(payments_queryset, payment_method):
+    rows = []
+    payment_rows = payments_queryset.filter(
+        payment_method=payment_method
+    ).values(
+        'id',
+        'amount',
+        'created_at',
+        'invoice__id',
+        'invoice__invoice_number',
+        'invoice__customer__name',
+    ).order_by('-created_at', '-id')
+
+    for row in payment_rows:
+        customer_name = row.get('invoice__customer__name') or 'Walk-in Customer'
+        rows.append({
+            'source': 'invoice_payment',
+            'id': row.get('id'),
+            'invoice_id': row.get('invoice__id'),
+            'invoice_number': row.get('invoice__invoice_number'),
+            'party_name': customer_name,
+            'customer_name': customer_name,
+            'amount': float(row.get('amount') or Decimal('0.00')),
+            'payment_date': row.get('created_at').isoformat() if row.get('created_at') else None,
+        })
+    return rows
+
+
+def _build_manual_contribution_rows(ledger_queryset, payment_mode):
+    rows = []
+    ledger_rows = ledger_queryset.filter(
+        payment_mode=payment_mode
+    ).values(
+        'id',
+        'amount',
+        'created_at',
+        'customer__name',
+        'description',
+    ).order_by('-created_at', '-id')
+
+    for row in ledger_rows:
+        customer_name = row.get('customer__name') or 'Walk-in Customer'
+        rows.append({
+            'source': 'manual_payment',
+            'id': row.get('id'),
+            'invoice_id': None,
+            'invoice_number': None,
+            'party_name': customer_name,
+            'customer_name': customer_name,
+            'amount': float(row.get('amount') or Decimal('0.00')),
+            'payment_date': row.get('created_at').isoformat() if row.get('created_at') else None,
+            'description': row.get('description') or '',
+        })
+    return rows
+
+
+def _build_manual_mixed_contribution_rows(ledger_queryset, split_method):
+    rows = []
+    mixed_rows = ledger_queryset.filter(
+        payment_mode='mixed'
+    ).values(
+        'id',
+        'amount',
+        'cash_amount',
+        'upi_amount',
+        'created_at',
+        'customer__name',
+        'description',
+    ).order_by('-created_at', '-id')
+
+    for row in mixed_rows:
+        cash_amount = _decimal_or_zero(row.get('cash_amount'))
+        upi_amount = _decimal_or_zero(row.get('upi_amount'))
+        split_amount = cash_amount if split_method == 'cash' else upi_amount
+        if split_amount <= Decimal('0.00'):
+            continue
+
+        customer_name = row.get('customer__name') or 'Walk-in Customer'
+        rows.append({
+            'source': 'manual_mixed_payment',
+            'id': row.get('id'),
+            'invoice_id': None,
+            'invoice_number': None,
+            'party_name': customer_name,
+            'customer_name': customer_name,
+            'amount': float(split_amount),
+            'payment_date': row.get('created_at').isoformat() if row.get('created_at') else None,
+            'description': row.get('description') or '',
+        })
+    return rows
 
 
 @api_view(['GET'])
@@ -56,18 +147,7 @@ def optimized_dashboard_kpis(request):
     else:
         date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
     
-    # Try cache first (skip if Redis not available)
-    try:
-        cached_data, cache_key = get_cached_dashboard_kpis(date_from, date_to, store_id)
-        if cached_data:
-            logger.info(f"Dashboard KPIs cache HIT (user: {request.user.username}, date_from: {date_from})")
-            response = Response(cached_data)
-            response['X-Cache'] = 'HIT'
-            response['Cache-Control'] = 'private, max-age=60'
-            return response
-        logger.info(f"Dashboard KPIs cache MISS (user: {request.user.username}, date_from: {date_from})")
-    except Exception as e:
-        logger.warning(f"Cache unavailable, proceeding without cache: {e}")
+    logger.info(f"Dashboard KPIs cache DISABLED (user: {request.user.username}, date_from: {date_from})")
     
     # OPTIMIZATION 1: Base invoice queryset with single query
     invoices = Invoice.objects.filter(
@@ -112,13 +192,69 @@ def optimized_dashboard_kpis(request):
         total=Sum('amount', output_field=DecimalField())
     )
     ledger_dict = {item['payment_mode']: item['total'] for item in ledger_summary}
+    ledger_mixed_split = ledger_credits.filter(payment_mode='mixed').aggregate(
+        cash_total=Sum('cash_amount', output_field=DecimalField()),
+        upi_total=Sum('upi_amount', output_field=DecimalField()),
+    )
 
-    total_cash = (payment_dict.get('cash', Decimal('0.00')) or Decimal('0.00')) + (
-        ledger_dict.get('cash', Decimal('0.00')) or Decimal('0.00')
+    total_cash = _decimal_or_zero(payment_dict.get('cash')) + (
+        _decimal_or_zero(ledger_dict.get('cash'))
+    ) + (
+        _decimal_or_zero(ledger_mixed_split.get('cash_total'))
     )
-    total_online = (payment_dict.get('upi', Decimal('0.00')) or Decimal('0.00')) + (
-        ledger_dict.get('upi', Decimal('0.00')) or Decimal('0.00')
+    total_online = _decimal_or_zero(payment_dict.get('upi')) + (
+        _decimal_or_zero(ledger_dict.get('upi'))
+    ) + (
+        _decimal_or_zero(ledger_mixed_split.get('upi_total'))
     )
+
+    cash_invoice_rows = _build_payment_contribution_rows(payments, 'cash')
+    upi_invoice_rows = _build_payment_contribution_rows(payments, 'upi')
+    cash_manual_rows = _build_manual_contribution_rows(ledger_credits, 'cash') + _build_manual_mixed_contribution_rows(ledger_credits, 'cash')
+    upi_manual_rows = _build_manual_contribution_rows(ledger_credits, 'upi') + _build_manual_mixed_contribution_rows(ledger_credits, 'upi')
+    cash_manual_rows = sorted(
+        cash_manual_rows,
+        key=lambda row: ((row.get('payment_date') or ''), (row.get('id') or 0)),
+        reverse=True,
+    )
+    upi_manual_rows = sorted(
+        upi_manual_rows,
+        key=lambda row: ((row.get('payment_date') or ''), (row.get('id') or 0)),
+        reverse=True,
+    )
+
+    # Repair-only clarity: split by invoice type and by received payment method.
+    repair_invoices = invoices.filter(store__shop_type='repair')
+    repair_invoice_cash_total = _decimal_or_zero(
+        repair_invoices.filter(invoice_type='cash').aggregate(
+            total=Sum('total', output_field=DecimalField())
+        )['total']
+    )
+    repair_invoice_upi_total = _decimal_or_zero(
+        repair_invoices.filter(invoice_type='upi').aggregate(
+            total=Sum('total', output_field=DecimalField())
+        )['total']
+    )
+    repair_invoice_cash_count = repair_invoices.filter(invoice_type='cash').count()
+    repair_invoice_upi_count = repair_invoices.filter(invoice_type='upi').count()
+
+    repair_payments = payments.filter(invoice__store__shop_type='repair')
+    repair_payment_summary = repair_payments.values('payment_method').annotate(
+        total=Sum('amount', output_field=DecimalField()),
+        count=Count('id')
+    )
+    repair_payment_dict = {item['payment_method']: item for item in repair_payment_summary}
+    repair_payment_cash_total = _decimal_or_zero(
+        (repair_payment_dict.get('cash') or {}).get('total')
+    )
+    repair_payment_upi_total = _decimal_or_zero(
+        (repair_payment_dict.get('upi') or {}).get('total')
+    )
+    repair_payment_cash_count = int((repair_payment_dict.get('cash') or {}).get('count') or 0)
+    repair_payment_upi_count = int((repair_payment_dict.get('upi') or {}).get('count') or 0)
+
+    repair_cash_payment_rows = _build_payment_contribution_rows(repair_payments, 'cash')
+    repair_upi_payment_rows = _build_payment_contribution_rows(repair_payments, 'upi')
     
     # OPTIMIZATION 3: Get invoice items with barcodes in bulk (prefetch related)
     paid_invoices = invoices.filter(status__in=['paid', 'partial'])
@@ -418,12 +554,20 @@ def optimized_dashboard_kpis(request):
         total=Sum('amount', output_field=DecimalField())
     )
     yesterday_ledger_dict = {item['payment_mode']: item['total'] for item in yesterday_ledger_summary}
-
-    yesterday_cash = (yesterday_payment_dict.get('cash', Decimal('0.00')) or Decimal('0.00')) + (
-        yesterday_ledger_dict.get('cash', Decimal('0.00')) or Decimal('0.00')
+    yesterday_ledger_mixed_split = yesterday_ledger_credits.filter(payment_mode='mixed').aggregate(
+        cash_total=Sum('cash_amount', output_field=DecimalField()),
+        upi_total=Sum('upi_amount', output_field=DecimalField()),
     )
-    yesterday_online = (yesterday_payment_dict.get('upi', Decimal('0.00')) or Decimal('0.00')) + (
-        yesterday_ledger_dict.get('upi', Decimal('0.00')) or Decimal('0.00')
+
+    yesterday_cash = _decimal_or_zero(yesterday_payment_dict.get('cash')) + (
+        _decimal_or_zero(yesterday_ledger_dict.get('cash'))
+    ) + (
+        _decimal_or_zero(yesterday_ledger_mixed_split.get('cash_total'))
+    )
+    yesterday_online = _decimal_or_zero(yesterday_payment_dict.get('upi')) + (
+        _decimal_or_zero(yesterday_ledger_dict.get('upi'))
+    ) + (
+        _decimal_or_zero(yesterday_ledger_mixed_split.get('upi_total'))
     )
     yesterday_expenses = Expenses.objects.filter(
         expense_date=yesterday
@@ -460,6 +604,14 @@ def optimized_dashboard_kpis(request):
             'total_online': float(total_online),
             'total_expenses': float(total_expenses),
             'total_inhand': float(total_inhand),
+            'repair_invoice_cash_total': float(repair_invoice_cash_total),
+            'repair_invoice_upi_total': float(repair_invoice_upi_total),
+            'repair_invoice_cash_count': repair_invoice_cash_count,
+            'repair_invoice_upi_count': repair_invoice_upi_count,
+            'repair_payment_cash_total': float(repair_payment_cash_total),
+            'repair_payment_upi_total': float(repair_payment_upi_total),
+            'repair_payment_cash_count': repair_payment_cash_count,
+            'repair_payment_upi_count': repair_payment_upi_count,
             'repairing_profit': float(repairing_profit),
             'counter_profit': float(counter_profit),
             'pending_profit': float(pending_profit),
@@ -481,18 +633,32 @@ def optimized_dashboard_kpis(request):
                 'total_inhand': float(yesterday_inhand),
                 'overall_profit': float(yesterday_profit),
             }
-        }
+        },
+        'cash_online_contributions': {
+            'cash': {
+                'invoice_payments': cash_invoice_rows,
+                'manual_payments': cash_manual_rows,
+            },
+            'upi': {
+                'invoice_payments': upi_invoice_rows,
+                'manual_payments': upi_manual_rows,
+            }
+        },
+        'repair_cash_upi_contributions': {
+            'cash': {
+                'invoice_payments': repair_cash_payment_rows,
+            },
+            'upi': {
+                'invoice_payments': repair_upi_payment_rows,
+            }
+        },
     }
     
-    # Cache the response (skip if Redis not available)
-    try:
-        cache_dashboard_kpis(cache_key, response_data, DASHBOARD_KPI_CACHE_TTL)
-    except Exception as e:
-        logger.warning(f"Unable to cache response: {e}")
-    
     response = Response(response_data)
-    response['X-Cache'] = 'MISS'
-    response['Cache-Control'] = 'private, max-age=60'
+    response['X-Cache'] = 'DISABLED'
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
     
     logger.info(f"Dashboard KPIs calculated (user: {request.user.username})")
     

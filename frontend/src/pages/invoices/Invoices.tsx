@@ -36,6 +36,7 @@ interface Invoice {
   store_name?: string;
   customer: number | null;
   customer_name: string | null;
+  customer_group_name?: string | null;
   status: string;
   invoice_type: string;
   subtotal: string;
@@ -258,12 +259,20 @@ export default function Invoices() {
 
   // Filter out defective invoices (they should only appear in defective move-outs page)
   // Filter out repair invoices (they appear on the Repairs page only)
-  // Filter out credit invoices (credit memos / refunds — not shown on this page)
+  // Credit invoices remain hidden by default, but are shown when explicitly filtered.
   // Search is applied server-side (invoice_number + customer_name)
   const filteredInvoices = invoices.filter((invoice) => {
+    const invoiceType = String(invoice.invoice_type || '').toLowerCase();
+    const customerGroup = String(invoice.customer_group_name || '').toUpperCase();
+    const isRepairByType = invoiceType === 'repair' || invoiceType === 'pos_repair';
+    const isRepairByCustomerGroup = customerGroup === 'REPAIR';
+    const isRepairInvoice = Boolean(invoice.repair) || isRepairByType || isRepairByCustomerGroup;
+
+    const isCreditInvoice = invoiceType === 'credit' || invoice.status === 'credit';
+
     if (invoice.invoice_type === 'defective') return false;
-    if (invoice.repair) return false;
-    if (invoice.status === 'credit') return false;
+    if (isRepairInvoice) return false;
+    if (invoiceTypeFilter !== 'credit' && isCreditInvoice) return false;
     return true;
   });
 
@@ -488,6 +497,7 @@ export default function Invoices() {
             <option value="cash">Cash</option>
             <option value="upi">UPI</option>
             <option value="pending">Pending</option>
+            <option value="credit">Credit</option>
           </Select>
           <div className="lg:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -618,6 +628,7 @@ export default function Invoices() {
                         {invoice.invoice_type === 'cash' ? 'Cash' :
                           invoice.invoice_type === 'upi' ? 'UPI' :
                             invoice.invoice_type === 'pending' ? 'Pending' :
+                              invoice.invoice_type === 'credit' ? 'Credit' :
                               invoice.invoice_type || 'Cash'}
                       </span>
                     </TableCell>
@@ -695,6 +706,7 @@ export default function Invoices() {
                           {invoice.invoice_type === 'cash' ? 'Cash' :
                             invoice.invoice_type === 'upi' ? 'UPI' :
                               invoice.invoice_type === 'pending' ? 'Pending' :
+                                invoice.invoice_type === 'credit' ? 'Credit' :
                                 invoice.invoice_type || 'Cash'}
                         </span>
                       </div>

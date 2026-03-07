@@ -2691,6 +2691,13 @@ export default function POS() {
     });
   }, []);
 
+  const handleOpenCustomProductModal = useCallback(() => {
+    if (isCartLocked) return;
+    setShowCustomProductModal(true);
+    setBarcodeInput('');
+    setProductSearchSelectedIndex(-1);
+  }, [isCartLocked]);
+
   usePosKeyboardShortcuts({
     onShowHelp: () => setShowShortcutsHelp(curr => !curr),
     onFocusSearch: () => {
@@ -2701,6 +2708,7 @@ export default function POS() {
     },
     onNewSale: handleNewSale,
     onTogglePaymentMode: handleToggleInvoiceType,
+    onOpenCustomProduct: handleOpenCustomProductModal,
     onCheckout: () => { if (!isCartLocked) handleCheckoutAndPrintThermal(); }, // F9: Thermal Print checkout
     onCompleteSale: () => { if (!isCartLocked) handleCheckout(); }, // F8: Simple checkout
     onDeleteCart: handleDeleteCurrentCart,
@@ -3433,9 +3441,7 @@ export default function POS() {
 
                       if (productSearchSelectedIndex === 0 && showCustomOption) {
                         e.preventDefault();
-                        setShowCustomProductModal(true);
-                        setBarcodeInput('');
-                        setProductSearchSelectedIndex(-1);
+                        handleOpenCustomProductModal();
                         return;
                       }
 
@@ -3651,9 +3657,7 @@ export default function POS() {
                       const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
                       if (showCustomOption) {
                         e.preventDefault();
-                        setShowCustomProductModal(true);
-                        setBarcodeInput('');
-                        setProductSearchSelectedIndex(-1);
+                        handleOpenCustomProductModal();
                       }
                     }
                   }}
@@ -3875,11 +3879,7 @@ export default function POS() {
                         {/* Custom Product Option */}
                         {showCustomOption && (
                           <button
-                            onClick={() => {
-                              setShowCustomProductModal(true);
-                              setBarcodeInput('');
-                              setProductSearchSelectedIndex(-1);
-                            }}
+                            onClick={handleOpenCustomProductModal}
                             className={`w-full text-left px-4 py-3 transition-colors border-b border-gray-100 group ${productSearchSelectedIndex === 0
                               ? 'bg-blue-100 hover:bg-blue-100'
                               : 'hover:bg-blue-50 active:bg-blue-100'

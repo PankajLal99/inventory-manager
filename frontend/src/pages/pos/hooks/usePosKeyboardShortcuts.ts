@@ -5,6 +5,7 @@ interface UsePosKeyboardShortcutsProps {
     onFocusSearch: () => void;
     onNewSale: () => void;
     onTogglePaymentMode: () => void;
+    onOpenCustomProduct?: () => void;
     onCheckout: () => void;
     onCompleteSale: () => void;
     onDeleteCart: () => void;
@@ -18,6 +19,7 @@ export default function usePosKeyboardShortcuts({
     onFocusSearch,
     onNewSale,
     onTogglePaymentMode,
+    onOpenCustomProduct,
     onCheckout,
     onCompleteSale,
     onDeleteCart,
@@ -64,6 +66,13 @@ export default function usePosKeyboardShortcuts({
                 return;
             }
 
+            // F6: Open Custom Product modal
+            if (e.key === 'F6' && onOpenCustomProduct) {
+                e.preventDefault();
+                onOpenCustomProduct();
+                return;
+            }
+
             // F9: Checkout & Print (Thermal)
             if (e.key === 'F9') {
                 e.preventDefault();
@@ -104,7 +113,9 @@ export default function usePosKeyboardShortcuts({
         onFocusSearch,
         onNewSale,
         onTogglePaymentMode,
+        onOpenCustomProduct,
         onCheckout,
+        onCompleteSale,
         onDeleteCart,
         onCancel,
         onToggleStrictBarcode

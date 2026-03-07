@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { reportsApi } from '../../lib/api';
-import { DateRangePreset, formatNumber, formatDateMMDDYYYY, getDateRangeByPreset } from '../../lib/utils';
+import { DateRangePreset, formatNumber, formatDateMMDDYYYY, formatDateDDMMYYYY, getDateRangeByPreset } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   Package, FileText, ShoppingBag, Calendar,
@@ -14,11 +14,26 @@ import DateRangeSelector from '../../components/ui/DateRangeSelector';
 const PIN_LENGTH = 6;
 const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070';
 
+type ContributionMethod = 'cash' | 'upi';
+
+type ContributionRow = {
+  id: number;
+  invoice_id?: number | null;
+  invoice_number?: string | null;
+  party_name?: string | null;
+  customer_name?: string | null;
+  amount: number;
+  payment_date?: string | null;
+  description?: string;
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(auth.getUser());
   const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
   const [dateRange, setDateRange] = useState(() => getDateRangeByPreset('one_day'));
+  const [contributionViewMode, setContributionViewMode] = useState<'tab' | 'both'>('tab');
+  const [selectedContributionMethod, setSelectedContributionMethod] = useState<ContributionMethod>('cash');
   const { startDate: dateFrom, endDate: dateTo } = dateRange;
 
   // 6-digit PIN lock; always locked when entering dashboard (auto-lock when leaving)
@@ -177,6 +192,112 @@ export default function Dashboard() {
   const onlineChange = getChange(kpis.total_online || 0, comparisons.total_online || 0);
   const inhandChange = getChange(kpis.total_inhand || 0, comparisons.total_inhand || 0);
   const profitChange = getChange(kpis.overall_profit || 0, comparisons.overall_profit || 0);
+  const contributionData = kpisData?.cash_online_contributions || {};
+
+  const formatContributionDate = (dateValue?: string | null) => {
+    if (!dateValue) return '-';
+    const parsedDate = new Date(dateValue);
+    if (Number.isNaN(parsedDate.getTime())) return '-';
+    return `${formatDateDDMMYYYY(parsedDate)} ${parsedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  };
+
+  const renderContributionTable = (method: ContributionMethod) => {
+    const methodLabel = method === 'cash' ? 'Cash' : 'UPI';
+    const methodColors = method === 'cash'
+      ? {
+          cardBorder: 'border-green-200',
+          cardBg: 'bg-green-50',
+          activeBtn: 'bg-green-100 border-green-300 text-green-800',
+          inactiveBtn: 'bg-white border-gray-200 text-gray-600',
+          chip: 'bg-green-100 text-green-700'
+        }
+      : {
+          cardBorder: 'border-blue-200',
+          cardBg: 'bg-blue-50',
+          activeBtn: 'bg-blue-100 border-blue-300 text-blue-800',
+          inactiveBtn: 'bg-white border-gray-200 text-gray-600',
+          chip: 'bg-blue-100 text-blue-700'
+        };
+
+    const invoicePayments: ContributionRow[] = contributionData?.[method]?.invoice_payments || [];
+    const manualPayments: ContributionRow[] = contributionData?.[method]?.manual_payments || [];
+    const totalContributions = [...invoicePayments, ...manualPayments].reduce((sum, row) => sum + (row.amount || 0), 0);
+
+    const renderRow = (row: ContributionRow, rowType: 'invoice' | 'manual') => {
+      const displayParty = row.party_name || row.customer_name || 'Walk-in Customer';
+      return (
+        <tr key={`${rowType}-${row.id}`} className="border-b border-gray-100 last:border-0">
+          <td className="px-3 py-2 text-sm text-gray-800 font-medium">{row.invoice_number || '-'}</td>
+          <td className="px-3 py-2 text-sm text-gray-700">{displayParty}</td>
+          <td className="px-3 py-2 text-sm text-gray-900 font-semibold text-right">₹{formatNumber(row.amount || 0, 2)}</td>
+          <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{formatContributionDate(row.payment_date)}</td>
+        </tr>
+      );
+    };
+
+    return (
+      <div className={`rounded-xl border ${methodColors.cardBorder} ${methodColors.cardBg} p-4`}>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900">{methodLabel} Contributions</h3>
+          <span className={`text-xs font-semibold px-2 py-1 rounded-full ${methodColors.chip}`}>
+            Total: ₹{formatNumber(totalContributions, 2)}
+          </span>
+        </div>
+
+        <div className="space-y-4">
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div className="px-3 py-2 border-b border-gray-200">
+              <p className="text-sm font-semibold text-gray-800">Invoice Payments</p>
+            </div>
+            {invoicePayments.length === 0 ? (
+              <p className="px-3 py-4 text-sm text-gray-500">No invoice payments found for {methodLabel} in this date range.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Invoice #</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party / Customer</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Amount</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoicePayments.map((row) => renderRow(row, 'invoice'))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div className="px-3 py-2 border-b border-gray-200">
+              <p className="text-sm font-semibold text-gray-800">Manual Payments</p>
+            </div>
+            {manualPayments.length === 0 ? (
+              <p className="px-3 py-4 text-sm text-gray-500">No manual payments found for {methodLabel} in this date range.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Invoice #</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party / Customer</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Amount</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {manualPayments.map((row) => renderRow(row, 'manual'))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const KpiCard = ({
     title,
@@ -239,7 +360,7 @@ export default function Dashboard() {
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <Calendar className="h-3 w-3" />
-              {formatDateMMDDYYYY(new Date())}
+              {formatDateDDMMYYYY(new Date())}
             </p>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">
@@ -310,6 +431,40 @@ export default function Dashboard() {
                 borderColor="border-purple-200"
                 change={inhandChange}
                 yesterdayValue={comparisons.total_inhand}
+              />
+
+              {/* Repair invoice/payment clarity cards */}
+              <KpiCard
+                title={`Repair Invoices (Cash) (${kpis.repair_invoice_cash_count || 0})`}
+                value={kpis.repair_invoice_cash_total || 0}
+                icon={Wrench}
+                bgColor="bg-gradient-to-br from-lime-50 to-lime-100"
+                iconColor="text-lime-700"
+                borderColor="border-lime-200"
+              />
+              <KpiCard
+                title={`Repair Invoices (UPI) (${kpis.repair_invoice_upi_count || 0})`}
+                value={kpis.repair_invoice_upi_total || 0}
+                icon={Wrench}
+                bgColor="bg-gradient-to-br from-sky-50 to-sky-100"
+                iconColor="text-sky-700"
+                borderColor="border-sky-200"
+              />
+              <KpiCard
+                title={`Repair Payments (Cash) (${kpis.repair_payment_cash_count || 0})`}
+                value={kpis.repair_payment_cash_total || 0}
+                icon={DollarSign}
+                bgColor="bg-gradient-to-br from-emerald-50 to-emerald-100"
+                iconColor="text-emerald-700"
+                borderColor="border-emerald-200"
+              />
+              <KpiCard
+                title={`Repair Payments (UPI) (${kpis.repair_payment_upi_count || 0})`}
+                value={kpis.repair_payment_upi_total || 0}
+                icon={CreditCard}
+                bgColor="bg-gradient-to-br from-cyan-50 to-cyan-100"
+                iconColor="text-cyan-700"
+                borderColor="border-cyan-200"
               />
 
               {/* 5. Repairing Profit */}
@@ -477,6 +632,70 @@ export default function Dashboard() {
                   <p className="text-xs text-gray-500 mt-1">View All</p>
                 </div>
               </button>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Cash / UPI Contribution Details</h2>
+                  <p className="text-sm text-gray-500">Know what invoices and payments are contributing to each payment mode.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setContributionViewMode('tab')}
+                    className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                      contributionViewMode === 'tab'
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    Toggle
+                  </button>
+                  <button
+                    onClick={() => setContributionViewMode('both')}
+                    className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                      contributionViewMode === 'both'
+                        ? 'bg-gray-900 text-white border-gray-900'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    Both
+                  </button>
+                </div>
+              </div>
+
+              {contributionViewMode === 'tab' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedContributionMethod('cash')}
+                      className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                        selectedContributionMethod === 'cash'
+                          ? 'bg-green-100 border-green-300 text-green-800'
+                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      Cash
+                    </button>
+                    <button
+                      onClick={() => setSelectedContributionMethod('upi')}
+                      className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                        selectedContributionMethod === 'upi'
+                          ? 'bg-blue-100 border-blue-300 text-blue-800'
+                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      UPI
+                    </button>
+                  </div>
+                  {renderContributionTable(selectedContributionMethod)}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  {renderContributionTable('cash')}
+                  {renderContributionTable('upi')}
+                </div>
+              )}
             </div>
           </>
         )}

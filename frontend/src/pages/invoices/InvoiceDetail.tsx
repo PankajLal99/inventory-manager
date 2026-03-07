@@ -66,12 +66,16 @@ export default function InvoiceDetail() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showEditPaymentModal, setShowEditPaymentModal] = useState(false);
   const [editingPaymentId, setEditingPaymentId] = useState<number | null>(null);
-  const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'upi' | 'card' | 'bank_transfer' | 'credit' | 'other' | 'refund'>('cash');
+  const [editPaymentMethod, setEditPaymentMethod] = useState<'cash' | 'upi' | 'mixed'>('cash');
   const [editPaymentAmount, setEditPaymentAmount] = useState<string>('');
+  const [editPaymentCashAmount, setEditPaymentCashAmount] = useState<string>('');
+  const [editPaymentUpiAmount, setEditPaymentUpiAmount] = useState<string>('');
   const [editPaymentReference, setEditPaymentReference] = useState<string>('');
   const [editPaymentNotes, setEditPaymentNotes] = useState<string>('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'upi' | 'card' | 'bank_transfer' | 'credit' | 'other'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'upi' | 'mixed'>('cash');
   const [paymentAmount, setPaymentAmount] = useState<string>('');
+  const [paymentCashAmount, setPaymentCashAmount] = useState<string>('');
+  const [paymentUpiAmount, setPaymentUpiAmount] = useState<string>('');
   const [paymentReference, setPaymentReference] = useState<string>('');
   const [paymentNotes, setPaymentNotes] = useState<string>('');
   const [deleteRestoreStock, setDeleteRestoreStock] = useState(true);
@@ -137,6 +141,71 @@ export default function InvoiceDetail() {
   });
 
   const inv = invoice?.data;
+
+  const getEffectiveInvoiceTypeFromPayments = (payments: any[]): 'cash' | 'upi' | 'mixed' | null => {
+    if (!Array.isArray(payments) || payments.length === 0) return null;
+    const salePayments = payments.filter((payment: any) => {
+      if (!payment || payment.payment_method === 'refund') return false;
+      const amount = parseFloat(String(payment.amount ?? '0'));
+      return Number.isFinite(amount) && amount > 0;
+    });
+    if (salePayments.length === 0) return null;
+
+    const hasCash = salePayments.some((payment: any) => payment.payment_method === 'cash');
+    const hasUpi = salePayments.some((payment: any) => payment.payment_method === 'upi');
+
+    if (hasCash && hasUpi) return 'mixed';
+    if (hasCash) return 'cash';
+    if (hasUpi) return 'upi';
+    return null;
+  };
+
+  const openPaymentEditor = (payment: any, forceMethod?: 'cash' | 'upi' | 'mixed') => {
+    setEditingPaymentId(payment.id);
+    const selectedMethod = forceMethod ?? (
+      payment.payment_method === 'cash' || payment.payment_method === 'upi' || payment.payment_method === 'mixed'
+        ? payment.payment_method
+        : 'cash'
+    );
+    setEditPaymentMethod(selectedMethod);
+    const existingAmount = String(payment.amount ?? '');
+    setEditPaymentAmount(existingAmount);
+
+    if (selectedMethod === 'mixed') {
+      const salePayments = Array.isArray(inv?.payments)
+        ? inv.payments.filter((p: any) => p && p.payment_method !== 'refund')
+        : [];
+      const cashTotal = salePayments
+        .filter((p: any) => p.payment_method === 'cash')
+        .reduce((sum: number, p: any) => sum + (parseFloat(String(p.amount ?? '0')) || 0), 0);
+      const upiTotal = salePayments
+        .filter((p: any) => p.payment_method === 'upi')
+        .reduce((sum: number, p: any) => sum + (parseFloat(String(p.amount ?? '0')) || 0), 0);
+      const fallbackAmount = parseFloat(existingAmount) || 0;
+      setEditPaymentCashAmount(cashTotal > 0 ? String(cashTotal) : String(fallbackAmount));
+      setEditPaymentUpiAmount(upiTotal > 0 ? String(upiTotal) : '');
+    } else {
+      setEditPaymentCashAmount(existingAmount);
+      setEditPaymentUpiAmount('');
+    }
+
+    setEditPaymentReference(payment.reference || '');
+    setEditPaymentNotes(payment.notes || '');
+    setShowEditPaymentModal(true);
+  };
+
+  const syncInvoiceTypeWithPayments = async (invoiceData: any) => {
+    if (!invoiceData) return;
+    if (invoiceData.invoice_type === 'credit' || invoiceData.invoice_type === 'pending') return;
+
+    const inferredType = getEffectiveInvoiceTypeFromPayments(invoiceData.payments || []);
+    if (!inferredType || inferredType === invoiceData.invoice_type) return;
+
+    await posApi.invoices.update(invoiceId, { invoice_type: inferredType });
+    await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+    await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+    queryClient.invalidateQueries({ queryKey: ['invoices'] });
+  };
 
   // Fetch customer details for balance calculation
   const { data: customerData } = useQuery({
@@ -317,15 +386,53 @@ export default function InvoiceDetail() {
   });
 
   const paymentMutation = useMutation({
-    mutationFn: (data: { payment_method: string; amount: number; reference?: string; notes?: string }) =>
-      posApi.invoices.payments(invoiceId, data),
+    mutationFn: async (data: {
+      payment_method: string;
+      amount?: number;
+      cash_amount?: number;
+      upi_amount?: number;
+      reference?: string;
+      notes?: string
+    }) => {
+      if (data.payment_method === 'mixed') {
+        const cashAmount = data.cash_amount ?? 0;
+        const upiAmount = data.upi_amount ?? 0;
+
+        const [cashResponse] = await Promise.all([
+          posApi.invoices.payments(invoiceId, {
+            payment_method: 'cash',
+            amount: cashAmount,
+            reference: data.reference,
+            notes: data.notes,
+          }),
+          posApi.invoices.payments(invoiceId, {
+            payment_method: 'upi',
+            amount: upiAmount,
+            reference: data.reference,
+            notes: data.notes,
+          }),
+        ]);
+        return cashResponse;
+      }
+
+      return posApi.invoices.payments(invoiceId, {
+        payment_method: data.payment_method,
+        amount: data.amount as number,
+        reference: data.reference,
+        notes: data.notes,
+      });
+    },
     onSuccess: async () => {
       // Invalidate and refetch to get updated invoice with payment
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+      const latestInvoice = (queryClient.getQueryData(['invoice', invoiceId]) as any)?.data;
+      await syncInvoiceTypeWithPayments(latestInvoice);
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       setShowPaymentModal(false);
       setPaymentAmount('');
+      setPaymentCashAmount('');
+      setPaymentUpiAmount('');
       setPaymentReference('');
       setPaymentNotes('');
       if (invoice?.data?.customer) {
@@ -345,16 +452,55 @@ export default function InvoiceDetail() {
     setEditingPaymentId(null);
     setEditPaymentMethod('cash');
     setEditPaymentAmount('');
+    setEditPaymentCashAmount('');
+    setEditPaymentUpiAmount('');
     setEditPaymentReference('');
     setEditPaymentNotes('');
   };
 
   const updatePaymentMutation = useMutation({
-    mutationFn: (data: { payment_id: number; payment_method: string; amount: number; reference?: string; notes?: string }) =>
-      posApi.invoices.updatePayment(invoiceId, data),
+    mutationFn: async (data: {
+      payment_id: number;
+      payment_method: string;
+      amount?: number;
+      cash_amount?: number;
+      upi_amount?: number;
+      reference?: string;
+      notes?: string
+    }) => {
+      if (data.payment_method === 'mixed') {
+        const cashAmount = data.cash_amount ?? 0;
+        const upiAmount = data.upi_amount ?? 0;
+
+        await posApi.invoices.updatePayment(invoiceId, {
+          payment_id: data.payment_id,
+          payment_method: 'cash',
+          amount: cashAmount,
+          reference: data.reference,
+          notes: data.notes,
+        });
+
+        return posApi.invoices.payments(invoiceId, {
+          payment_method: 'upi',
+          amount: upiAmount,
+          reference: data.reference,
+          notes: data.notes,
+        });
+      }
+
+      return posApi.invoices.updatePayment(invoiceId, {
+        payment_id: data.payment_id,
+        payment_method: data.payment_method,
+        amount: data.amount as number,
+        reference: data.reference,
+        notes: data.notes,
+      });
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+      const latestInvoice = (queryClient.getQueryData(['invoice', invoiceId]) as any)?.data;
+      await syncInvoiceTypeWithPayments(latestInvoice);
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       if (invoice?.data?.customer) {
         queryClient.invalidateQueries({ queryKey: ['customer', invoice.data.customer] });
@@ -540,17 +686,13 @@ export default function InvoiceDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoice?.data?.items?.length, showCheckoutModal]); // Only run when item count changes or modal opens
 
-  // When navigating from Repairs with ?openCheckout=1: open checkout modal (if draft) or repair status modal (if repair, non-draft)
+  // When navigating from Repairs with ?openCheckout=1, always open checkout modal.
   useEffect(() => {
     const inv = invoice?.data;
     if (!inv) return;
-    if (searchParams.get('openCheckout') !== '1') return;
-    const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
-    if (isPending) {
-      handleCheckout();
-    } else if (inv.repair) {
-      setShowRepairStatusModal(true);
-    }
+    const openCheckout = searchParams.get('openCheckout');
+    if (openCheckout !== '1') return;
+    handleCheckout();
     const next = new URLSearchParams(searchParams);
     next.delete('openCheckout');
     setSearchParams(next, { replace: true });
@@ -2131,6 +2273,7 @@ export default function InvoiceDetail() {
                       <option value="cash">Cash</option>
                       <option value="upi">UPI</option>
                       <option value="mixed">Cash + UPI</option>
+                      <option value="credit">Credit</option>
                       <option value="pending">Pending</option>
                       <option value="defective">Defective</option>
                     </Select>
@@ -2138,6 +2281,21 @@ export default function InvoiceDetail() {
                       size="sm"
                       onClick={() => {
                         if (selectedInvoiceType !== inv.invoice_type) {
+                          const isSaleType = selectedInvoiceType === 'cash' || selectedInvoiceType === 'upi' || selectedInvoiceType === 'mixed';
+                          if (isSaleType) {
+                            const inferredType = getEffectiveInvoiceTypeFromPayments(inv.payments || []);
+                            if (inferredType && inferredType !== selectedInvoiceType) {
+                              alert(`Payments currently indicate ${inferredType.toUpperCase()}. Update payments to match ${selectedInvoiceType.toUpperCase()} first.`);
+                              const editablePayment = Array.isArray(inv.payments)
+                                ? inv.payments.find((payment: any) => payment && payment.payment_method !== 'refund')
+                                : null;
+                              if (editablePayment) {
+                                openPaymentEditor(editablePayment, selectedInvoiceType as 'cash' | 'upi' | 'mixed');
+                              }
+                              setEditingInvoiceType(false);
+                              return;
+                            }
+                          }
                           updateInvoiceMutation.mutate({ invoice_type: selectedInvoiceType });
                         } else {
                           setEditingInvoiceType(false);
@@ -2568,14 +2726,7 @@ export default function InvoiceDetail() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        setEditingPaymentId(payment.id);
-                        setEditPaymentMethod((payment.payment_method || 'cash') as any);
-                        setEditPaymentAmount(String(payment.amount ?? ''));
-                        setEditPaymentReference(payment.reference || '');
-                        setEditPaymentNotes(payment.notes || '');
-                        setShowEditPaymentModal(true);
-                      }}
+                      onClick={() => openPaymentEditor(payment)}
                       className="!px-2"
                     >
                       <Pencil className="h-3.5 w-3.5" />
@@ -2612,14 +2763,7 @@ export default function InvoiceDetail() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        setEditingPaymentId(payment.id);
-                        setEditPaymentMethod((payment.payment_method || 'cash') as any);
-                        setEditPaymentAmount(String(payment.amount ?? ''));
-                        setEditPaymentReference(payment.reference || '');
-                        setEditPaymentNotes(payment.notes || '');
-                        setShowEditPaymentModal(true);
-                      }}
+                      onClick={() => openPaymentEditor(payment)}
                       className="inline-flex items-center gap-2"
                     >
                       <Pencil className="h-3.5 w-3.5" />
@@ -2721,24 +2865,23 @@ export default function InvoiceDetail() {
       </Card>
 
       {/* Checkout Modal */}
-      {isPending && (
-        <Modal
-          isOpen={showCheckoutModal}
-          onClose={() => {
-            setShowCheckoutModal(false);
-            setCheckoutQuantities({});
-            setCheckoutPrices({});
-            setCheckoutPriceErrors({});
-            setCheckoutPurchasePrices({});
-            setParentGroupPrices({});
-            setCheckoutCashAmount('');
-            setCheckoutUpiAmount('');
-            setCheckoutDeliveryDate('');
-          }}
-          title="Checkout Invoice"
-          size="xl-wide"
-          closeOnBackdropClick={false}
-        >
+      <Modal
+        isOpen={showCheckoutModal}
+        onClose={() => {
+          setShowCheckoutModal(false);
+          setCheckoutQuantities({});
+          setCheckoutPrices({});
+          setCheckoutPriceErrors({});
+          setCheckoutPurchasePrices({});
+          setParentGroupPrices({});
+          setCheckoutCashAmount('');
+          setCheckoutUpiAmount('');
+          setCheckoutDeliveryDate('');
+        }}
+        title="Checkout Invoice"
+        size="xl-wide"
+        closeOnBackdropClick={false}
+      >
           <div className="space-y-6">
             {/* Show/hide purchase price toggle - same as POS */}
             <div className="flex items-center justify-end">
@@ -4159,8 +4302,7 @@ export default function InvoiceDetail() {
               </Button>
             </div>
           </div>
-        </Modal>
-      )}
+      </Modal>
 
       {/* Custom Product Modal (checkout modal add-product search) */}
       <Modal
@@ -4249,6 +4391,8 @@ export default function InvoiceDetail() {
             onClose={() => {
               setShowPaymentModal(false);
               setPaymentAmount('');
+              setPaymentCashAmount('');
+              setPaymentUpiAmount('');
               setPaymentReference('');
               setPaymentNotes('');
               setPaymentMethod('cash');
@@ -4263,36 +4407,79 @@ export default function InvoiceDetail() {
                 </label>
                 <Select
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as any)}
+                  onChange={(e) => {
+                    const nextMethod = e.target.value as typeof paymentMethod;
+                    setPaymentMethod(nextMethod);
+                    if (nextMethod === 'mixed' && paymentAmount) {
+                      setPaymentCashAmount(paymentAmount);
+                      setPaymentUpiAmount('');
+                    }
+                  }}
                   className="w-full"
                 >
                   <option value="cash">Cash</option>
                   <option value="upi">UPI</option>
-                  <option value="card">Card</option>
-                  <option value="bank_transfer">Bank Transfer</option>
-                  <option value="credit">Credit</option>
-                  <option value="other">Other</option>
+                  <option value="mixed">Cash + UPI (Mixed)</option>
                 </Select>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Amount <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max={parseFloat(inv.due_amount || '0')}
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                  placeholder={`Max: ₹${formatNumber(inv.due_amount || '0')} `}
-                  className="w-full"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Due Amount: ₹{formatNumber(inv.due_amount || '0')}
-                </p>
-              </div>
+              {paymentMethod === 'mixed' ? (
+                <div className="space-y-3 border border-blue-200 bg-blue-50 rounded-lg p-3">
+                  <div className="text-sm font-medium text-gray-700">Split Amounts</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Cash Amount <span className="text-red-500">*</span>
+                      </label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={paymentCashAmount}
+                        onChange={(e) => setPaymentCashAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        UPI Amount <span className="text-red-500">*</span>
+                      </label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={paymentUpiAmount}
+                        onChange={(e) => setPaymentUpiAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-600">
+                    Total: ₹{formatNumber((parseFloat(paymentCashAmount) || 0) + (parseFloat(paymentUpiAmount) || 0))} | Due: ₹{formatNumber(inv.due_amount || '0')}
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Amount <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={parseFloat(inv.due_amount || '0')}
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder={`Max: ₹${formatNumber(inv.due_amount || '0')} `}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Due Amount: ₹{formatNumber(inv.due_amount || '0')}
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -4325,6 +4512,8 @@ export default function InvoiceDetail() {
                   onClick={() => {
                     setShowPaymentModal(false);
                     setPaymentAmount('');
+                    setPaymentCashAmount('');
+                    setPaymentUpiAmount('');
                     setPaymentReference('');
                     setPaymentNotes('');
                     setPaymentMethod('cash');
@@ -4337,6 +4526,31 @@ export default function InvoiceDetail() {
                 </Button>
                 <Button
                   onClick={() => {
+                    if (paymentMethod === 'mixed') {
+                      const cashAmount = parseFloat(paymentCashAmount);
+                      const upiAmount = parseFloat(paymentUpiAmount);
+                      const splitTotal = (cashAmount || 0) + (upiAmount || 0);
+                      const dueAmount = parseFloat(inv.due_amount || '0');
+
+                      if (!cashAmount || cashAmount <= 0 || !upiAmount || upiAmount <= 0) {
+                        alert('Please enter valid cash and UPI amounts for mixed payment');
+                        return;
+                      }
+                      if (splitTotal > dueAmount) {
+                        alert(`Split payment total cannot exceed due amount of ₹${formatNumber(inv.due_amount || '0')} `);
+                        return;
+                      }
+
+                      paymentMutation.mutate({
+                        payment_method: 'mixed',
+                        cash_amount: cashAmount,
+                        upi_amount: upiAmount,
+                        reference: paymentReference || undefined,
+                        notes: paymentNotes || undefined,
+                      });
+                      return;
+                    }
+
                     const amount = parseFloat(paymentAmount);
                     if (!amount || amount <= 0) {
                       alert('Please enter a valid payment amount');
@@ -4348,12 +4562,23 @@ export default function InvoiceDetail() {
                     }
                     paymentMutation.mutate({
                       payment_method: paymentMethod,
-                      amount: amount,
+                      amount,
                       reference: paymentReference || undefined,
                       notes: paymentNotes || undefined,
                     });
                   }}
-                  disabled={paymentMutation.isPending || !paymentAmount || parseFloat(paymentAmount) <= 0}
+                  disabled={
+                    paymentMutation.isPending || (
+                      paymentMethod === 'mixed'
+                        ? (
+                          !paymentCashAmount
+                          || !paymentUpiAmount
+                          || parseFloat(paymentCashAmount) <= 0
+                          || parseFloat(paymentUpiAmount) <= 0
+                        )
+                        : (!paymentAmount || parseFloat(paymentAmount) <= 0)
+                    )
+                  }
                   className="flex-1"
                 >
                   {paymentMutation.isPending ? 'Processing...' : 'Record Payment'}
@@ -4378,33 +4603,75 @@ export default function InvoiceDetail() {
             </label>
             <Select
               value={editPaymentMethod}
-              onChange={(e) => setEditPaymentMethod(e.target.value as any)}
+              onChange={(e) => {
+                const nextMethod = e.target.value as typeof editPaymentMethod;
+                setEditPaymentMethod(nextMethod);
+                if (nextMethod === 'mixed' && editPaymentAmount) {
+                  setEditPaymentCashAmount(editPaymentAmount);
+                  setEditPaymentUpiAmount('');
+                }
+              }}
               className="w-full"
             >
               <option value="cash">Cash</option>
               <option value="upi">UPI</option>
-              <option value="card">Card</option>
-              <option value="bank_transfer">Bank Transfer</option>
-              <option value="credit">Credit</option>
-              <option value="other">Other</option>
-              <option value="refund">Refund</option>
+              <option value="mixed">Cash + UPI (Mixed)</option>
             </Select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Amount <span className="text-red-500">*</span>
-            </label>
-            <Input
-              type="number"
-              step="0.01"
-              min="0"
-              value={editPaymentAmount}
-              onChange={(e) => setEditPaymentAmount(e.target.value)}
-              placeholder="Enter amount"
-              className="w-full"
-            />
-          </div>
+          {editPaymentMethod === 'mixed' ? (
+            <div className="space-y-3 border border-blue-200 bg-blue-50 rounded-lg p-3">
+              <div className="text-sm font-medium text-gray-700">Split Amounts</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Cash Amount <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editPaymentCashAmount}
+                    onChange={(e) => setEditPaymentCashAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    UPI Amount <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editPaymentUpiAmount}
+                    onChange={(e) => setEditPaymentUpiAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-600">
+                Split Total: ₹{formatNumber((parseFloat(editPaymentCashAmount) || 0) + (parseFloat(editPaymentUpiAmount) || 0))}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Amount <span className="text-red-500">*</span>
+              </label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={editPaymentAmount}
+                onChange={(e) => setEditPaymentAmount(e.target.value)}
+                placeholder="Enter amount"
+                className="w-full"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -4443,11 +4710,29 @@ export default function InvoiceDetail() {
             </Button>
             <Button
               onClick={() => {
-                const amount = parseFloat(editPaymentAmount);
                 if (!editingPaymentId) {
                   alert('Invalid payment selected');
                   return;
                 }
+                if (editPaymentMethod === 'mixed') {
+                  const cashAmount = parseFloat(editPaymentCashAmount);
+                  const upiAmount = parseFloat(editPaymentUpiAmount);
+                  if (!cashAmount || cashAmount <= 0 || !upiAmount || upiAmount <= 0) {
+                    alert('Please enter valid cash and UPI amounts for mixed payment');
+                    return;
+                  }
+                  updatePaymentMutation.mutate({
+                    payment_id: editingPaymentId,
+                    payment_method: 'mixed',
+                    cash_amount: cashAmount,
+                    upi_amount: upiAmount,
+                    reference: editPaymentReference || undefined,
+                    notes: editPaymentNotes || undefined,
+                  });
+                  return;
+                }
+
+                const amount = parseFloat(editPaymentAmount);
                 if (!amount || amount <= 0) {
                   alert('Please enter a valid payment amount');
                   return;
@@ -4460,7 +4745,18 @@ export default function InvoiceDetail() {
                   notes: editPaymentNotes || undefined,
                 });
               }}
-              disabled={updatePaymentMutation.isPending || !editPaymentAmount || parseFloat(editPaymentAmount) <= 0}
+              disabled={
+                updatePaymentMutation.isPending || (
+                  editPaymentMethod === 'mixed'
+                    ? (
+                      !editPaymentCashAmount
+                      || !editPaymentUpiAmount
+                      || parseFloat(editPaymentCashAmount) <= 0
+                      || parseFloat(editPaymentUpiAmount) <= 0
+                    )
+                    : (!editPaymentAmount || parseFloat(editPaymentAmount) <= 0)
+                )
+              }
               className="flex-1"
             >
               {updatePaymentMutation.isPending ? 'Saving...' : 'Update Payment'}

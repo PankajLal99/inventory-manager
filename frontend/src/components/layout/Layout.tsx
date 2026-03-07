@@ -273,12 +273,12 @@ export default function Layout() {
     {
       title: 'Financial',
       items: [
-        { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin'] },
+        { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
         { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/expenses', icon: Coins, label: 'Expenses', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin','Temp','Retail','Wholesale'] },
-        { path: '/payments', icon: Coins, label: 'Payments', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Retail', 'Wholesale'] },
+        { path: '/payments', icon: Coins, label: 'Payments', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
       ],
     },
     {

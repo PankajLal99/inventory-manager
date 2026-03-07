@@ -2355,6 +2355,13 @@ export default function POS() {
     });
   }, []);
 
+  const handleOpenCustomProductModal = useCallback(() => {
+    if (isCartLocked) return;
+    setShowCustomProductModal(true);
+    setBarcodeInput('');
+    setProductSearchSelectedIndex(-1);
+  }, [isCartLocked]);
+
   usePosKeyboardShortcuts({
     onShowHelp: () => setShowShortcutsHelp(curr => !curr),
     onFocusSearch: () => {
@@ -2365,6 +2372,7 @@ export default function POS() {
     },
     onNewSale: handleNewSale,
     onTogglePaymentMode: handleToggleInvoiceType,
+    onOpenCustomProduct: handleOpenCustomProductModal,
     onCheckout: handleCheckoutAndPrintThermal, // F9: Thermal Print checkout
     onCompleteSale: handleCheckout, // F8: Simple checkout
     onDeleteCart: handleDeleteCurrentCart,
