@@ -214,6 +214,60 @@ class ReportsTests(TestCase):
         self.assertEqual(kpis['repair_payment_cash_count'], 1)
         self.assertEqual(kpis['repair_payment_upi_count'], 2)
 
+    def test_dashboard_kpis_contains_all_kpi_debug_blocks(self):
+        """Dashboard should expose row-level debug blocks for all displayed KPI cards."""
+        invoice = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='cash',
+            status='paid'
+        )
+        invoice.total = Decimal('100.00')
+        invoice.save(update_fields=['total'])
+        Payment.objects.create(invoice=invoice, payment_method='cash', amount=Decimal('100.00'), created_by=self.user)
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        debug_blocks = response.data.get('kpi_debug_rows', {})
+        expected_keys = [
+            'total_cash',
+            'total_online',
+            'total_expenses',
+            'total_inhand',
+            'repair_invoice_cash_total',
+            'repair_invoice_upi_total',
+            'repair_payment_cash_total',
+            'repair_payment_upi_total',
+            'repairing_profit',
+            'counter_profit',
+            'pending_profit',
+            'overall_profit',
+            'monthly_profit',
+            'total_stock',
+            'total_stock_value',
+            'pending_invoices_total',
+            'total_replacement',
+            'todays_loss',
+            'monthly_loss',
+            'total_loss',
+        ]
+
+        for key in expected_keys:
+            self.assertIn(key, debug_blocks)
+            self.assertIn('label', debug_blocks[key])
+            self.assertIn('formula', debug_blocks[key])
+            self.assertIn('total', debug_blocks[key])
+            self.assertIn('rows', debug_blocks[key])
+            self.assertIsInstance(debug_blocks[key]['rows'], list)
+
+        store_grouping = response.data.get('kpi_store_grouping', {})
+        self.assertIn('total_cash', store_grouping)
+        self.assertIn('formula', store_grouping['total_cash'])
+        self.assertIn('stores', store_grouping['total_cash'])
+        self.assertIsInstance(store_grouping['total_cash']['stores'], list)
+
     def test_dashboard_kpis_includes_cash_upi_contribution_rows(self):
         """Dashboard should return invoice/manual contribution rows for cash and UPI."""
         invoice = TestDataFactory.create_invoice(

@@ -2898,7 +2898,8 @@ export default function POS() {
                               const total = calculateTotal();
                               const cash = parseFloat(value) || 0;
                               const remaining = Math.max(0, total - cash);
-                              setUpiAmount(formatNumber(remaining));
+                              // Keep number inputs valid: no comma separators in controlled value.
+                              setUpiAmount(formatNumber(remaining, 2, false));
                             }
                           }}
                           className="w-full text-xs"
@@ -2920,7 +2921,8 @@ export default function POS() {
                               const total = calculateTotal();
                               const upi = parseFloat(value) || 0;
                               const remaining = Math.max(0, total - upi);
-                              setCashAmount(formatNumber(remaining));
+                              // Keep number inputs valid: no comma separators in controlled value.
+                              setCashAmount(formatNumber(remaining, 2, false));
                             }
                           }}
                           className="w-full text-xs"

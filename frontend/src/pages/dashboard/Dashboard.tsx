@@ -7,7 +7,7 @@ import { auth } from '../../lib/auth';
 import {
   Package, FileText, ShoppingBag, Calendar,
   DollarSign, CreditCard, Wallet, TrendingUp, TrendingDown, Wrench, Store, Clock,
-  BarChart3, Box, RefreshCw, ArrowUp, ArrowDown, Lock
+  BarChart3, Box, RefreshCw, ArrowUp, ArrowDown, Lock, type LucideIcon
 } from 'lucide-react';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
@@ -27,11 +27,41 @@ type ContributionRow = {
   description?: string;
 };
 
+type KpiDebugRow = {
+  id?: number;
+  ref?: string;
+  party?: string;
+  value?: number;
+  date?: string | null;
+  source?: string;
+  note?: string;
+};
+
+type KpiDebugBlock = {
+  label?: string;
+  formula?: string;
+  total?: number;
+  rows?: KpiDebugRow[];
+};
+
+type KpiStoreRow = {
+  store: string;
+  value: number;
+};
+
+type KpiStoreGroupingBlock = {
+  label?: string;
+  formula?: string;
+  total?: number;
+  stores?: KpiStoreRow[];
+};
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(auth.getUser());
   const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
   const [dateRange, setDateRange] = useState(() => getDateRangeByPreset('one_day'));
+  const [includeMonthlyProfitRows, setIncludeMonthlyProfitRows] = useState(false);
   const [contributionViewMode, setContributionViewMode] = useState<'tab' | 'both'>('tab');
   const [selectedContributionMethod, setSelectedContributionMethod] = useState<ContributionMethod>('cash');
   const { startDate: dateFrom, endDate: dateTo } = dateRange;
@@ -52,11 +82,14 @@ export default function Dashboard() {
 
   // Fetch dashboard KPIs (must run unconditionally for Rules of Hooks; enabled only when unlocked)
   const { data: kpisData, isLoading: kpisLoading } = useQuery({
-    queryKey: ['dashboard-kpis', dateFrom, dateTo],
+    queryKey: ['dashboard-kpis', dateFrom, dateTo, includeMonthlyProfitRows],
     queryFn: async () => {
       const response = await reportsApi.dashboardKpis({
         date_from: dateFrom,
-        date_to: dateTo
+        date_to: dateTo,
+        include_total_stock_rows: 0,
+        include_total_stock_value_rows: 0,
+        include_monthly_profit_rows: includeMonthlyProfitRows ? 1 : 0,
       });
       return response.data;
     },
@@ -193,12 +226,152 @@ export default function Dashboard() {
   const inhandChange = getChange(kpis.total_inhand || 0, comparisons.total_inhand || 0);
   const profitChange = getChange(kpis.overall_profit || 0, comparisons.overall_profit || 0);
   const contributionData = kpisData?.cash_online_contributions || {};
+  const kpiDebugRows = kpisData?.kpi_debug_rows || {};
+  const kpiStoreGrouping = kpisData?.kpi_store_grouping || {};
+  const kpiDebugOrder = [
+    'total_cash',
+    'total_online',
+    'total_expenses',
+    'total_inhand',
+    'repair_invoice_cash_total',
+    'repair_invoice_upi_total',
+    'repair_payment_cash_total',
+    'repair_payment_upi_total',
+    'repairing_profit',
+    'counter_profit',
+    'pending_profit',
+    'overall_profit',
+    'monthly_profit',
+    'pending_invoices_total',
+    'total_replacement',
+    'todays_loss',
+    'monthly_loss',
+    'total_loss',
+  ];
 
   const formatContributionDate = (dateValue?: string | null) => {
     if (!dateValue) return '-';
     const parsedDate = new Date(dateValue);
     if (Number.isNaN(parsedDate.getTime())) return '-';
     return `${formatDateDDMMYYYY(parsedDate)} ${parsedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  };
+
+  const renderKpiDebugBlock = (kpiKey: string) => {
+    const block: KpiDebugBlock | undefined = kpiDebugRows?.[kpiKey];
+    if (!block) return null;
+    const rows = block.rows || [];
+    return (
+      <div key={kpiKey} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm sm:text-base font-semibold text-gray-900">{block.label || kpiKey}</h3>
+            {block.formula ? (
+              <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">Formula: {block.formula}</p>
+            ) : null}
+          </div>
+          <span className="text-xs sm:text-sm font-semibold text-gray-700 bg-gray-100 px-2 py-1 rounded-full">
+            Total: {kpiKey === 'total_stock' ? formatNumber(block.total || 0, 0) : `₹${formatNumber(block.total || 0, 2)}`}
+          </span>
+        </div>
+        {kpiKey === 'monthly_profit' && !includeMonthlyProfitRows ? (
+          <div className="px-4 py-4">
+            <p className="text-sm text-gray-500 mb-3">Monthly Profit rows are loaded on demand.</p>
+            <button
+              onClick={() => setIncludeMonthlyProfitRows(true)}
+              className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Load Monthly Profit Rows
+            </button>
+          </div>
+        ) : rows.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-gray-500">No rows found for this KPI in selected date range.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Ref</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Value</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Source</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row: KpiDebugRow, idx: number) => (
+                  <tr key={`${kpiKey}-${row.id ?? idx}`} className="border-b border-gray-100 last:border-0">
+                    <td className="px-3 py-2 text-sm text-gray-800 font-medium">{row.ref || '-'}</td>
+                    <td className="px-3 py-2 text-sm text-gray-700">{row.party || '-'}</td>
+                    <td className="px-3 py-2 text-sm text-gray-900 font-semibold text-right">
+                      {kpiKey === 'total_stock' ? formatNumber(row.value || 0, 0) : `₹${formatNumber(row.value || 0, 2)}`}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{formatContributionDate(row.date)}</td>
+                    <td className="px-3 py-2 text-xs text-gray-500">{row.source || '-'}</td>
+                    <td className="px-3 py-2 text-xs text-gray-500">{row.note || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderKpiStoreGroupingBlock = (kpiKey: string) => {
+    const block: KpiStoreGroupingBlock | undefined = kpiStoreGrouping?.[kpiKey];
+    if (!block) return null;
+    const stores = block.stores || [];
+    return (
+      <div key={`store-${kpiKey}`} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm sm:text-base font-semibold text-gray-900">{block.label || kpiKey}</h3>
+            {block.formula ? (
+              <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">Formula: {block.formula}</p>
+            ) : null}
+          </div>
+          <span className="text-xs sm:text-sm font-semibold text-gray-700 bg-gray-100 px-2 py-1 rounded-full">
+            Total: {kpiKey === 'total_stock' ? formatNumber(block.total || 0, 0) : `₹${formatNumber(block.total || 0, 2)}`}
+          </span>
+        </div>
+        {kpiKey === 'monthly_profit' && !includeMonthlyProfitRows ? (
+          <div className="px-4 py-4">
+            <p className="text-sm text-gray-500 mb-3">Monthly Profit store split is loaded on demand.</p>
+            <button
+              onClick={() => setIncludeMonthlyProfitRows(true)}
+              className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Load Monthly Profit Store Split
+            </button>
+          </div>
+        ) : stores.length === 0 ? (
+          <p className="px-4 py-4 text-sm text-gray-500">No store-wise split available for this KPI.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Store</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Contribution</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stores.map((row, idx) => (
+                  <tr key={`store-row-${kpiKey}-${idx}`} className="border-b border-gray-100 last:border-0">
+                    <td className="px-3 py-2 text-sm text-gray-800 font-medium">{row.store || 'Unmapped'}</td>
+                    <td className="px-3 py-2 text-sm text-gray-900 font-semibold text-right">
+                      {kpiKey === 'total_stock' ? formatNumber(row.value || 0, 0) : `₹${formatNumber(row.value || 0, 2)}`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderContributionTable = (method: ContributionMethod) => {
@@ -313,7 +486,7 @@ export default function Dashboard() {
   }: {
     title: string;
     value: number | string;
-    icon: any;
+    icon: LucideIcon;
     bgColor: string;
     iconColor: string;
     borderColor: string;
@@ -696,6 +869,26 @@ export default function Dashboard() {
                   {renderContributionTable('upi')}
                 </div>
               )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+              <div className="mb-4">
+                <h2 className="text-lg sm:text-xl font-semibold text-gray-900">All KPI Debug Rows</h2>
+                <p className="text-sm text-gray-500">Each KPI block shows row-level contributions with total on top-right.</p>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {kpiDebugOrder.map((kpiKey) => renderKpiDebugBlock(kpiKey))}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
+              <div className="mb-4">
+                <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Store-wise KPI Grouping</h2>
+                <p className="text-sm text-gray-500">See each KPI contribution split by store.</p>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {kpiDebugOrder.map((kpiKey) => renderKpiStoreGroupingBlock(kpiKey))}
+              </div>
             </div>
           </>
         )}
