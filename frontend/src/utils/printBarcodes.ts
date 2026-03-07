@@ -1,9 +1,15 @@
 import { loadPrintSettings, PrintSettings } from '../components/PrintSettings';
 
 // Helper to convert URL to Base64
+const appendCacheBust = (url: string): string => {
+  if (!/^https?:\/\//i.test(url)) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}_cb=${Date.now()}`;
+};
+
 const convertImageToDataURL = async (url: string): Promise<string> => {
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { cache: 'no-store' });
     const blob = await response.blob();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -20,7 +26,7 @@ const convertImageToDataURL = async (url: string): Promise<string> => {
 export const printLabelsFromResponse = async (responseData: any) => {
   const rawUrls = responseData.labels
     .filter((label: any) => label.image)
-    .map((label: any) => label.image);
+    .map((label: any) => appendCacheBust(label.image));
 
   if (rawUrls.length === 0) {
     alert('No labels available to print.');

@@ -326,8 +326,16 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
         blob_url = construct_blob_url(barcode_id, prefix=prefix)
         blob_urls[barcode_id] = blob_url
         
-        # Format purchase_date to dd-mm-yyyy if present
+        # Normalize payload: always prefer short_code over full barcode when available.
+        # This keeps printed/scannable code values consistent across Azure label generation.
         formatted_item = item.copy()
+        short_code = str(formatted_item.get('short_code') or '').strip()
+        if short_code:
+            formatted_item['barcode_value'] = short_code
+        elif formatted_item.get('barcode_value') is not None:
+            formatted_item['barcode_value'] = str(formatted_item['barcode_value']).strip()
+
+        # Format purchase_date to dd-mm-yyyy if present
         if 'purchase_date' in formatted_item:
             formatted_item['purchase_date'] = format_date_dd_mm_yyyy(formatted_item['purchase_date'])
         

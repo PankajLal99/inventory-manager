@@ -206,7 +206,7 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
             # Prepare data for Azure API
             barcodes_data.append({
                 'product_name': product.name,
-                'barcode_value': barcode.barcode,
+                'barcode_value': (barcode.short_code if hasattr(barcode, 'short_code') else None) or barcode.barcode,
                 'short_code': barcode.short_code if hasattr(barcode, 'short_code') else None,
                 'barcode_id': barcode.id,
                 'vendor_name': vendor_name,

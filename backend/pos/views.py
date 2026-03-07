@@ -349,11 +349,12 @@ def generate_repair_label(request, pk):
         
         amount_value = str(repair.booking_amount) if repair.booking_amount else "0.00"
         display_name = f"Rs.{amount_value} | {repair.description[:30]}"
+        repair_short_code = (repair_barcode.split('-')[-1] if repair_barcode else '').strip()
 
         repair_data = [{
             'product_name': display_name[:50],  # Tracking ID + Work Desc
-            'barcode_value': repair_barcode.split('-')[-1],       # AMOUNT AS BARCODE
-            'short_code': None,                  # Only one of barcode_value or short_code
+            'barcode_value': repair_short_code,
+            'short_code': repair_short_code or None,
             'barcode_id': repair.id,
             'vendor_name': f"{customer_name[:20]} | {repair.model_name}" if customer_name else repair.model_name,
             'purchase_date': created_date,

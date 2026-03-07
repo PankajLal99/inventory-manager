@@ -238,7 +238,7 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                         # Collect for bulk processing
                         barcodes_to_queue.append({
                             'product_name': prod_name,
-                            'barcode_value': barcode.barcode,
+                            'barcode_value': (barcode.short_code if hasattr(barcode, 'short_code') else None) or barcode.barcode,
                             'short_code': barcode.short_code if hasattr(barcode, 'short_code') else None,
                             'barcode_id': barcode.id,
                             'vendor_name': vendor_name,
@@ -297,10 +297,11 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
     def _generate_local_fallback(item, label_info):
         try:
             from backend.catalog.label_generator import generate_label_image
+            display_code = item.get('short_code') or item['barcode_value']
             image_data_url = generate_label_image(
                 product_name=item['product_name'],
-                barcode_value=item['barcode_value'],
-                sku=item['barcode_value'],
+                barcode_value=display_code,
+                sku=display_code,
                 vendor_name=item['vendor_name'],
                 purchase_date=item['purchase_date'],
                 serial_number=item['serial_number']

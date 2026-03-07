@@ -1034,7 +1034,7 @@ def product_generate_labels(request, pk):
                 data = barcode_data[barcode.id]
                 barcodes_to_queue.append({
                     'product_name': product.name,
-                    'barcode_value': data['barcode_value'],
+                    'barcode_value': data.get('short_code') or data['barcode_value'],
                     'short_code': data.get('short_code'),
                     'barcode_id': barcode.id,
                     'vendor_name': data['vendor_name'],
@@ -1115,10 +1115,11 @@ def product_generate_labels(request, pk):
                     # Fallback to local generation
                     from .label_generator import generate_label_image
                     data = barcode_data[barcode_id]
+                    display_code = item.get('short_code') or data['barcode_value']
                     image_data_url = generate_label_image(
                         product_name=item['product_name'],
-                        barcode_value=data['barcode_value'],
-                        sku=data['barcode_value'],
+                        barcode_value=display_code,
+                        sku=display_code,
                         vendor_name=data['vendor_name'],
                         purchase_date=data['purchase_date'],
                         serial_number=data['serial_number']
@@ -1147,10 +1148,11 @@ def product_generate_labels(request, pk):
             for item in barcodes_to_queue:
                 try:
                     data = barcode_data[item['barcode_id']]
+                    display_code = item.get('short_code') or data['barcode_value']
                     image_data_url = generate_label_image(
                         product_name=item['product_name'],
-                        barcode_value=data['barcode_value'],
-                        sku=data['barcode_value'],
+                        barcode_value=display_code,
+                        sku=display_code,
                         vendor_name=data['vendor_name'],
                         purchase_date=data['purchase_date'],
                         serial_number=data['serial_number']
@@ -1342,7 +1344,7 @@ def product_regenerate_labels(request, pk):
         
         barcodes_data.append({
             'product_name': product.name,
-            'barcode_value': barcode.barcode,
+            'barcode_value': (barcode.short_code if hasattr(barcode, 'short_code') else None) or barcode.barcode,
             'short_code': barcode.short_code if hasattr(barcode, 'short_code') else None,
             'barcode_id': barcode.id,
             'vendor_name': vendor_name,

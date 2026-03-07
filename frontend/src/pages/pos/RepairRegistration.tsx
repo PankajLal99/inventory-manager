@@ -247,6 +247,11 @@ export default function RepairRegistration() {
         },
     });
 
+    const getRegisteredInvoiceId = () => {
+        const nestedInvoiceId = registeredRepair?.repair?.invoice;
+        return Number(nestedInvoiceId || registeredRepair?.id);
+    };
+
     const handleRegister = () => {
         if (!selectedCustomer) return showToast('Please select a customer', 'error');
         if (!repairModelName.trim()) return showToast('Please fill required fields', 'error');
@@ -307,7 +312,14 @@ export default function RepairRegistration() {
                         <div className="flex gap-4 pt-4">
                             <Button
                                 variant="primary"
-                                onClick={() => generateLabelMutation.mutate(registeredRepair.id)}
+                                onClick={() => {
+                                    const invoiceId = getRegisteredInvoiceId();
+                                    if (!invoiceId || Number.isNaN(invoiceId)) {
+                                        showToast('Unable to determine invoice for printing', 'error');
+                                        return;
+                                    }
+                                    generateLabelMutation.mutate(invoiceId);
+                                }}
                                 disabled={generateLabelMutation.isPending}
                                 className="flex-1 h-16 text-lg font-black rounded-2xl shadow-xl hover:shadow-2xl transition-all"
                             >
