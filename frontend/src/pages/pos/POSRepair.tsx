@@ -197,6 +197,10 @@ export default function POS() {
   const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
 
+  // UI-only lock: active cart is frozen (no edits); persisted per-tab in localStorage
+  const activeTab = cartTabs.find((t) => t.id === cartId);
+  const isCartLocked = !!activeTab?.locked;
+
   // Check if user is in Retail group or RetailAdmin (both get store selector)
   const isRetailGroup = user?.groups && (user.groups.includes('Retail') || user.groups.includes('RetailAdmin'));
 
