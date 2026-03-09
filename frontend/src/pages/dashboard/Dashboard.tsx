@@ -61,6 +61,7 @@ export default function Dashboard() {
   const [user, setUser] = useState(auth.getUser());
   const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
   const [dateRange, setDateRange] = useState(() => getDateRangeByPreset('one_day'));
+  const [didAutoAlignToLatestDate, setDidAutoAlignToLatestDate] = useState(false);
   const [includeMonthlyProfitRows, setIncludeMonthlyProfitRows] = useState(false);
   const [contributionViewMode, setContributionViewMode] = useState<'tab' | 'both'>('tab');
   const [selectedContributionMethod, setSelectedContributionMethod] = useState<ContributionMethod>('cash');
@@ -96,6 +97,23 @@ export default function Dashboard() {
     enabled: unlocked,
     retry: false,
   });
+
+  // On initial open, if selected day is ahead of latest invoice date, auto-jump once to latest date.
+  useEffect(() => {
+    if (didAutoAlignToLatestDate) return;
+    const latestInvoiceDate = kpisData?.latest_invoice_date as string | undefined;
+    if (!latestInvoiceDate) return;
+    if (datePreset !== 'one_day') return;
+    if (dateRange.startDate !== dateRange.endDate) return;
+    if (dateRange.startDate <= latestInvoiceDate) {
+      setDidAutoAlignToLatestDate(true);
+      return;
+    }
+
+    setDatePreset('custom');
+    setDateRange({ startDate: latestInvoiceDate, endDate: latestInvoiceDate });
+    setDidAutoAlignToLatestDate(true);
+  }, [kpisData, didAutoAlignToLatestDate, datePreset, dateRange.startDate, dateRange.endDate]);
 
   // Auto-focus first PIN input when lock screen is shown (on mount or when navigating to dashboard)
   useEffect(() => {
@@ -541,6 +559,7 @@ export default function Dashboard() {
               preset={datePreset}
               value={dateRange}
               onChange={({ preset, range }) => {
+                setDidAutoAlignToLatestDate(true);
                 setDatePreset(preset);
                 setDateRange(range);
               }}

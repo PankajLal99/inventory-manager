@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Q, DecimalField, Prefetch, F, Value, Case, When, ExpressionWrapper
+from django.db.models import Sum, Count, Max, Q, DecimalField, Prefetch, F, Value, Case, When, ExpressionWrapper
 from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -202,6 +202,17 @@ def optimized_dashboard_kpis(request):
         date_to = timezone.now().date()
     else:
         date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+    latest_invoices_qs = Invoice.objects.exclude(
+        status='void'
+    ).exclude(
+        customer__name__iexact='Manish Traders Loss'
+    )
+    if store_id:
+        latest_invoices_qs = latest_invoices_qs.filter(store_id=store_id)
+    latest_invoice_date = latest_invoices_qs.aggregate(
+        latest=Max('created_at__date')
+    ).get('latest')
     
     logger.info(f"Dashboard KPIs cache DISABLED (user: {request.user.username}, date_from: {date_from})")
     
@@ -891,6 +902,7 @@ def optimized_dashboard_kpis(request):
             'to': date_to.isoformat(),
             'yesterday': yesterday.isoformat()
         },
+        'latest_invoice_date': latest_invoice_date.isoformat() if latest_invoice_date else None,
         'kpis': {
             'total_cash': float(total_cash),
             'total_online': float(total_online),
