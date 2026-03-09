@@ -41,9 +41,18 @@ def _with_invoice_amount_annotations(queryset):
     - _items_paid_agg matches the old "Paid" column calculation from sold line totals/rates.
     """
     money_field = DecimalField(max_digits=18, decimal_places=2)
+    purchase_rate = Case(
+        # For custom/other products, checkout stores purchase_price on invoice item.
+        When(items__purchase_price__gt=0, then=F('items__purchase_price')),
+        # For barcode-backed items, use linked purchase item unit price.
+        When(items__barcode__purchase_item__unit_price__isnull=False, then=F('items__barcode__purchase_item__unit_price')),
+        default=Value(Decimal('0.00')),
+        output_field=money_field,
+    )
     item_total_rate = Case(
-        When(items__product_selling_price__gt=0, then=F('items__product_selling_price')),
-        default=F('items__product_purchase_price'),
+        # Prefer configured selling price when available; otherwise fall back to purchase rate.
+        When(items__barcode__purchase_item__selling_price__gt=0, then=F('items__barcode__purchase_item__selling_price')),
+        default=purchase_rate,
         output_field=money_field,
     )
     item_total_expr = ExpressionWrapper(
