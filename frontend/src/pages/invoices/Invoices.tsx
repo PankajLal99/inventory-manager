@@ -44,6 +44,8 @@ interface Invoice {
   tax_amount: string;
   total: string;
   display_total?: string | number;
+  computed_total?: string | number;
+  computed_paid?: string | number;
   paid_amount: string;
   due_amount: string;
   created_at: string;
@@ -275,35 +277,6 @@ export default function Invoices() {
     if (invoiceTypeFilter !== 'credit' && isCreditInvoice) return false;
     return true;
   });
-
-  const getInvoiceTotalFromPurchaseModel = (invoice: Invoice) => {
-    const items = Array.isArray(invoice.items) ? invoice.items : [];
-    if (items.length === 0) return 0;
-
-    return items.reduce((sum, item) => {
-      const quantity = parseAmount(item.quantity);
-      const sellingPrice = parseAmount(item.product_selling_price);
-      const purchasePrice = parseAmount(item.product_purchase_price);
-      const effectiveRate = sellingPrice > 0 ? sellingPrice : purchasePrice;
-      return sum + quantity * effectiveRate;
-    }, 0);
-  };
-
-  const getInvoicePaidFromSoldItems = (invoice: Invoice) => {
-    const items = Array.isArray(invoice.items) ? invoice.items : [];
-    if (items.length === 0) return parseAmount(invoice.total);
-
-    return items.reduce((sum, item) => {
-      const lineTotal = parseAmount(item.line_total);
-      if (lineTotal > 0) return sum + lineTotal;
-
-      const quantity = parseAmount(item.quantity);
-      const manualUnitPrice = parseAmount(item.manual_unit_price);
-      const unitPrice = parseAmount(item.unit_price);
-      const soldRate = manualUnitPrice > 0 ? manualUnitPrice : unitPrice;
-      return sum + quantity * soldRate;
-    }, 0);
-  };
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -635,13 +608,13 @@ export default function Invoices() {
                     {canSeeTotalColumn && (
                       <TableCell align="right">
                         <span className="font-semibold text-gray-900">
-                          ₹{formatNumber(getInvoiceTotalFromPurchaseModel(invoice))}
+                          ₹{formatNumber(parseAmount(invoice.computed_total))}
                         </span>
                       </TableCell>
                     )}
                     <TableCell align="right">
                       <span className="text-green-600 font-medium">
-                        ₹{formatNumber(getInvoicePaidFromSoldItems(invoice))}
+                        ₹{formatNumber(parseAmount(invoice.computed_paid))}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -716,12 +689,12 @@ export default function Invoices() {
                         {canSeeTotalColumn && (
                           <div>
                             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
-                            <div className="text-base font-bold text-gray-900">₹{formatNumber(getInvoiceTotalFromPurchaseModel(invoice))}</div>
+                            <div className="text-base font-bold text-gray-900">₹{formatNumber(parseAmount(invoice.computed_total))}</div>
                           </div>
                         )}
                         <div>
                           <div className="text-xs font-medium text-green-600 uppercase tracking-wide mb-1">Paid</div>
-                          <div className="text-sm font-semibold text-green-600">₹{formatNumber(getInvoicePaidFromSoldItems(invoice))}</div>
+                          <div className="text-sm font-semibold text-green-600">₹{formatNumber(parseAmount(invoice.computed_paid))}</div>
                         </div>
                       </div>
                     </div>

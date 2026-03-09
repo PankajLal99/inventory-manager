@@ -6,8 +6,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q, Sum
-from django.db.models.functions import TruncDate
+from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper
+from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
@@ -32,6 +32,47 @@ def _get_barcode_supplier_id(barcode_obj):
     if getattr(barcode_obj, 'purchase_id', None):
         return barcode_obj.purchase.supplier_id if barcode_obj.purchase else None
     return None
+
+
+def _with_invoice_amount_annotations(queryset):
+    """
+    Annotate invoices with DB-side per-invoice totals used by list pages.
+    - _items_total_agg matches the old "Total" column calculation from item purchase/selling rates.
+    - _items_paid_agg matches the old "Paid" column calculation from sold line totals/rates.
+    """
+    money_field = DecimalField(max_digits=18, decimal_places=2)
+    item_total_rate = Case(
+        When(items__product_selling_price__gt=0, then=F('items__product_selling_price')),
+        default=F('items__product_purchase_price'),
+        output_field=money_field,
+    )
+    item_total_expr = ExpressionWrapper(
+        F('items__quantity') * item_total_rate,
+        output_field=money_field,
+    )
+    item_paid_rate = Case(
+        When(items__manual_unit_price__gt=0, then=F('items__manual_unit_price')),
+        default=F('items__unit_price'),
+        output_field=money_field,
+    )
+    item_paid_expr = Case(
+        When(items__line_total__gt=0, then=F('items__line_total')),
+        default=ExpressionWrapper(F('items__quantity') * item_paid_rate, output_field=money_field),
+        output_field=money_field,
+    )
+    return queryset.annotate(
+        _items_count=Count('items', distinct=True),
+        _items_total_agg=Coalesce(
+            Sum(item_total_expr, output_field=money_field),
+            Value(Decimal('0.00')),
+            output_field=money_field,
+        ),
+        _items_paid_agg=Coalesce(
+            Sum(item_paid_expr, output_field=money_field),
+            Value(Decimal('0.00')),
+            output_field=money_field,
+        ),
+    )
 
 
 @api_view(['GET'])
@@ -94,6 +135,8 @@ def repair_invoices_list(request):
         )
     elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
+
+    queryset = _with_invoice_amount_annotations(queryset)
     
     unpaginated_param = str(request.query_params.get('unpaginated', '')).strip().lower()
     force_unpaginated = unpaginated_param in ('1', 'true', 'yes')
@@ -109,7 +152,11 @@ def repair_invoices_list(request):
 
     # Default view stays paginated; filtered or explicitly unpaginated view returns full result set.
     if has_active_filters or force_unpaginated:
-        serializer = InvoiceSerializer(queryset, many=True)
+        serializer = InvoiceSerializer(
+            queryset,
+            many=True,
+            context={'amount_profile': 'repair_list'},
+        )
         return Response({
             'results': serializer.data,
             'count': len(serializer.data),
@@ -128,7 +175,11 @@ def repair_invoices_list(request):
     paginator = Paginator(queryset, limit)
     page_obj = paginator.get_page(page)
     
-    serializer = InvoiceSerializer(page_obj, many=True)
+    serializer = InvoiceSerializer(
+        page_obj,
+        many=True,
+        context={'amount_profile': 'repair_list'},
+    )
     return Response({
         'results': serializer.data,
         'count': paginator.count,
@@ -2404,6 +2455,8 @@ def invoice_list_create(request):
         # Exclude repair invoices (they appear on the Repairs page only)
         queryset = queryset.filter(repair__isnull=True)
 
+        queryset = _with_invoice_amount_annotations(queryset)
+
         # In filtered mode, return all matching invoices without date-based pagination.
         # Default (unfiltered) mode keeps one-day-per-page behavior.
         has_active_filters = any([
@@ -2420,7 +2473,11 @@ def invoice_list_create(request):
         if has_active_filters:
             order_by = 'created_at'
             queryset = queryset.order_by(order_by)
-            serializer = InvoiceSerializer(queryset, many=True)
+            serializer = InvoiceSerializer(
+                queryset,
+                many=True,
+                context={'amount_profile': 'invoice_list'},
+            )
             return Response({
                 'results': serializer.data,
                 'count': len(serializer.data),
@@ -2452,7 +2509,11 @@ def invoice_list_create(request):
             page_date = dates_list[page - 1]
             queryset = queryset.filter(created_at__date=page_date)
 
-        serializer = InvoiceSerializer(queryset, many=True)
+        serializer = InvoiceSerializer(
+            queryset,
+            many=True,
+            context={'amount_profile': 'invoice_list'},
+        )
         return Response({
             'results': serializer.data,
             'count': len(serializer.data),

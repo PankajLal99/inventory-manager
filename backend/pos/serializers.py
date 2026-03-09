@@ -298,6 +298,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
     display_total = serializers.SerializerMethodField()
+    computed_total = serializers.SerializerMethodField()
+    computed_paid = serializers.SerializerMethodField()
 
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Invoice._meta.get_field('customer').related_model.objects.all(),
@@ -309,7 +311,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         model = Invoice
         fields = [
             'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name', 'status',
-            'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'paid_amount', 'due_amount',
+            'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on', 'items', 'payments'
         ]
 
@@ -343,6 +345,37 @@ class InvoiceSerializer(serializers.ModelSerializer):
         )['total'] or Decimal('0.00')
 
         return float(pending_total)
+
+    def get_computed_total(self, obj):
+        """
+        Precomputed list value for Total column.
+        Uses queryset annotations when available; falls back per list profile behavior.
+        """
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_total_agg', Decimal('0.00')) or Decimal('0.00'))
+
+        amount_profile = self.context.get('amount_profile')
+        if amount_profile == 'repair_list':
+            return float(self.get_display_total(obj) or obj.total or Decimal('0.00'))
+        # Invoices page intentionally showed 0 when items are absent.
+        return 0.0
+
+    def get_computed_paid(self, obj):
+        """
+        Precomputed list value for Paid column.
+        Uses queryset annotations when available; falls back per list profile behavior.
+        """
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_paid_agg', Decimal('0.00')) or Decimal('0.00'))
+
+        amount_profile = self.context.get('amount_profile')
+        if amount_profile == 'repair_list':
+            paid_amount = obj.paid_amount or Decimal('0.00')
+            if paid_amount > 0:
+                return float(paid_amount)
+        return float(obj.total or Decimal('0.00'))
 
 
 class ReturnItemSerializer(serializers.ModelSerializer):

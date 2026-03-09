@@ -57,6 +57,8 @@ interface RepairInvoice {
   created_at: string;
   total: string;
   display_total?: string | number;
+  computed_total?: string | number;
+  computed_paid?: string | number;
   paid_amount?: string;
   items?: RepairInvoiceItem[];
   status?: 'draft' | 'paid' | 'partial' | 'credit' | 'void';
@@ -525,40 +527,6 @@ export default function Repairs() {
       day: 'numeric',
     });
   };
-
-  const getRepairTotalAmount = (invoice: RepairInvoice) => {
-    const items = Array.isArray(invoice.items) ? invoice.items : [];
-    if (items.length === 0) return parseAmount(invoice.display_total ?? invoice.total);
-
-    return items.reduce((sum, item) => {
-      const quantity = parseAmount(item.quantity);
-      const sellingPrice = parseAmount(item.product_selling_price);
-      const purchasePrice = parseAmount(item.product_purchase_price);
-      const effectiveRate = sellingPrice > 0 ? sellingPrice : purchasePrice;
-      return sum + quantity * effectiveRate;
-    }, 0);
-  };
-
-  const getRepairPaidAmount = (invoice: RepairInvoice) => {
-    const items = Array.isArray(invoice.items) ? invoice.items : [];
-    if (items.length === 0) {
-      const paid = parseAmount(invoice.paid_amount);
-      if (paid > 0) return paid;
-      return parseAmount(invoice.total);
-    }
-
-    return items.reduce((sum, item) => {
-      const lineTotal = parseAmount(item.line_total);
-      if (lineTotal > 0) return sum + lineTotal;
-
-      const quantity = parseAmount(item.quantity);
-      const manualUnitPrice = parseAmount(item.manual_unit_price);
-      const unitPrice = parseAmount(item.unit_price);
-      const soldRate = manualUnitPrice > 0 ? manualUnitPrice : unitPrice;
-      return sum + quantity * soldRate;
-    }, 0);
-  };
-
 
   const getStatusBadge = (status: string) => {
     const Icon = STATUS_ICONS[status] || Clock;
@@ -1037,13 +1005,13 @@ export default function Repairs() {
                         {canSeeTotalColumn && (
                           <TableCell align="right">
                             <span className="font-semibold text-gray-900">
-                              ₹{formatNumber(getRepairTotalAmount(invoice))}
+                              ₹{formatNumber(parseAmount(invoice.computed_total))}
                             </span>
                           </TableCell>
                         )}
                         <TableCell align="right">
                           <span className="text-green-600 font-medium">
-                            ₹{formatNumber(getRepairPaidAmount(invoice))}
+                            ₹{formatNumber(parseAmount(invoice.computed_paid))}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -1206,12 +1174,12 @@ export default function Repairs() {
                                 {canSeeTotalColumn && (
                                   <div>
                                     <span className="text-gray-500 font-medium">Total: </span>
-                                    <span className="font-medium text-gray-900">₹{formatNumber(getRepairTotalAmount(invoice))}</span>
+                                    <span className="font-medium text-gray-900">₹{formatNumber(parseAmount(invoice.computed_total))}</span>
                                   </div>
                                 )}
                                 <div>
                                   <span className="text-green-700 font-medium">Paid: </span>
-                                  <span className="font-medium text-green-700">₹{formatNumber(getRepairPaidAmount(invoice))}</span>
+                                  <span className="font-medium text-green-700">₹{formatNumber(parseAmount(invoice.computed_paid))}</span>
                                 </div>
                               </div>
                               {invoice.repair.description && (

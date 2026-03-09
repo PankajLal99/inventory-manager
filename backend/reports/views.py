@@ -3,7 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Avg, Q, F, DecimalField, ExpressionWrapper
+from django.db.models import Sum, Count, Avg, Q, F, DecimalField, ExpressionWrapper, Value, Case, When
 from django.db.models.functions import TruncDate, TruncMonth, TruncYear
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -522,80 +522,59 @@ def dashboard_kpis(request):
         status__in=['paid', 'partial']
     )
     repair_items = InvoiceItem.objects.filter(invoice__in=repair_invoices)
-    
-    repairing_profit = Decimal('0.00')
-    repair_profit_totals_map = {}
-    for item in repair_items.select_related('barcode', 'product', 'invoice__store', 'invoice__customer'):
-        purchase_price = Decimal('0.00')
-        
-        # Get purchase price from barcode
-        if item.barcode:
-            purchase_price = item.barcode.get_purchase_price()
-        elif item.product:
-            # Try to get from first barcode of product
-            first_barcode = Barcode.objects.filter(
-                product=item.product,
-                tag__in=['new', 'returned']
-            ).exclude(purchase__status='draft').first()
-            if first_barcode:
-                purchase_price = first_barcode.get_purchase_price()
 
-        # Total side: product_selling_price fallback product_purchase_price
-        selling_price = Decimal('0.00')
-        if item.barcode:
-            selling_price = item.barcode.get_selling_price() or Decimal('0.00')
-        total_rate = selling_price if selling_price > Decimal('0.00') else purchase_price
-        total_component = total_rate * (item.quantity or Decimal('0.00'))
+    # DB aggregate formula to match Repairs page logic:
+    #   profit = SUM(item_paid_component) - SUM(item_total_component)
+    repair_purchase_rate_expr = Case(
+        When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
+        default=Value(Decimal('0.00')),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    repair_total_rate_expr = Case(
+        When(barcode__purchase_item__selling_price__gt=0, then=F('barcode__purchase_item__selling_price')),
+        default=repair_purchase_rate_expr,
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    repair_total_component_expr = ExpressionWrapper(
+        F('quantity') * repair_total_rate_expr,
+        output_field=DecimalField(max_digits=18, decimal_places=2),
+    )
+    repair_sold_rate_expr = Case(
+        When(manual_unit_price__gt=0, then=F('manual_unit_price')),
+        default=F('unit_price'),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    repair_paid_component_expr = Case(
+        When(line_total__gt=0, then=F('line_total')),
+        default=ExpressionWrapper(
+            F('quantity') * repair_sold_rate_expr,
+            output_field=DecimalField(max_digits=18, decimal_places=2),
+        ),
+        output_field=DecimalField(max_digits=18, decimal_places=2),
+    )
 
-        # Paid side: line_total fallback quantity * (manual_unit_price or unit_price)
-        line_total = item.line_total or Decimal('0.00')
-        if line_total > Decimal('0.00'):
-            paid_component = line_total
-        else:
-            sold_rate = item.manual_unit_price or item.unit_price or Decimal('0.00')
-            paid_component = sold_rate * (item.quantity or Decimal('0.00'))
+    repair_item_totals = repair_items.aggregate(
+        paid_total=Sum(repair_paid_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
+        cost_total=Sum(repair_total_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
+    )
+    item_paid_total = repair_item_totals.get('paid_total') or Decimal('0.00')
+    item_cost_total = repair_item_totals.get('cost_total') or Decimal('0.00')
+    repairing_profit = item_paid_total - item_cost_total
 
-        invoice_id = item.invoice.id
-        invoice_number = item.invoice.invoice_number
-        customer_name = item.invoice.customer.name if item.invoice.customer else 'Walk-in Customer'
-        store_name = item.invoice.store.name if item.invoice.store else 'Unknown Store'
-        created_at = item.invoice.created_at.isoformat() if item.invoice.created_at else None
-        totals_entry = repair_profit_totals_map.setdefault(
-            invoice_id,
-            {
-                'id': invoice_id,
-                'ref': invoice_number,
-                'party': customer_name,
-                'store': store_name,
-                'paid_total': Decimal('0.00'),
-                'cost_total': Decimal('0.00'),
-                'date': created_at,
-            }
-        )
-        totals_entry['paid_total'] += paid_component
-        totals_entry['cost_total'] += total_component
-
-    # Fallback for paid/partial repair invoices with no item rows
-    for invoice in repair_invoices.select_related('customer', 'store'):
-        totals_entry = repair_profit_totals_map.setdefault(
-            invoice.id,
-            {
-                'id': invoice.id,
-                'ref': invoice.invoice_number,
-                'party': invoice.customer.name if invoice.customer else 'Walk-in Customer',
-                'store': invoice.store.name if invoice.store else 'Unknown Store',
-                'paid_total': Decimal('0.00'),
-                'cost_total': Decimal('0.00'),
-                'date': invoice.created_at.isoformat() if invoice.created_at else None,
-            }
-        )
-        if totals_entry['paid_total'] == Decimal('0.00') and totals_entry['cost_total'] == Decimal('0.00'):
-            invoice_paid = invoice.paid_amount if (invoice.paid_amount or Decimal('0.00')) > Decimal('0.00') else (invoice.total or Decimal('0.00'))
-            totals_entry['paid_total'] = invoice_paid
-            totals_entry['cost_total'] = invoice.total or Decimal('0.00')
-
-    for totals_entry in repair_profit_totals_map.values():
-        repairing_profit += (totals_entry['paid_total'] - totals_entry['cost_total'])
+    # Fallback for paid/partial repair invoices that have no item rows.
+    repair_invoice_paid_expr = Case(
+        When(paid_amount__gt=0, then=F('paid_amount')),
+        default=F('total'),
+        output_field=DecimalField(max_digits=10, decimal_places=2),
+    )
+    repair_invoice_profit_expr = ExpressionWrapper(
+        repair_invoice_paid_expr - F('total'),
+        output_field=DecimalField(max_digits=18, decimal_places=2),
+    )
+    repair_invoice_fallback = repair_invoices.filter(items__isnull=True).aggregate(
+        total=Sum(repair_invoice_profit_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
+    )['total'] or Decimal('0.00')
+    repairing_profit += repair_invoice_fallback
     
     # 6. Counter Profit (Retail Profit) - Sales from Retail stores minus purchase price
     retail_invoices = invoices.filter(
