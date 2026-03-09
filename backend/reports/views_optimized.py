@@ -326,41 +326,33 @@ def optimized_dashboard_kpis(request):
     repair_upi_payment_rows = _build_payment_contribution_rows(repair_payments, 'upi')
     
     # OPTIMIZATION 3: Profit calculations from invoice item aggregates
-    paid_invoices = invoices.filter(status__in=['paid', 'partial'])
+    paid_invoices = invoices.filter(status='paid')
     repair_paid_invoices = paid_invoices.filter(repair__isnull=False)
 
-    # Shared item-level expressions:
-    # total  = quantity * (selling_price > 0 ? selling_price : purchase_price)
-    # paid   = line_total > 0 ? line_total : quantity * (manual_unit_price > 0 ? manual_unit_price : unit_price)
-    purchase_rate_expr = Case(
-        When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
-        default=Value(Decimal('0.00')),
-        output_field=DecimalField(max_digits=12, decimal_places=2),
-    )
-    total_rate_expr = Case(
-        When(barcode__purchase_item__selling_price__gt=0, then=F('barcode__purchase_item__selling_price')),
-        default=purchase_rate_expr,
-        output_field=DecimalField(max_digits=12, decimal_places=2),
-    )
-    total_component_expr = ExpressionWrapper(
-        F('quantity') * total_rate_expr,
-        output_field=DecimalField(max_digits=18, decimal_places=2),
-    )
-    paid_rate_expr = Case(
+    # Shared item-level margin expressions:
+    # sold = quantity * (manual_unit_price > 0 ? manual_unit_price : unit_price)
+    # cost = quantity * (invoice_item.purchase_price > 0 ? purchase_price : barcode.purchase_item.unit_price)
+    sold_rate_expr = Case(
         When(manual_unit_price__gt=0, then=F('manual_unit_price')),
         default=F('unit_price'),
         output_field=DecimalField(max_digits=12, decimal_places=2),
     )
-    paid_component_expr = Case(
-        When(line_total__gt=0, then=F('line_total')),
-        default=ExpressionWrapper(
-            F('quantity') * paid_rate_expr,
-            output_field=DecimalField(max_digits=18, decimal_places=2),
-        ),
+    sold_component_expr = ExpressionWrapper(
+        F('quantity') * sold_rate_expr,
+        output_field=DecimalField(max_digits=18, decimal_places=2),
+    )
+    cost_rate_expr = Case(
+        When(purchase_price__gt=0, then=F('purchase_price')),
+        When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
+        default=Value(Decimal('0.00')),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    cost_component_expr = ExpressionWrapper(
+        F('quantity') * cost_rate_expr,
         output_field=DecimalField(max_digits=18, decimal_places=2),
     )
 
-    # Repairing profit via aggregate query (Paid - Total), grouped by invoice for debug rows.
+    # Repairing profit via aggregate query (sold - cost), grouped by invoice for debug rows.
     repair_grouped_rows = InvoiceItem.objects.filter(
         invoice__in=repair_paid_invoices
     ).values(
@@ -370,16 +362,16 @@ def optimized_dashboard_kpis(request):
         'invoice__store__name',
         'invoice__created_at',
     ).annotate(
-        paid_total=Sum(paid_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
-        total_amount=Sum(total_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
+        sold_total=Sum(sold_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
+        cost_total=Sum(cost_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
     )
 
     repairing_profit = Decimal('0.00')
     repairing_profit_map = {}
     for row in repair_grouped_rows:
-        paid_total = _decimal_or_zero(row.get('paid_total'))
-        total_amount = _decimal_or_zero(row.get('total_amount'))
-        invoice_profit = paid_total - total_amount
+        sold_total = _decimal_or_zero(row.get('sold_total'))
+        cost_total = _decimal_or_zero(row.get('cost_total'))
+        invoice_profit = sold_total - cost_total
         repairing_profit += invoice_profit
         invoice_id = row.get('invoice_id')
         repairing_profit_map[invoice_id] = {
@@ -389,47 +381,16 @@ def optimized_dashboard_kpis(request):
             'store': row.get('invoice__store__name') or 'Unknown Store',
             'value': float(invoice_profit),
             'date': row.get('invoice__created_at').isoformat() if row.get('invoice__created_at') else None,
-            'source': 'repair_paid_minus_total',
-            'note': 'Repair invoice Paid - Total (aggregate)',
-        }
-
-    # Include paid/partial repair invoices with no item rows (invoice-level fallback).
-    repair_invoice_paid_expr = Case(
-        When(paid_amount__gt=0, then=F('paid_amount')),
-        default=F('total'),
-        output_field=DecimalField(max_digits=10, decimal_places=2),
-    )
-    repair_invoice_profit_expr = ExpressionWrapper(
-        repair_invoice_paid_expr - F('total'),
-        output_field=DecimalField(max_digits=18, decimal_places=2),
-    )
-    repair_fallback_rows = repair_paid_invoices.filter(items__isnull=True).values(
-        'id',
-        'invoice_number',
-        'customer__name',
-        'store__name',
-        'created_at',
-    ).annotate(
-        invoice_profit=repair_invoice_profit_expr
-    )
-    for row in repair_fallback_rows:
-        invoice_profit = _decimal_or_zero(row.get('invoice_profit'))
-        repairing_profit += invoice_profit
-        invoice_id = row.get('id')
-        repairing_profit_map[invoice_id] = {
-            'id': invoice_id,
-            'ref': row.get('invoice_number'),
-            'party': row.get('customer__name') or 'Walk-in Customer',
-            'store': row.get('store__name') or 'Unknown Store',
-            'value': float(invoice_profit),
-            'date': row.get('created_at').isoformat() if row.get('created_at') else None,
-            'source': 'repair_paid_minus_total_fallback',
-            'note': 'Repair invoice Paid - Total (invoice-level fallback)',
+            'source': 'repair_item_margin',
+            'note': 'Repair invoice item margin: (sold - cost)',
         }
 
     retail_paid_invoices = paid_invoices.filter(store__shop_type='retail')
 
-    # Counter profit: retail invoice Paid - Total, grouped per invoice.
+    counter_profit = Decimal('0.00')
+    counter_profit_map = {}
+
+    # Counter profit uses retail invoice item margin (sold - cost), grouped per invoice.
     retail_grouped_rows = InvoiceItem.objects.filter(
         invoice__in=retail_paid_invoices
     ).values(
@@ -439,17 +400,13 @@ def optimized_dashboard_kpis(request):
         'invoice__store__name',
         'invoice__created_at',
     ).annotate(
-        paid_total=Sum(paid_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
-        total_amount=Sum(total_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
+        sold_total=Sum(sold_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
+        cost_total=Sum(cost_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)),
     )
-
-    counter_profit = Decimal('0.00')
-    counter_profit_map = {}
-
     for row in retail_grouped_rows:
-        paid_total = _decimal_or_zero(row.get('paid_total'))
-        total_amount = _decimal_or_zero(row.get('total_amount'))
-        invoice_profit = paid_total - total_amount
+        sold_total = _decimal_or_zero(row.get('sold_total'))
+        cost_total = _decimal_or_zero(row.get('cost_total'))
+        invoice_profit = sold_total - cost_total
         invoice_id = row.get('invoice_id')
         counter_profit += invoice_profit
         counter_profit_map[invoice_id] = {
@@ -459,42 +416,8 @@ def optimized_dashboard_kpis(request):
             'store': row.get('invoice__store__name') or 'Unknown Store',
             'value': float(invoice_profit),
             'date': row.get('invoice__created_at').isoformat() if row.get('invoice__created_at') else None,
-            'source': 'retail_paid_minus_total',
-            'note': 'Retail invoice Paid - Total (aggregate)',
-        }
-
-    # Include paid/partial retail invoices with no item rows (invoice-level fallback).
-    retail_invoice_paid_expr = Case(
-        When(paid_amount__gt=0, then=F('paid_amount')),
-        default=F('total'),
-        output_field=DecimalField(max_digits=10, decimal_places=2),
-    )
-    retail_invoice_profit_expr = ExpressionWrapper(
-        retail_invoice_paid_expr - F('total'),
-        output_field=DecimalField(max_digits=18, decimal_places=2),
-    )
-    retail_fallback_rows = retail_paid_invoices.filter(items__isnull=True).values(
-        'id',
-        'invoice_number',
-        'customer__name',
-        'store__name',
-        'created_at',
-    ).annotate(
-        invoice_profit=retail_invoice_profit_expr
-    )
-    for row in retail_fallback_rows:
-        invoice_profit = _decimal_or_zero(row.get('invoice_profit'))
-        invoice_id = row.get('id')
-        counter_profit += invoice_profit
-        counter_profit_map[invoice_id] = {
-            'id': invoice_id,
-            'ref': row.get('invoice_number'),
-            'party': row.get('customer__name') or 'Walk-in Customer',
-            'store': row.get('store__name') or 'Unknown Store',
-            'value': float(invoice_profit),
-            'date': row.get('created_at').isoformat() if row.get('created_at') else None,
-            'source': 'retail_paid_minus_total_fallback',
-            'note': 'Retail invoice Paid - Total (invoice-level fallback)',
+            'source': 'retail_item_margin',
+            'note': 'Retail invoice item margin: (sold - cost)',
         }
     
     overall_profit = counter_profit + repairing_profit
@@ -655,7 +578,7 @@ def optimized_dashboard_kpis(request):
     monthly_invoices = Invoice.objects.filter(
         created_at__gte=monthly_start,
         created_at__lte=monthly_end,
-        status__in=['paid', 'partial']
+        status='paid'
     ).exclude(status='void').exclude(customer__name__iexact='Manish Traders Loss')
     if store_id:
         monthly_invoices = monthly_invoices.filter(store_id=store_id)
@@ -882,7 +805,7 @@ def optimized_dashboard_kpis(request):
     # Yesterday profit (simplified, no loop)
     yesterday_invoices = Invoice.objects.filter(
         created_at__date=yesterday,
-        status__in=['paid', 'partial']
+        status='paid'
     ).exclude(
         status='void'
     ).exclude(
@@ -1112,11 +1035,11 @@ def optimized_dashboard_kpis(request):
         'repair_invoice_upi_total': "SUM(Invoice.total where invoice has Repair row and invoice_type='upi')",
         'repair_payment_cash_total': "SUM(Payment.amount where payment.invoice has Repair row and method='cash')",
         'repair_payment_upi_total': "SUM(Payment.amount where payment.invoice has Repair row and method='upi')",
-        'repairing_profit': "SUM((repair_paid - repair_total) per paid/partial repair invoice; item-level paid/total logic with invoice-level fallback)",
-        'counter_profit': "SUM((retail_paid - retail_total) per paid/partial retail invoice; item-level paid/total logic with invoice-level fallback)",
+        'repairing_profit': "SUM((effective_sale_rate - effective_cost_rate) * quantity for items on paid repair invoices)",
+        'counter_profit': "SUM((effective_sale_rate - effective_cost_rate) * quantity for items on paid retail invoices)",
         'pending_profit': "SUM((sale_price - purchase_price) * quantity for credit/pending invoice items in selected date range)",
         'overall_profit': "counter_profit + repairing_profit",
-        'monthly_profit': "SUM((sale_price - purchase_price) * quantity for paid/partial invoice items in 10th-to-10th monthly window)",
+        'monthly_profit': "SUM((sale_price - purchase_price) * quantity for paid invoice items in 10th-to-10th monthly window)",
         'total_stock': "DISABLED in dashboard endpoint (returns 0 for performance)",
         'total_stock_value': "DISABLED in dashboard endpoint (returns 0 for performance)",
         'pending_invoices_total': "SUM(quantity * effective_purchase_price for pending invoices with unpriced items)",
