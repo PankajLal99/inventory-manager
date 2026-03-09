@@ -279,8 +279,8 @@ def optimized_dashboard_kpis(request):
         reverse=True,
     )
 
-    # Repair-only clarity: split by invoice type and by received payment method.
-    repair_invoices = invoices.filter(store__shop_type='repair')
+    # Repair-only clarity: derive repair invoices from Repair model link.
+    repair_invoices = invoices.filter(repair__isnull=False)
     repair_invoice_cash_total = _decimal_or_zero(
         repair_invoices.filter(invoice_type='cash').aggregate(
             total=Sum('total', output_field=DecimalField())
@@ -296,7 +296,7 @@ def optimized_dashboard_kpis(request):
     repair_invoice_cash_rows = _build_invoice_rows(repair_invoices.filter(invoice_type='cash'))
     repair_invoice_upi_rows = _build_invoice_rows(repair_invoices.filter(invoice_type='upi'))
 
-    repair_payments = payments.filter(invoice__store__shop_type='repair')
+    repair_payments = payments.filter(invoice__repair__isnull=False)
     repair_payment_summary = repair_payments.values('payment_method').annotate(
         total=Sum('amount', output_field=DecimalField()),
         count=Count('id')
@@ -316,6 +316,9 @@ def optimized_dashboard_kpis(request):
     
     # OPTIMIZATION 3: Get invoice items with barcodes in bulk (prefetch related)
     paid_invoices = invoices.filter(status__in=['paid', 'partial'])
+    repair_paid_invoice_ids = set(
+        paid_invoices.filter(repair__isnull=False).values_list('id', flat=True)
+    )
     
     invoice_items = InvoiceItem.objects.filter(
         invoice__in=paid_invoices
@@ -336,6 +339,7 @@ def optimized_dashboard_kpis(request):
     counter_profit = Decimal('0.00')
     repairing_profit_map = {}
     counter_profit_map = {}
+    repair_profit_totals_map = {}
     
     for item in invoice_items:
         sale_price = item.manual_unit_price or item.unit_price or Decimal('0.00')
@@ -371,23 +375,40 @@ def optimized_dashboard_kpis(request):
         store_name = item.invoice.store.name if item.invoice.store else 'Unknown Store'
         created_at = item.invoice.created_at.isoformat() if item.invoice.created_at else None
         
-        # Check store type
-        if item.invoice.store and item.invoice.store.shop_type == 'repair':
-            repairing_profit += profit
-            entry = repairing_profit_map.setdefault(
+        # Check invoice type bucket (Repair via Repair model link)
+        if invoice_id in repair_paid_invoice_ids:
+            # Match Repairs page logic: repairing profit = Paid - Total
+            # Total side: product_selling_price fallback product_purchase_price
+            # Paid side: line_total fallback quantity * (manual_unit_price or unit_price)
+            selling_price = Decimal('0.00')
+            if item.barcode:
+                selling_price = item.barcode.get_selling_price() or Decimal('0.00')
+            total_rate = selling_price if selling_price > Decimal('0.00') else purchase_price
+            total_component = total_rate * (item.quantity or Decimal('0.00'))
+
+            line_total = item.line_total or Decimal('0.00')
+            if line_total > Decimal('0.00'):
+                paid_component = line_total
+            else:
+                sold_rate = item.manual_unit_price or item.unit_price or Decimal('0.00')
+                paid_component = sold_rate * (item.quantity or Decimal('0.00'))
+
+            totals_entry = repair_profit_totals_map.setdefault(
                 invoice_id,
                 {
                     'id': invoice_id,
                     'ref': invoice_number,
                     'party': customer_name,
                     'store': store_name,
-                    'value': 0.0,
+                    'paid_total': Decimal('0.00'),
+                    'cost_total': Decimal('0.00'),
                     'date': created_at,
-                    'source': 'repair_profit',
-                    'note': 'Repair shop invoice item margin',
+                    'source': 'repair_paid_minus_total',
+                    'note': 'Repair invoice Paid - Total (from item-level repair logic)',
                 }
             )
-            entry['value'] += float(profit)
+            totals_entry['paid_total'] += paid_component
+            totals_entry['cost_total'] += total_component
         elif item.invoice.store and item.invoice.store.shop_type == 'retail':
             counter_profit += profit
             entry = counter_profit_map.setdefault(
@@ -404,6 +425,49 @@ def optimized_dashboard_kpis(request):
                 }
             )
             entry['value'] += float(profit)
+
+    # Include paid/partial repair invoices with no item rows (fallback: invoice-level amounts)
+    repair_paid_invoices = paid_invoices.filter(repair__isnull=False).select_related('customer', 'store')
+    for invoice in repair_paid_invoices:
+        invoice_id = invoice.id
+        invoice_number = invoice.invoice_number
+        customer_name = invoice.customer.name if invoice.customer else 'Walk-in Customer'
+        store_name = invoice.store.name if invoice.store else 'Unknown Store'
+        created_at = invoice.created_at.isoformat() if invoice.created_at else None
+
+        totals_entry = repair_profit_totals_map.setdefault(
+            invoice_id,
+            {
+                'id': invoice_id,
+                'ref': invoice_number,
+                'party': customer_name,
+                'store': store_name,
+                'paid_total': Decimal('0.00'),
+                'cost_total': Decimal('0.00'),
+                'date': created_at,
+                'source': 'repair_paid_minus_total_fallback',
+                'note': 'Repair invoice Paid - Total (invoice-level fallback)',
+            }
+        )
+        if totals_entry['paid_total'] == Decimal('0.00') and totals_entry['cost_total'] == Decimal('0.00'):
+            invoice_paid = invoice.paid_amount if (invoice.paid_amount or Decimal('0.00')) > Decimal('0.00') else (invoice.total or Decimal('0.00'))
+            invoice_total = invoice.total or Decimal('0.00')
+            totals_entry['paid_total'] = invoice_paid
+            totals_entry['cost_total'] = invoice_total
+
+    for invoice_id, totals_entry in repair_profit_totals_map.items():
+        invoice_profit = totals_entry['paid_total'] - totals_entry['cost_total']
+        repairing_profit += invoice_profit
+        repairing_profit_map[invoice_id] = {
+            'id': totals_entry['id'],
+            'ref': totals_entry['ref'],
+            'party': totals_entry['party'],
+            'store': totals_entry['store'],
+            'value': float(invoice_profit),
+            'date': totals_entry['date'],
+            'source': totals_entry['source'],
+            'note': totals_entry['note'],
+        }
     
     overall_profit = counter_profit + repairing_profit
     repairing_profit_rows = sorted(
@@ -1015,11 +1079,11 @@ def optimized_dashboard_kpis(request):
         'total_online': "SUM(Payment.amount where method='upi') + SUM(LedgerEntry.amount where entry_type='credit' and payment_mode='upi' and invoice is null) + SUM(LedgerEntry.upi_amount where payment_mode='mixed')",
         'total_expenses': "SUM(Expenses.expense_amount in selected date range)",
         'total_inhand': "total_cash - total_expenses",
-        'repair_invoice_cash_total': "SUM(Invoice.total where store.shop_type='repair' and invoice_type='cash')",
-        'repair_invoice_upi_total': "SUM(Invoice.total where store.shop_type='repair' and invoice_type='upi')",
-        'repair_payment_cash_total': "SUM(Payment.amount where invoice.store.shop_type='repair' and method='cash')",
-        'repair_payment_upi_total': "SUM(Payment.amount where invoice.store.shop_type='repair' and method='upi')",
-        'repairing_profit': "SUM((sale_price - purchase_price) * quantity for paid/partial repair-store invoice items)",
+        'repair_invoice_cash_total': "SUM(Invoice.total where invoice has Repair row and invoice_type='cash')",
+        'repair_invoice_upi_total': "SUM(Invoice.total where invoice has Repair row and invoice_type='upi')",
+        'repair_payment_cash_total': "SUM(Payment.amount where payment.invoice has Repair row and method='cash')",
+        'repair_payment_upi_total': "SUM(Payment.amount where payment.invoice has Repair row and method='upi')",
+        'repairing_profit': "SUM((repair_paid - repair_total) per paid/partial repair invoice; item-level paid/total logic with invoice-level fallback)",
         'counter_profit': "SUM((sale_price - purchase_price) * quantity for paid/partial retail-store invoice items)",
         'pending_profit': "SUM((sale_price - purchase_price) * quantity for credit/pending invoice items in selected date range)",
         'overall_profit': "counter_profit + repairing_profit",

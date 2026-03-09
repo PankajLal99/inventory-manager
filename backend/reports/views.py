@@ -516,16 +516,16 @@ def dashboard_kpis(request):
     # 4. Total Inhand - Cash only (not including UPI)
     total_inhand = total_cash
     
-    # 5. Repairing Profit - Sales from Repair stores minus purchase price
+    # 5. Repairing Profit - Match Repairs page logic: Paid - Total (for repair invoices)
     repair_invoices = invoices.filter(
-        store__shop_type='repair',
+        repair__isnull=False,
         status__in=['paid', 'partial']
     )
     repair_items = InvoiceItem.objects.filter(invoice__in=repair_invoices)
     
     repairing_profit = Decimal('0.00')
-    for item in repair_items.select_related('barcode', 'invoice__store'):
-        sale_price = item.manual_unit_price or item.unit_price or Decimal('0.00')
+    repair_profit_totals_map = {}
+    for item in repair_items.select_related('barcode', 'product', 'invoice__store', 'invoice__customer'):
         purchase_price = Decimal('0.00')
         
         # Get purchase price from barcode
@@ -539,9 +539,63 @@ def dashboard_kpis(request):
             ).exclude(purchase__status='draft').first()
             if first_barcode:
                 purchase_price = first_barcode.get_purchase_price()
-        
-        profit = (sale_price - purchase_price) * item.quantity
-        repairing_profit += profit
+
+        # Total side: product_selling_price fallback product_purchase_price
+        selling_price = Decimal('0.00')
+        if item.barcode:
+            selling_price = item.barcode.get_selling_price() or Decimal('0.00')
+        total_rate = selling_price if selling_price > Decimal('0.00') else purchase_price
+        total_component = total_rate * (item.quantity or Decimal('0.00'))
+
+        # Paid side: line_total fallback quantity * (manual_unit_price or unit_price)
+        line_total = item.line_total or Decimal('0.00')
+        if line_total > Decimal('0.00'):
+            paid_component = line_total
+        else:
+            sold_rate = item.manual_unit_price or item.unit_price or Decimal('0.00')
+            paid_component = sold_rate * (item.quantity or Decimal('0.00'))
+
+        invoice_id = item.invoice.id
+        invoice_number = item.invoice.invoice_number
+        customer_name = item.invoice.customer.name if item.invoice.customer else 'Walk-in Customer'
+        store_name = item.invoice.store.name if item.invoice.store else 'Unknown Store'
+        created_at = item.invoice.created_at.isoformat() if item.invoice.created_at else None
+        totals_entry = repair_profit_totals_map.setdefault(
+            invoice_id,
+            {
+                'id': invoice_id,
+                'ref': invoice_number,
+                'party': customer_name,
+                'store': store_name,
+                'paid_total': Decimal('0.00'),
+                'cost_total': Decimal('0.00'),
+                'date': created_at,
+            }
+        )
+        totals_entry['paid_total'] += paid_component
+        totals_entry['cost_total'] += total_component
+
+    # Fallback for paid/partial repair invoices with no item rows
+    for invoice in repair_invoices.select_related('customer', 'store'):
+        totals_entry = repair_profit_totals_map.setdefault(
+            invoice.id,
+            {
+                'id': invoice.id,
+                'ref': invoice.invoice_number,
+                'party': invoice.customer.name if invoice.customer else 'Walk-in Customer',
+                'store': invoice.store.name if invoice.store else 'Unknown Store',
+                'paid_total': Decimal('0.00'),
+                'cost_total': Decimal('0.00'),
+                'date': invoice.created_at.isoformat() if invoice.created_at else None,
+            }
+        )
+        if totals_entry['paid_total'] == Decimal('0.00') and totals_entry['cost_total'] == Decimal('0.00'):
+            invoice_paid = invoice.paid_amount if (invoice.paid_amount or Decimal('0.00')) > Decimal('0.00') else (invoice.total or Decimal('0.00'))
+            totals_entry['paid_total'] = invoice_paid
+            totals_entry['cost_total'] = invoice.total or Decimal('0.00')
+
+    for totals_entry in repair_profit_totals_map.values():
+        repairing_profit += (totals_entry['paid_total'] - totals_entry['cost_total'])
     
     # 6. Counter Profit (Retail Profit) - Sales from Retail stores minus purchase price
     retail_invoices = invoices.filter(
