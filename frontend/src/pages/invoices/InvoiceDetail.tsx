@@ -79,7 +79,7 @@ export default function InvoiceDetail() {
   const [paymentReference, setPaymentReference] = useState<string>('');
   const [paymentNotes, setPaymentNotes] = useState<string>('');
   const [deleteRestoreStock, setDeleteRestoreStock] = useState(true);
-  const [checkoutInvoiceType, setCheckoutInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed'>('pending');
+  const [checkoutInvoiceType, setCheckoutInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed' | 'credit'>('pending');
   const [checkoutCashAmount, setCheckoutCashAmount] = useState<string>('');
   const [checkoutUpiAmount, setCheckoutUpiAmount] = useState<string>('');
   const [checkoutQuantities, setCheckoutQuantities] = useState<Record<number, string>>({});
@@ -297,7 +297,7 @@ export default function InvoiceDetail() {
 
   // Mutations - must be defined before any early returns
   const checkoutMutation = useMutation({
-    mutationFn: (data: { invoice_type: 'cash' | 'upi' | 'pending' | 'mixed'; items: any[]; cash_amount?: number; upi_amount?: number }) => {
+    mutationFn: (data: { invoice_type: 'cash' | 'upi' | 'pending' | 'mixed' | 'credit'; items: any[]; cash_amount?: number; upi_amount?: number }) => {
       return posApi.invoices.checkout(invoiceId, data);
     },
     onSuccess: async (response: any) => {
@@ -1306,6 +1306,9 @@ export default function InvoiceDetail() {
 
   // Shared function to generate invoice HTML for both print and download
   const generateInvoiceHTML = () => {
+    const isRepairInvoice = !!inv?.repair;
+    const printableInvoiceTitle = isRepairInvoice ? 'Repair Invoice' : 'Invoice';
+
     // Calculate total PCS
     const totalPcs = inv.items && Array.isArray(inv.items)
       ? inv.items.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0)
@@ -1334,7 +1337,7 @@ export default function InvoiceDetail() {
   <!DOCTYPE html>
     <html>
       <head>
-        <title>Invoice ${inv.invoice_number || inv.id}</title>
+        <title>${printableInvoiceTitle} ${inv.invoice_number || inv.id}</title>
         <meta charset="UTF-8">
           <style>
             * {margin: 0; padding: 0; box-sizing: border-box; }
@@ -1454,7 +1457,7 @@ export default function InvoiceDetail() {
               </div>
 
               <!-- INVOICE Title - Bold -->
-              <div class="invoice-title">INVOICE</div>
+              <div class="invoice-title">${isRepairInvoice ? 'REPAIR INVOICE' : 'INVOICE'}</div>
 
               <!-- Party Section -->
               <div class="party-section">
@@ -2822,7 +2825,9 @@ export default function InvoiceDetail() {
         </div>
         <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-100 shadow-lg">
           <div className="bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-700">A4 Invoice Preview</span>
+            <span className="text-xs font-semibold text-gray-700">
+              {inv?.repair ? 'A4 Repair Invoice Preview' : 'A4 Invoice Preview'}
+            </span>
             <span className="text-xs text-gray-500 hidden sm:inline">This is how the invoice will appear when printed</span>
           </div>
           <div className="bg-gray-200 p-4 sm:p-8 flex justify-center overflow-auto" style={{ maxHeight: '900px' }}>
@@ -2837,7 +2842,7 @@ export default function InvoiceDetail() {
             >
               <iframe
                 ref={invoicePreviewRef}
-                title="Invoice A4 Preview"
+                title={inv?.repair ? 'Repair Invoice A4 Preview' : 'Invoice A4 Preview'}
                 srcDoc={generateInvoiceHTML()}
                 className="w-full border-0 block"
                 style={{
@@ -4023,7 +4028,7 @@ export default function InvoiceDetail() {
               <Select
                 value={checkoutInvoiceType}
                 onChange={(e) => {
-                  const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed';
+                  const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
                   setCheckoutInvoiceType(newType);
                   // Clear split amounts when switching away from mixed
                   if (newType !== 'mixed') {
@@ -4046,12 +4051,14 @@ export default function InvoiceDetail() {
                 <option value="cash">CASH (Checkout)</option>
                 <option value="upi">UPI (Checkout)</option>
                 <option value="mixed">CASH + UPI (Checkout)</option>
+                <option value="credit">CREDIT (Move to Ledger)</option>
               </Select>
               <p className="text-xs text-blue-700 mt-2 font-medium">
                 {checkoutInvoiceType === 'pending' && '✓ Prices will be saved. Invoice remains as draft. No checkout performed.'}
                 {checkoutInvoiceType === 'cash' && '✓ Invoice will be checked out and marked as paid (cash). Inventory will be updated.'}
                 {checkoutInvoiceType === 'upi' && '✓ Invoice will be checked out and marked as paid (UPI). Inventory will be updated.'}
                 {checkoutInvoiceType === 'mixed' && '✓ Invoice will be checked out with split payment (cash + UPI). Inventory will be updated.'}
+                {checkoutInvoiceType === 'credit' && '✓ Invoice will be marked as credit and moved to ledger.'}
               </p>
               {/* Split Payment Inputs for Mixed Type */}
               {checkoutInvoiceType === 'mixed' && (
@@ -4211,6 +4218,10 @@ export default function InvoiceDetail() {
               </Button>
               <Button
                 onClick={() => {
+                  if (checkoutInvoiceType !== 'credit') {
+                    alert('Select CREDIT invoice type to move this invoice to ledger.');
+                    return;
+                  }
                   if (!inv?.items || inv.items.length === 0) {
                     alert('Invoice has no items');
                     return;
@@ -4294,8 +4305,8 @@ export default function InvoiceDetail() {
 
                   markCreditMutation.mutate(items);
                 }}
-                disabled={markCreditMutation.isPending || checkoutMutation.isPending || !areAllPricesEntered() || !inv?.items || inv.items.length === 0 || Object.keys(checkoutPriceErrors).length > 0}
-                className="w-full sm:w-auto bg-green-600 hover:bg-green-700"
+                disabled={checkoutInvoiceType !== 'credit' || markCreditMutation.isPending || checkoutMutation.isPending || !areAllPricesEntered() || !inv?.items || inv.items.length === 0 || Object.keys(checkoutPriceErrors).length > 0}
+                className="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:hover:bg-gray-400"
               >
                 {markCreditMutation.isPending ? 'Moving to Ledger...' : 'Move to Ledger'}
               </Button>
