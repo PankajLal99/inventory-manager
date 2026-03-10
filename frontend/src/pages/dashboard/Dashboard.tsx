@@ -227,7 +227,7 @@ export default function Dashboard() {
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 10);
     }
 
-    return `${formatDateMMDDYYYY(startDate)} - ${formatDateMMDDYYYY(endDate)}`;
+    return `${formatDateDDMMYYYY(startDate)} - ${formatDateDDMMYYYY(endDate)}`;
   };
 
   const kpis = kpisData?.kpis || {};
@@ -865,7 +865,7 @@ export default function Dashboard() {
 
               {/* 14. Today's Loss (Manish Traders Loss Loss Loss) */}
               <KpiCard
-                title={`Selected Day Loss (${formatDateMMDDYYYY(new Date(dateTo))})`}
+                title={`Selected Day Loss (${formatDateDDMMYYYY(new Date(dateTo))})`}
                 value={kpis.todays_loss || 0}
                 icon={TrendingDown}
                 bgColor="bg-gradient-to-br from-rose-50 to-rose-100"
