@@ -4,6 +4,7 @@ import { Coins, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
 import { customersApi } from '../../lib/api';
 import { DateRangePreset, formatAmountINR, getDateRangeByPreset, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
+import { auth } from '../../lib/auth';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
@@ -36,6 +37,8 @@ const getTodayDateValue = (): string => toLocalDateString(new Date());
 
 export default function Payments() {
   const queryClient = useQueryClient();
+  const user = auth.getUser();
+  const isSuper = user?.groups && user.groups.includes('Super');
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
@@ -378,9 +381,11 @@ export default function Payments() {
           <div className="text-sm text-gray-600">
             Entries: <span className="font-semibold text-gray-900">{entries.length}</span>
           </div>
-          <div className="text-sm text-gray-600">
-            Total amount: <span className="font-semibold text-emerald-700">₹{formatAmountINR(totalAmount)}</span>
-          </div>
+          {isSuper && (
+            <div className="text-sm text-gray-600">
+              Total amount: <span className="font-semibold text-emerald-700">₹{formatAmountINR(totalAmount)}</span>
+            </div>
+          )}
         </div>
       </Card>
 
