@@ -232,6 +232,7 @@ export default function Dashboard() {
 
   const kpis = kpisData?.kpis || {};
   const comparisons = kpisData?.comparisons?.yesterday || {};
+  const contributionData = kpisData?.cash_online_contributions || {};
 
   // Calculate percentage changes
   const getChange = (current: number, previous: number) => {
@@ -243,7 +244,6 @@ export default function Dashboard() {
   const onlineChange = getChange(kpis.total_online || 0, comparisons.total_online || 0);
   const inhandChange = getChange(kpis.total_inhand || 0, comparisons.total_inhand || 0);
   const profitChange = getChange(kpis.overall_profit || 0, comparisons.overall_profit || 0);
-  const contributionData = kpisData?.cash_online_contributions || {};
   const kpiDebugRows = kpisData?.kpi_debug_rows || {};
   const kpiStoreGrouping = kpisData?.kpi_store_grouping || {};
   const kpiDebugOrder = [
@@ -520,7 +520,8 @@ export default function Dashboard() {
         <div className="mb-4">
           <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Manual Payments</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            Payments recorded via Ledger (Payments page). Only <strong>cash</strong> from manual payments is included in Total Cash; UPI/online is in Total Online.
+            Payments recorded via Ledger (Payments page). Only <strong>cash</strong> from manual payments is included in Total Cash; UPI/online manual
+            payments are <strong>not</strong> included in Total Online and are shown here for reference only.
           </p>
         </div>
         {!hasAny ? (

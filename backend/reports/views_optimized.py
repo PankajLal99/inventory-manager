@@ -248,7 +248,10 @@ def optimized_dashboard_kpis(request):
     )
     payment_dict = {item['payment_method']: item['total'] for item in payment_summary}
 
-    # Include manual payment receipts recorded through ledger (Payments page).
+    # Ledger has two kinds of credits:
+    # - Invoice-linked: created when paying an invoice (POS); same money is in Payment. We use Payment for amounts/method.
+    # - Manual (invoice__isnull=True): created from Ledger/Payments page with no invoice; have payment_mode (cash/upi/mixed).
+    # For KPIs we use Payment for invoice payment totals and only ledger credits with invoice__isnull=True for "manual".
     ledger_credits = LedgerEntry.objects.filter(
         entry_type='credit',
         invoice__isnull=True,
@@ -264,16 +267,16 @@ def optimized_dashboard_kpis(request):
         upi_total=Sum('upi_amount', output_field=DecimalField()),
     )
 
+    # Total Cash: Invoice cash payments + manual cash (including mixed cash part)
     total_cash = _decimal_or_zero(payment_dict.get('cash')) + (
         _decimal_or_zero(ledger_dict.get('cash'))
     ) + (
         _decimal_or_zero(ledger_mixed_split.get('cash_total'))
     )
-    total_online = _decimal_or_zero(payment_dict.get('upi')) + (
-        _decimal_or_zero(ledger_dict.get('upi'))
-    ) + (
-        _decimal_or_zero(ledger_mixed_split.get('upi_total'))
-    )
+
+    # Total Online: ONLY invoice UPI/online payments.
+    # Manual UPI/online (including mixed UPI split) is deliberately excluded from this KPI.
+    total_online = _decimal_or_zero(payment_dict.get('upi'))
 
     cash_invoice_rows = _build_payment_contribution_rows(payments, 'cash')
     upi_invoice_rows = _build_payment_contribution_rows(payments, 'upi')
@@ -812,11 +815,9 @@ def optimized_dashboard_kpis(request):
     ) + (
         _decimal_or_zero(yesterday_ledger_mixed_split.get('cash_total'))
     )
-    yesterday_online = _decimal_or_zero(yesterday_payment_dict.get('upi')) + (
-        _decimal_or_zero(yesterday_ledger_dict.get('upi'))
-    ) + (
-        _decimal_or_zero(yesterday_ledger_mixed_split.get('upi_total'))
-    )
+
+    # Yesterday Online: ONLY invoice UPI/online payments (exclude manual).
+    yesterday_online = _decimal_or_zero(yesterday_payment_dict.get('upi'))
     yesterday_expenses = Expenses.objects.filter(
         expense_date=yesterday
     ).aggregate(
@@ -938,7 +939,7 @@ def optimized_dashboard_kpis(request):
                         'date': row.get('payment_date'),
                         'source': row.get('source') or 'payment',
                         'note': row.get('description') or '',
-                    } for row in (upi_invoice_rows + upi_manual_rows)
+                    } for row in upi_invoice_rows
                 ], key=lambda row: ((row.get('date') or ''), (row.get('id') or 0)), reverse=True),
             },
             'total_expenses': {
@@ -1078,7 +1079,7 @@ def optimized_dashboard_kpis(request):
     }
     kpi_formulas = {
         'total_cash': "SUM(Payment.amount where method='cash') + SUM(LedgerEntry.amount where entry_type='credit' and payment_mode='cash' and invoice is null) + SUM(LedgerEntry.cash_amount where payment_mode='mixed')",
-        'total_online': "SUM(Payment.amount where method='upi') + SUM(LedgerEntry.amount where entry_type='credit' and payment_mode='upi' and invoice is null) + SUM(LedgerEntry.upi_amount where payment_mode='mixed')",
+        'total_online': "SUM(Payment.amount where method='upi')  # invoice UPI/online payments only (no manual ledger UPI)",
         'total_expenses': "SUM(Expenses.expense_amount in selected date range)",
         'total_inhand': "total_cash - total_expenses",
         'repair_invoice_cash_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='cash')",
