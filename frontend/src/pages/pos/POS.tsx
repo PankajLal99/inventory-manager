@@ -673,6 +673,7 @@ export default function POS() {
       ));
 
       const barcodeToScan = nextItem.code;
+      let scannedBarcodeForAdd = barcodeToScan;
 
       // Use queryClient to get the LATEST cart data directly from cache
       // The 'cart' closure variable might be stale during rapid processing
@@ -724,7 +725,6 @@ export default function POS() {
         // Check product existence and availability via API
         // Use barcode_only=true to strictly match barcodes
         let productData = null;
-        let scannedBarcode = barcodeToScan;
 
         try {
           const barcodeCheck = await productsApi.byBarcode(barcodeToScan, strictBarcodeMode);
@@ -742,7 +742,7 @@ export default function POS() {
             }
             productData = barcodeCheck.data;
             // Use canonical_barcode so cart stores exactly what backend uses (no scan vs stored mismatch)
-            scannedBarcode = (barcodeCheck.data as any).canonical_barcode ?? barcodeCheck.data.matched_barcode ?? barcodeToScan;
+            scannedBarcodeForAdd = (barcodeCheck.data as any).canonical_barcode ?? barcodeCheck.data.matched_barcode ?? barcodeToScan;
           }
         } catch (err: any) {
           // Not found as strict barcode
@@ -772,7 +772,7 @@ export default function POS() {
           product: productData.id,
           quantity: 1,
           unit_price: 0,
-          barcode: scannedBarcode
+          barcode: scannedBarcodeForAdd
         });
 
         const msg = result?.data?.message || 'Added';
@@ -787,6 +787,32 @@ export default function POS() {
 
       } catch (error: any) {
         const errorMsg = error?.response?.data?.message || error?.message || 'Failed';
+        const isAlreadyInCartError =
+          errorMsg?.includes('already in another cart') || errorMsg?.includes('already been scanned');
+        if (isAlreadyInCartError && cartId) {
+          try {
+            await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+            const freshCart = await queryClient.fetchQuery({ queryKey: ['cart', cartId] }) as any;
+            const items = freshCart?.data?.items || [];
+            const isInCurrentCart = [barcodeToScan, scannedBarcodeForAdd].some(bc => {
+              const b = String(bc || '').trim();
+              return b && items.some(
+                (item: any) =>
+                  (item.scanned_barcodes || []).some((x: string) => x && String(x).trim() === b)
+              );
+            });
+            if (isInCurrentCart) {
+              setScanQueue(prev => prev.map(item =>
+                item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
+              ));
+              await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+              setIsProcessingQueue(false);
+              return;
+            }
+          } catch (_e) {
+            // Refetch failed, fall through to show error
+          }
+        }
         setScanQueue(prev => prev.map(item =>
           item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
         ));
@@ -1308,10 +1334,45 @@ export default function POS() {
         }, 1500);
       }
     },
-    onError: (error: any) => {
+    onError: async (error: any, variables: any) => {
       // Don't show generic error for UI lock (we already show a toast in mutationFn)
       if (error?.message === 'Cart locked') return;
       const errorMessage = error?.response?.data?.message || error?.response?.data?.error || 'Failed to add product to cart';
+
+      // If backend says "already in another cart", refetch cart once - might be stale cache and item is in THIS cart
+      const isAlreadyInCartError =
+        errorMessage?.includes('already in another cart') || errorMessage?.includes('already been scanned');
+      if (isAlreadyInCartError && cartId && variables?.barcode) {
+        try {
+          await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+          const freshCart = await queryClient.fetchQuery({ queryKey: ['cart', cartId] }) as any;
+          const items = freshCart?.data?.items || [];
+          const barcodeSent = String(variables.barcode || '').trim();
+          const isInCurrentCart = items.some(
+            (item: any) =>
+              (item.scanned_barcodes || []).some(
+                (bc: string) => bc && String(bc).trim() === barcodeSent
+              )
+          );
+          if (isInCurrentCart) {
+            setBarcodeInput('');
+            setIsSearchTyped(false);
+            setBarcodeStatus('success');
+            setBarcodeMessage('Item already in this cart');
+            setTimeout(() => {
+              setBarcodeStatus('idle');
+              setBarcodeMessage('');
+            }, 1500);
+            if (barcodeInputRef.current && Object.keys(editingManualPrice).length === 0 && !isTypingInPriceInput.current) {
+              barcodeInputRef.current.focus();
+            }
+            return;
+          }
+        } catch (_e) {
+          // Refetch failed, fall through to show error
+        }
+      }
+
       setBarcodeStatus('error');
       setBarcodeMessage(errorMessage);
       // Show error longer for sold items
@@ -1475,11 +1536,11 @@ export default function POS() {
   const deleteItemMutation = useMutation({
     mutationFn: (itemId: number) => posApi.carts.deleteItem(cartId!, itemId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
-      // Invalidate products query to refresh product list and show updated availability
+      // Refetch cart so cache has fresh data before user can add again (avoids "already in cart" from stale cache)
+      await queryClient.refetchQueries({ queryKey: ['cart', cartId] });
       await queryClient.invalidateQueries({ queryKey: ['products'] });
-
-      // Backend is already updated, localStorage will sync via useEffect hook
+      // Clear barcode-check cache so re-adding same barcodes doesn't use stale "in cart" / unavailable state
+      queryClient.removeQueries({ predicate: (q) => (q.queryKey as string[])?.[0] === 'barcode-check' });
     },
     onError: (_error) => {
     },
@@ -1506,12 +1567,13 @@ export default function POS() {
       await Promise.all(promises);
     },
     onSuccess: async () => {
-      // Clear customer from local state
       setSelectedCustomer(null);
       setCustomerSearch('');
-
-      await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+      // Refetch cart so cache is fresh and re-adding same barcodes works
+      await queryClient.refetchQueries({ queryKey: ['cart', cartId] });
       await queryClient.invalidateQueries({ queryKey: ['products'] });
+      // Clear any barcode-check cache so re-add doesn't use stale "in cart" state
+      queryClient.removeQueries({ predicate: (q) => (q.queryKey as string[])?.[0] === 'barcode-check' });
       showToast('Cart cleared', 'success');
     },
     onError: (error: any) => {
@@ -4570,18 +4632,24 @@ export default function POS() {
                                 <span className="font-mono text-xs font-semibold text-gray-800">{scannedBarcodesDisplay[idx] ?? barcode}</span>
                                 {!isCartLocked && (
                                   <button
-                                    onClick={() => {
+                                    onClick={async () => {
                                       if (cartId) {
-                                        posApi.carts.removeSku(cartId, item.id, barcode)
-                                          .then(() => {
-                                            queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
-                                            queryClient.invalidateQueries({ queryKey: ['products'] });
-                                            queryClient.refetchQueries({ queryKey: ['products'] });
-                                          })
-                                          .catch((error: any) => {
-                                            const errorMessage = error?.response?.data?.error || error?.response?.data?.message || 'Failed to remove SKU';
-                                            showToast(errorMessage, 'error');
-                                          });
+                                        try {
+                                          await posApi.carts.removeSku(cartId, item.id, barcode);
+                                          // Refetch cart so cache is fresh before user can re-add same barcode
+                                          await queryClient.refetchQueries({ queryKey: ['cart', cartId] });
+                                          queryClient.invalidateQueries({ queryKey: ['products'] });
+                                          queryClient.refetchQueries({ queryKey: ['products'] });
+                                          // Clear barcode-check cache for this barcode so re-add doesn't use stale state
+                                          queryClient.removeQueries({ queryKey: ['barcode-check', barcode] });
+                                          const normalized = String(barcode).trim().toUpperCase();
+                                          if (normalized !== barcode) {
+                                            queryClient.removeQueries({ queryKey: ['barcode-check', normalized] });
+                                          }
+                                        } catch (error: any) {
+                                          const errorMessage = error?.response?.data?.error || error?.response?.data?.message || 'Failed to remove SKU';
+                                          showToast(errorMessage, 'error');
+                                        }
                                       }
                                     }}
                                     className="p-0.5 rounded hover:bg-red-100 text-red-500 hover:text-red-700 transition-colors"

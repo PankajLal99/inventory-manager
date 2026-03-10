@@ -1377,6 +1377,17 @@ def cart_items(request, pk):
                     'message': f'Barcode/SKU {scanned_value_str} has already been sold{invoice_info}. It is not available in inventory.'
                 }, status=status.HTTP_400_BAD_REQUEST)
             elif barcode_obj.tag == 'in-cart':
+                # Check if barcode is in the current cart (not another cart)
+                full_barcode = barcode_obj.barcode
+                in_current_cart = CartItem.objects.filter(
+                    cart=cart,
+                    scanned_barcodes__contains=[full_barcode]
+                ).first()
+                if in_current_cart:
+                    serializer = CartItemSerializer(in_current_cart)
+                    data = dict(serializer.data)
+                    data['message'] = 'Item already in this cart'
+                    return Response(data, status=status.HTTP_200_OK)
                 return Response({
                     'error': 'Item already in cart',
                     'message': f'Barcode/SKU {scanned_value_str} is already in another cart and cannot be added to this cart.'
@@ -1422,10 +1433,20 @@ def cart_items(request, pk):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Check if barcode is already in any cart item across ALL active carts
+            # Use barcode_obj.barcode (full barcode) for the check so short_code requests still match
+            # (cart stores full barcode in scanned_barcodes)
+            full_barcode = barcode_obj.barcode
             all_active_carts = Cart.objects.filter(status='active')
             all_cart_items = CartItem.objects.filter(cart__in=all_active_carts)
             for item in all_cart_items:
-                if item.scanned_barcodes and scanned_value_str in item.scanned_barcodes:
+                if item.scanned_barcodes and (full_barcode in item.scanned_barcodes or scanned_value_str in item.scanned_barcodes):
+                    # Item is in a cart - distinguish current cart vs another cart
+                    if item.cart_id == cart.id:
+                        # Already in THIS cart - return success so frontend doesn't show error
+                        serializer = CartItemSerializer(item)
+                        data = dict(serializer.data)
+                        data['message'] = 'Item already in this cart'
+                        return Response(data, status=status.HTTP_200_OK)
                     return Response({
                         'error': 'This barcode/SKU has already been scanned',
                         'message': 'Item with this barcode/SKU is already in another cart'
@@ -2057,14 +2078,8 @@ def cart_item_remove_sku(request, pk, item_id):
             quantity=F('quantity') + Decimal('1.000')
         )
 
-    # If quantity becomes 0, delete the cart item
-    if cart_item.quantity == 0:
-        cart_item.delete()
-        return Response({'message': 'Cart item removed', 'deleted': True}, status=status.HTTP_200_OK)
-    
-    cart_item.save(update_fields=['scanned_barcodes', 'quantity'])
-    
-    # Release the barcode back to available inventory (b_upper already set above)
+    # Release the removed barcode back to available inventory (restore tag to 'new')
+    # Must happen before deleting cart item when quantity becomes 0, so the barcode can be re-added
     try:
         try:
             barcode_obj = Barcode.objects.get(barcode=b_upper)
@@ -2072,11 +2087,8 @@ def cart_item_remove_sku(request, pk, item_id):
             barcode_obj = Barcode.objects.get(short_code=b_upper)
         old_tag = barcode_obj.tag
         if barcode_obj.tag in ['in-cart', 'sold']:
-            # Restore to 'new' (default) - could be enhanced to remember original state
             barcode_obj.tag = 'new'
             barcode_obj.save(update_fields=['tag'])
-            
-            # Audit log: Barcode tag changed (in-cart/sold -> new)
             create_audit_log(
                 request=request,
                 action='barcode_tag_change',
@@ -2097,7 +2109,13 @@ def cart_item_remove_sku(request, pk, item_id):
             )
     except Barcode.DoesNotExist:
         pass  # Barcode doesn't exist, skip
-    
+
+    # If quantity becomes 0, delete the cart item (barcode tag already restored above)
+    if cart_item.quantity == 0:
+        cart_item.delete()
+        return Response({'message': 'Cart item removed', 'deleted': True}, status=status.HTTP_200_OK)
+
+    cart_item.save(update_fields=['scanned_barcodes', 'quantity'])
     serializer = CartItemSerializer(cart_item)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
