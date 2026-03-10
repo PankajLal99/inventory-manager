@@ -81,6 +81,12 @@ export default function POS() {
   // Live date/time for header (updates every second)
   const [now, setNow] = useState(() => new Date());
 
+  // True when user has selected an invoice date different from today (custom/backdated/forward-dated)
+  const isCustomInvoiceDate = useMemo(
+    () => invoiceDate !== toLocalDateString(new Date()),
+    [invoiceDate]
+  );
+
   // Toggle to show/hide purchase price in cart (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Barcode Queue Types and State
@@ -3256,18 +3262,25 @@ export default function POS() {
                 </Select>
 
                 <div className="mt-3">
-                  <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1.5 flex items-center gap-2">
                     Invoice Date
+                    {isCustomInvoiceDate && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-300">
+                        Custom date
+                      </span>
+                    )}
                   </label>
                   <Input
                     type="date"
                     value={invoiceDate}
                     onChange={(e) => setInvoiceDate(e.target.value)}
-                    className="w-full h-11 text-sm font-medium border-2 rounded-lg"
+                    className={`w-full h-11 text-sm font-medium border-2 rounded-lg ${isCustomInvoiceDate ? 'border-amber-400 bg-amber-50/50' : ''}`}
                     disabled={isCartLocked}
                   />
                   <p className="mt-1 text-xs text-gray-500">
-                    Time stays current; only the invoice date changes.
+                    {isCustomInvoiceDate
+                      ? 'Invoice will be created with the selected date above.'
+                      : 'Time stays current; only the invoice date changes.'}
                   </p>
                 </div>
 

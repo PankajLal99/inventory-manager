@@ -2198,7 +2198,7 @@ def cart_checkout(request, pk):
         # 4. Extract and Validate Input
         invoice_type = request.data.get('invoice_type', cart.invoice_type or 'cash')
         customer_id = request.data.get('customer', cart.customer_id if cart.customer else None)
-        created_at_raw = request.data.get('created_at')
+        created_at_raw = request.data.get('created_at') or request.data.get('createdAt')
         repair_contact_no = ''
         repair_model_name = ''
 
@@ -2216,18 +2216,18 @@ def cart_checkout(request, pk):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-        # Optional POS-provided invoice datetime:
-        # apply only when selected date is not today; otherwise keep server current time.
+        # Optional POS-provided invoice datetime: always use when client sends a valid value.
         created_at_override = None
         if created_at_raw not in (None, ''):
-            parsed_created_at = parse_datetime(str(created_at_raw))
+            raw_str = str(created_at_raw).strip()
+            if raw_str.endswith('Z'):
+                raw_str = raw_str[:-1] + '+00:00'
+            parsed_created_at = parse_datetime(raw_str)
             if parsed_created_at is None:
                 return Response({'error': 'Invalid created_at datetime format'}, status=status.HTTP_400_BAD_REQUEST)
             if timezone.is_naive(parsed_created_at):
                 parsed_created_at = timezone.make_aware(parsed_created_at, timezone.get_current_timezone())
-            parsed_local_date = timezone.localtime(parsed_created_at).date()
-            if parsed_local_date != timezone.localdate():
-                created_at_override = parsed_created_at
+            created_at_override = parsed_created_at
         
         # Mixed payment validation
         cash_amount = Decimal(str(request.data.get('cash_amount', '0'))) if invoice_type == 'mixed' else Decimal('0')
@@ -2279,18 +2279,16 @@ def cart_checkout(request, pk):
         while Invoice.objects.filter(invoice_number=invoice_number).exists():
             invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
-        # 8. Create Invoice
+        # 8. Create Invoice (created_at from POS when provided, else server now)
         invoice = Invoice.objects.create(
             invoice_number=invoice_number,
             cart=cart, store=cart.store,
             customer_id=customer_id,
             invoice_type=invoice_type,
             status='draft',
-            created_by=request.user
+            created_by=request.user,
+            created_at=created_at_override if created_at_override is not None else timezone.now(),
         )
-        if created_at_override is not None:
-            invoice.created_at = created_at_override
-            invoice.save(update_fields=['created_at'])
 
         # 9. Handle Repairs
         if is_repair_shop:

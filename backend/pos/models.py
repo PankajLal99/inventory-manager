@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from decimal import Decimal
 from backend.catalog.models import Product, ProductVariant
 from backend.parties.models import Customer
@@ -122,7 +123,7 @@ class Invoice(models.Model):
     applied_promotions = models.ManyToManyField(Promotion, related_name='invoices', blank=True)
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='invoices')
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now)  # Set at creation; POS can pass custom invoice date
     updated_at = models.DateTimeField(auto_now=True)
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='voided_invoices')
