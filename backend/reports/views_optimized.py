@@ -267,12 +267,12 @@ def optimized_dashboard_kpis(request):
         upi_total=Sum('upi_amount', output_field=DecimalField()),
     )
 
-    # Total Cash: Invoice cash payments + manual cash (including mixed cash part)
-    total_cash = _decimal_or_zero(payment_dict.get('cash')) + (
-        _decimal_or_zero(ledger_dict.get('cash'))
-    ) + (
-        _decimal_or_zero(ledger_mixed_split.get('cash_total'))
-    )
+    # Split invoice vs manual cash so KPIs can treat them differently.
+    invoice_cash_total = _decimal_or_zero(payment_dict.get('cash'))
+    manual_cash_total = _decimal_or_zero(ledger_dict.get('cash')) + _decimal_or_zero(ledger_mixed_split.get('cash_total'))
+
+    # Total Cash: ONLY invoice cash payments (no manual cash).
+    total_cash = invoice_cash_total
 
     # Total Online: ONLY invoice UPI/online payments.
     # Manual UPI/online (including mixed UPI split) is deliberately excluded from this KPI.
@@ -558,8 +558,9 @@ def optimized_dashboard_kpis(request):
         total=Sum('expense_amount', output_field=DecimalField(max_digits=18, decimal_places=2))
     )['total'] or Decimal('0.00')
 
-    # In-hand is cash in period minus expenses in the same period.
-    total_inhand = total_cash - total_expenses
+    # In-hand is ALL cash in period (invoice cash + manual cash) minus expenses in the same period.
+    total_inhand_cash_component = invoice_cash_total + manual_cash_total
+    total_inhand = total_inhand_cash_component - total_expenses
     total_inhand_rows = []
     for row in cash_invoice_rows + cash_manual_rows:
         total_inhand_rows.append({
@@ -810,11 +811,11 @@ def optimized_dashboard_kpis(request):
         upi_total=Sum('upi_amount', output_field=DecimalField()),
     )
 
-    yesterday_cash = _decimal_or_zero(yesterday_payment_dict.get('cash')) + (
-        _decimal_or_zero(yesterday_ledger_dict.get('cash'))
-    ) + (
-        _decimal_or_zero(yesterday_ledger_mixed_split.get('cash_total'))
-    )
+    yesterday_invoice_cash = _decimal_or_zero(yesterday_payment_dict.get('cash'))
+    yesterday_manual_cash = _decimal_or_zero(yesterday_ledger_dict.get('cash')) + _decimal_or_zero(yesterday_ledger_mixed_split.get('cash_total'))
+
+    # Yesterday Cash KPI: ONLY invoice cash (no manual).
+    yesterday_cash = yesterday_invoice_cash
 
     # Yesterday Online: ONLY invoice UPI/online payments (exclude manual).
     yesterday_online = _decimal_or_zero(yesterday_payment_dict.get('upi'))
@@ -823,7 +824,8 @@ def optimized_dashboard_kpis(request):
     ).aggregate(
         total=Sum('expense_amount', output_field=DecimalField(max_digits=18, decimal_places=2))
     )['total'] or Decimal('0.00')
-    yesterday_inhand = yesterday_cash - yesterday_expenses
+    # Yesterday In-hand: invoice cash + manual cash - expenses.
+    yesterday_inhand = (yesterday_invoice_cash + yesterday_manual_cash) - yesterday_expenses
     
     # Yesterday profit (simplified, no loop)
     yesterday_invoices = Invoice.objects.filter(
@@ -923,7 +925,7 @@ def optimized_dashboard_kpis(request):
                         'date': row.get('payment_date'),
                         'source': row.get('source') or 'payment',
                         'note': row.get('description') or '',
-                    } for row in (cash_invoice_rows + cash_manual_rows)
+                    } for row in cash_invoice_rows
                 ], key=lambda row: ((row.get('date') or ''), (row.get('id') or 0)), reverse=True),
             },
             'total_online': {
@@ -1078,10 +1080,10 @@ def optimized_dashboard_kpis(request):
         },
     }
     kpi_formulas = {
-        'total_cash': "SUM(Payment.amount where method='cash') + SUM(LedgerEntry.amount where entry_type='credit' and payment_mode='cash' and invoice is null) + SUM(LedgerEntry.cash_amount where payment_mode='mixed')",
+        'total_cash': "SUM(Payment.amount where method='cash')  # invoice cash payments only (no manual ledger cash)",
         'total_online': "SUM(Payment.amount where method='upi')  # invoice UPI/online payments only (no manual ledger UPI)",
         'total_expenses': "SUM(Expenses.expense_amount in selected date range)",
-        'total_inhand': "total_cash - total_expenses",
+        'total_inhand': "(SUM(Payment.amount where method='cash') + SUM(LedgerEntry.amount where entry_type='credit' and payment_mode='cash' and invoice is null) + SUM(LedgerEntry.cash_amount where payment_mode='mixed')) - total_expenses",
         'repair_invoice_cash_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='cash')",
         'repair_invoice_upi_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='upi')",
         'repair_invoice_mixed_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='mixed')",

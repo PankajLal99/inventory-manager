@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { reportsApi } from '../../lib/api';
-import { DateRangePreset, formatNumber, formatDateMMDDYYYY, formatDateDDMMYYYY, getDateRangeByPreset } from '../../lib/utils';
+import { DateRangePreset, formatNumber, formatDateDDMMYYYY, getDateRangeByPreset } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import {
   Package, FileText, ShoppingBag, Calendar,
@@ -520,8 +520,8 @@ export default function Dashboard() {
         <div className="mb-4">
           <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Manual Payments</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            Payments recorded via Ledger (Payments page). Only <strong>cash</strong> from manual payments is included in Total Cash; UPI/online manual
-            payments are <strong>not</strong> included in Total Online and are shown here for reference only.
+            Payments recorded via Ledger (Payments page). Manual payments (cash and UPI/online) are <strong>not</strong> included in Total Cash or Total
+            Online. Cash from manual payments is included only in <strong>Total Inhand</strong>; all manual payments are listed here for reference.
           </p>
         </div>
         {!hasAny ? (
