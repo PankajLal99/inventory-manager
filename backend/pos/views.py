@@ -14,6 +14,7 @@ from collections import Counter
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses
 from backend.catalog.models import Barcode, Product, ProductVariant
+from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.inventory.models import Stock
 from backend.core.utils import create_audit_log
 from .serializers import (
@@ -738,7 +739,7 @@ def cart_detail(request, pk):
                         if barcode_obj.tag in ['in-cart', 'sold']:
                             barcode_obj.tag = 'new'
                             barcode_obj.save(update_fields=['tag'])
-                            
+                            invalidate_barcode_cache(barcode_obj)  # so next byBarcode() returns fresh data
                             # Audit log: Barcode tag changed (in-cart/sold -> new)
                             create_audit_log(
                                 request=request,
@@ -1388,9 +1389,17 @@ def cart_items(request, pk):
                     data = dict(serializer.data)
                     data['message'] = 'Item already in this cart'
                     return Response(data, status=status.HTTP_200_OK)
+                other_item = CartItem.objects.filter(
+                    scanned_barcodes__contains=[full_barcode]
+                ).exclude(cart=cart).select_related('cart').first()
+                other_cart_id = other_item.cart_id if other_item else None
+                other_cart_number = other_item.cart.cart_number if other_item and other_item.cart else None
+                cart_info = f' (Cart #{other_cart_number or other_cart_id})' if (other_cart_number or other_cart_id) else ''
                 return Response({
                     'error': 'Item already in cart',
-                    'message': f'Barcode/SKU {scanned_value_str} is already in another cart and cannot be added to this cart.'
+                    'message': f'Barcode/SKU {scanned_value_str} is already in another cart{cart_info} and cannot be added to this cart.',
+                    'other_cart_id': other_cart_id,
+                    'other_cart_number': other_cart_number,
                 }, status=status.HTTP_400_BAD_REQUEST)
             else:
                 tag_display = barcode_obj.get_tag_display() if hasattr(barcode_obj, 'get_tag_display') else barcode_obj.tag
@@ -1437,7 +1446,7 @@ def cart_items(request, pk):
             # (cart stores full barcode in scanned_barcodes)
             full_barcode = barcode_obj.barcode
             all_active_carts = Cart.objects.filter(status='active')
-            all_cart_items = CartItem.objects.filter(cart__in=all_active_carts)
+            all_cart_items = CartItem.objects.filter(cart__in=all_active_carts).select_related('cart')
             for item in all_cart_items:
                 if item.scanned_barcodes and (full_barcode in item.scanned_barcodes or scanned_value_str in item.scanned_barcodes):
                     # Item is in a cart - distinguish current cart vs another cart
@@ -1447,9 +1456,13 @@ def cart_items(request, pk):
                         data = dict(serializer.data)
                         data['message'] = 'Item already in this cart'
                         return Response(data, status=status.HTTP_200_OK)
+                    other_cart_number = item.cart.cart_number if item.cart else None
+                    cart_info = f' (Cart #{other_cart_number or item.cart_id})' if (other_cart_number or item.cart_id) else ''
                     return Response({
                         'error': 'This barcode/SKU has already been scanned',
-                        'message': 'Item with this barcode/SKU is already in another cart'
+                        'message': f'Item with this barcode/SKU is already in another cart{cart_info}',
+                        'other_cart_id': item.cart_id,
+                        'other_cart_number': other_cart_number,
                     }, status=status.HTTP_400_BAD_REQUEST)
             
             # Strict validation: only 'new' or 'returned' tag barcodes can be added to POS
@@ -1475,12 +1488,20 @@ def cart_items(request, pk):
                         'message': f'Barcode {scanned_value_str} is already assigned to invoice {sold_item.invoice.invoice_number}'
                     }, status=status.HTTP_400_BAD_REQUEST)
             
-            # Block if barcode is already in another cart
+            # Block if barcode is already in another cart (tag says in-cart but not in current cart)
             if barcode_obj.tag == 'in-cart':
+                other_item = CartItem.objects.filter(
+                    scanned_barcodes__contains=[barcode_obj.barcode]
+                ).exclude(cart=cart).select_related('cart').first()
+                other_cart_id = other_item.cart_id if other_item else None
+                other_cart_number = other_item.cart.cart_number if other_item and other_item.cart else None
+                cart_info = f' (Cart #{other_cart_number or other_cart_id})' if (other_cart_number or other_cart_id) else ''
                 return Response({
                     'error': 'Barcode is not available',
-                    'message': f'Barcode {scanned_value_str} is already in another cart and cannot be added to this cart.',
-                    'current_tag': barcode_obj.tag
+                    'message': f'Barcode {scanned_value_str} is already in another cart{cart_info} and cannot be added to this cart.',
+                    'current_tag': barcode_obj.tag,
+                    'other_cart_id': other_cart_id,
+                    'other_cart_number': other_cart_number,
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # ALWAYS use the actual barcode string from the database object
@@ -1746,7 +1767,7 @@ def cart_item_update(request, pk, item_id):
                     if barcode_obj.tag in ['in-cart', 'sold']:
                         barcode_obj.tag = 'new'
                         barcode_obj.save(update_fields=['tag'])
-                        
+                        invalidate_barcode_cache(barcode_obj)  # so next byBarcode() returns fresh data
                         # Audit log: Barcode tag changed (in-cart/sold -> new)
                         create_audit_log(
                             request=request,
@@ -2089,6 +2110,8 @@ def cart_item_remove_sku(request, pk, item_id):
         if barcode_obj.tag in ['in-cart', 'sold']:
             barcode_obj.tag = 'new'
             barcode_obj.save(update_fields=['tag'])
+            # Invalidate catalog barcode lookup cache so next byBarcode() returns fresh data (not stale "in-cart")
+            invalidate_barcode_cache(barcode_obj)
             create_audit_log(
                 request=request,
                 action='barcode_tag_change',
