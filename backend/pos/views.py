@@ -695,9 +695,10 @@ def cart_detail(request, pk):
             status=status.HTTP_404_NOT_FOUND
         )
     
-    # For DELETE, ensure user can only delete their own carts
+    # For DELETE: allow if user owns the cart or is in Super group
     if request.method == 'DELETE':
-        if cart.created_by != request.user:
+        is_super = request.user.groups.filter(name='Super').exists()
+        if cart.created_by != request.user and not is_super:
             return Response(
                 {'error': 'Permission denied', 'detail': 'You can only delete your own carts'},
                 status=status.HTTP_403_FORBIDDEN
@@ -3631,10 +3632,10 @@ def invoice_mark_credit(request, pk):
         # Use select_for_update to prevent race conditions
         invoice = Invoice.objects.select_for_update().get(pk=pk)
         
-            # Only allow marking draft pending invoices as credit
-        if invoice.status != 'draft' or invoice.invoice_type != 'pending':
+            # Allow draft pending (convert to credit) or draft credit (save updates and move to ledger)
+        if invoice.status != 'draft' or invoice.invoice_type not in ('pending', 'credit'):
             return Response(
-                {'error': 'Only draft pending invoices can be marked as credit'},
+                {'error': 'Only draft pending or draft credit invoices can be marked as credit'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -3667,6 +3668,13 @@ def invoice_mark_credit(request, pk):
                             item.discount_amount = Decimal(str(item_data['discount_amount']))
                         if 'tax_amount' in item_data:
                             item.tax_amount = Decimal(str(item_data['tax_amount']))
+                        if 'purchase_price' in item_data:
+                            raw = item_data['purchase_price']
+                            try:
+                                val = Decimal(str(raw)) if raw not in (None, '') else None
+                                item.purchase_price = val if val is not None and val > 0 else None
+                            except (TypeError, ValueError):
+                                item.purchase_price = None
                         
                         # Recalculate line_total
                         price = item.manual_unit_price or item.unit_price
@@ -3699,6 +3707,26 @@ def invoice_mark_credit(request, pk):
                 {'error': 'Invoice must have a customer assigned to mark as credit'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # If this invoice is linked to a repair: optionally update delivery_date from request (same as checkout)
+        try:
+            repair = invoice.repair
+            if repair:
+                if 'delivery_date' in request.data:
+                    v = request.data.get('delivery_date')
+                    if v is None or v == '':
+                        repair.delivery_date = None
+                    else:
+                        try:
+                            from datetime import datetime
+                            repair.delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
+                        except (ValueError, TypeError):
+                            pass
+                if invoice.items.exists() and repair.status == 'received':
+                    repair.status = 'work_in_progress'
+                repair.save()
+        except Repair.DoesNotExist:
+            pass
         
         # Update invoice status to credit FIRST (before recalculating totals)
         # This ensures update_invoice_totals calculates correctly

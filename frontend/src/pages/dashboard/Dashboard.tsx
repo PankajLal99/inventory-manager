@@ -253,8 +253,10 @@ export default function Dashboard() {
     'total_inhand',
     'repair_invoice_cash_total',
     'repair_invoice_upi_total',
+    'repair_invoice_mixed_total',
     'repair_payment_cash_total',
     'repair_payment_upi_total',
+    'repair_payment_mixed_total',
     'repairing_profit',
     'counter_profit',
     'pending_profit',
@@ -392,7 +394,7 @@ export default function Dashboard() {
     );
   };
 
-  const renderContributionTable = (method: ContributionMethod) => {
+  const renderContributionTable = (method: ContributionMethod, invoiceOnly = false) => {
     const methodLabel = method === 'cash' ? 'Cash' : 'UPI';
     const methodColors = method === 'cash'
       ? {
@@ -411,7 +413,7 @@ export default function Dashboard() {
         };
 
     const invoicePayments: ContributionRow[] = contributionData?.[method]?.invoice_payments || [];
-    const manualPayments: ContributionRow[] = contributionData?.[method]?.manual_payments || [];
+    const manualPayments: ContributionRow[] = invoiceOnly ? [] : (contributionData?.[method]?.manual_payments || []);
     const totalContributions = [...invoicePayments, ...manualPayments].reduce((sum, row) => sum + (row.amount || 0), 0);
 
     const renderRow = (row: ContributionRow, rowType: 'invoice' | 'manual') => {
@@ -429,7 +431,9 @@ export default function Dashboard() {
     return (
       <div className={`rounded-xl border ${methodColors.cardBorder} ${methodColors.cardBg} p-4`}>
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <h3 className="text-base sm:text-lg font-semibold text-gray-900">{methodLabel} Contributions</h3>
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900">
+            {invoiceOnly ? `${methodLabel} (Invoice Payments Only)` : `${methodLabel} Contributions`}
+          </h3>
           <span className={`text-xs font-semibold px-2 py-1 rounded-full ${methodColors.chip}`}>
             Total: ₹{formatNumber(totalContributions, 2)}
           </span>
@@ -461,31 +465,120 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <div className="px-3 py-2 border-b border-gray-200">
-              <p className="text-sm font-semibold text-gray-800">Manual Payments</p>
-            </div>
-            {manualPayments.length === 0 ? (
-              <p className="px-3 py-4 text-sm text-gray-500">No manual payments found for {methodLabel} in this date range.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Invoice #</th>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party / Customer</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Amount</th>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {manualPayments.map((row) => renderRow(row, 'manual'))}
-                  </tbody>
-                </table>
+          {!invoiceOnly && (
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <div className="px-3 py-2 border-b border-gray-200">
+                <p className="text-sm font-semibold text-gray-800">Manual Payments</p>
               </div>
-            )}
-          </div>
+              {manualPayments.length === 0 ? (
+                <p className="px-3 py-4 text-sm text-gray-500">No manual payments found for {methodLabel} in this date range.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Invoice #</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party / Customer</th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualPayments.map((row) => renderRow(row, 'manual'))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
+      </div>
+    );
+  };
+
+  const renderManualPaymentsBlock = () => {
+    const cashManual: ContributionRow[] = contributionData?.cash?.manual_payments || [];
+    const upiManual: ContributionRow[] = contributionData?.upi?.manual_payments || [];
+    const cashTotal = cashManual.reduce((sum, row) => sum + (row.amount || 0), 0);
+    const upiTotal = upiManual.reduce((sum, row) => sum + (row.amount || 0), 0);
+    const hasAny = cashManual.length > 0 || upiManual.length > 0;
+
+    const renderRow = (row: ContributionRow) => {
+      const displayParty = row.party_name || row.customer_name || 'Walk-in Customer';
+      return (
+        <tr key={`manual-${row.id}`} className="border-b border-gray-100 last:border-0">
+          <td className="px-3 py-2 text-sm text-gray-800 font-medium">{row.invoice_number || '-'}</td>
+          <td className="px-3 py-2 text-sm text-gray-700">{displayParty}</td>
+          <td className="px-3 py-2 text-sm text-gray-900 font-semibold text-right">₹{formatNumber(row.amount || 0, 2)}</td>
+          <td className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{formatContributionDate(row.payment_date)}</td>
+        </tr>
+      );
+    };
+
+    return (
+      <div className="bg-white rounded-xl border border-amber-200 bg-amber-50/50 p-4 sm:p-5">
+        <div className="mb-4">
+          <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Manual Payments</h2>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Payments recorded via Ledger (Payments page). Only <strong>cash</strong> from manual payments is included in Total Cash; UPI/online is in Total Online.
+          </p>
+        </div>
+        {!hasAny ? (
+          <p className="text-sm text-gray-500">No manual payments in this date range.</p>
+        ) : (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div className="bg-white rounded-lg border border-green-200 overflow-hidden">
+              <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between">
+                <p className="text-sm font-semibold text-gray-800">Cash</p>
+                <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-1 rounded-full">
+                  ₹{formatNumber(cashTotal, 2)}
+                </span>
+              </div>
+              {cashManual.length === 0 ? (
+                <p className="px-3 py-4 text-sm text-gray-500">No cash manual payments.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Ref</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party / Customer</th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>{cashManual.map((row) => renderRow(row))}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="bg-white rounded-lg border border-blue-200 overflow-hidden">
+              <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between">
+                <p className="text-sm font-semibold text-gray-800">UPI / Online</p>
+                <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-1 rounded-full">
+                  ₹{formatNumber(upiTotal, 2)}
+                </span>
+              </div>
+              {upiManual.length === 0 ? (
+                <p className="px-3 py-4 text-sm text-gray-500">No UPI manual payments.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Ref</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Party / Customer</th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600 uppercase">Amount</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>{upiManual.map((row) => renderRow(row))}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -643,6 +736,14 @@ export default function Dashboard() {
                 borderColor="border-sky-200"
               />
               <KpiCard
+                title={`Repair Invoices (Mixed) (${kpis.repair_invoice_mixed_count || 0})`}
+                value={kpis.repair_invoice_mixed_total || 0}
+                icon={Wrench}
+                bgColor="bg-gradient-to-br from-violet-50 to-violet-100"
+                iconColor="text-violet-700"
+                borderColor="border-violet-200"
+              />
+              <KpiCard
                 title={`Repair Payments (Cash) (${kpis.repair_payment_cash_count || 0})`}
                 value={kpis.repair_payment_cash_total || 0}
                 icon={DollarSign}
@@ -657,6 +758,14 @@ export default function Dashboard() {
                 bgColor="bg-gradient-to-br from-cyan-50 to-cyan-100"
                 iconColor="text-cyan-700"
                 borderColor="border-cyan-200"
+              />
+              <KpiCard
+                title={`Repair Payments (Mixed) (${kpis.repair_payment_mixed_count || 0})`}
+                value={kpis.repair_payment_mixed_total || 0}
+                icon={CreditCard}
+                bgColor="bg-gradient-to-br from-amber-50 to-amber-100"
+                iconColor="text-amber-700"
+                borderColor="border-amber-200"
               />
 
               {/* 5. Repairing Profit */}
@@ -826,11 +935,14 @@ export default function Dashboard() {
               </button>
             </div>
 
+            {/* Manual Payments: separate block; only cash from here goes into Total Cash */}
+            {renderManualPaymentsBlock()}
+
             <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                 <div>
-                  <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Cash / UPI Contribution Details</h2>
-                  <p className="text-sm text-gray-500">Know what invoices and payments are contributing to each payment mode.</p>
+                  <h2 className="text-lg sm:text-xl font-semibold text-gray-900">Cash / UPI Contribution Details (Invoice Payments)</h2>
+                  <p className="text-sm text-gray-500">Invoice payments by mode. Manual payments are shown in the Manual Payments block above.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -880,12 +992,12 @@ export default function Dashboard() {
                       UPI
                     </button>
                   </div>
-                  {renderContributionTable(selectedContributionMethod)}
+                  {renderContributionTable(selectedContributionMethod, true)}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  {renderContributionTable('cash')}
-                  {renderContributionTable('upi')}
+                  {renderContributionTable('cash', true)}
+                  {renderContributionTable('upi', true)}
                 </div>
               )}
             </div>

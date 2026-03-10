@@ -326,7 +326,8 @@ export default function InvoiceDetail() {
   });
 
   const markCreditMutation = useMutation({
-    mutationFn: (itemsData: any[]) => posApi.invoices.markCredit(invoiceId, { items: itemsData }),
+    mutationFn: (payload: { items: any[]; delivery_date?: string | null }) =>
+      posApi.invoices.markCredit(invoiceId, { items: payload.items, ...(payload.delivery_date !== undefined && payload.delivery_date !== null && payload.delivery_date !== '' ? { delivery_date: payload.delivery_date } : {}) }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
@@ -3143,6 +3144,9 @@ export default function InvoiceDetail() {
                           <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Quantity</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Unit Price</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Total</th>
+                          {inv?.repair && (
+                            <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Actions</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
@@ -3394,6 +3398,27 @@ export default function InvoiceDetail() {
                                       </div>
                                     </div>
                                   </td>
+                                  {inv?.repair && (
+                                    <td className="px-4 py-4">
+                                      <div className="flex items-center justify-center">
+                                        <button
+                                          onClick={() => {
+                                            // Remove all items in this group by calling delete API for each item
+                                            if (window.confirm(`Remove all items of "${group.productName}" from the invoice ? `)) {
+                                              group.items.forEach((item) => {
+                                                deleteItemMutation.mutate(item.id);
+                                              });
+                                            }
+                                          }}
+                                          disabled={deleteItemMutation.isPending}
+                                          className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50"
+                                          title="Remove Product"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  )}
                                 </tr>
                                 {/* Expanded Barcode Rows */}
                                 {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
@@ -3490,6 +3515,7 @@ export default function InvoiceDetail() {
                                           ₹{formatNumber(itemLineTotal)}
                                         </div>
                                       </td>
+                                      {inv?.repair && <td className="px-4 py-3" />}
                                     </tr>
                                   );
                                 })}
@@ -3534,6 +3560,7 @@ export default function InvoiceDetail() {
                               <td className="px-4 py-3 text-center text-sm font-bold text-gray-900">{totalQty}</td>
                               <td className="px-4 py-3"></td>
                               <td className="px-4 py-3 text-right text-sm font-bold text-blue-600">₹{formatNumber(totalSaleAmount)}</td>
+                              {inv?.repair && <td className="px-4 py-3" />}
                             </tr>
                           );
                         })()}
@@ -3883,24 +3910,25 @@ export default function InvoiceDetail() {
                                 </div>
                               </div>
                             )}
-                            {/* Remove Button for Mobile */}
-                            <div className="mt-3 pt-3 border-t border-gray-200">
-                              <button
-                                onClick={() => {
-                                  // Remove all items in this group by calling delete API for each item
-                                  if (window.confirm(`Remove all items of "${group.productName}" from the invoice ? `)) {
-                                    group.items.forEach((item) => {
-                                      deleteItemMutation.mutate(item.id);
-                                    });
-                                  }
-                                }}
-                                disabled={deleteItemMutation.isPending}
-                                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                Remove Product
-                              </button>
-                            </div>
+                            {/* Remove Button for Mobile - only for repair checkout */}
+                            {inv?.repair && (
+                              <div className="mt-3 pt-3 border-t border-gray-200">
+                                <button
+                                  onClick={() => {
+                                    if (window.confirm(`Remove all items of "${group.productName}" from the invoice ? `)) {
+                                      group.items.forEach((item) => {
+                                        deleteItemMutation.mutate(item.id);
+                                      });
+                                    }
+                                  }}
+                                  disabled={deleteItemMutation.isPending}
+                                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  Remove Product
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       });
@@ -4217,12 +4245,18 @@ export default function InvoiceDetail() {
                 Cancel
               </Button>
               <Button
-                onClick={() => {
+                onClick={async () => {
                   if (checkoutInvoiceType !== 'credit') {
                     alert('Select CREDIT invoice type to move this invoice to ledger.');
                     return;
                   }
-                  if (!inv?.items || inv.items.length === 0) {
+
+                  // Refetch invoice to use latest data (same as Complete Checkout)
+                  await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+                  const freshInvoice = queryClient.getQueryData(['invoice', invoiceId]) as any;
+                  const freshInv = freshInvoice?.data;
+
+                  if (!freshInv?.items || freshInv.items.length === 0) {
                     alert('Invoice has no items');
                     return;
                   }
@@ -4237,7 +4271,7 @@ export default function InvoiceDetail() {
                   }
 
                   // Validate purchase price for custom products (must be > 0)
-                  const customItemsMissingPP = inv.items.filter((item: any) => {
+                  const customItemsMissingPP = freshInv.items.filter((item: any) => {
                     if (!item.product_name?.startsWith('Other -')) return false;
                     const qty = checkoutQuantities[item.id] ?? item.quantity?.toString();
                     if (parseFloat(qty) <= 0) return false;
@@ -4253,7 +4287,7 @@ export default function InvoiceDetail() {
                   }
 
                   // Final UI-level guard: block below-cost pricing at submit time as well
-                  const priceValidationErrors = getCheckoutPriceValidationErrors(inv.items);
+                  const priceValidationErrors = getCheckoutPriceValidationErrors(freshInv.items);
                   if (priceValidationErrors.length > 0) {
                     alert(`Price validation failed: \n\n${priceValidationErrors.join('\n')} `);
                     return;
@@ -4261,7 +4295,7 @@ export default function InvoiceDetail() {
 
                   // Prepare items with updated quantities and prices (same as handleCheckoutSubmit)
                   // Filter out items with quantity 0 (they will be deleted by backend)
-                  const items = inv.items
+                  const items = freshInv.items
                     .map((item: any): any => {
                       const quantity = checkoutQuantities[item.id]
                         ? parseInt(checkoutQuantities[item.id]) || 0
@@ -4303,7 +4337,11 @@ export default function InvoiceDetail() {
                     return;
                   }
 
-                  markCreditMutation.mutate(items);
+                  const payload: { items: any[]; delivery_date?: string | null } = { items };
+                  if (freshInv?.repair && checkoutDeliveryDate?.trim()) {
+                    payload.delivery_date = checkoutDeliveryDate.trim();
+                  }
+                  markCreditMutation.mutate(payload);
                 }}
                 disabled={checkoutInvoiceType !== 'credit' || markCreditMutation.isPending || checkoutMutation.isPending || !areAllPricesEntered() || !inv?.items || inv.items.length === 0 || Object.keys(checkoutPriceErrors).length > 0}
                 className="w-full sm:w-auto bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:hover:bg-gray-400"
@@ -4312,7 +4350,7 @@ export default function InvoiceDetail() {
               </Button>
               <Button
                 onClick={handleCheckoutSubmit}
-                disabled={checkoutMutation.isPending || markCreditMutation.isPending || !inv?.items || inv.items.length === 0}
+                disabled={checkoutMutation.isPending || markCreditMutation.isPending || checkoutInvoiceType === 'credit' || !inv?.items || inv.items.length === 0}
                 className="w-full sm:w-auto"
               >
                 {checkoutMutation.isPending ? 'Processing...' : 'Complete Checkout'}

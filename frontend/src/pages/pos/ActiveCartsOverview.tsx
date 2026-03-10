@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { useToast } from '../../lib/toast';
 import {
   ShoppingCart,
   User,
@@ -10,6 +11,8 @@ import {
   ChevronDown,
   ChevronRight,
   Package,
+  Trash2,
+  Loader2,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
@@ -57,9 +60,27 @@ function formatDate(iso: string) {
 }
 
 export default function ActiveCartsOverview() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
   const [storeId, setStoreId] = useState<number | ''>('');
   const [expandedCartId, setExpandedCartId] = useState<number | null>(null);
   const [user, setUser] = useState<any>(null);
+
+  const discardCartMutation = useMutation({
+    mutationFn: ({ cartId }: { cartId: number; productIds: number[] }) => posApi.carts.delete(cartId),
+    onSuccess: (_data, { cartId, productIds }) => {
+      productIds.forEach((productId) => {
+        queryClient.invalidateQueries({ queryKey: ['product-barcodes', productId] });
+      });
+      queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+      setExpandedCartId((prev) => (prev === cartId ? null : prev));
+      toast.success('Cart discarded. Items returned to inventory and barcodes set to fresh.');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error ?? err?.response?.data?.detail ?? (err?.message || 'Failed to discard cart');
+      toast.error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    },
+  });
 
   useEffect(() => {
     const loadUser = async () => {
@@ -96,6 +117,8 @@ export default function ActiveCartsOverview() {
     user?.is_staff ||
     (user?.groups && user.groups.includes('Admin'));
 
+  const isSuper = user?.groups && user.groups.includes('Super');
+
   const { data: carts, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['pos/carts/overview', storeId || undefined],
     queryFn: async () => {
@@ -106,6 +129,48 @@ export default function ActiveCartsOverview() {
   });
 
   const list = Array.isArray(carts) ? carts : [];
+  const discardableCarts = list.filter(
+    (c) => !c.locked && user != null && (c.created_by === user.id || isSuper)
+  );
+  const [isDiscardAllPending, setIsDiscardAllPending] = useState(false);
+
+  const handleDiscardAll = async () => {
+    if (discardableCarts.length === 0) return;
+    const message =
+      discardableCarts.length === 1
+        ? `Discard 1 cart? All items will be returned to inventory and barcodes set to fresh.`
+        : `Discard all ${discardableCarts.length} carts? All items will be returned to inventory and barcodes set to fresh.`;
+    if (!window.confirm(message)) return;
+    setIsDiscardAllPending(true);
+    const allProductIds = new Set<number>();
+    let successCount = 0;
+    let failCount = 0;
+    try {
+      for (const cart of discardableCarts) {
+        try {
+          await posApi.carts.delete(cart.id);
+          (cart.items || []).forEach((item) => allProductIds.add(item.product));
+          successCount += 1;
+        } catch {
+          failCount += 1;
+        }
+      }
+      allProductIds.forEach((productId) => {
+        queryClient.invalidateQueries({ queryKey: ['product-barcodes', productId] });
+      });
+      queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+      setExpandedCartId(null);
+      if (failCount === 0) {
+        toast.success(
+          successCount === 1 ? 'Cart discarded.' : `${successCount} carts discarded. Items returned to inventory.`
+        );
+      } else {
+        toast.error(`Discarded ${successCount} cart(s). ${failCount} failed.`);
+      }
+    } finally {
+      setIsDiscardAllPending(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -132,7 +197,7 @@ export default function ActiveCartsOverview() {
     <div className="p-6">
       <PageHeader
         title="Active Carts Overview"
-        subtitle="View which carts are active, who has them, and what’s in each. Read-only; no changes or continue-to-cart here."
+        subtitle="View which carts are active, who has them, and what’s in each. Discard a cart to remove it and return all items to inventory (barcodes set to fresh)."
       />
 
       {isAdmin && stores.length > 1 && (
@@ -163,6 +228,25 @@ export default function ActiveCartsOverview() {
             message="There are no active or held carts right now."
           />
         ) : (
+          <>
+            {discardableCarts.length > 0 && (
+              <div className="mb-4 flex flex-wrap items-center justify-end gap-2 border-b border-gray-200 pb-4">
+                <button
+                  type="button"
+                  onClick={handleDiscardAll}
+                  disabled={isDiscardAllPending}
+                  title="Discard all carts you can discard (unlocked; your carts or any if Super). Items returned to inventory."
+                  className="inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isDiscardAllPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  Discard all{discardableCarts.length > 1 ? ` (${discardableCarts.length})` : ''}
+                </button>
+              </div>
+            )}
           <Table
             headers={[
               '',
@@ -173,11 +257,14 @@ export default function ActiveCartsOverview() {
               'Status',
               'Items',
               'Updated',
+              'Actions',
             ]}
           >
             {list.flatMap((cart) => {
               const isExpanded = expandedCartId === cart.id;
               const itemCount = cart.items?.length ?? 0;
+              const productIds = cart.items?.length ? [...new Set(cart.items.map((item) => item.product))] : [];
+              const canDiscard = !cart.locked && user != null && (cart.created_by === user.id || isSuper);
               return [
                 <TableRow
                   key={cart.id}
@@ -223,10 +310,46 @@ export default function ActiveCartsOverview() {
                   <TableCell className="text-gray-600">
                     {formatDate(cart.updated_at)}
                   </TableCell>
+                  <TableCell>
+                    <div onClick={(e: React.MouseEvent) => e.stopPropagation()} role="presentation">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!canDiscard) return;
+                        const message =
+                          itemCount > 0
+                            ? `Discard cart ${cart.cart_number}? All ${itemCount} item(s) will be removed and returned to inventory; barcodes will be set to fresh.`
+                            : `Discard cart ${cart.cart_number}?`;
+                        if (!window.confirm(message)) return;
+                        discardCartMutation.mutate({
+                          cartId: cart.id,
+                          productIds,
+                        });
+                      }}
+                      disabled={!canDiscard || isDiscardAllPending || (discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id)}
+                      title={
+                        cart.locked
+                          ? 'Unlock the cart before discarding'
+                          : !isSuper && cart.created_by !== user?.id
+                            ? 'You can only discard your own carts'
+                            : 'Discard cart and return items to inventory'
+                      }
+                      className="inline-flex items-center gap-1.5 rounded px-2 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                      Discard
+                    </button>
+                    </div>
+                  </TableCell>
                 </TableRow>,
                 isExpanded ? (
                   <TableRow key={`${cart.id}-items`}>
-                    <TableCell colSpan={8} className="bg-gray-50/80 p-0">
+                    <TableCell colSpan={9} className="bg-gray-50/80 p-0">
                       <div className="border-t border-gray-200 px-6 py-4">
                         <div className="mb-2 flex items-center gap-2 text-sm font-medium text-gray-700">
                           <Package className="h-4 w-4" />
@@ -300,6 +423,7 @@ export default function ActiveCartsOverview() {
               ].filter(Boolean);
             })}
           </Table>
+          </>
         )}
       </Card>
     </div>

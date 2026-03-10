@@ -290,8 +290,12 @@ def optimized_dashboard_kpis(request):
         reverse=True,
     )
 
-    # Repair-only clarity: derive repair invoices from Repair model link.
-    repair_invoices = invoices.filter(repair__isnull=False)
+    # Repair KPIs: only invoices whose repair status is 'done' or 'delivered' (from Repair model).
+    REPAIR_DONE_STATUSES = ('done', 'delivered')
+    repair_invoices = invoices.filter(
+        repair__isnull=False,
+        repair__status__in=REPAIR_DONE_STATUSES,
+    )
     repair_invoice_cash_total = _decimal_or_zero(
         repair_invoices.filter(invoice_type='cash').aggregate(
             total=Sum('total', output_field=DecimalField())
@@ -302,12 +306,22 @@ def optimized_dashboard_kpis(request):
             total=Sum('total', output_field=DecimalField())
         )['total']
     )
+    repair_invoice_mixed_total = _decimal_or_zero(
+        repair_invoices.filter(invoice_type='mixed').aggregate(
+            total=Sum('total', output_field=DecimalField())
+        )['total']
+    )
     repair_invoice_cash_count = repair_invoices.filter(invoice_type='cash').count()
     repair_invoice_upi_count = repair_invoices.filter(invoice_type='upi').count()
+    repair_invoice_mixed_count = repair_invoices.filter(invoice_type='mixed').count()
     repair_invoice_cash_rows = _build_invoice_rows(repair_invoices.filter(invoice_type='cash'))
     repair_invoice_upi_rows = _build_invoice_rows(repair_invoices.filter(invoice_type='upi'))
+    repair_invoice_mixed_rows = _build_invoice_rows(repair_invoices.filter(invoice_type='mixed'))
 
-    repair_payments = payments.filter(invoice__repair__isnull=False)
+    repair_payments = payments.filter(
+        invoice__repair__isnull=False,
+        invoice__repair__status__in=REPAIR_DONE_STATUSES,
+    )
     repair_payment_summary = repair_payments.values('payment_method').annotate(
         total=Sum('amount', output_field=DecimalField()),
         count=Count('id')
@@ -319,15 +333,23 @@ def optimized_dashboard_kpis(request):
     repair_payment_upi_total = _decimal_or_zero(
         (repair_payment_dict.get('upi') or {}).get('total')
     )
+    repair_payment_mixed_total = _decimal_or_zero(
+        (repair_payment_dict.get('mixed') or {}).get('total')
+    )
     repair_payment_cash_count = int((repair_payment_dict.get('cash') or {}).get('count') or 0)
     repair_payment_upi_count = int((repair_payment_dict.get('upi') or {}).get('count') or 0)
+    repair_payment_mixed_count = int((repair_payment_dict.get('mixed') or {}).get('count') or 0)
 
     repair_cash_payment_rows = _build_payment_contribution_rows(repair_payments, 'cash')
     repair_upi_payment_rows = _build_payment_contribution_rows(repair_payments, 'upi')
+    repair_mixed_payment_rows = _build_payment_contribution_rows(repair_payments, 'mixed')
     
     # OPTIMIZATION 3: Profit calculations from invoice item aggregates
     paid_invoices = invoices.filter(status='paid')
-    repair_paid_invoices = paid_invoices.filter(repair__isnull=False)
+    repair_paid_invoices = paid_invoices.filter(
+        repair__isnull=False,
+        repair__status__in=REPAIR_DONE_STATUSES,
+    )
 
     # Shared item-level margin expressions:
     # sold = quantity * (manual_unit_price > 0 ? manual_unit_price : unit_price)
@@ -833,12 +855,16 @@ def optimized_dashboard_kpis(request):
             'total_inhand': float(total_inhand),
             'repair_invoice_cash_total': float(repair_invoice_cash_total),
             'repair_invoice_upi_total': float(repair_invoice_upi_total),
+            'repair_invoice_mixed_total': float(repair_invoice_mixed_total),
             'repair_invoice_cash_count': repair_invoice_cash_count,
             'repair_invoice_upi_count': repair_invoice_upi_count,
+            'repair_invoice_mixed_count': repair_invoice_mixed_count,
             'repair_payment_cash_total': float(repair_payment_cash_total),
             'repair_payment_upi_total': float(repair_payment_upi_total),
+            'repair_payment_mixed_total': float(repair_payment_mixed_total),
             'repair_payment_cash_count': repair_payment_cash_count,
             'repair_payment_upi_count': repair_payment_upi_count,
+            'repair_payment_mixed_count': repair_payment_mixed_count,
             'repairing_profit': float(repairing_profit),
             'counter_profit': float(counter_profit),
             'pending_profit': float(pending_profit),
@@ -877,7 +903,10 @@ def optimized_dashboard_kpis(request):
             },
             'upi': {
                 'invoice_payments': repair_upi_payment_rows,
-            }
+            },
+            'mixed': {
+                'invoice_payments': repair_mixed_payment_rows,
+            },
         },
         'kpi_debug_rows': {
             'total_cash': {
@@ -932,6 +961,11 @@ def optimized_dashboard_kpis(request):
                 'total': float(repair_invoice_upi_total),
                 'rows': repair_invoice_upi_rows,
             },
+            'repair_invoice_mixed_total': {
+                'label': 'Repair Invoices (Mixed)',
+                'total': float(repair_invoice_mixed_total),
+                'rows': repair_invoice_mixed_rows,
+            },
             'repair_payment_cash_total': {
                 'label': 'Repair Payments (Cash)',
                 'total': float(repair_payment_cash_total),
@@ -962,6 +996,22 @@ def optimized_dashboard_kpis(request):
                         'source': row.get('source') or 'invoice_payment',
                         'note': '',
                     } for row in repair_upi_payment_rows
+                ],
+            },
+            'repair_payment_mixed_total': {
+                'label': 'Repair Payments (Mixed)',
+                'total': float(repair_payment_mixed_total),
+                'rows': [
+                    {
+                        'id': row.get('id'),
+                        'ref': row.get('invoice_number') or f"PAY-{row.get('id')}",
+                        'party': row.get('party_name') or row.get('customer_name') or '',
+                        'store': row.get('store') or 'Unknown Store',
+                        'value': float(row.get('amount') or 0.0),
+                        'date': row.get('payment_date'),
+                        'source': row.get('source') or 'invoice_payment',
+                        'note': '',
+                    } for row in repair_mixed_payment_rows
                 ],
             },
             'repairing_profit': {
@@ -1031,10 +1081,12 @@ def optimized_dashboard_kpis(request):
         'total_online': "SUM(Payment.amount where method='upi') + SUM(LedgerEntry.amount where entry_type='credit' and payment_mode='upi' and invoice is null) + SUM(LedgerEntry.upi_amount where payment_mode='mixed')",
         'total_expenses': "SUM(Expenses.expense_amount in selected date range)",
         'total_inhand': "total_cash - total_expenses",
-        'repair_invoice_cash_total': "SUM(Invoice.total where invoice has Repair row and invoice_type='cash')",
-        'repair_invoice_upi_total': "SUM(Invoice.total where invoice has Repair row and invoice_type='upi')",
-        'repair_payment_cash_total': "SUM(Payment.amount where payment.invoice has Repair row and method='cash')",
-        'repair_payment_upi_total': "SUM(Payment.amount where payment.invoice has Repair row and method='upi')",
+        'repair_invoice_cash_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='cash')",
+        'repair_invoice_upi_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='upi')",
+        'repair_invoice_mixed_total': "SUM(Invoice.total where repair.status in ('done','delivered') and invoice_type='mixed')",
+        'repair_payment_cash_total': "SUM(Payment.amount where repair.status in ('done','delivered') and method='cash')",
+        'repair_payment_upi_total': "SUM(Payment.amount where repair.status in ('done','delivered') and method='upi')",
+        'repair_payment_mixed_total': "SUM(Payment.amount where repair.status in ('done','delivered') and method='mixed')",
         'repairing_profit': "SUM((effective_sale_rate - effective_cost_rate) * quantity for items on paid repair invoices)",
         'counter_profit': "SUM((effective_sale_rate - effective_cost_rate) * quantity for items on paid retail invoices)",
         'pending_profit': "SUM((sale_price - purchase_price) * quantity for credit/pending invoice items in selected date range)",

@@ -588,9 +588,7 @@ def ledger_by_customer(request):
 @permission_classes([IsAuthenticated])
 def ledger_entry_list_create(request):
     """List all ledger entries or create a new entry (Admin only)"""
-    # Check Admin permission
-    if not is_admin_user(request.user):
-        return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+    
     if request.method == 'GET':
         queryset = _exclude_repair_group_entries(
             LedgerEntry.objects.select_related('customer', 'customer__customer_group', 'invoice', 'created_by').all()

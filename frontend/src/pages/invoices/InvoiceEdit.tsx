@@ -1,9 +1,10 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { posApi, productsApi } from '../../lib/api';
 import { formatNumber } from '../../lib/utils';
 import { getPriceValidationError } from '../pos/priceValidation';
+import { parseBarcodesFromInput, looksLikeBarcode } from '../../lib/scanningQueue';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -11,7 +12,7 @@ import Input from '../../components/ui/Input';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import Modal from '../../components/ui/Modal';
-import { ArrowLeft, Trash2, Plus, Check, Barcode, Search, Package, XCircle } from 'lucide-react';
+import { ArrowLeft, Trash2, Plus, Check, Barcode, Search, Package, XCircle, CheckCircle, Sparkles } from 'lucide-react';
 
 export default function InvoiceEdit() {
   const { id } = useParams<{ id: string }>();
@@ -48,6 +49,45 @@ export default function InvoiceEdit() {
   } | null>(null);
 
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
+  const isTypingInPriceInput = useRef(false);
+
+  // Scanning queue (same as POS): rapid scans or paste go to queue, processed one-by-one
+  interface QueueItem {
+    id: string;
+    code: string;
+    status: 'pending' | 'processing' | 'success' | 'error';
+    message?: string;
+    timestamp: number;
+  }
+  const [scanQueue, setScanQueue] = useState<QueueItem[]>([]);
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+
+  const addToQueue = useCallback((barcodes: string[]) => {
+    const newItems: QueueItem[] = barcodes
+      .filter(code => code.trim().length > 0)
+      .map(code => ({
+        id: Math.random().toString(36).substring(7),
+        code: code.trim(),
+        status: 'pending',
+        timestamp: Date.now()
+      }));
+    setScanQueue(prev => [...prev, ...newItems]);
+  }, []);
+
+  // Clear queue items that are done (success/error) after delay
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setScanQueue(prev => {
+        const now = Date.now();
+        return prev.filter(item =>
+          item.status === 'pending' ||
+          item.status === 'processing' ||
+          (now - item.timestamp < 5000)
+        );
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const [itemQuantities, setItemQuantities] = useState<Record<number, string>>({});
   const [itemPrices, setItemPrices] = useState<Record<number, string>>({});
@@ -107,12 +147,6 @@ export default function InvoiceEdit() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: editCartQueryKey }),
     onError: (e: any) => alert(e?.response?.data?.error || 'Remove failed'),
   });
-
-  const looksLikeBarcode = (input: string): boolean => {
-    if (!input || input.length < 3) return false;
-    const barcodePattern = /^[A-Za-z0-9\-_]+$/;
-    return barcodePattern.test(input) && (input.length >= 4 || input.includes('-') || input.includes('_'));
-  };
 
   const trimmedBarcodeInput = useMemo(() => debouncedBarcodeInput.trim(), [debouncedBarcodeInput]);
 
@@ -194,6 +228,113 @@ export default function InvoiceEdit() {
       setBarcodeMessage(errorMsg);
     },
   });
+
+  // Dedicated mutation for queue processing (no alert on error; errors shown in queue UI)
+  const processQueueItemMutation = useMutation({
+    mutationFn: (data: any) => posApi.carts.addItem(cartId!, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: editCartQueryKey }),
+  });
+
+  // Process scanning queue one-by-one (same as POS)
+  useEffect(() => {
+    if (!cartId) return;
+
+    const processNextItem = async () => {
+      if (isProcessingQueue) return;
+
+      const nextItem = scanQueue.find(item => item.status === 'pending');
+      if (!nextItem) return;
+
+      setIsProcessingQueue(true);
+      setScanQueue(prev => prev.map(item =>
+        item.id === nextItem.id ? { ...item, status: 'processing' } : item
+      ));
+
+      const barcodeToScan = nextItem.code;
+      const currentCartData = queryClient.getQueryData(editCartQueryKey) as any;
+      const currentItems = currentCartData?.data?.items ?? currentCartData?.items ?? [];
+
+      const isAlreadyProcessedInQueue = scanQueue.some(item =>
+        item.id !== nextItem.id &&
+        item.code === barcodeToScan &&
+        (item.status === 'success' || item.status === 'processing')
+      );
+      if (isAlreadyProcessedInQueue) {
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'error', message: 'Duplicate scan' } : item
+        ));
+        setIsProcessingQueue(false);
+        return;
+      }
+
+      try {
+        let alreadyInCart = false;
+        for (const item of currentItems) {
+          const scannedBarcodes = item.scanned_barcodes || [];
+          if (scannedBarcodes.some((bc: string) => bc && typeof bc === 'string' && bc.trim() === barcodeToScan)) {
+            alreadyInCart = true;
+            break;
+          }
+          if (item.barcode === barcodeToScan) {
+            alreadyInCart = true;
+            break;
+          }
+        }
+        if (alreadyInCart) {
+          setScanQueue(prev => prev.map(item =>
+            item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
+          ));
+          setIsProcessingQueue(false);
+          return;
+        }
+
+        const barcodeCheck = await productsApi.byBarcode(barcodeToScan, strictBarcodeMode);
+        if (!barcodeCheck.data) {
+          setScanQueue(prev => prev.map(item =>
+            item.id === nextItem.id ? { ...item, status: 'error', message: 'Product not found' } : item
+          ));
+          setIsProcessingQueue(false);
+          return;
+        }
+        if (barcodeCheck.data.barcode_available === false) {
+          const errorMsg = barcodeCheck.data.sold_invoice
+            ? `Sold (Inv #${barcodeCheck.data.sold_invoice})`
+            : 'Sold / Unavailable';
+          setScanQueue(prev => prev.map(item =>
+            item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
+          ));
+          setIsProcessingQueue(false);
+          return;
+        }
+
+        const productData = barcodeCheck.data;
+        const scannedBarcode = (productData as any).canonical_barcode ?? productData.matched_barcode ?? barcodeToScan;
+
+        await processQueueItemMutation.mutateAsync({
+          product: productData.id,
+          quantity: 1,
+          unit_price: 0,
+          manual_unit_price: productData.selling_price ?? 0,
+          barcode: scannedBarcode
+        });
+
+        const msg = (productData as any).message || 'Added';
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'success', message: msg } : item
+        ));
+        await queryClient.invalidateQueries({ queryKey: editCartQueryKey });
+      } catch (error: any) {
+        const errorMsg = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Failed';
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
+        ));
+      } finally {
+        setIsProcessingQueue(false);
+      }
+    };
+
+    processNextItem();
+  }, [scanQueue, isProcessingQueue, cartId, queryClient, strictBarcodeMode, editCartQueryKey]);
 
   const handleBarcodeScan = async (barcode: string) => {
     const val = barcode.trim();
@@ -354,6 +495,37 @@ export default function InvoiceEdit() {
           <span className="text-sm text-gray-500">• Add/change items, then Apply.</span>
         </div>
         <div className="p-4 relative">
+          {/* Scanning Queue display (same as POS) */}
+          {scanQueue.length > 0 && (
+            <div className="absolute z-50 left-4 right-4 mb-1 bottom-full bg-white border border-gray-200 rounded-lg shadow-xl max-h-40 overflow-y-auto mb-2">
+              <div className="p-2 border-b border-gray-100 bg-gray-50 flex justify-between items-center sticky top-0 z-10">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Scanning Queue</h4>
+                <button type="button" onClick={() => setScanQueue([])} className="text-xs text-blue-600 hover:text-blue-800">Clear</button>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {[...scanQueue].reverse().map(item => (
+                  <div key={item.id} className="p-2 flex items-center justify-between text-sm hover:bg-gray-50">
+                    <div className="flex items-center gap-3">
+                      {item.status === 'pending' && <span className="w-2 h-2 rounded-full bg-gray-400 animate-pulse" />}
+                      {item.status === 'processing' && <Sparkles className="h-4 w-4 text-blue-500 animate-spin" />}
+                      {item.status === 'success' && <CheckCircle className="h-4 w-4 text-green-500" />}
+                      {item.status === 'error' && <XCircle className="h-4 w-4 text-red-500" />}
+                      <div className="flex flex-col">
+                        <span className={`font-mono font-medium ${item.status === 'success' ? 'text-gray-900' : 'text-gray-600'}`}>
+                          {item.code}
+                        </span>
+                        {item.message && (
+                          <span className={`text-xs ${item.status === 'error' ? 'text-red-500' : item.status === 'success' ? 'text-green-600' : 'text-gray-400'}`}>
+                            {item.message}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
             <div className="relative flex-1">
               <div className="absolute left-3 top-1/2 -translate-y-1/2 z-10 pointer-events-none">
@@ -370,7 +542,9 @@ export default function InvoiceEdit() {
                   if (searchedBarcodeStatus) setSearchedBarcodeStatus(null);
                 }}
                 onKeyDown={async (e) => {
-                  const inputVal = barcodeInput.trim();
+                  // Read from DOM on Enter so rapid scanner input isn't lost (same as POS)
+                  const inputElement = e.currentTarget as HTMLInputElement;
+                  const inputVal = (e.key === 'Enter' ? (inputElement.value || '').trim() : barcodeInput.trim());
                   const searchLower = inputVal.toLowerCase();
                   const showCustomOption = searchLower === 'other' || searchLower === 'custom' || searchLower.startsWith('other ') || searchLower.startsWith('custom ');
 
@@ -416,9 +590,22 @@ export default function InvoiceEdit() {
                       }
                     }
 
+                    // Queue path for barcode(s): rapid scan or paste (same as POS)
                     if (looksLikeBarcode(inputVal)) {
-                      handleBarcodeScan(inputVal);
-                    } else if (inputVal) {
+                      const barcodes = parseBarcodesFromInput(inputVal);
+                      if (barcodes.length > 0) {
+                        addToQueue(barcodes);
+                        setBarcodeInput('');
+                        setIsSearchTyped(false);
+                        setProductSearchSelectedIndex(-1);
+                        if (!isTypingInPriceInput.current) {
+                          barcodeInputRef.current?.focus();
+                        }
+                      }
+                      return;
+                    }
+
+                    if (inputVal) {
                       const firstProduct = _barcodeCheck?.product || (searchResults?.results?.[0]);
                       if (firstProduct) {
                         addItemMutation.mutate({
@@ -633,7 +820,8 @@ export default function InvoiceEdit() {
                         step={1}
                         value={itemQuantities[item.id] ?? item.quantity}
                         onChange={(e) => setItemQuantities((p) => ({ ...p, [item.id]: e.target.value }))}
-                        onBlur={() => handleQuantityBlur(item)}
+                        onFocus={() => { isTypingInPriceInput.current = true; }}
+                        onBlur={() => { isTypingInPriceInput.current = false; handleQuantityBlur(item); }}
                         className="w-16"
                       />
                     </TableCell>
@@ -651,7 +839,9 @@ export default function InvoiceEdit() {
                             placeholder="0"
                             value={purchaseInputValue}
                             onChange={(e) => setEditingPurchasePrice((p) => ({ ...p, [item.id]: e.target.value }))}
+                            onFocus={() => { isTypingInPriceInput.current = true; }}
                             onBlur={() => {
+                              isTypingInPriceInput.current = false;
                               const raw = editingPurchasePrice[item.id] ?? purchaseInputValue;
                               const num = parseFloat(raw);
                               if (raw === '' || raw === undefined) {
@@ -697,8 +887,8 @@ export default function InvoiceEdit() {
                               setPriceErrors((p) => { const n = { ...p }; delete n[item.id]; return n; });
                             }
                           }}
-                          onFocus={() => setItemPrices((p) => ({ ...p, [item.id]: itemPrices[item.id] ?? (item.manual_unit_price ?? item.unit_price) ?? '' }))}
-                          onBlur={() => handlePriceBlur(item)}
+                          onFocus={() => { isTypingInPriceInput.current = true; setItemPrices((p) => ({ ...p, [item.id]: itemPrices[item.id] ?? (item.manual_unit_price ?? item.unit_price) ?? '' })); }}
+                          onBlur={() => { isTypingInPriceInput.current = false; handlePriceBlur(item); }}
                           className={`w-28 ${priceErrors[item.id] ? 'border-red-500' : ''}`}
                         />
                         {priceErrors[item.id] && <div className="text-xs text-red-600 mt-0.5">{priceErrors[item.id]}</div>}
