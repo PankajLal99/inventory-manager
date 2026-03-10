@@ -872,6 +872,10 @@ export default function Repairs() {
             const hasGroupDateSelector = group.status !== 'old_repair';
             const selectedGroupDate = getGroupSelectedDate(group.status, group.items);
             const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate));
+            // Profit = sum(paid) - sum(total) for Super group summary row
+            const groupTotalSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_total), 0);
+            const groupPaidSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
+            const groupProfit = groupPaidSum - groupTotalSum;
             return (
             <div key={group.status} className="space-y-4">
               <div className="flex flex-col gap-1 px-2">
@@ -1105,6 +1109,15 @@ export default function Repairs() {
                       </TableRow>
                     );
                   })}
+                  {canSeeTotalColumn && displayedGroupItems.length > 0 && (
+                    <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
+                      <TableCell colSpan={10}>Profit (Paid − Total)</TableCell>
+                      <TableCell align="right" className="text-emerald-700">
+                        ₹{formatNumber(groupProfit)}
+                      </TableCell>
+                      <TableCell>{' '}</TableCell>
+                    </TableRow>
+                  )}
                 </Table>
                 )}
               </div>
@@ -1267,6 +1280,12 @@ export default function Repairs() {
                     </div>
                   );
                 })}
+                {canSeeTotalColumn && displayedGroupItems.length > 0 && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center">
+                    <span className="text-gray-700">Profit (Paid − Total)</span>
+                    <span className="text-emerald-700">₹{formatNumber(groupProfit)}</span>
+                  </div>
+                )}
               </div>
               )}
             </div>

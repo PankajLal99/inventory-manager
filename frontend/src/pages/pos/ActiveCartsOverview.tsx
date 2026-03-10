@@ -28,6 +28,7 @@ interface CartItemOverview {
   product: number;
   product_name: string;
   product_sku: string;
+  scanned_barcodes_display?: string[];
   quantity: string;
   unit_price: string;
   discount_amount?: string;
@@ -405,7 +406,9 @@ export default function ActiveCartsOverview() {
                                         {item.product_name}
                                       </td>
                                       <td className="px-4 py-2 font-mono text-gray-600">
-                                        {item.product_sku}
+                                        {item.scanned_barcodes_display?.length
+                                          ? item.scanned_barcodes_display.filter(Boolean).join(', ')
+                                          : item.product_sku}
                                       </td>
                                       <td className="px-4 py-2 text-right">
                                         {formatNumber(qty, 3)}

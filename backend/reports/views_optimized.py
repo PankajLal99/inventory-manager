@@ -349,12 +349,9 @@ def optimized_dashboard_kpis(request):
     
     # OPTIMIZATION 3: Profit calculations from invoice item aggregates
     paid_invoices = invoices.filter(status='paid')
-    # Repairing profit: use same set as Repair Payments (Cash/UPI/Mixed) — delivered repair invoices
-    # that have at least one payment with method cash, upi, or mixed (payment-based, not invoice_type).
-    repair_profit_invoice_ids = repair_payments.filter(
-        payment_method__in=('cash', 'upi', 'mixed')
-    ).values_list('invoice_id', flat=True).distinct()
-    repair_paid_invoices = repair_invoices.filter(id__in=repair_profit_invoice_ids)
+    # Repairing profit: simple — all repair invoices with status delivered (done/delivered), by invoice date.
+    # Sum (effective_sale_rate - effective_cost_rate) * qty for each item.
+    repair_paid_invoices = repair_invoices
 
     # Shared item-level margin expressions:
     # sold = quantity * (manual_unit_price > 0 ? manual_unit_price : unit_price)
