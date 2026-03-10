@@ -602,11 +602,9 @@ def pos_session_close(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def active_carts_overview(request):
-    """List all active and held carts (read-only overview): which user, locked, items. No edits."""
+    """List all active and held carts (read-only overview): which user, locked, items. Includes EDIT-* (invoice edit) carts."""
     carts = Cart.objects.filter(
         status__in=['active', 'held']
-    ).exclude(
-        cart_number__startswith='EDIT-'
     ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__variant').order_by('-updated_at')
     store_id = request.query_params.get('store')
     if store_id:

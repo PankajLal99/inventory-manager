@@ -279,7 +279,14 @@ export default function ActiveCartsOverview() {
                     )}
                   </TableCell>
                   <TableCell className="font-mono font-medium">
-                    {cart.cart_number}
+                    <span className="flex items-center gap-2">
+                      {cart.cart_number}
+                      {cart.cart_number?.startsWith('EDIT-') && (
+                        <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+                          Invoice edit
+                        </span>
+                      )}
+                    </span>
                   </TableCell>
                   <TableCell>
                     <span className="flex items-center gap-1.5">

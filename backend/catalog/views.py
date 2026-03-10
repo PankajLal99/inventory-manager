@@ -98,6 +98,8 @@ def get_barcode_status_message(barcode_obj, sold_invoice=None):
         elif tag == 'defective':
             tag_display = barcode_obj.get_tag_display() if hasattr(barcode_obj, 'get_tag_display') and barcode_obj else 'Defective'
             return f'This item cannot be added as it is already {tag_display.lower()}.', 'defective'
+        elif tag == 'in-cart':
+            return 'In cart', 'in_cart'
         else:
             return 'This item cannot be added due to unknown status.', 'unknown'
     except Exception as e:

@@ -50,6 +50,8 @@ export default function InvoiceEdit() {
 
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
   const isTypingInPriceInput = useRef(false);
+  const cartIdRef = useRef<number | undefined>(cartId);
+  cartIdRef.current = cartId;
 
   // Scanning queue (same as POS): rapid scans or paste go to queue, processed one-by-one
   interface QueueItem {
@@ -372,10 +374,23 @@ export default function InvoiceEdit() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+      localStorage.removeItem(`invoice_edit_cart_${invoiceId}`);
       navigate(`/invoices/${invoiceId}`);
     },
     onError: (e: any) => alert(e?.response?.data?.error || 'Apply failed'),
   });
+
+  const handleBack = useCallback(() => {
+    const cid = cartIdRef.current;
+    if (cid) {
+      posApi.carts.delete(cid).then(() => {
+        queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+      }).catch(() => {});
+      localStorage.removeItem(`invoice_edit_cart_${invoiceId}`);
+    }
+    navigate(`/invoices/${invoiceId}`);
+  }, [invoiceId, navigate, queryClient]);
 
   const handleApply = () => {
     const customItemsMissingPP = items.filter((item: any) => {
@@ -472,7 +487,7 @@ export default function InvoiceEdit() {
     <div className="space-y-6 max-w-7xl mx-auto p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <Button variant="outline" onClick={() => navigate(`/invoices/${invoiceId}`)}>
+          <Button variant="outline" onClick={handleBack}>
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back
           </Button>
