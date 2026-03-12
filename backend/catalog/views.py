@@ -1206,7 +1206,8 @@ def product_get_labels(request, pk):
     purchase_id = request.query_params.get('purchase_id', None)
     
     # Filter barcodes by product and optionally by purchase
-    barcodes_query = product.barcodes.all()
+    # Order by short_code so labels print in human-friendly short-code sequence
+    barcodes_query = product.barcodes.all().order_by('short_code', 'id')
     if purchase_id:
         try:
             purchase_id_int = int(purchase_id)
@@ -1218,15 +1219,19 @@ def product_get_labels(request, pk):
     
     # Get all existing labels for these barcodes
     # Valid labels can be: base64 data URL (data:image/...) or blob URL (https://...)
-    labels = BarcodeLabel.objects.filter(
-        barcode__in=barcodes
-    ).exclude(
-        label_image=''
-    ).exclude(
-        label_image__isnull=True
-    ).filter(
-        Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
-    ).select_related('barcode')
+    labels = (
+        BarcodeLabel.objects.filter(
+            barcode__in=barcodes
+        )
+        .exclude(label_image='')
+        .exclude(label_image__isnull=True)
+        .filter(
+            Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
+        )
+        .select_related('barcode')
+        # Ensure deterministic ordering matching barcode short_code sequence
+        .order_by('barcode__short_code', 'barcode__id')
+    )
     
     labels_list = []
     for label in labels:
