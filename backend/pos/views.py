@@ -640,13 +640,15 @@ def active_carts_overview(request):
         ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
     )
     serializer = CartOverviewSerializer(carts, many=True, context={'sold_barcode_ids': sold_barcode_ids})
-    # Expose sold barcode display values so the frontend can filter them out on the page as well
+    # Expose sold barcode display values (all string forms) so the frontend can filter consistently
     sold_barcode_display_values = []
     if sold_barcode_ids:
+        seen = set()
         for short_code, barcode in Barcode.objects.filter(id__in=sold_barcode_ids).values_list('short_code', 'barcode'):
-            val = (short_code or barcode or '').strip()
-            if val:
-                sold_barcode_display_values.append(val)
+            for val in ((short_code or '').strip(), (barcode or '').strip()):
+                if val and val not in seen:
+                    seen.add(val)
+                    sold_barcode_display_values.append(val)
     return Response({
         'carts': serializer.data,
         'sold_barcode_display_values': sold_barcode_display_values,
@@ -660,11 +662,11 @@ def cart_list_create(request):
     if request.method == 'GET':
         # If active parameter is provided, return active carts for current user
         if request.query_params.get('active') == 'true':
-            # Return all active carts for the user, excluding invoice-edit carts (EDIT-*)
+            # Return all active carts for the user, excluding invoice-edit carts (EDIT-* / edit-*)
             active_carts = Cart.objects.filter(
                 created_by=request.user,
                 status='active'
-            ).exclude(cart_number__startswith='EDIT-').order_by('-updated_at')
+            ).exclude(cart_number__istartswith='edit-').order_by('-updated_at')
             
             # If 'single' parameter is true, return only the most recent one (backward compatibility)
             if request.query_params.get('single') == 'true':
@@ -689,7 +691,7 @@ def cart_list_create(request):
                 customer_id=customer_id,
                 status='active',
                 created_by=request.user
-            ).exclude(cart_number__startswith='EDIT-').first()
+            ).exclude(cart_number__istartswith='edit-').first()
             
             if existing_cart:
                 # Return existing cart instead of creating new one
@@ -838,7 +840,7 @@ def cart_detail(request, pk):
                 customer_id=new_customer_id,
                 status='active',
                 created_by=request.user
-            ).exclude(pk=cart.pk).exclude(cart_number__startswith='EDIT-').first()
+            ).exclude(pk=cart.pk).exclude(cart_number__istartswith='edit-').first()
             if existing_cart:
                 return Response(
                     {

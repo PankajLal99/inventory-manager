@@ -186,8 +186,16 @@ export default function ActiveCartsOverview() {
     }
   };
 
+  const isInvoiceEditCart = (cart: CartOverview) =>
+    (cart.cart_number || '').toUpperCase().startsWith('EDIT-');
+
+  // Discard all: only regular carts (exclude EDIT-* / edit-* invoice-edit carts to avoid closing edit sessions)
   const discardableCarts = matchingCarts.filter(
-    (c) => !c.locked && user != null && (c.created_by === user.id || isSuper)
+    (c) =>
+      !c.locked &&
+      user != null &&
+      (c.created_by === user.id || isSuper) &&
+      !isInvoiceEditCart(c)
   );
   const [isDiscardAllPending, setIsDiscardAllPending] = useState(false);
 
@@ -195,8 +203,8 @@ export default function ActiveCartsOverview() {
     if (discardableCarts.length === 0) return;
     const message =
       discardableCarts.length === 1
-        ? `Discard 1 cart? All items will be returned to inventory and barcodes set to fresh.`
-        : `Discard all ${discardableCarts.length} carts? All items will be returned to inventory and barcodes set to fresh.`;
+        ? `Discard 1 cart? Items will be returned to inventory; barcodes already on a paid/credit invoice are left unchanged.`
+        : `Discard all ${discardableCarts.length} carts? Items will be returned to inventory; barcodes already on a paid/credit invoice are left unchanged.`;
     if (!window.confirm(message)) return;
     setIsDiscardAllPending(true);
     const allProductIds = new Set<number>();
@@ -254,7 +262,7 @@ export default function ActiveCartsOverview() {
     <div className="p-6">
       <PageHeader
         title="Active Carts Overview"
-        subtitle="View which carts are active, who has them, and what’s in each. Discard a cart to remove it and return all items to inventory (barcodes set to fresh)."
+        subtitle="View which carts are active, who has them, and what’s in each. Discard removes the cart and returns items to inventory; barcodes already on a paid/credit invoice are never reverted. Invoice-edit (EDIT-*) carts are excluded from Discard all."
       />
 
       {isAdmin && stores.length > 1 && (
@@ -278,6 +286,9 @@ export default function ActiveCartsOverview() {
       )}
 
       <Card className="mb-6">
+        <p className="mb-3 text-sm text-gray-600">
+          Barcodes already on a paid/credit invoice are hidden and will not appear in cart items or in search results.
+        </p>
         <div className="flex flex-wrap items-center gap-3">
           <label className="text-sm font-medium text-gray-700">Search by barcode</label>
           <div className="flex flex-1 min-w-[200px] max-w-md items-center gap-2 rounded-md border border-gray-300 bg-white shadow-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
@@ -349,7 +360,7 @@ export default function ActiveCartsOverview() {
                   type="button"
                   onClick={handleDiscardAll}
                   disabled={isDiscardAllPending}
-                  title="Discard all carts you can discard (unlocked; your carts or any if Super). Items returned to inventory."
+                  title="Discard all non–invoice-edit carts you can discard. Barcodes on paid/credit invoices are never reverted."
                   className="inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isDiscardAllPending ? (
@@ -395,7 +406,7 @@ export default function ActiveCartsOverview() {
                   <TableCell className="font-mono font-medium">
                     <span className="flex items-center gap-2">
                       {cart.cart_number}
-                      {cart.cart_number?.startsWith('EDIT-') && (
+                      {isInvoiceEditCart(cart) && (
                         <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
                           Invoice edit
                         </span>
@@ -440,7 +451,7 @@ export default function ActiveCartsOverview() {
                         if (!canDiscard) return;
                         const message =
                           itemCount > 0
-                            ? `Discard cart ${cart.cart_number}? All ${itemCount} item(s) will be removed and returned to inventory; barcodes will be set to fresh.`
+                            ? `Discard cart ${cart.cart_number}? All ${itemCount} item(s) will be removed and returned to inventory. Barcodes already on a paid/credit invoice are left unchanged.`
                             : `Discard cart ${cart.cart_number}?`;
                         if (!window.confirm(message)) return;
                         discardCartMutation.mutate({

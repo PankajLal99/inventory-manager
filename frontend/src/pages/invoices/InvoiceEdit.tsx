@@ -290,7 +290,7 @@ export default function InvoiceEdit() {
           return;
         }
 
-        const barcodeCheck = await productsApi.byBarcode(barcodeToScan, strictBarcodeMode);
+        const barcodeCheck = await productsApi.byBarcode(barcodeToScan, strictBarcodeMode, true);
         if (!barcodeCheck.data) {
           setScanQueue(prev => prev.map(item =>
             item.id === nextItem.id ? { ...item, status: 'error', message: 'Product not found' } : item
@@ -324,9 +324,36 @@ export default function InvoiceEdit() {
         setScanQueue(prev => prev.map(item =>
           item.id === nextItem.id ? { ...item, status: 'success', message: msg } : item
         ));
-        await queryClient.invalidateQueries({ queryKey: editCartQueryKey });
+        // Await refetch so next queue item sees updated cart (consistent with POS)
+        await queryClient.refetchQueries({ queryKey: editCartQueryKey });
       } catch (error: any) {
         const errorMsg = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Failed';
+        const isAlreadyInCartError =
+          errorMsg?.includes?.('already in another cart') || errorMsg?.includes?.('already been scanned');
+        if (isAlreadyInCartError && cartId) {
+          try {
+            await queryClient.refetchQueries({ queryKey: editCartQueryKey });
+            const freshCart = await queryClient.fetchQuery({ queryKey: editCartQueryKey }) as any;
+            const freshItems = freshCart?.data?.items ?? freshCart?.items ?? [];
+            const isInCurrentCart = [barcodeToScan, (productData as any)?.canonical_barcode ?? (productData as any)?.matched_barcode ?? barcodeToScan].some(bc => {
+              const b = String(bc ?? '').trim();
+              return b && freshItems.some(
+                (item: any) =>
+                  (item.scanned_barcodes || []).some((x: string) => x && String(x).trim() === b)
+              );
+            });
+            if (isInCurrentCart) {
+              setScanQueue(prev => prev.map(item =>
+                item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
+              ));
+              await queryClient.refetchQueries({ queryKey: editCartQueryKey });
+              setIsProcessingQueue(false);
+              return;
+            }
+          } catch (_e) {
+            // refetch failed, fall through to show error
+          }
+        }
         setScanQueue(prev => prev.map(item =>
           item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
         ));
@@ -371,12 +398,16 @@ export default function InvoiceEdit() {
 
   const applyMutation = useMutation({
     mutationFn: () => posApi.invoices.updateFromCart(invoiceId, cartId!),
-    onSuccess: () => {
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: editCartQueryKey });
       queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['pos/carts'] });
       localStorage.removeItem(`invoice_edit_cart_${invoiceId}`);
+      setCartId(undefined);
       navigate(`/invoices/${invoiceId}`);
+      // Backend deletes the cart in updateFromCart; clearing local state and cache above ensures no stale cart remains.
     },
     onError: (e: any) => alert(e?.response?.data?.error || 'Apply failed'),
   });
@@ -386,9 +417,12 @@ export default function InvoiceEdit() {
     if (cid) {
       posApi.carts.delete(cid).then(() => {
         queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+        queryClient.invalidateQueries({ queryKey: ['pos/carts'] });
       }).catch(() => {});
+      queryClient.removeQueries({ queryKey: ['edit-cart', cid] });
       localStorage.removeItem(`invoice_edit_cart_${invoiceId}`);
     }
+    setCartId(undefined);
     navigate(`/invoices/${invoiceId}`);
   }, [invoiceId, navigate, queryClient]);
 
@@ -621,6 +655,10 @@ export default function InvoiceEdit() {
                     }
 
                     if (inputVal) {
+                      // When multiple options exist, require explicit selection to avoid adding wrong product
+                      if (productList.length > 1 && productSearchSelectedIndex < 0) {
+                        return;
+                      }
                       const firstProduct = _barcodeCheck?.product || (searchResults?.results?.[0]);
                       if (firstProduct) {
                         addItemMutation.mutate({
@@ -841,7 +879,17 @@ export default function InvoiceEdit() {
                       />
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm font-semibold text-blue-600">₹{formatNumber(item.product_selling_price || item.product_purchase_price || 0)}</span>
+                      <div className="flex flex-col gap-0.5">
+                        {item.product_selling_price != null && parseFloat(String(item.product_selling_price)) > 0 && (
+                          <span className="text-sm font-semibold text-blue-600">Sell: ₹{formatNumber(item.product_selling_price)}</span>
+                        )}
+                        {(item.product_purchase_price != null || item.purchase_price != null) && (
+                          <span className="text-xs text-gray-600">Cost: ₹{formatNumber(item.product_purchase_price ?? item.purchase_price ?? 0)}</span>
+                        )}
+                        {(!item.product_selling_price || parseFloat(String(item.product_selling_price)) <= 0) && item.product_purchase_price == null && item.purchase_price == null && (
+                          <span className="text-sm font-semibold text-blue-600">₹0</span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {showCostInput ? (

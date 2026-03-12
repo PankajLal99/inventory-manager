@@ -4405,8 +4405,18 @@ export default function POS() {
                                   );
                                 }
                                 return (
-                                  <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={hasValidSellingPrice ? 'Selling Price' : 'Purchase Price'}>
-                                    <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPriceFromApi)}</span>
+                                  <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={hasValidSellingPrice ? (hasValidPurchasePriceFromApi ? 'Selling & cost' : 'Selling Price') : 'Purchase Price (cost)'}>
+                                    <div className="flex flex-col gap-0.5">
+                                      {hasValidSellingPrice && (
+                                        <span className="text-xs font-medium text-blue-700">Sell: ₹{formatNumber(rawSelling)}</span>
+                                      )}
+                                      {hasValidPurchasePriceFromApi && (
+                                        <span className="text-xs font-medium text-blue-600">Cost: ₹{formatNumber(rawPurchaseFromApi)}</span>
+                                      )}
+                                      {!hasValidSellingPrice && !hasValidPurchasePriceFromApi && (
+                                        <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPriceFromApi ?? 0)}</span>
+                                      )}
+                                    </div>
                                   </div>
                                 );
                               }

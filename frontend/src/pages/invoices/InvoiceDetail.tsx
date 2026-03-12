@@ -720,6 +720,21 @@ export default function InvoiceDetail() {
     }
   }, [showCheckoutModal, invoice?.data?.repair?.id]);
 
+  // F6: Open Custom Product modal when checkout modal is open (same as POS / Invoice Edit)
+  useEffect(() => {
+    if (!showCheckoutModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F6') {
+        e.preventDefault();
+        setShowCustomProductModal(true);
+        setBarcodeInput('');
+        setProductSearchSelectedIndex(-1);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showCheckoutModal]);
+
   // Early returns after all hooks
   if (isLoading) {
     return <LoadingState message="Loading invoice details..." />;
@@ -2963,6 +2978,7 @@ export default function InvoiceDetail() {
               <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
                 <Plus className="h-4 w-4" />
                 Add Product
+                <span className="text-xs font-normal text-gray-500">(F6: Custom Product)</span>
               </h4>
               <div className="relative w-full">
                 <div className="flex gap-2">
