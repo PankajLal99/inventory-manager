@@ -503,9 +503,13 @@ export default function Repairs() {
       : []),
   ];
   const getLatestDateForItems = (items: RepairInvoice[]): string => {
-    const dates = items
-      .map((inv) => toLocalDateString(getRepairDisplayDate(inv)))
-      .filter(Boolean);
+    const dates: string[] = [];
+    for (const inv of items) {
+      const repairDate = toLocalDateString(getRepairDisplayDate(inv));
+      if (repairDate) dates.push(repairDate);
+      const deliveryDate = inv.repair?.delivery_date ? toLocalDateString(inv.repair.delivery_date) : '';
+      if (deliveryDate) dates.push(deliveryDate);
+    }
     if (dates.length === 0) return '';
     return dates.reduce((latest, current) => (current > latest ? current : latest));
   };
@@ -514,9 +518,13 @@ export default function Repairs() {
     const defaultDate = getLatestDateForItems(items) || toLocalDateString(new Date());
     return groupDateFilters[status] ?? defaultDate;
   };
+  /** Match if selected date equals repair date (created/updated) OR delivery date. */
   const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string) => {
     if (!selectedDate) return true;
-    return toLocalDateString(getRepairDisplayDate(invoice)) === selectedDate;
+    const repairDate = toLocalDateString(getRepairDisplayDate(invoice));
+    if (repairDate === selectedDate) return true;
+    const deliveryDate = invoice.repair?.delivery_date ? toLocalDateString(invoice.repair.delivery_date) : '';
+    return deliveryDate === selectedDate;
   };
 
   const formatDate = (dateString: string) => {
@@ -897,13 +905,13 @@ export default function Repairs() {
                   </Badge>
                   {hasGroupDateSelector && (
                     <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className="text-xs text-gray-500 whitespace-nowrap">Repair date</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">Date (repair or delivery)</span>
                       <input
                         type="date"
                         value={selectedGroupDate}
                         onChange={(e) => setGroupDateFilters((prev) => ({ ...prev, [group.status]: e.target.value }))}
                         className="h-8 rounded-md border border-gray-200 px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        aria-label={`Filter ${group.label} by repair date`}
+                        aria-label={`Filter ${group.label} by repair or delivery date`}
                       />
                     </div>
                   )}
@@ -912,7 +920,7 @@ export default function Repairs() {
                   <p className="text-sm text-gray-500 ml-5">Repairs from previous days (not delivered)</p>
                 )}
                 {isNotRepairedGroup && (
-                  <p className="text-sm text-gray-500 ml-5">Choose any date (including past dates) for this group — click to expand</p>
+                  <p className="text-sm text-gray-500 ml-5">Filter by repair or delivery date — click to expand</p>
                 )}
               </div>
 

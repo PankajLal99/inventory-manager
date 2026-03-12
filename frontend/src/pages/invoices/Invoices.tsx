@@ -114,6 +114,52 @@ const parseAmount = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const invoiceTypeLabel: Record<string, string> = {
+  cash: 'Cash',
+  upi: 'UPI',
+  pending: 'Pending',
+  credit: 'Credit',
+  defective: 'Defective',
+  mixed: 'Mixed',
+  repair: 'Repair',
+  pos_repair: 'Repair',
+};
+const invoiceStatusLabel: Record<string, string> = {
+  draft: 'Draft',
+  paid: 'Paid',
+  partial: 'Partially Paid',
+  credit: 'Credit',
+  void: 'Void',
+};
+const getInvoiceTypeLabel = (type: string) =>
+  invoiceTypeLabel[String(type || '').toLowerCase()] || type || 'Cash';
+const getInvoiceStatusLabel = (status: string) =>
+  invoiceStatusLabel[String(status || '').toLowerCase()] || status || '—';
+
+/** Type pill color (compact) */
+const typePillClass: Record<string, string> = {
+  cash: 'bg-blue-100 text-blue-800',
+  upi: 'bg-emerald-100 text-emerald-800',
+  pending: 'bg-amber-100 text-amber-800',
+  credit: 'bg-amber-100 text-amber-800',
+  mixed: 'bg-slate-100 text-slate-700',
+  repair: 'bg-purple-100 text-purple-800',
+  pos_repair: 'bg-purple-100 text-purple-800',
+};
+const getTypePillClass = (type: string) =>
+  typePillClass[String(type || '').toLowerCase()] || 'bg-slate-100 text-slate-700';
+
+/** Status text color only (no pill, keeps cell compact) */
+const statusTextClass: Record<string, string> = {
+  paid: 'text-emerald-700',
+  partial: 'text-amber-700',
+  credit: 'text-amber-700',
+  draft: 'text-slate-500',
+  void: 'text-red-600',
+};
+const getStatusTextClass = (status: string) =>
+  statusTextClass[String(status || '').toLowerCase()] || 'text-gray-600';
+
 export default function Invoices() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -261,7 +307,7 @@ export default function Invoices() {
 
   // Filter out defective invoices (they should only appear in defective move-outs page)
   // Filter out repair invoices (they appear on the Repairs page only)
-  // Credit invoices remain hidden by default, but are shown when explicitly filtered.
+  // Credit status invoices (invoice_type === 'credit' or status === 'credit') are shown by default.
   // Search is applied server-side (invoice_number + customer_name)
   const filteredInvoices = invoices.filter((invoice) => {
     const invoiceType = String(invoice.invoice_type || '').toLowerCase();
@@ -270,11 +316,8 @@ export default function Invoices() {
     const isRepairByCustomerGroup = customerGroup === 'REPAIR';
     const isRepairInvoice = Boolean(invoice.repair) || isRepairByType || isRepairByCustomerGroup;
 
-    const isCreditInvoice = invoiceType === 'credit' || invoice.status === 'credit';
-
     if (invoice.invoice_type === 'defective') return false;
     if (isRepairInvoice) return false;
-    if (invoiceTypeFilter !== 'credit' && isCreditInvoice) return false;
     return true;
   });
 
@@ -299,6 +342,21 @@ export default function Invoices() {
     .reduce((sum, inv) => sum + parseAmount(inv.display_total ?? inv.total), 0);
   const totalInvoices = filteredInvoices.length;
   const paidInvoices = filteredInvoices.filter(inv => inv.status === 'paid').length;
+
+  // Credit = invoice_type === 'credit' OR status === 'credit' (UI shows Type / Status separately)
+  const isCreditInvoice = (inv: Invoice) =>
+    String(inv.invoice_type || '').toLowerCase() === 'credit' ||
+    String(inv.status || '').toLowerCase() === 'credit';
+  // Profit summary (Paid − Total) for Super group footer row; bifurcate Paid vs Credit
+  const totalSum = filteredInvoices.reduce((s, inv) => s + parseAmount(inv.computed_total), 0);
+  const paidSum = filteredInvoices.reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
+  const profitSum = paidSum - totalSum;
+  const paidSumNonCredit = filteredInvoices
+    .filter((inv) => !isCreditInvoice(inv))
+    .reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
+  const creditDifference = filteredInvoices
+    .filter((inv) => isCreditInvoice(inv))
+    .reduce((s, inv) => s + (parseAmount(inv.computed_paid) - parseAmount(inv.computed_total)), 0);
 
   const buildInvoiceDetailPath = (invoiceId: number) => {
     const params = new URLSearchParams();
@@ -553,7 +611,7 @@ export default function Invoices() {
               { label: 'Invoice #', align: 'left' },
               { label: 'Date & time', align: 'left' },
               { label: 'Customer', align: 'left' },
-              { label: 'Invoice Type', align: 'left' },
+              { label: 'Type / Status', align: 'left' },
               ...(canSeeTotalColumn ? [{ label: 'Total', align: 'right' as const }] : []),
               { label: 'Paid', align: 'right' },
               { label: '', align: 'right' },
@@ -597,13 +655,17 @@ export default function Invoices() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                        {invoice.invoice_type === 'cash' ? 'Cash' :
-                          invoice.invoice_type === 'upi' ? 'UPI' :
-                            invoice.invoice_type === 'pending' ? 'Pending' :
-                              invoice.invoice_type === 'credit' ? 'Credit' :
-                              invoice.invoice_type || 'Cash'}
-                      </span>
+                      <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 shadow-sm">
+                        <span
+                          className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold ${getTypePillClass(invoice.invoice_type)}`}
+                        >
+                          {getInvoiceTypeLabel(invoice.invoice_type)}
+                        </span>
+                        <span className="text-gray-400 font-medium">·</span>
+                        <span className={`shrink-0 text-xs font-medium ${getStatusTextClass(invoice.status)}`}>
+                          {getInvoiceStatusLabel(invoice.status)}
+                        </span>
+                      </div>
                     </TableCell>
                     {canSeeTotalColumn && (
                       <TableCell align="right">
@@ -634,6 +696,31 @@ export default function Invoices() {
                   </TableRow>
                 );
               })}
+              {canSeeTotalColumn && filteredInvoices.length > 0 && (
+                <>
+                  <TableRow className="bg-gray-50 border-t border-gray-200 font-medium">
+                    <TableCell colSpan={5}>Paid (non-credit)</TableCell>
+                    <TableCell align="right" className="text-green-700">
+                      ₹{formatNumber(paidSumNonCredit)}
+                    </TableCell>
+                    <TableCell>{' '}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-amber-50/80 border-t border-gray-200 font-medium">
+                    <TableCell colSpan={5}>Credit (Paid − Total)</TableCell>
+                    <TableCell align="right" className="text-amber-800">
+                      ₹{formatNumber(creditDifference)}
+                    </TableCell>
+                    <TableCell>{' '}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
+                    <TableCell colSpan={5}>Profit (Paid − Total)</TableCell>
+                    <TableCell align="right" className="text-emerald-700">
+                      ₹{formatNumber(profitSum)}
+                    </TableCell>
+                    <TableCell>{' '}</TableCell>
+                  </TableRow>
+                </>
+              )}
             </Table>
           </div>
           {/* Mobile Card View */}
@@ -674,13 +761,15 @@ export default function Invoices() {
                           {invoice.customer_name || 'Walk-in Customer'}
                         </span>
                       </div>
-                      <div className="mt-1">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {invoice.invoice_type === 'cash' ? 'Cash' :
-                            invoice.invoice_type === 'upi' ? 'UPI' :
-                              invoice.invoice_type === 'pending' ? 'Pending' :
-                                invoice.invoice_type === 'credit' ? 'Credit' :
-                                invoice.invoice_type || 'Cash'}
+                      <div className="mt-1.5 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 shadow-sm">
+                        <span
+                          className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold ${getTypePillClass(invoice.invoice_type)}`}
+                        >
+                          {getInvoiceTypeLabel(invoice.invoice_type)}
+                        </span>
+                        <span className="text-gray-400 font-medium">·</span>
+                        <span className={`shrink-0 text-xs font-medium ${getStatusTextClass(invoice.status)}`}>
+                          {getInvoiceStatusLabel(invoice.status)}
                         </span>
                       </div>
                     </div>
@@ -702,6 +791,22 @@ export default function Invoices() {
                 </div>
               );
             })}
+            {canSeeTotalColumn && filteredInvoices.length > 0 && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 space-y-2 px-4 py-3 text-sm font-medium">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Paid (non-credit)</span>
+                  <span className="text-green-700">₹{formatNumber(paidSumNonCredit)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Credit (Paid − Total)</span>
+                  <span className="text-amber-800">₹{formatNumber(creditDifference)}</span>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-gray-200 font-semibold">
+                  <span className="text-gray-700">Profit (Paid − Total)</span>
+                  <span className="text-emerald-700">₹{formatNumber(profitSum)}</span>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

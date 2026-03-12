@@ -13,7 +13,8 @@ from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSe
 
 
 def _credit_invoice_plus_manual_payment_filter():
-    """Credit-ledger view = credit invoices + manual received payments."""
+    """Credit-ledger view = invoices moved to ledger (status=credit) + manual received payments.
+    Pending invoices do not affect ledger until user does 'Move to Ledger' (mark credit)."""
     return Q(invoice__status='credit') | Q(invoice__isnull=True, entry_type='credit')
 
 
@@ -1159,13 +1160,19 @@ def personal_ledger_customer_detail(request, customer_id):
     })
 
 
-# Internal Ledger views (Admin only) - only customers with customer_group name "MTSHOP" are shown
+# Internal Ledger views (Admin only) - show customers whose name contains "MT SHOP"
 INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
+INTERNAL_LEDGER_NAME_CONTAINS = 'MT SHOP'
 
 
 def _get_mtshop_group():
     """Return CustomerGroup with name MTSHOP, or None if it does not exist."""
     return CustomerGroup.objects.filter(name=INTERNAL_LEDGER_GROUP_NAME).first()
+
+
+def _internal_ledger_customer_filter():
+    """Q filter for customers included in internal ledger (name contains MT SHOP)."""
+    return Q(customer__name__icontains=INTERNAL_LEDGER_NAME_CONTAINS)
 
 
 @api_view(['GET', 'POST'])
@@ -1246,11 +1253,8 @@ def internal_ledger_entry_list_create(request):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
     
     if request.method == 'GET':
-        mtshop = _get_mtshop_group()
-        if not mtshop:
-            return Response([])
         queryset = InternalLedgerEntry.objects.select_related('customer', 'created_by').filter(
-            customer__customer_group=mtshop
+            _internal_ledger_customer_filter()
         )
         customer_id = request.query_params.get('customer', None)
         date_from = request.query_params.get('date_from', None)
@@ -1282,18 +1286,12 @@ def internal_ledger_entry_list_create(request):
         serializer = InternalLedgerEntrySerializer(queryset, many=True)
         return Response(serializer.data)
     else:  # POST
-        mtshop = _get_mtshop_group()
-        if not mtshop:
-            return Response(
-                {'error': f'Customer group "{INTERNAL_LEDGER_GROUP_NAME}" does not exist.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
         serializer = InternalLedgerEntrySerializer(data=request.data)
         if serializer.is_valid():
             customer = serializer.validated_data.get('customer')
-            if customer and (not customer.customer_group_id or customer.customer_group_id != mtshop.id):
+            if customer and INTERNAL_LEDGER_NAME_CONTAINS.upper() not in (customer.name or '').upper():
                 return Response(
-                    {'error': 'Customer must belong to MTSHOP group for internal ledger.'},
+                    {'error': f'Customer name must contain "{INTERNAL_LEDGER_NAME_CONTAINS}" for internal ledger.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             from django.utils import timezone
@@ -1321,9 +1319,8 @@ def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can edit/delete internal ledger entries'}, status=status.HTTP_403_FORBIDDEN)
     entry = get_object_or_404(InternalLedgerEntry, pk=entry_id)
-    mtshop = _get_mtshop_group()
-    if mtshop and entry.customer and (not entry.customer.customer_group_id or entry.customer.customer_group_id != mtshop.id):
-        return Response({'error': 'Entry not in MTSHOP ledger.'}, status=status.HTTP_404_NOT_FOUND)
+    if entry.customer and INTERNAL_LEDGER_NAME_CONTAINS.upper() not in (entry.customer.name or '').upper():
+        return Response({'error': 'Entry not in internal ledger (customer name must contain MT SHOP).'}, status=status.HTTP_404_NOT_FOUND)
     if request.method == 'GET':
         serializer = InternalLedgerEntrySerializer(entry)
         return Response(serializer.data)
@@ -1348,18 +1345,14 @@ def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def internal_ledger_summary(request):
-    """Get internal ledger summary for MTSHOP customers only (Admin only)."""
+    """Get internal ledger summary for customers whose name contains MT SHOP (Admin only).
+    Optional query param entry_type=credit for credit-only totals."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
-    mtshop = _get_mtshop_group()
-    if not mtshop:
-        return Response({
-            'total_credit': '0.00',
-            'total_debit': '0.00',
-            'num_accounts': 0,
-            'balance': '0.00'
-        })
-    base_queryset = InternalLedgerEntry.objects.filter(customer__customer_group=mtshop)
+    base_queryset = InternalLedgerEntry.objects.filter(_internal_ledger_customer_filter())
+    entry_type_filter = request.query_params.get('entry_type', None)
+    if entry_type_filter:
+        base_queryset = base_queryset.filter(entry_type=entry_type_filter)
     total_credit = base_queryset.filter(entry_type='credit').aggregate(
         total=Sum('amount')
     )['total'] or Decimal('0.00')
@@ -1367,9 +1360,11 @@ def internal_ledger_summary(request):
         total=Sum('amount')
     )['total'] or Decimal('0.00')
     num_accounts = Customer.objects.filter(
-        customer_group=mtshop,
+        name__icontains=INTERNAL_LEDGER_NAME_CONTAINS,
         internal_ledger_entries__isnull=False
     ).distinct().count()
+    if entry_type_filter == 'credit':
+        num_accounts = base_queryset.filter(customer__isnull=False).values('customer').distinct().count()
     return Response({
         'total_credit': str(total_credit),
         'total_debit': str(total_debit),
@@ -1381,14 +1376,13 @@ def internal_ledger_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def internal_ledger_customer_detail(request, customer_id):
-    """Get internal ledger entries for a specific MTSHOP customer with running balance (Admin only).
+    """Get internal ledger entries for a specific customer (name must contain MT SHOP) with running balance (Admin only).
     Query params: date_from, date_to, entry_type, search."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
-    mtshop = _get_mtshop_group()
-    if not mtshop:
-        return Response({'error': 'MTSHOP group not found'}, status=status.HTTP_404_NOT_FOUND)
-    customer = get_object_or_404(Customer, pk=customer_id, customer_group=mtshop)
+    customer = get_object_or_404(Customer, pk=customer_id)
+    if INTERNAL_LEDGER_NAME_CONTAINS.upper() not in (customer.name or '').upper():
+        return Response({'error': 'Customer name must contain MT SHOP for internal ledger.'}, status=status.HTTP_404_NOT_FOUND)
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     entry_type = request.query_params.get('entry_type', None)

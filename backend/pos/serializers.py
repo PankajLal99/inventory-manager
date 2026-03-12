@@ -53,10 +53,13 @@ class CartItemSerializer(serializers.ModelSerializer):
         fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
 
     def get_scanned_barcodes_display(self, obj):
-        """Return display labels (short_code or barcode) for each scanned barcode for UI."""
+        """Return display labels (short_code or barcode) for each scanned barcode for UI.
+        When context has 'sold_barcode_ids' (e.g. Active Carts Overview), barcodes already on paid/credit
+        invoices are excluded so we don't show sold barcodes in stale carts."""
         from backend.catalog.models import Barcode
         if not obj.scanned_barcodes:
             return []
+        sold_barcode_ids = self.context.get('sold_barcode_ids') or set()
         result = []
         for barcode_str in obj.scanned_barcodes:
             if not barcode_str:
@@ -74,6 +77,9 @@ class CartItemSerializer(serializers.ModelSerializer):
                     except Barcode.DoesNotExist:
                         pass
                 if barcode_obj:
+                    # In overview context: do not show barcodes that are already on paid/credit invoice (stale cart)
+                    if sold_barcode_ids and barcode_obj.id in sold_barcode_ids:
+                        continue
                     result.append(barcode_obj.short_code or barcode_obj.barcode)
                 else:
                     result.append(barcode_str)

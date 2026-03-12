@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { useToast } from '../../lib/toast';
@@ -13,6 +13,7 @@ import {
   Package,
   Trash2,
   Loader2,
+  Search,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
@@ -66,6 +67,8 @@ export default function ActiveCartsOverview() {
   const [storeId, setStoreId] = useState<number | ''>('');
   const [expandedCartId, setExpandedCartId] = useState<number | null>(null);
   const [user, setUser] = useState<any>(null);
+  const [barcodeSearch, setBarcodeSearch] = useState('');
+  const [barcodeSearchApplied, setBarcodeSearchApplied] = useState('');
 
   const discardCartMutation = useMutation({
     mutationFn: ({ cartId }: { cartId: number; productIds: number[] }) => posApi.carts.delete(cartId),
@@ -120,17 +123,70 @@ export default function ActiveCartsOverview() {
 
   const isSuper = user?.groups && user.groups.includes('Super');
 
-  const { data: carts, isLoading, isError, error, refetch } = useQuery({
+  const { data: overviewData, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['pos/carts/overview', storeId || undefined],
     queryFn: async () => {
       const params = storeId ? { store: storeId } : undefined;
       const response = await posApi.carts.getOverview(params);
-      return response.data as CartOverview[];
+      return response.data as { carts?: CartOverview[]; sold_barcode_display_values?: string[] } | CartOverview[];
     },
   });
 
-  const list = Array.isArray(carts) ? carts : [];
-  const discardableCarts = list.filter(
+  // Support both array (legacy) and { carts, sold_barcode_display_values } response
+  const list = useMemo(() => {
+    if (Array.isArray(overviewData)) return overviewData;
+    return overviewData?.carts ?? [];
+  }, [overviewData]);
+
+  const soldBarcodeSet = useMemo(() => {
+    const raw = Array.isArray(overviewData) ? [] : (overviewData?.sold_barcode_display_values ?? []);
+    return new Set(raw.map((s) => String(s).trim().toLowerCase()).filter(Boolean));
+  }, [overviewData]);
+
+  // Barcodes to show for an item: exclude ones already on paid/credit invoices (stale cart data)
+  const getVisibleBarcodes = (item: CartItemOverview): string[] => {
+    const raw = (item.scanned_barcodes_display ?? []).filter(Boolean);
+    if (soldBarcodeSet.size === 0) return raw;
+    return raw.filter((b) => !soldBarcodeSet.has(String(b).trim().toLowerCase()));
+  };
+
+  // Find carts that contain the given barcode (in visible scanned_barcodes_display or product_sku)
+  const cartsContainingBarcode = (barcode: string): CartOverview[] => {
+    const term = barcode.trim().toLowerCase();
+    if (!term) return [];
+    return list.filter((cart) =>
+      (cart.items ?? []).some((item) => {
+        const visible = getVisibleBarcodes(item);
+        const inScanned = visible.some((b) => String(b).trim().toLowerCase() === term);
+        const inSku =
+          item.product_sku && String(item.product_sku).trim().toLowerCase() === term;
+        return inScanned || inSku;
+      })
+    );
+  };
+
+  const matchingCarts = barcodeSearchApplied
+    ? cartsContainingBarcode(barcodeSearchApplied)
+    : list;
+  const hasSearch = barcodeSearchApplied.length > 0;
+  const searchNotFound = hasSearch && matchingCarts.length === 0;
+
+  const applyBarcodeSearch = () => {
+    setBarcodeSearchApplied(barcodeSearch.trim());
+    const term = barcodeSearch.trim();
+    if (term) {
+      const found = cartsContainingBarcode(term);
+      if (found.length > 0) {
+        setExpandedCartId(found[0].id);
+      } else {
+        setExpandedCartId(null);
+      }
+    } else {
+      setExpandedCartId(null);
+    }
+  };
+
+  const discardableCarts = matchingCarts.filter(
     (c) => !c.locked && user != null && (c.created_by === user.id || isSuper)
   );
   const [isDiscardAllPending, setIsDiscardAllPending] = useState(false);
@@ -221,12 +277,69 @@ export default function ActiveCartsOverview() {
         </Card>
       )}
 
+      <Card className="mb-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm font-medium text-gray-700">Search by barcode</label>
+          <div className="flex flex-1 min-w-[200px] max-w-md items-center gap-2 rounded-md border border-gray-300 bg-white shadow-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
+            <Search className="ml-3 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              value={barcodeSearch}
+              onChange={(e) => setBarcodeSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyBarcodeSearch()}
+              placeholder="e.g. FOL-21413"
+              className="flex-1 border-0 bg-transparent py-2 pl-1 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={applyBarcodeSearch}
+            className="inline-flex items-center gap-2 rounded-md bg-gray-800 px-3 py-2 text-sm font-medium text-white hover:bg-gray-700"
+          >
+            <Search className="h-4 w-4" />
+            Search
+          </button>
+          {barcodeSearchApplied && (
+            <button
+              type="button"
+              onClick={() => {
+                setBarcodeSearch('');
+                setBarcodeSearchApplied('');
+                setExpandedCartId(null);
+              }}
+              className="text-sm text-gray-500 hover:text-gray-700 underline"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {hasSearch && (
+          <p className="mt-3 text-sm text-gray-600">
+            {searchNotFound ? (
+              <span className="text-amber-700">
+                Barcode &quot;{barcodeSearchApplied}&quot; not found in any cart.
+              </span>
+            ) : (
+              <span className="text-green-700">
+                Barcode &quot;{barcodeSearchApplied}&quot; found in: {matchingCarts.map((c) => c.cart_number).join(', ')}.
+              </span>
+            )}
+          </p>
+        )}
+      </Card>
+
       <Card>
         {list.length === 0 ? (
           <EmptyState
             icon={ShoppingCart}
             title="No active carts"
             message="There are no active or held carts right now."
+          />
+        ) : matchingCarts.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="No carts match this barcode"
+            message={`No active cart contains barcode "${barcodeSearchApplied}". Try another barcode or clear the search.`}
           />
         ) : (
           <>
@@ -261,7 +374,7 @@ export default function ActiveCartsOverview() {
               'Actions',
             ]}
           >
-            {list.flatMap((cart) => {
+            {matchingCarts.flatMap((cart) => {
               const isExpanded = expandedCartId === cart.id;
               const itemCount = cart.items?.length ?? 0;
               const productIds = cart.items?.length ? [...new Set(cart.items.map((item) => item.product))] : [];
@@ -379,7 +492,7 @@ export default function ActiveCartsOverview() {
                                     Product
                                   </th>
                                   <th className="px-4 py-2 text-left font-medium text-gray-700">
-                                    SKU
+                                    Barcode
                                   </th>
                                   <th className="px-4 py-2 text-right font-medium text-gray-700">
                                     Qty
@@ -406,9 +519,10 @@ export default function ActiveCartsOverview() {
                                         {item.product_name}
                                       </td>
                                       <td className="px-4 py-2 font-mono text-gray-600">
-                                        {item.scanned_barcodes_display?.length
-                                          ? item.scanned_barcodes_display.filter(Boolean).join(', ')
-                                          : item.product_sku}
+                                        {(() => {
+                                          const visible = getVisibleBarcodes(item);
+                                          return visible.length ? visible.join(', ') : '—';
+                                        })()}
                                       </td>
                                       <td className="px-4 py-2 text-right">
                                         {formatNumber(qty, 3)}

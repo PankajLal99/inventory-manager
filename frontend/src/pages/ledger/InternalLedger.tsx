@@ -14,7 +14,7 @@ import {
   Plus, Minus, FileText, Users, TrendingUp, TrendingDown,
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search,
-  UserPlus
+  UserPlus, Receipt
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -46,6 +46,11 @@ export default function InternalLedger() {
     customer: searchParams.get('customer') ?? '',
     search: searchParams.get('search') ?? '',
   });
+  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(() => {
+    const value = searchParams.get('credit_only');
+    if (value == null) return true;
+    return value !== '0';
+  });
   const [showFilters, setShowFilters] = useState(false);
   const [datePreset, setDatePreset] = useState<DateRangePreset>(() => {
     const preset = searchParams.get('preset');
@@ -69,6 +74,7 @@ export default function InternalLedger() {
     if (filters.entryType) params.set('entry_type', filters.entryType);
     if (filters.customer) params.set('customer', filters.customer);
     if (datePreset !== 'custom') params.set('preset', datePreset);
+    if (!showCreditInvoicesOnly) params.set('credit_only', '0');
     const query = params.toString();
     return query ? `/internal-ledger/${customerId}?${query}` : `/internal-ledger/${customerId}`;
   };
@@ -81,13 +87,14 @@ export default function InternalLedger() {
     if (filters.entryType) nextParams.set('entry_type', filters.entryType);
     if (filters.customer) nextParams.set('customer', filters.customer);
     if (datePreset !== 'custom') nextParams.set('preset', datePreset);
+    if (!showCreditInvoicesOnly) nextParams.set('credit_only', '0');
     if (nextParams.toString() !== searchParams.toString()) {
       setSearchParams(nextParams, { replace: true });
     }
-  }, [filters, datePreset, searchParams, setSearchParams]);
+  }, [filters, datePreset, showCreditInvoicesOnly, searchParams, setSearchParams]);
 
-  // MTSHOP group: Shop Boys Ledger uses only Customer with this group
-  const MTSHOP_GROUP_NAME = 'MTSHOP';
+  // Internal Ledger shows customers whose name contains "MT SHOP"
+  const MTSHOP_NAME_SEARCH = 'MT SHOP';
   const { data: customerGroupsData } = useQuery({
     queryKey: ['customer-groups'],
     queryFn: async () => {
@@ -98,58 +105,56 @@ export default function InternalLedger() {
   });
   const mtshopGroupId = useMemo(() => {
     const groups = Array.isArray(customerGroupsData) ? customerGroupsData : (customerGroupsData as any)?.results ?? (customerGroupsData as any)?.data ?? [];
-    const g = groups.find((x: any) => (x.name || '').toUpperCase() === MTSHOP_GROUP_NAME);
+    const g = groups.find((x: any) => (x.name || '').toUpperCase() === 'MTSHOP');
     return g ? String(g.id) : null;
   }, [customerGroupsData]);
 
-  // All customer lists on this page show only MTSHOP group (Shop Boys). Never fetch without customer_group.
+  // Customer search for entry form: search by term, then filter to name containing MT SHOP
   const { data: customersResponse } = useQuery({
-    queryKey: ['customers', 'mtshop', mtshopGroupId, customerSearch],
+    queryKey: ['customers', 'mtshop-name', customerSearch],
     queryFn: async () => {
-      const params: Record<string, string> = { customer_group: mtshopGroupId! };
-      if (customerSearch.trim()) params.search = customerSearch.trim();
+      const params: Record<string, string> = { search: customerSearch.trim() };
       const response = await customersApi.list(params);
       return response.data;
     },
-    enabled: !!mtshopGroupId && customerSearch.trim().length > 0,
+    enabled: customerSearch.trim().length > 0,
     retry: false,
   });
 
+  // All customers with "MT SHOP" in name (for filters and list)
   const { data: allCustomers } = useQuery({
-    queryKey: ['customers', 'mtshop', mtshopGroupId],
+    queryKey: ['customers', 'mtshop-name', MTSHOP_NAME_SEARCH],
     queryFn: async () => {
-      const response = await customersApi.list({ customer_group: mtshopGroupId! });
+      const response = await customersApi.list({ search: MTSHOP_NAME_SEARCH });
       return response.data;
     },
-    enabled: !!mtshopGroupId,
     retry: false,
   });
 
-  // Customer list for "Customers" modal and add-customer flows: MTSHOP only
+  // Customer list for "Customers" modal: all with "MT SHOP" in name; filter by customerListSearch client-side
   const { data: customerListResponse } = useQuery({
-    queryKey: ['customers', 'mtshop', mtshopGroupId, customerListSearch],
+    queryKey: ['customers', 'mtshop-name', showCustomerListModal],
     queryFn: async () => {
-      const params: Record<string, string> = { customer_group: mtshopGroupId! };
-      if (customerListSearch.trim()) params.search = customerListSearch.trim();
-      const response = await customersApi.list(params);
+      const response = await customersApi.list({ search: MTSHOP_NAME_SEARCH });
       return response.data;
     },
-    enabled: !!mtshopGroupId && showCustomerListModal,
+    enabled: showCustomerListModal,
     retry: false,
   });
-
 
   const { data: ledgerSummary } = useQuery({
-    queryKey: ['internal-ledger-summary'],
+    queryKey: ['internal-ledger-summary', showCreditInvoicesOnly],
     queryFn: async () => {
-      const response = await customersApi.internalLedger.summary({});
+      const params: any = {};
+      if (showCreditInvoicesOnly) params.entry_type = 'credit';
+      const response = await customersApi.internalLedger.summary(params);
       return response.data;
     },
     retry: false,
   });
 
   const { data: ledgerEntries, isLoading } = useQuery({
-    queryKey: ['internal-ledger-entries', filters],
+    queryKey: ['internal-ledger-entries', filters, showCreditInvoicesOnly],
     queryFn: async () => {
       const params: any = {};
       if (filters.dateFrom) params.date_from = filters.dateFrom;
@@ -157,6 +162,7 @@ export default function InternalLedger() {
       if (filters.entryType) params.entry_type = filters.entryType;
       if (filters.customer) params.customer = filters.customer;
       if (filters.search) params.search = filters.search;
+      if (showCreditInvoicesOnly) params.entry_type = 'credit';
 
       const response = await customersApi.internalLedger.entries.list(params);
       return response.data;
@@ -245,7 +251,7 @@ export default function InternalLedger() {
     });
   };
 
-  const customers = (() => {
+  const customersRaw = (() => {
     if (!customersResponse) return [];
     if (Array.isArray(customersResponse.results)) return customersResponse.results;
     if (Array.isArray(customersResponse.data)) return customersResponse.data;
@@ -253,18 +259,22 @@ export default function InternalLedger() {
     return [];
   })();
 
-  // Search results - only shop boys
+  // Search results: only customers whose name contains "MT SHOP"
+  const customers = useMemo(() => {
+    const needle = MTSHOP_NAME_SEARCH.toUpperCase();
+    return customersRaw.filter((c: any) => (c.name || '').toUpperCase().includes(needle));
+  }, [customersRaw]);
+
   const searchResults = useMemo(() => {
     return customers.map((c: any) => ({ ...c, type: 'customer' }));
   }, [customers]);
 
-  const allCustomersList = (() => {
+  const allCustomersList = useMemo(() => {
     if (!allCustomers) return [];
-    if (Array.isArray(allCustomers.results)) return allCustomers.results;
-    if (Array.isArray(allCustomers.data)) return allCustomers.data;
-    if (Array.isArray(allCustomers)) return allCustomers;
-    return [];
-  })();
+    const raw = Array.isArray(allCustomers.results) ? allCustomers.results : Array.isArray(allCustomers.data) ? allCustomers.data : Array.isArray(allCustomers) ? allCustomers : [];
+    const needle = MTSHOP_NAME_SEARCH.toUpperCase();
+    return raw.filter((c: any) => (c.name || '').toUpperCase().includes(needle));
+  }, [allCustomers]);
 
   const entries = (() => {
     if (!ledgerEntries) return [];
@@ -582,6 +592,15 @@ export default function InternalLedger() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4">
           <h2 className="text-xl font-semibold">Shop Boys Ledger Entries</h2>
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowCreditInvoicesOnly(!showCreditInvoicesOnly)}
+              className={`flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 sm:py-2 ${!showCreditInvoicesOnly ? 'bg-blue-100 text-blue-700 border-blue-300' : ''}`}
+              title={showCreditInvoicesOnly ? 'Click to show all entries' : 'Click to show credit only'}
+            >
+              <Receipt className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="hidden sm:inline">{showCreditInvoicesOnly ? 'Credit Only' : 'All Entries'}</span>
+            </Button>
             <div className="relative flex-1 min-w-[140px] max-w-[200px]">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
               <Input
@@ -1136,25 +1155,25 @@ export default function InternalLedger() {
             />
           </div>
 
-          {/* Customer List — MTSHOP group only */}
+          {/* Customer List — name contains "MT SHOP" */}
           <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg">
             {(() => {
-              if (!mtshopGroupId) {
-                return (
-                  <div className="p-8 text-center text-gray-500">
-                    <Users className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                    <p>Customer group &quot;MTSHOP&quot; is required</p>
-                    <p className="text-sm mt-1">Create it under Customer Groups to show shop boys here.</p>
-                  </div>
-                );
-              }
-              const customerList = (() => {
+              const customerListRaw = (() => {
                 if (!customerListResponse) return [];
                 if (Array.isArray(customerListResponse.results)) return customerListResponse.results;
                 if (Array.isArray(customerListResponse.data)) return customerListResponse.data;
                 if (Array.isArray(customerListResponse)) return customerListResponse;
                 return [];
               })();
+              const q = customerListSearch.trim().toLowerCase();
+              const customerList = q
+                ? customerListRaw.filter(
+                    (c: any) =>
+                      (c.name || '').toLowerCase().includes(q) ||
+                      (c.phone || '').toLowerCase().includes(q) ||
+                      (c.email || '').toLowerCase().includes(q)
+                  )
+                : customerListRaw;
 
               const allItems = customerList.map((c: any) => ({ ...c, type: 'customer' }));
 
@@ -1162,7 +1181,7 @@ export default function InternalLedger() {
                 return (
                   <div className="p-8 text-center text-gray-500">
                     <Users className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                    <p>No shop boys found (MTSHOP group only)</p>
+                    <p>No customers with &quot;MT SHOP&quot; in name found</p>
                     {customerListSearch && (
                       <p className="text-sm mt-1">Try a different search term</p>
                     )}

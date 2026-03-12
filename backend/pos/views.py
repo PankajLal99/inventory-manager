@@ -17,6 +17,10 @@ from backend.catalog.models import Barcode, Product, ProductVariant
 from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.inventory.models import Stock
 from backend.core.utils import create_audit_log
+from backend.parties.internal_ledger_utils import (
+    create_internal_ledger_entry_if_mtshop,
+    reverse_internal_ledger_entries_for_ledger_entries,
+)
 from .serializers import (
     POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
     InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
@@ -114,13 +118,27 @@ def repair_invoices_list(request):
         except (ValueError, TypeError):
             pass
 
-    # Filter by date range if provided
+    # Filter by date range if provided (match repair date OR delivery date)
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
-    if date_from:
-        queryset = queryset.filter(created_at__date__gte=date_from)
-    if date_to:
-        queryset = queryset.filter(created_at__date__lte=date_to)
+    if date_from and date_to:
+        queryset = queryset.filter(
+            Q(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            | Q(repair__updated_at__date__gte=date_from, repair__updated_at__date__lte=date_to)
+            | Q(repair__delivery_date__gte=date_from, repair__delivery_date__lte=date_to)
+        )
+    elif date_from:
+        queryset = queryset.filter(
+            Q(created_at__date__gte=date_from)
+            | Q(repair__updated_at__date__gte=date_from)
+            | Q(repair__delivery_date__gte=date_from)
+        )
+    elif date_to:
+        queryset = queryset.filter(
+            Q(created_at__date__lte=date_to)
+            | Q(repair__updated_at__date__lte=date_to)
+            | Q(repair__delivery_date__lte=date_to)
+        )
 
     # Filter by repair status if provided
     repair_status = request.query_params.get('repair_status', None)
@@ -602,7 +620,8 @@ def pos_session_close(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def active_carts_overview(request):
-    """List all active and held carts (read-only overview): which user, locked, items. Includes EDIT-* (invoice edit) carts."""
+    """List all active and held carts (read-only overview): which user, locked, items. Includes EDIT-* (invoice edit) carts.
+    Barcodes that are already on a paid/credit invoice are excluded from display (stale cart data)."""
     carts = Cart.objects.filter(
         status__in=['active', 'held']
     ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__variant').order_by('-updated_at')
@@ -612,8 +631,26 @@ def active_carts_overview(request):
             carts = carts.filter(store_id=int(store_id))
         except ValueError:
             pass
-    serializer = CartOverviewSerializer(carts, many=True)
-    return Response(serializer.data)
+    # Barcode IDs that are already on paid/credit invoices — don't show them in overview (they're sold, cart is stale)
+    from backend.pos.models import InvoiceItem
+    from backend.catalog.models import Barcode
+    sold_barcode_ids = set(
+        InvoiceItem.objects.filter(
+            invoice__status__in=['paid', 'credit']
+        ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
+    )
+    serializer = CartOverviewSerializer(carts, many=True, context={'sold_barcode_ids': sold_barcode_ids})
+    # Expose sold barcode display values so the frontend can filter them out on the page as well
+    sold_barcode_display_values = []
+    if sold_barcode_ids:
+        for short_code, barcode in Barcode.objects.filter(id__in=sold_barcode_ids).values_list('short_code', 'barcode'):
+            val = (short_code or barcode or '').strip()
+            if val:
+                sold_barcode_display_values.append(val)
+    return Response({
+        'carts': serializer.data,
+        'sold_barcode_display_values': sold_barcode_display_values,
+    })
 
 
 @api_view(['GET', 'POST'])
@@ -707,7 +744,13 @@ def cart_detail(request, pk):
                 {'error': 'Cart is locked.', 'detail': 'Unlock the cart before closing or discarding it.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # Release all SKUs/barcodes from scanned_barcodes back to available inventory
+        # Barcodes already on paid/credit invoices must stay 'sold' — do not revert them when discarding
+        sold_barcode_ids = set(
+            InvoiceItem.objects.filter(
+                invoice__status__in=['paid', 'credit']
+            ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
+        )
+        # Release all SKUs/barcodes from scanned_barcodes back to available inventory (except those already sold)
         # Also restore stock for non-tracked inventory items
         for cart_item in cart.items.all():
             # Restore stock for non-tracked inventory items
@@ -732,6 +775,9 @@ def cart_detail(request, pk):
                             barcode_obj = Barcode.objects.get(barcode=b_upper)
                         except Barcode.DoesNotExist:
                             barcode_obj = Barcode.objects.get(short_code=b_upper)
+                        # Do not revert barcodes that are on a paid/credit invoice — they stay 'sold'
+                        if barcode_obj.id in sold_barcode_ids:
+                            continue
                         # Restore from 'in-cart' or 'sold' back to 'new' when cart is deleted
                         old_tag = barcode_obj.tag
                         if barcode_obj.tag in ['in-cart', 'sold']:
@@ -1749,8 +1795,13 @@ def cart_item_update(request, pk, item_id):
                 stock.quantity += cart_item.quantity
                 stock.save()
         
-        # Handle barcodes for tracked inventory items - restore from 'in-cart' or 'sold' to 'new'
+        # Handle barcodes for tracked inventory items - restore from 'in-cart' to 'new' only if not on paid/credit invoice
         if cart_item.product.track_inventory and cart_item.scanned_barcodes:
+            sold_barcode_ids_item = set(
+                InvoiceItem.objects.filter(
+                    invoice__status__in=['paid', 'credit']
+                ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
+            )
             for barcode_value in cart_item.scanned_barcodes:
                 if not barcode_value:
                     continue
@@ -1760,6 +1811,9 @@ def cart_item_update(request, pk, item_id):
                         barcode_obj = Barcode.objects.get(barcode=b_upper)
                     except Barcode.DoesNotExist:
                         barcode_obj = Barcode.objects.get(short_code=b_upper)
+                    # Do not revert barcodes that are on a paid/credit invoice — they stay 'sold'
+                    if barcode_obj.id in sold_barcode_ids_item:
+                        continue
                     # Restore from 'in-cart' or 'sold' back to 'new' when cart item is deleted
                     old_tag = barcode_obj.tag
                     if barcode_obj.tag in ['in-cart', 'sold']:
@@ -2097,37 +2151,42 @@ def cart_item_remove_sku(request, pk, item_id):
             quantity=F('quantity') + Decimal('1.000')
         )
 
-    # Release the removed barcode back to available inventory (restore tag to 'new')
-    # Must happen before deleting cart item when quantity becomes 0, so the barcode can be re-added
+    # Release the removed barcode back to available inventory (restore tag to 'new') only if not on paid/credit invoice
     try:
         try:
             barcode_obj = Barcode.objects.get(barcode=b_upper)
         except Barcode.DoesNotExist:
             barcode_obj = Barcode.objects.get(short_code=b_upper)
-        old_tag = barcode_obj.tag
-        if barcode_obj.tag in ['in-cart', 'sold']:
-            barcode_obj.tag = 'new'
-            barcode_obj.save(update_fields=['tag'])
-            # Invalidate catalog barcode lookup cache so next byBarcode() returns fresh data (not stale "in-cart")
-            invalidate_barcode_cache(barcode_obj)
-            create_audit_log(
-                request=request,
-                action='barcode_tag_change',
-                model_name='Barcode',
-                object_id=str(barcode_obj.id),
-                object_name=cart_item.product.name,
-                object_reference=f"Cart #{cart.cart_number or cart.id}",
-                barcode=barcode_obj.barcode,
-                changes={
-                    'tag': {'old': old_tag, 'new': 'new'},
-                    'barcode': barcode_obj.barcode,
-                    'product_id': cart_item.product.id,
-                    'product_name': cart_item.product.name,
-                    'cart_id': cart.id,
-                    'cart_number': cart.cart_number,
-                    'context': 'cart_item_sku_removed',
-                }
-            )
+        # Do not revert barcodes that are on a paid/credit invoice — they stay 'sold'
+        on_paid_or_credit = InvoiceItem.objects.filter(
+            invoice__status__in=['paid', 'credit'],
+            barcode_id=barcode_obj.id,
+        ).exists()
+        if not on_paid_or_credit:
+            old_tag = barcode_obj.tag
+            if barcode_obj.tag in ['in-cart', 'sold']:
+                barcode_obj.tag = 'new'
+                barcode_obj.save(update_fields=['tag'])
+                # Invalidate catalog barcode lookup cache so next byBarcode() returns fresh data (not stale "in-cart")
+                invalidate_barcode_cache(barcode_obj)
+                create_audit_log(
+                    request=request,
+                    action='barcode_tag_change',
+                    model_name='Barcode',
+                    object_id=str(barcode_obj.id),
+                    object_name=cart_item.product.name,
+                    object_reference=f"Cart #{cart.cart_number or cart.id}",
+                    barcode=barcode_obj.barcode,
+                    changes={
+                        'tag': {'old': old_tag, 'new': 'new'},
+                        'barcode': barcode_obj.barcode,
+                        'product_id': cart_item.product.id,
+                        'product_name': cart_item.product.name,
+                        'cart_id': cart.id,
+                        'cart_number': cart.cart_number,
+                        'context': 'cart_item_sku_removed',
+                    }
+                )
     except Barcode.DoesNotExist:
         pass  # Barcode doesn't exist, skip
 
@@ -2420,6 +2479,11 @@ def cart_checkout(request, pk):
                 created_by=request.user,
                 created_at=timezone.now()
             )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, 'debit', invoice.total,
+                f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
+                request.user, timezone.now()
+            )
             invoice.customer.credit_balance -= invoice.total
             invoice.customer.save()
 
@@ -2681,17 +2745,77 @@ def invoice_detail(request, pk):
             invoice.refresh_from_db()  # Refresh to get updated invoice_type
             invoice_type_changed = 'invoice_type' in request.data and old_invoice_type_for_recalc != invoice.invoice_type
             
-            # If invoice_type changed to 'pending', reset status and payment fields
+            # If invoice_type changed to 'pending', delete payments and reset status/amounts
             if invoice_type_changed and invoice.invoice_type == 'pending':
+                invoice.payments.all().delete()
                 invoice.status = 'draft'
-                # Calculate paid_amount based on actual payments
-                invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-                invoice.due_amount = invoice.total - invoice.paid_amount
+                invoice.paid_amount = Decimal('0.00')
+                invoice.due_amount = invoice.total
+                invoice.save()
+
+            # If invoice_type changed to cash/upi/mixed, set status to paid (fully paid)
+            if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed'):
+                invoice.status = 'paid'
+                invoice.paid_amount = invoice.total
+                invoice.due_amount = Decimal('0.00')
                 invoice.save()
             
             if invoice_type_changed or not update_fields.issubset(allowed_fields_for_all):
                 update_invoice_totals(invoice)
                 invoice.refresh_from_db()
+
+            # When invoice_type changed to 'pending', remove this invoice from the ledger until "Move to Ledger" (mark credit).
+            # Pending is draft; ledger is only updated when user explicitly moves to ledger.
+            if invoice_type_changed and invoice.invoice_type == 'pending' and invoice.customer:
+                from backend.parties.models import LedgerEntry
+                existing_entries = LedgerEntry.objects.filter(invoice=invoice)
+                net_reversal = Decimal('0.00')
+                for e in existing_entries:
+                    if e.entry_type == 'debit':
+                        net_reversal += e.amount
+                    else:
+                        net_reversal -= e.amount
+                reverse_internal_ledger_entries_for_ledger_entries(
+                    existing_entries, request.user, 'Invoice type change'
+                )
+                existing_entries.delete()
+                invoice.customer.credit_balance += net_reversal
+                invoice.customer.save(update_fields=['credit_balance'])
+
+            # When invoice_type changed to cash/upi/mixed (paid), update ledger: remove debt entry and add payment (credit)
+            # so customer.credit_balance and ledger match (payments received via Ledger/Payments page also add credit entries)
+            if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed') and invoice.customer:
+                from backend.parties.models import LedgerEntry
+                existing_entries = LedgerEntry.objects.filter(invoice=invoice)
+                net_reversal = Decimal('0.00')
+                for e in existing_entries:
+                    if e.entry_type == 'debit':
+                        net_reversal += e.amount
+                    else:
+                        net_reversal -= e.amount
+                reverse_internal_ledger_entries_for_ledger_entries(
+                    existing_entries, request.user, 'Invoice type change (settlement)'
+                )
+                existing_entries.delete()
+                invoice.customer.credit_balance += net_reversal
+                total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
+                LedgerEntry.objects.create(
+                    customer=invoice.customer,
+                    invoice=invoice,
+                    entry_type='credit',
+                    amount=invoice.total,
+                    quantity=total_qty,
+                    description=f'Invoice {invoice.invoice_number} ({invoice.invoice_type.upper()}) (Settlement)',
+                    created_by=request.user,
+                    created_at=timezone.now(),
+                )
+                create_internal_ledger_entry_if_mtshop(
+                    invoice.customer, 'credit', invoice.total,
+                    f'Invoice {invoice.invoice_number} ({invoice.invoice_type.upper()}) (Settlement)',
+                    request.user, timezone.now()
+                )
+                invoice.customer.credit_balance += invoice.total
+                invoice.customer.save(update_fields=['credit_balance'])
 
             # When invoice_type is updated, set the latest payment's payment_method to match
             if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed'):
@@ -2726,6 +2850,11 @@ def invoice_detail(request, pk):
                 changes['status'] = {'old': old_status, 'new': invoice.status}
                 changes['paid_amount'] = {'old': str(old_paid_amount), 'new': '0.00'}
                 changes['due_amount'] = {'old': str(old_due_amount), 'new': '0.00'}
+            # Track status change when invoice_type changed to cash/upi/mixed (status -> paid)
+            if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed') and old_status != invoice.status:
+                changes['status'] = {'old': old_status, 'new': invoice.status}
+                changes['paid_amount'] = {'old': str(old_paid_amount), 'new': str(invoice.paid_amount)}
+                changes['due_amount'] = {'old': str(old_due_amount), 'new': str(invoice.due_amount)}
             # Include total changes if totals were recalculated
             if invoice_type_changed or not update_fields.issubset(allowed_fields_for_all):
                 changes['total'] = {'old': str(old_total), 'new': str(invoice.total)}
@@ -2841,6 +2970,9 @@ def invoice_detail(request, pk):
             from backend.parties.models import LedgerEntry
             # Find all ledger entries for this invoice
             ledger_entries = LedgerEntry.objects.filter(invoice=invoice)
+            reverse_internal_ledger_entries_for_ledger_entries(
+                ledger_entries, request.user, 'Invoice deleted'
+            )
             for entry in ledger_entries:
                 # Reverse the entry (if debit, credit it back; if credit, debit it back)
                 reverse_type = 'credit' if entry.entry_type == 'debit' else 'debit'
@@ -2943,6 +3075,11 @@ def invoice_payments(request, pk):
                 created_by=request.user,
                 created_at=timezone.now()
             )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, entry_type, abs(amount_delta),
+                f'Payment adjustment for Invoice {invoice.invoice_number}',
+                request.user, timezone.now()
+            )
             # Credit entry increases balance, debit entry decreases it.
             invoice.customer.credit_balance += amount_delta
             invoice.customer.save(update_fields=['credit_balance'])
@@ -3022,6 +3159,11 @@ def invoice_payments(request, pk):
                 description=f'Payment for Invoice {invoice.invoice_number}',
                 created_by=request.user,
                 created_at=timezone.now()
+            )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, 'credit', payment.amount,
+                f'Payment for Invoice {invoice.invoice_number}',
+                request.user, timezone.now()
             )
             # Update customer credit_balance
             invoice.customer.credit_balance += entry.amount
@@ -3264,6 +3406,11 @@ def invoice_checkout(request, pk):
                 created_by=request.user,
                 created_at=timezone.now()
             )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, 'debit', invoice.total,
+                f'Invoice {invoice.invoice_number} (CREDIT)',
+                request.user, timezone.now()
+            )
             invoice.customer.credit_balance -= invoice.total
             invoice.customer.save()
     elif new_invoice_type == 'mixed':
@@ -3361,7 +3508,10 @@ def invoice_checkout(request, pk):
             else:
                 net_reversal -= e.amount # Subtract what was added
         
-        # 2. Delete existing entries and update balance partially
+        # 2. Reverse internal ledger for deleted entries, then delete and update balance
+        reverse_internal_ledger_entries_for_ledger_entries(
+            existing_entries, request.user, 'Invoice type change'
+        )
         existing_entries.delete()
         invoice.customer.credit_balance += net_reversal
         
@@ -3376,6 +3526,11 @@ def invoice_checkout(request, pk):
             created_by=request.user,
             created_at=invoice.created_at or timezone.now()
         )
+        create_internal_ledger_entry_if_mtshop(
+            invoice.customer, 'debit', invoice.total,
+            f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Purchase)',
+            request.user, invoice.created_at or timezone.now()
+        )
         invoice.customer.credit_balance -= entry_debit.amount
         
         # IF it's now paid, create a CREDIT entry (Payment)
@@ -3389,6 +3544,11 @@ def invoice_checkout(request, pk):
                 description=f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Settlement)',
                 created_by=request.user,
                 created_at=timezone.now()
+            )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, 'credit', invoice.total,
+                f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Settlement)',
+                request.user, timezone.now()
             )
             invoice.customer.credit_balance += entry_credit.amount
             
@@ -3669,10 +3829,12 @@ def invoice_mark_credit(request, pk):
         # Use select_for_update to prevent race conditions
         invoice = Invoice.objects.select_for_update().get(pk=pk)
         
-            # Allow draft pending (convert to credit) or draft credit (save updates and move to ledger)
-        if invoice.status != 'draft' or invoice.invoice_type not in ('pending', 'credit'):
+            # Allow: draft pending/credit (convert or save and move), or paid cash/upi/mixed (move to ledger / mark as credit)
+        draft_ok = invoice.status == 'draft' and invoice.invoice_type in ('pending', 'credit')
+        paid_ok = invoice.status == 'paid' and invoice.invoice_type in ('cash', 'upi', 'mixed')
+        if not (draft_ok or paid_ok):
             return Response(
-                {'error': 'Only draft pending or draft credit invoices can be marked as credit'},
+                {'error': 'Only draft pending, draft credit, or paid (cash/upi/mixed) invoices can be marked as credit'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -3765,12 +3927,12 @@ def invoice_mark_credit(request, pk):
         except Repair.DoesNotExist:
             pass
         
-        # Update invoice status to credit FIRST (before recalculating totals)
-        # This ensures update_invoice_totals calculates correctly
+        # Update invoice status and type to credit (before recalculating totals)
+        # This ensures update_invoice_totals calculates correctly and type matches status
         old_status = invoice.status
         invoice.status = 'credit'
-        invoice.invoice_type = 'pending'  # Keep as pending type
-        # Save the status change immediately
+        invoice.invoice_type = 'credit'
+        # Save the status/type change immediately
         invoice.save()
         
         # Now recalculate invoice totals (status is 'credit', so it will calculate from items)
@@ -3829,6 +3991,10 @@ def invoice_mark_credit(request, pk):
                 else:  # credit
                     net_balance_to_reverse -= entry.amount
             
+            # Mirror reversals to internal ledger (MT SHOP customers) before deleting main ledger entries
+            reverse_internal_ledger_entries_for_ledger_entries(
+                existing_entries, request.user, 'Mark as credit (replace entries)'
+            )
             # Delete all existing entries for this invoice
             # We'll create a single clean DEBIT entry for the credit invoice
             existing_entries.delete()
@@ -3845,6 +4011,11 @@ def invoice_mark_credit(request, pk):
                 description=f'Credit Invoice {invoice.invoice_number}',
                 created_by=request.user,
                 created_at=invoice.created_at or timezone.now()
+            )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, 'debit', invoice.total,
+                f'Credit Invoice {invoice.invoice_number}',
+                request.user, invoice.created_at or timezone.now()
             )
             # Update customer credit_balance (debit means customer owes more)
             invoice.customer.credit_balance -= entry.amount
@@ -5211,6 +5382,11 @@ def replacement_replace(request):
             description=f'Replacement adjustment for Invoice {invoice.invoice_number}',
             created_by=request.user
         )
+        create_internal_ledger_entry_if_mtshop(
+            invoice.customer, entry_type, abs(price_difference),
+            f'Replacement adjustment for Invoice {invoice.invoice_number}',
+            request.user, timezone.now()
+        )
         # Update customer credit_balance
         if entry_type == 'credit':
             invoice.customer.credit_balance += entry.amount
@@ -5365,10 +5541,15 @@ def replacement_return(request):
                     created_by=request.user,
                     created_at=timezone.now()
                 )
+                create_internal_ledger_entry_if_mtshop(
+                    invoice.customer, 'credit', excess_payment,
+                    f'Refund for returned items from Invoice {invoice.invoice_number} (Qty: {return_qty})',
+                    request.user, timezone.now()
+                )
                 # Update customer credit_balance
                 invoice.customer.credit_balance += refund_entry.amount
                 invoice.customer.save()
-            
+
             # Audit log: Refund payment created
             create_audit_log(
                 request=request,
@@ -6632,6 +6813,11 @@ def replacement_credit_note(request, invoice_id):
                 description=f'Credit note {credit_note.credit_note_number} for replacement of items from Invoice {invoice.invoice_number}',
                 created_by=request.user,
                 created_at=timezone.now()
+            )
+            create_internal_ledger_entry_if_mtshop(
+                invoice.customer, 'credit', actual_credit_amount,
+                f'Credit note {credit_note.credit_note_number} for replacement of items from Invoice {invoice.invoice_number}',
+                request.user, timezone.now()
             )
             # Update customer credit_balance
             invoice.customer.credit_balance += entry.amount

@@ -39,6 +39,7 @@ import {
   Wrench,
   AlertTriangle,
   Package,
+  BookOpen,
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
@@ -50,6 +51,12 @@ export default function InvoiceDetail() {
     !userGroups.includes('Admin') &&
     !userGroups.includes('RetailAdmin') &&
     !userGroups.includes('WholesaleAdmin');
+  // Hide CASH / UPI / CASH+UPI in checkout modal for Wholesale, WholesaleAdmin, or user sunny
+  const hideCheckoutPaymentOptions =
+    userGroups.includes('Wholesale') ||
+    userGroups.includes('WholesaleAdmin') ||
+    user?.username === 'sunny' ||
+    String(user?.id) === 'sunny';
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -236,43 +243,40 @@ export default function InvoiceDetail() {
   });
   const repairStatusOptions: { value: string; label: string }[] = repairStatusChoicesResponse?.data ?? [];
 
+  // Old balance = total of customer's ledger (invoices moved to ledger / mark credit, minus payments).
+  // Pending invoices do not affect the ledger until "Move to Ledger" (mark credit). totalOutstanding = -credit_balance.
   const { prevBalance, totalOutstanding } = useMemo(() => {
     if (!inv || !customer) return { prevBalance: 0, totalOutstanding: 0 };
 
     const invoiceTotal = parseFloat(inv.total || '0');
-    // Negative credit_balance means customer owes money (debit)
-    // We treat debt as a positive number for display purposes
     const currentOutstanding = -parseFloat(customer.credit_balance || '0');
 
-    // Determine if this invoice is already reflected in the customer balance
-    // 1. Credit invoices and all Pending invoices (including drafts) create a LedgerEntry immediately
-    // 2. Paid invoices (Cash/UPI) create a Credit entry immediately
-    const isReflected = (inv.status !== 'void') && (inv.status !== 'draft' || inv.invoice_type === 'pending');
+    // Only credit (moved to ledger) and paid invoices are in the ledger. Pending = draft, not in ledger yet.
+    const isReflected =
+      inv.status !== 'void' &&
+      (inv.status === 'credit' || inv.status === 'paid' || (inv.status === 'draft' && inv.invoice_type !== 'pending'));
 
     let total = currentOutstanding;
     let pb = 0;
 
     if (isReflected) {
       total = currentOutstanding;
-      // If it's a sale (credit status or pending type), it increased the debt
-      if (inv.status === 'credit' || inv.invoice_type === 'pending') {
-        pb = total - invoiceTotal;
+      if (inv.status === 'credit') {
+        pb = total - invoiceTotal; // Old balance = outstanding before this invoice
       } else if (inv.status === 'paid') {
-        // If it's a paid invoice, it decreased the debt (Credit entry)
-        pb = total + invoiceTotal;
+        pb = total + invoiceTotal; // Before this payment, they owed more
       } else {
         pb = total;
       }
     } else {
-      // Not reflected (Draft non-pending or Void non-pending?)
       pb = currentOutstanding;
-      total = pb; // No change to outstanding if not reflected
+      total = pb; // Pending/draft not in ledger: show same for both
     }
 
     return { prevBalance: pb, totalOutstanding: total };
   }, [inv, customer]);
 
-  // Only show Previous Balance / Total Outstanding when this customer has at least one credit invoice
+  // Only show Old Balance / Total Outstanding when this customer has at least one credit invoice
   const { data: customerCreditInvoicesData } = useQuery({
     queryKey: ['invoices', 'customer-credit', inv?.customer],
     queryFn: () => posApi.invoices.list({ customer: inv!.customer, status: 'credit', page: 1, page_size: 1 }),
@@ -1060,6 +1064,38 @@ export default function InvoiceDetail() {
     setShowCheckoutModal(true);
   };
 
+  const handleMoveToLedger = () => {
+    // Same init as handleCheckout but pre-select credit so user can move paid bill to ledger
+    const initialQuantities: Record<number, string> = {};
+    const initialPrices: Record<number, string> = {};
+    const initialParentPrices: Record<string, string> = {};
+    const initialPurchasePrices: Record<number, string> = {};
+    if (inv?.items && Array.isArray(inv.items)) {
+      const groupedItems = groupItemsByProduct(inv.items);
+      groupedItems.forEach((group, groupIndex) => {
+        const groupKey = `group_${group.productId}_${groupIndex} `;
+        const firstItem = group.items[0];
+        const basePrice = (firstItem.manual_unit_price || firstItem.unit_price || '0').toString();
+        initialParentPrices[groupKey] = basePrice;
+      });
+    }
+    inv?.items?.forEach((item: any) => {
+      initialQuantities[item.id] = item.quantity.toString();
+      initialPrices[item.id] = (item.manual_unit_price || item.unit_price || '0').toString();
+      if (item.product_name?.startsWith('Other -')) {
+        const pp = item.product_purchase_price ?? item.purchase_price;
+        if (pp != null && Number(pp) > 0) initialPurchasePrices[item.id] = String(pp);
+      }
+    });
+    setCheckoutQuantities(initialQuantities);
+    setCheckoutPrices(initialPrices);
+    setParentGroupPrices(initialParentPrices);
+    setCheckoutPurchasePrices(initialPurchasePrices);
+    setCheckoutPriceErrors({});
+    setCheckoutInvoiceType('credit');
+    setShowCheckoutModal(true);
+  };
+
   const handleCheckoutSubmit = async () => {
     // Refetch invoice to ensure we have the latest data (in case items were deleted)
     await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
@@ -1572,9 +1608,9 @@ export default function InvoiceDetail() {
                   <td></td>
                   <td style="text-align: right;"><strong>${formatNumber(totalAmount, 2)}</strong></td>
                 </tr>
-                ${inv.customer && customerHasCreditInvoice ? `
+                ${inv.customer && customerHasCreditInvoice && inv.status !== 'paid' ? `
                 <tr style="border-top: 1px dashed #000;">
-                  <td style="padding-top: 8px;">Previous Balance</td>
+                  <td style="padding-top: 8px;">Old Balance</td>
                   <td></td>
                   <td></td>
                   <td></td>
@@ -1898,9 +1934,9 @@ export default function InvoiceDetail() {
             <span>TOTAL:</span>
             <span>₹${formatNumber(invoice.total || '0')}</span>
           </div>
-          ${invoice.customer && customerHasCreditInvoice ? `
+          ${invoice.customer && customerHasCreditInvoice && invoice.status !== 'paid' ? `
           <div class="summary-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px dotted #ccc;">
-            <span>Previous Balance:</span>
+            <span>Old Balance:</span>
             <span>${prevBalance < 0 ? formatNumber(Math.abs(prevBalance)) + ' (Cr)' : '₹' + formatNumber(prevBalance)}</span>
           </div>
           <div class="summary-row summary-total" style="border-top: 1px dashed #000;">
@@ -2013,6 +2049,18 @@ export default function InvoiceDetail() {
                 >
                   <ShoppingCart className="h-4 w-4 mr-2" />
                   {checkoutMutation.isPending ? 'Processing...' : 'Checkout'}
+                </Button>
+              )}
+              {/* Move to Ledger: show when bill is paid (to move paid bill to ledger or mark as credit) */}
+              {inv.status === 'paid' && (
+                <Button
+                  variant="primary"
+                  onClick={handleMoveToLedger}
+                  className="w-full sm:w-auto sm:min-w-[160px]"
+                  disabled={markCreditMutation.isPending}
+                >
+                  <BookOpen className="h-4 w-4 mr-2" />
+                  {markCreditMutation.isPending ? 'Moving...' : 'Move to Ledger'}
                 </Button>
               )}
 
@@ -2366,10 +2414,10 @@ export default function InvoiceDetail() {
                   <span className="text-base font-semibold text-gray-900">Total</span>
                   <span className="text-lg font-bold text-gray-900">₹{formatNumber('0')}</span>
                 </div>
-                {inv.customer && customerHasCreditInvoice && (
+                {inv.customer && customerHasCreditInvoice && inv.status !== 'paid' && (
                   <>
                     <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
-                      <span className="text-sm text-gray-600">Previous Balance</span>
+                      <span className="text-sm text-gray-600">Old Balance</span>
                       <span className={`text-sm font-medium ${prevBalance < 0 ? "text-green-600" : "text-gray-900"}`}>{formatBalance(prevBalance)}</span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-t border-double border-gray-900 mt-2 pt-2">
@@ -2406,10 +2454,10 @@ export default function InvoiceDetail() {
                   <span className="text-base font-semibold text-gray-900">Total</span>
                   <span className="text-lg font-bold text-gray-900">₹{formatNumber(inv.total || '0')}</span>
                 </div>
-                {inv.customer && customerHasCreditInvoice && (
+                {inv.customer && customerHasCreditInvoice && inv.status !== 'paid' && (
                   <>
                     <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
-                      <span className="text-sm text-gray-600">Previous Balance</span>
+                      <span className="text-sm text-gray-600">Old Balance</span>
                       <span className={`text-sm font-medium ${prevBalance < 0 ? "text-green-600" : "text-gray-900"}`}>{formatBalance(prevBalance)}</span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-t border-double border-gray-900 mt-2 pt-2">
@@ -4054,7 +4102,7 @@ export default function InvoiceDetail() {
                 Invoice Type
               </label>
               <Select
-                value={checkoutInvoiceType}
+                value={hideCheckoutPaymentOptions && !['pending', 'credit'].includes(checkoutInvoiceType) ? 'pending' : checkoutInvoiceType}
                 onChange={(e) => {
                   const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
                   setCheckoutInvoiceType(newType);
@@ -4076,9 +4124,13 @@ export default function InvoiceDetail() {
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
               >
                 <option value="pending">PENDING (Save Prices Only)</option>
-                <option value="cash">CASH (Checkout)</option>
-                <option value="upi">UPI (Checkout)</option>
-                <option value="mixed">CASH + UPI (Checkout)</option>
+                {!hideCheckoutPaymentOptions && (
+                  <>
+                    <option value="cash">CASH (Checkout)</option>
+                    <option value="upi">UPI (Checkout)</option>
+                    <option value="mixed">CASH + UPI (Checkout)</option>
+                  </>
+                )}
                 <option value="credit">CREDIT (Move to Ledger)</option>
               </Select>
               <p className="text-xs text-blue-700 mt-2 font-medium">

@@ -352,6 +352,9 @@ export default function POS() {
     return filteredStores.find((s: any) => s.is_active) || filteredStores[0];
   }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
 
+  // Wholesale shop: selected store is wholesale → only pending or credit, default pending
+  const isWholesaleShop = defaultStore?.shop_type === 'wholesale';
+
   // Update selectedStoreId when stores load and Admin/Retail/WholesaleAdmin hasn't selected one yet
   useEffect(() => {
     if ((isAdmin || isRetailGroup || isWholesaleAdmin) && !selectedStoreId && filteredStores.length > 0) {
@@ -1096,15 +1099,17 @@ export default function POS() {
       const cartData: any = { store: defaultStore.id };
       if (isWholesaleGroup && !isWholesaleAdmin) {
         cartData.invoice_type = 'pending';
+      } else if (isWholesaleShop) {
+        cartData.invoice_type = 'pending';
       }
       return posApi.carts.create(cartData);
     },
     onSuccess: async (data) => {
       const newCartId = data.data.id;
 
-      // Update invoiceType state from cart (Wholesale users get 'pending' from backend when we created with it)
-      const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin)
-        ? 'pending'
+      // Update invoiceType state from cart (Wholesale users/shop get 'pending' from backend when we created with it)
+      const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop
+        ? (data.data.invoice_type === 'credit' ? 'credit' : 'pending')
         : backendToFrontendInvoiceType(data.data.invoice_type || 'cash');
       setInvoiceType(cartInvoiceType);
 
@@ -1215,14 +1220,16 @@ export default function POS() {
         const cartData: any = { store: defaultStore.id };
         if (isWholesaleGroup && !isWholesaleAdmin) {
           cartData.invoice_type = 'pending';
+        } else if (isWholesaleShop) {
+          cartData.invoice_type = 'pending';
         }
         const cartResponse = await posApi.carts.create(cartData);
         currentCartId = cartResponse.data.id;
         cartWasCreated = true;
 
-        // Update invoiceType state from cart (Wholesale users get 'pending')
-        const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin)
-          ? 'pending'
+        // Update invoiceType state from cart (Wholesale users/shop get 'pending')
+        const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop
+          ? (cartResponse.data.invoice_type === 'credit' ? 'credit' : 'pending')
           : backendToFrontendInvoiceType(cartResponse.data.invoice_type || 'cash');
         setInvoiceType(cartInvoiceType);
 
@@ -1638,8 +1645,10 @@ export default function POS() {
             const cartData: any = { store: defaultStore.id };
             if (isWholesaleGroup && !isWholesaleAdmin) {
               cartData.invoice_type = 'pending';
+            } else if (isWholesaleShop) {
+              cartData.invoice_type = 'pending';
             }
-            setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) ? 'pending' : 'cash');
+            setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : 'cash');
             const data = await posApi.carts.create(cartData);
             const newCartId = data.data.id;
             if (username && data.data) {
@@ -1749,7 +1758,7 @@ export default function POS() {
           setCartId(null);
           setActiveTabId(null);
           setSelectedCustomer(null);
-          setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) ? 'pending' : 'cash');
+          setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : 'cash');
           setCashAmount('');
           setUpiAmount('');
           setBarcodeInput('');
@@ -1762,7 +1771,7 @@ export default function POS() {
         setCartId(null);
         setActiveTabId(null);
         setSelectedCustomer(null);
-        setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) ? 'pending' : 'cash');
+        setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : 'cash');
         setBarcodeInput('');
         // Create new cart automatically after checkout
         if (defaultStore) {
@@ -2291,7 +2300,7 @@ export default function POS() {
             setCartId(null);
             setActiveTabId(null);
             setSelectedCustomer(null);
-            setInvoiceType('cash');
+            setInvoiceType(isWholesaleShop ? 'pending' : 'cash');
             setBarcodeInput('');
             // Create new cart automatically after checkout if no other tabs
             if (defaultStore) {
@@ -2651,10 +2660,17 @@ export default function POS() {
     }
   }, [invoiceType]);
 
-  // Auto-set invoice type to 'pending' when repair shop is selected
-  // Only apply when store changes, not when cart loads (cart invoice_type takes precedence)
+  // Auto-set invoice type when store is repair or wholesale; only reset to cash for retail
   useEffect(() => {
-    // Skip if we have a cart with invoice_type already set (cart data takes precedence)
+    // Wholesale shop: only pending or credit; always enforce (even if cart had cash/upi/mixed)
+    if (defaultStore?.shop_type === 'wholesale') {
+      if (invoiceType !== 'pending' && invoiceType !== 'credit') {
+        setInvoiceType('pending');
+      }
+      return;
+    }
+
+    // Skip if we have a cart with invoice_type already set (cart data takes precedence for non-wholesale)
     if (cart?.data?.invoice_type) {
       return;
     }
@@ -2672,9 +2688,9 @@ export default function POS() {
       if (invoiceType !== 'pending') {
         setInvoiceType('pending');
       }
-    } else if (defaultStore?.shop_type !== 'repair' && invoiceType === 'pending') {
-      // If switching from repair to non-repair shop, reset to 'cash' if currently 'pending'
-      // But only if we don't have a cart (cart invoice_type takes precedence)
+    } else if (defaultStore?.shop_type !== 'repair' && defaultStore?.shop_type !== 'wholesale' && invoiceType === 'pending') {
+      // If switching from repair to retail shop, reset to 'cash' if currently 'pending'
+      // (Wholesale shop keeps pending/credit only; do not set cash)
       if (!cartId || !cart?.data) {
         setInvoiceType('cash');
       }
@@ -3237,9 +3253,14 @@ export default function POS() {
                       (Wholesale - PENDING invoices only)
                     </span>
                   )}
+                  {isWholesaleShop && !isWholesaleGroup && (
+                    <span className="ml-2 text-xs text-orange-600 font-normal">
+                      (Wholesale shop - PENDING or CREDIT only)
+                    </span>
+                  )}
                 </label>
                 <Select
-                  value={invoiceType}
+                  value={isWholesaleShop && !['pending', 'credit'].includes(invoiceType) ? 'pending' : invoiceType}
                   onChange={(e) => {
                     if (isCartLocked) return;
                     const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
@@ -3254,9 +3275,13 @@ export default function POS() {
                   className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg hover:border-gray-400 cursor-pointer transition-all"
                   disabled={isWholesaleGroup || isCartLocked}
                 >
-                  <option value="cash">CASH</option>
-                  <option value="upi">UPI</option>
-                  <option value="mixed">CASH + UPI</option>
+                  {!isWholesaleShop && (
+                    <>
+                      <option value="cash">CASH</option>
+                      <option value="upi">UPI</option>
+                      <option value="mixed">CASH + UPI</option>
+                    </>
+                  )}
                   <option value="credit">CREDIT</option>
                   <option value="pending">PENDING</option>
                 </Select>

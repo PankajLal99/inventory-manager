@@ -190,6 +190,8 @@ class InternalLedgerEntry(models.Model):
     description = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='internal_ledger_entries')
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
+    # Set when created by backfill from main LedgerEntry; null when created from POS mirroring
+    source_ledger_entry_id = models.PositiveIntegerField(null=True, blank=True, unique=True, db_index=True)
     
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'
