@@ -39,6 +39,7 @@ export default function Payments() {
   const queryClient = useQueryClient();
   const user = auth.getUser();
   const isSuper = user?.groups && user.groups.includes('Super');
+  const isRetail = user?.groups && user.groups.includes('Retail');
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
@@ -439,15 +440,17 @@ export default function Payments() {
               <TableCell className="text-base">{entry.created_by_username || '-'}</TableCell>
               <TableCell>
                 <div className="flex items-center justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    onClick={() => openEditModal(entry)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                    Edit
-                  </Button>
+                  {!isRetail && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={() => openEditModal(entry)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Edit
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
