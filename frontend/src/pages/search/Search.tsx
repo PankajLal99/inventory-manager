@@ -47,13 +47,14 @@ export default function Search() {
   const initialType = searchParams.get('type') || 'product';
   const [query, setQuery] = useState(initialQuery);
   const [searchType, setSearchType] = useState(initialType);
+  const [showZeroRows, setShowZeroRows] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [productLimit, setProductLimit] = useState(40);
   const scrollYRef = useRef<number | null>(null);
 
   const { data, isLoading, error, isFetching } = useQuery<SearchResults>({
-    queryKey: ['global-search', query, searchType, productLimit],
+    queryKey: ['global-search', query, searchType, productLimit, showZeroRows],
     queryFn: async () => {
       if (!query.trim()) {
         return {
@@ -71,7 +72,10 @@ export default function Search() {
           purchases: [],
         };
       }
-      const response = await searchApi.search(query, searchType, { product_limit: productLimit });
+      const response = await searchApi.search(query, searchType, {
+        product_limit: productLimit,
+        include_zero_shop_rows: showZeroRows ? 'true' : 'false',
+      } as any);
       return response.data;
     },
     enabled: query.trim().length > 0,
@@ -473,6 +477,23 @@ export default function Search() {
                           {/* Supplier Breakdown Table */}
                           {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
                             <div className="mt-4 overflow-x-auto border border-gray-100 rounded-md">
+                              <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
+                                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                                  Supplier breakdown
+                                </div>
+                                <label
+                                  className="flex items-center gap-2 text-[11px] font-medium text-gray-700 select-none cursor-pointer"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={showZeroRows}
+                                    onChange={(e) => setShowZeroRows(e.target.checked)}
+                                    className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
+                                  />
+                                  Show zero rows
+                                </label>
+                              </div>
                               <table className="min-w-full divide-y divide-gray-100">
                                 <thead className="bg-gray-50">
                                   <tr>

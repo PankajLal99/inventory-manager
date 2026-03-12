@@ -38,6 +38,7 @@ import {
   ClipboardList,
   CalendarDays,
   Coins,
+  Boxes,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -266,6 +267,7 @@ export default function Layout() {
       title: 'Inventory & Products',
       items: [
         { path: '/products', icon: Package, label: 'Products', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
+        { path: '/stock', icon: Boxes, label: 'Stock Overview', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
         { path: '/purchases', icon: ShoppingBag, label: 'Purchases', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
         // { path: '/pricing', icon: Coins, label: 'Pricing', showFor: 'all' }, // Hidden for now
       ],

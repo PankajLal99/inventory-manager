@@ -320,8 +320,14 @@ class ProductSerializer(serializers.ModelSerializer):
         return int(round(sum(b['warehouse_stock'] for b in breakdown)))
 
     def get_supplier_breakdown(self, obj):
-        """Breakdown for display: only rows with shop stock > 0."""
-        return _get_supplier_breakdown_for_product(obj, filter_shop_only=True)
+        """Breakdown for display.
+        Default: only rows with available > 0. If request includes include_zero_shop_rows=true, include zero rows too.
+        """
+        request = self.context.get('request')
+        include_zero = False
+        if request:
+            include_zero = str(request.query_params.get('include_zero_shop_rows', '')).lower() in ('1', 'true', 'yes', 'y')
+        return _get_supplier_breakdown_for_product(obj, filter_shop_only=not include_zero)
 
     class Meta:
         model = Product
@@ -669,7 +675,11 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_supplier_breakdown(self, obj):
         if self._get_tag_filter() not in (None, 'new'):
             return []
-        return _get_supplier_breakdown_for_product(obj, filter_shop_only=True)
+        request = self.context.get('request')
+        include_zero = False
+        if request:
+            include_zero = str(request.query_params.get('include_zero_shop_rows', '')).lower() in ('1', 'true', 'yes', 'y')
+        return _get_supplier_breakdown_for_product(obj, filter_shop_only=not include_zero)
 
     class Meta:
         model = Product

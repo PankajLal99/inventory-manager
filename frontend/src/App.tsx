@@ -45,6 +45,7 @@ import DefectiveMoveOuts from './pages/defective/DefectiveMoveOuts';
 import PaymentReminders from './pages/payment-reminders/PaymentReminders';
 import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
+import StockOverview from './pages/stock/StockOverview';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -128,6 +129,7 @@ function App() {
                 <Route path="payment-reminders" element={<PaymentReminders />} />
                 <Route path="expenses" element={<Expenses />} />
                 <Route path="payments" element={<Payments />} />
+                <Route path="stock" element={<StockOverview />} />
                 <Route path="stores" element={<Stores />} />
                 <Route path="search" element={<Search />} />
                 <Route path="vendors" element={<Vendors />} />
