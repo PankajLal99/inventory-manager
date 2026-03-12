@@ -338,7 +338,7 @@ class ProductSerializer(serializers.ModelSerializer):
 def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
     """
     One row per purchase batch (PurchaseItem). Warehouse/Shop from that item; Shop Qty = available
-    (new+returned) barcodes for that batch. Ordered by supplier then latest purchase date first.
+    (shop_quantity - sold - in-cart) for that batch. Ordered by supplier then latest purchase date first.
     If filter_shop_only=True, only include rows where shop stock (shop_barcode_count) > 0.
     """
     from backend.purchasing.models import PurchaseItem
@@ -352,19 +352,23 @@ def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
         .select_related('purchase__supplier')
         .order_by('purchase__supplier__name', '-purchase__purchase_date')
     )
-    # Available (new+returned) count per purchase_item
-    available_per_item = dict(
+    # Sold/in-cart count per purchase_item
+    used_per_item = dict(
         obj.barcodes.filter(
-            tag__in=['new', 'returned'],
+            tag__in=['sold', 'in-cart'],
             purchase_item_id__isnull=False
-        ).values('purchase_item').annotate(count=Count('id')).values_list('purchase_item', 'count')
+        )
+        .values('purchase_item')
+        .annotate(count=Count('id'))
+        .values_list('purchase_item', 'count')
     )
 
     breakdown = []
     for item in items:
         whse = float(item.warehouse_quantity)
         shop_allocated = float(item.shop_quantity)
-        shop_available = float(available_per_item.get(item.id, 0))
+        used = float(used_per_item.get(item.id, 0))
+        shop_available = float(max(0, shop_allocated - used))
         if shop_allocated == 0 and whse == 0 and shop_available == 0:
             continue
         # For display: only show rows where shop stock > 0

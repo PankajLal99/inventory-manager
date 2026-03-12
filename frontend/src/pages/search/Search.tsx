@@ -479,7 +479,7 @@ export default function Search() {
                                     <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Supplier</th>
                                     <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Purchase date</th>
                                     <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Whse</th>
-                                    <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Shop Qty</th>
+                                    <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Available</th>
                                     <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Price</th>
                                   </tr>
                                 </thead>
