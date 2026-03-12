@@ -335,13 +335,10 @@ export default function InvoiceEdit() {
             await queryClient.refetchQueries({ queryKey: editCartQueryKey });
             const freshCart = await queryClient.fetchQuery({ queryKey: editCartQueryKey }) as any;
             const freshItems = freshCart?.data?.items ?? freshCart?.items ?? [];
-            const isInCurrentCart = [barcodeToScan, (productData as any)?.canonical_barcode ?? (productData as any)?.matched_barcode ?? barcodeToScan].some(bc => {
-              const b = String(bc ?? '').trim();
-              return b && freshItems.some(
-                (item: any) =>
-                  (item.scanned_barcodes || []).some((x: string) => x && String(x).trim() === b)
-              );
-            });
+            const isInCurrentCart = freshItems.some(
+              (item: any) =>
+                (item.scanned_barcodes || []).some((x: string) => x && String(x).trim() === String(barcodeToScan).trim())
+            );
             if (isInCurrentCart) {
               setScanQueue(prev => prev.map(item =>
                 item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
