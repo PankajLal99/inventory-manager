@@ -469,30 +469,34 @@ export default function Repairs() {
   const canSeeSuperMetrics = (user?.groups || []).includes('Super');
   const canSeeTotalColumn = canSeeSuperMetrics;
 
-  // Old Repair: only delivered or done (any date). Other statuses stay in their respective groups.
-  const oldRepairItems = filteredRepairs.filter(
-    (inv) =>
-      inv.repair?.status === 'delivered' || inv.repair?.status === 'done'
-  );
+  // Old Repair: only delivered or done AND not from today.
+  const oldRepairItems = filteredRepairs.filter((inv) => {
+    const status = inv.repair?.status;
+    if (status !== 'delivered' && status !== 'done') return false;
+    return !isToday(new Date(getRepairDisplayDate(inv)));
+  });
   // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
   const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
 
-  // Status groups: work_in_progress, received, cancelled (done/delivered go to Old Repair). All dates shown by default.
-  const STATUS_ORDER_MAIN = STATUS_ORDER.filter(
-    (s) => s !== 'not_repaired' && s !== 'done' && s !== 'delivered'
-  );
+  // Status groups: include done/delivered, but keep old done/delivered only in Old Repair.
+  const STATUS_ORDER_MAIN = STATUS_ORDER.filter((s) => s !== 'not_repaired');
   const statusGroups = STATUS_ORDER_MAIN.map((status) => ({
     status,
     label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
-    items: filteredRepairs.filter((inv) => inv.repair?.status === status),
+    items: filteredRepairs.filter((inv) => {
+      if (inv.repair?.status !== status) return false;
+      // For done/delivered, only keep today's items here; older ones go to Old Repair.
+      if (status === 'done' || status === 'delivered') {
+        return isToday(new Date(getRepairDisplayDate(inv)));
+      }
+      return true;
+    }),
   }));
-  // Other = status not in main list; exclude not_repaired, done, delivered (done/delivered are in Old Repair)
+  // Other = status not in main list; exclude not_repaired (and anything already covered above)
   const otherItems = filteredRepairs.filter(
     (inv) =>
       inv.repair &&
       inv.repair.status !== 'not_repaired' &&
-      inv.repair.status !== 'done' &&
-      inv.repair.status !== 'delivered' &&
       !STATUS_ORDER_MAIN.includes(inv.repair?.status ?? '')
   );
   const groupsWithItems = [
