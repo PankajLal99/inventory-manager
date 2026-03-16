@@ -354,8 +354,9 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
     def get_computed_total(self, obj):
         """
-        Precomputed list value for Total column.
-        Uses queryset annotations when available; falls back per list profile behavior.
+        Precomputed list value for Total column (Invoices and Repairs list pages).
+        When annotations exist: _items_total_agg = sum(quantity * purchase_price) — always cost.
+        Falls back per list profile when no items (e.g. repair_list uses display_total or total).
         """
         item_count = getattr(obj, '_items_count', None)
         if item_count is not None and int(item_count) > 0:

@@ -367,7 +367,9 @@ def global_search(request):
         from backend.catalog.filters import ProductFilter
         from backend.pos.models import CartItem
 
-        products_queryset = Product.objects.filter(is_active=True).prefetch_related(
+        products_queryset = Product.objects.filter(is_active=True).exclude(
+            name__istartswith='Other -'
+        ).prefetch_related(
             'barcodes',
             'barcodes__purchase__supplier',
             'stock_entries',

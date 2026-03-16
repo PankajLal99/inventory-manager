@@ -40,12 +40,15 @@ interface SearchResults {
   purchases: any[];
 }
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 export default function Search() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
   const initialType = searchParams.get('type') || 'product';
-  const [query, setQuery] = useState(initialQuery);
+  const [inputValue, setInputValue] = useState(initialQuery);
+  const [debouncedQuery, setDebouncedQuery] = useState(initialQuery);
   const [searchType, setSearchType] = useState(initialType);
   const [showZeroRows, setShowZeroRows] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
@@ -53,10 +56,18 @@ export default function Search() {
   const [productLimit, setProductLimit] = useState(40);
   const scrollYRef = useRef<number | null>(null);
 
+  // Debounce input so we only search after user stops typing
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedQuery(inputValue);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(handler);
+  }, [inputValue]);
+
   const { data, isLoading, error, isFetching } = useQuery<SearchResults>({
-    queryKey: ['global-search', query, searchType, productLimit, showZeroRows],
+    queryKey: ['global-search', debouncedQuery, searchType, productLimit, showZeroRows],
     queryFn: async () => {
-      if (!query.trim()) {
+      if (!debouncedQuery.trim()) {
         return {
           products: [],
           variants: [],
@@ -72,23 +83,24 @@ export default function Search() {
           purchases: [],
         };
       }
-      const response = await searchApi.search(query, searchType, {
+      const response = await searchApi.search(debouncedQuery, searchType, {
         product_limit: productLimit,
         include_zero_shop_rows: showZeroRows ? 'true' : 'false',
       } as any);
       return response.data;
     },
-    enabled: query.trim().length > 0,
+    enabled: debouncedQuery.trim().length > 0,
     retry: false,
     placeholderData: keepPreviousData,
   });
 
-  // Sync query with URL params and reset product limit when search changes
+  // Sync from URL (e.g. back button) and reset product limit when search changes
   useEffect(() => {
     const urlQuery = searchParams.get('q') || '';
     const urlType = searchParams.get('type') || 'product';
-    if (urlQuery !== query) {
-      setQuery(urlQuery);
+    if (urlQuery !== debouncedQuery) {
+      setInputValue(urlQuery);
+      setDebouncedQuery(urlQuery);
       setProductLimit(40);
     }
     if (urlType !== searchType) {
@@ -113,16 +125,18 @@ export default function Search() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const params: any = {};
-    if (query.trim()) params.q = query.trim();
+    const q = inputValue.trim();
+    if (q) params.q = q;
     if (searchType !== 'product') params.type = searchType;
     setSearchParams(params);
+    setDebouncedQuery(q);
     // Query will trigger automatically via useQuery
   };
 
   const handleTypeChange = (type: string) => {
     setSearchType(type);
-    if (query.trim()) {
-      const params: any = { q: query.trim() };
+    if (debouncedQuery.trim()) {
+      const params: any = { q: debouncedQuery.trim() };
       if (type !== 'product') params.type = type;
       setSearchParams(params);
     }
@@ -144,14 +158,16 @@ export default function Search() {
         setShowScanner(false);
       } else {
         // Product not found - update search query to search for the barcode
-        setQuery(trimmedBarcode);
+        setInputValue(trimmedBarcode);
+        setDebouncedQuery(trimmedBarcode);
         setSearchParams({ q: trimmedBarcode });
         setShowScanner(false);
       }
     } catch (error: any) {
       // If barcode not found, try searching for it in the search query
       if (error?.response?.status === 404) {
-        setQuery(trimmedBarcode);
+        setInputValue(trimmedBarcode);
+        setDebouncedQuery(trimmedBarcode);
         setSearchParams({ q: trimmedBarcode });
         setShowScanner(false);
       } else {
@@ -248,8 +264,8 @@ export default function Search() {
             <Input
               type="text"
               placeholder="Search products, customers, invoices, SKUs, barcodes..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
               className="pl-12 pr-4 py-3 text-lg"
               autoFocus
             />
@@ -330,17 +346,17 @@ export default function Search() {
         </div>
       )}
 
-      {!isLoading && !error && query.trim() && (
+      {!isLoading && !error && debouncedQuery.trim() && (
         <>
           {totalResults === 0 ? (
             <div className="text-center py-12">
               <SearchIcon className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-600">No results found for "{query}"</p>
+              <p className="text-gray-600">No results found for "{debouncedQuery}"</p>
             </div>
           ) : (
             <div className="mb-4">
               <p className="text-sm text-gray-600">
-                Found <span className="font-semibold">{totalResults}</span> result{totalResults !== 1 ? 's' : ''} for "{query}"
+                Found <span className="font-semibold">{totalResults}</span> result{totalResults !== 1 ? 's' : ''} for "{debouncedQuery}"
               </p>
             </div>
           )}
@@ -732,7 +748,7 @@ export default function Search() {
                 items={data.customers}
                 onItemClick={(item) => {
                   const params = new URLSearchParams();
-                  params.set('search', query);
+                  params.set('search', debouncedQuery);
                   params.set('is_active', item.is_active ? 'true' : 'false');
                   if (item.customer_group) params.set('customer_group', item.customer_group.toString());
                   navigate(`/customers?${params.toString()}`);
@@ -748,7 +764,7 @@ export default function Search() {
                 items={data.invoices}
                 onItemClick={(item) => {
                   const params = new URLSearchParams();
-                  params.set('search', query);
+                  params.set('search', debouncedQuery);
                   params.set('status', item.status);
                   navigate(`/invoices?${params.toString()}`);
                 }}
@@ -844,7 +860,7 @@ export default function Search() {
         </>
       )}
 
-      {!isLoading && !error && !query.trim() && (
+      {!isLoading && !error && !debouncedQuery.trim() && (
         <div className="text-center py-12">
           <SearchIcon className="h-12 w-12 text-gray-300 mx-auto mb-4" />
           <p className="text-gray-600">Enter a search query to find products, customers, invoices, and more</p>

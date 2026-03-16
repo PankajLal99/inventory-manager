@@ -42,8 +42,8 @@ def _get_barcode_supplier_id(barcode_obj):
 def _with_invoice_amount_annotations(queryset):
     """
     Annotate invoices with DB-side per-invoice totals used by list pages.
-    - _items_total_agg matches the old "Total" column calculation from item purchase/selling rates.
-    - _items_paid_agg matches the old "Paid" column calculation from sold line totals/rates.
+    - _items_total_agg: Total column = sum of (quantity * purchase_price) — always purchase/cost.
+    - _items_paid_agg: Paid column = sold line totals/rates.
     """
     money_field = DecimalField(max_digits=18, decimal_places=2)
     purchase_rate = Case(
@@ -54,14 +54,9 @@ def _with_invoice_amount_annotations(queryset):
         default=Value(Decimal('0.00')),
         output_field=money_field,
     )
-    item_total_rate = Case(
-        # Prefer configured selling price when available; otherwise fall back to purchase rate.
-        When(items__barcode__purchase_item__selling_price__gt=0, then=F('items__barcode__purchase_item__selling_price')),
-        default=purchase_rate,
-        output_field=money_field,
-    )
+    # Total column uses purchase price only (cost), not selling price.
     item_total_expr = ExpressionWrapper(
-        F('items__quantity') * item_total_rate,
+        F('items__quantity') * purchase_rate,
         output_field=money_field,
     )
     item_paid_rate = Case(

@@ -469,54 +469,46 @@ export default function Repairs() {
   const canSeeSuperMetrics = (user?.groups || []).includes('Super');
   const canSeeTotalColumn = canSeeSuperMetrics;
 
-  // Old Repair: not from today and not not_repaired (not_repaired has its own section at the end)
+  // Old Repair: only delivered or done (any date). Other statuses stay in their respective groups.
   const oldRepairItems = filteredRepairs.filter(
     (inv) =>
-      !isToday(getRepairDisplayDate(inv)) &&
-      inv.repair?.status !== 'not_repaired'
+      inv.repair?.status === 'delivered' || inv.repair?.status === 'done'
   );
-  // Single "Not Repaired" group: all not_repaired (today + old), shown last and collapsed
+  // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
   const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
 
-  // Status groups (all dates); per-group date selectors decide what date to show.
-  const STATUS_ORDER_MAIN = STATUS_ORDER.filter((s) => s !== 'not_repaired');
+  // Status groups: work_in_progress, received, cancelled (done/delivered go to Old Repair). All dates shown by default.
+  const STATUS_ORDER_MAIN = STATUS_ORDER.filter(
+    (s) => s !== 'not_repaired' && s !== 'done' && s !== 'delivered'
+  );
   const statusGroups = STATUS_ORDER_MAIN.map((status) => ({
     status,
     label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
     items: filteredRepairs.filter((inv) => inv.repair?.status === status),
   }));
-  // Other = repairs with status not in main list; exclude not_repaired (they go in "Not Repaired" section)
+  // Other = status not in main list; exclude not_repaired, done, delivered (done/delivered are in Old Repair)
   const otherItems = filteredRepairs.filter(
     (inv) =>
       inv.repair &&
       inv.repair.status !== 'not_repaired' &&
+      inv.repair.status !== 'done' &&
+      inv.repair.status !== 'delivered' &&
       !STATUS_ORDER_MAIN.includes(inv.repair?.status ?? '')
   );
   const groupsWithItems = [
     ...statusGroups,
     ...(otherItems.length > 0 ? [{ status: 'other', label: 'Other', items: otherItems }] : []),
-    // Old Repair: repairs not from today and not delivered (excluding not_repaired)
+    // Old Repair: completed repairs (done / delivered) only
     ...(oldRepairItems.length > 0 ? [{ status: 'old_repair', label: 'Old Repair', items: oldRepairItems }] : []),
     // Not Repaired: one group at the very end, collapsed by default (today + old)
     ...(allNotRepaired.length > 0
       ? [{ status: 'not_repaired', label: 'Not Repaired', items: allNotRepaired }]
       : []),
   ];
-  const getLatestDateForItems = (items: RepairInvoice[]): string => {
-    const dates: string[] = [];
-    for (const inv of items) {
-      const repairDate = toLocalDateString(getRepairDisplayDate(inv));
-      if (repairDate) dates.push(repairDate);
-      const deliveryDate = inv.repair?.delivery_date ? toLocalDateString(inv.repair.delivery_date) : '';
-      if (deliveryDate) dates.push(deliveryDate);
-    }
-    if (dates.length === 0) return '';
-    return dates.reduce((latest, current) => (current > latest ? current : latest));
-  };
-  const getGroupSelectedDate = (status: string, items: RepairInvoice[]) => {
+  // No default date filter: show all items in each group. User can optionally filter by date.
+  const getGroupSelectedDate = (status: string, _items: RepairInvoice[]) => {
     if (status === 'old_repair') return '';
-    const defaultDate = getLatestDateForItems(items) || toLocalDateString(new Date());
-    return groupDateFilters[status] ?? defaultDate;
+    return groupDateFilters[status] ?? '';
   };
   /** Match if selected date equals repair date (created/updated) OR delivery date. */
   const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string) => {
@@ -829,6 +821,9 @@ export default function Repairs() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Date range
               </label>
+              <p className="text-xs text-gray-500 mb-1">
+                Includes repairs created, updated, or delivered in this range
+              </p>
               <DateRangeSelector
                 preset={datePreset}
                 value={{ startDate: dateFrom, endDate: dateTo }}
@@ -917,7 +912,7 @@ export default function Repairs() {
                   )}
                 </div>
                 {group.status === 'old_repair' && (
-                  <p className="text-sm text-gray-500 ml-5">Repairs from previous days (not delivered)</p>
+                  <p className="text-sm text-gray-500 ml-5">Completed repairs (done / delivered)</p>
                 )}
                 {isNotRepairedGroup && (
                   <p className="text-sm text-gray-500 ml-5">Filter by repair or delivery date — click to expand</p>
@@ -935,6 +930,7 @@ export default function Repairs() {
                 <Table compact headers={[
                   { label: 'Invoice #', align: 'left' },
                   { label: 'Date', align: 'left' },
+                  { label: 'Delivery date', align: 'left' },
                   { label: 'Customer', align: 'left' },
                   { label: 'Contact', align: 'left' },
                   { label: 'Model', align: 'left' },
@@ -968,6 +964,11 @@ export default function Repairs() {
                         <TableCell>
                           <span className="text-gray-600">
                             {formatDate(getRepairDisplayDate(invoice))}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-gray-600">
+                            {invoice.repair?.delivery_date ? formatDate(invoice.repair.delivery_date) : '—'}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -1119,7 +1120,7 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell colSpan={10}>Profit (Paid − Total)</TableCell>
+                      <TableCell colSpan={11}>Profit (Paid − Total)</TableCell>
                       <TableCell align="right" className="text-emerald-700">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
@@ -1167,6 +1168,12 @@ export default function Repairs() {
                           <div className="text-sm text-gray-600 mb-1">
                             {formatDate(getRepairDisplayDate(invoice))}
                           </div>
+                          {invoice.repair?.delivery_date && (
+                            <div className="text-sm text-gray-600 mb-1">
+                              <span className="text-gray-500 font-medium">Delivery: </span>
+                              <span>{formatDate(invoice.repair.delivery_date)}</span>
+                            </div>
+                          )}
                           <div className="flex items-center gap-2 text-sm text-gray-900 font-medium mb-1">
                             <User className="h-3.5 w-3.5 text-gray-400" />
                             <span className="truncate">

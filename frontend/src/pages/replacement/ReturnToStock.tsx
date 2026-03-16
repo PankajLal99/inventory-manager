@@ -655,8 +655,9 @@ export default function ReturnToStock() {
                             <div className="flex-1">
                               <div className="font-medium text-gray-900">{item.product_name}</div>
                               <div className="text-sm text-gray-600 mt-1">
+                                {item.barcode_value && item.barcode_value !== item.barcode_full && <>Short code: {item.barcode_value}</>}
+                                {item.barcode_value && item.barcode_value !== item.barcode_full && item.barcode_full && <> | </>}
                                 {item.barcode_full && <>Barcode: {item.barcode_full}</>}
-                                {item.barcode_value && item.barcode_value !== item.barcode_full && <> | Short code: {item.barcode_value}</>}
                               </div>
                               <div className="text-sm text-gray-500 mt-1">
                                 Sold: {item.quantity} | Available: {item.available_quantity}
