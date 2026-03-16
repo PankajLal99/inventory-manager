@@ -61,6 +61,7 @@ def _optimized_product_list_internal(request):
         'low_stock': request.query_params.get('low_stock', ''),
         'out_of_stock': request.query_params.get('out_of_stock', ''),
         'exclude_other_custom': request.query_params.get('exclude_other_custom', ''),
+        'warehouse_qty_gt_zero': request.query_params.get('warehouse_qty_gt_zero', ''),
         'page': request.query_params.get('page', 1),
         'limit': request.query_params.get('limit', 50),
     }
@@ -143,6 +144,17 @@ def _optimized_product_list_internal(request):
     # Exclude Other/Custom products (name starts with "Other -") when requested (e.g. Purchases, Products pages)
     if request.query_params.get('exclude_other_custom') in ('true', '1', 'yes'):
         queryset = queryset.exclude(name__startswith='Other -')
+    
+    # Filter: only products that have at least one PurchaseItem with warehouse_quantity > 0 (finalized purchases)
+    if request.query_params.get('warehouse_qty_gt_zero') in ('true', '1', 'yes'):
+        from backend.purchasing.models import PurchaseItem
+        product_ids_with_wh = set(
+            PurchaseItem.objects.filter(
+                purchase__status='finalized',
+                warehouse_quantity__gt=0
+            ).values_list('product_id', flat=True).distinct()
+        )
+        queryset = queryset.filter(id__in=product_ids_with_wh)
     
     # OPTIMIZATION 4: Only do expensive stock filtering when explicitly requested
     # Skip stock calculations for search/tag filters that don't need them

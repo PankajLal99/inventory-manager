@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Boxes, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { Boxes, ChevronDown, ChevronRight, ExternalLink, Loader2 } from 'lucide-react';
 import { productsApi } from '../../lib/api';
 import PageHeader from '../../components/ui/PageHeader';
 import Input from '../../components/ui/Input';
@@ -19,9 +19,11 @@ export default function StockOverview() {
 
   const initialSearch = searchParams.get('q') || '';
   const initialPage = Number(searchParams.get('page') || '1') || 1;
+  const initialWhGtZero = searchParams.get('wh_gt_zero') === '1' || searchParams.get('wh_gt_zero') === 'true';
 
   const [search, setSearch] = useState(initialSearch);
   const [currentPage, setCurrentPage] = useState(initialPage);
+  const [warehouseQtyGtZero, setWarehouseQtyGtZero] = useState(initialWhGtZero);
   const [expandAll, setExpandAll] = useState(() => localStorage.getItem(EXPAND_ALL_KEY) === 'true');
   const [expandedIds, setExpandedIds] = useState<Record<number, boolean>>({});
 
@@ -31,23 +33,27 @@ export default function StockOverview() {
     if (search.trim()) params.set('q', search.trim());
     else params.delete('q');
     params.set('page', String(currentPage));
+    if (warehouseQtyGtZero) params.set('wh_gt_zero', '1');
+    else params.delete('wh_gt_zero');
     setSearchParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, currentPage]);
+  }, [search, currentPage, warehouseQtyGtZero]);
 
   // Sync state with URL (back/forward + manual edits)
   useEffect(() => {
     const urlQ = searchParams.get('q') || '';
     const urlPage = Number(searchParams.get('page') || '1') || 1;
+    const urlWhGtZero = searchParams.get('wh_gt_zero') === '1' || searchParams.get('wh_gt_zero') === 'true';
     if (urlQ !== search) setSearch(urlQ);
     if (urlPage !== currentPage) setCurrentPage(urlPage);
+    if (urlWhGtZero !== warehouseQtyGtZero) setWarehouseQtyGtZero(urlWhGtZero);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // Reset page on search change
+  // Reset page when search or warehouse filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [search]);
+  }, [search, warehouseQtyGtZero]);
 
   // Remember expand/collapse all preference
   useEffect(() => {
@@ -65,8 +71,11 @@ export default function StockOverview() {
       params.search = search.trim();
       params.search_mode = 'name_only';
     }
+    if (warehouseQtyGtZero) {
+      params.warehouse_qty_gt_zero = 'true';
+    }
     return params;
-  }, [search, currentPage]);
+  }, [search, currentPage, warehouseQtyGtZero]);
 
   const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['stock-overview', queryParams],
@@ -76,6 +85,7 @@ export default function StockOverview() {
     },
     retry: false,
     placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
   });
 
   const products = (() => {
@@ -124,10 +134,34 @@ export default function StockOverview() {
         }
       />
 
-      {products.length === 0 ? (
-        <EmptyState icon={Boxes} title="No products found" message="Try changing your search." />
-      ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className="flex flex-wrap items-center gap-4 py-2">
+        <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={warehouseQtyGtZero}
+            onChange={(e) => setWarehouseQtyGtZero(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
+          />
+          Warehouse Qty &gt; 0
+        </label>
+      </div>
+
+      <div className="relative min-h-[200px]">
+        {isFetching && (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 rounded-lg border border-gray-100"
+            aria-hidden="false"
+          >
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+              <span className="text-sm font-medium text-gray-600">Updating list…</span>
+            </div>
+          </div>
+        )}
+        {products.length === 0 ? (
+          <EmptyState icon={Boxes} title="No products found" message="Try changing your search or filters." />
+        ) : (
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
             <div className="text-sm text-gray-600">
               Showing <span className="font-semibold text-gray-900">{products.length}</span> items
@@ -138,7 +172,7 @@ export default function StockOverview() {
                 </>
               ) : null}
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-wrap">
               <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
                 <input
                   type="checkbox"
@@ -316,7 +350,8 @@ export default function StockOverview() {
             pageSize={50}
           />
         </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

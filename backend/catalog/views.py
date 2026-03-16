@@ -3,7 +3,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from backend.core.permissions import IsAuthenticatedOrVendorPurchaseLabels
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Sum, OuterRef, Subquery, Value, DecimalField
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.core.cache import cache
@@ -257,6 +258,18 @@ def product_list_create(request):
         # Exclude Other/Custom products (name starts with "Other -") when requested (e.g. Purchases, Products pages)
         if request.query_params.get('exclude_other_custom') in ('true', '1', 'yes'):
             queryset = queryset.exclude(name__startswith='Other -')
+        
+        # Filter: only products with warehouse stock > 0 (sum of PurchaseItem.warehouse_quantity for finalized purchases)
+        if request.query_params.get('warehouse_qty_gt_zero') in ('true', '1', 'yes'):
+            from backend.purchasing.models import PurchaseItem
+            wh_subq = PurchaseItem.objects.filter(
+                product_id=OuterRef('pk'),
+                purchase__status='finalized'
+            ).values('product_id').annotate(s=Sum('warehouse_quantity')).values('s')
+            # Coalesce NULL (no purchase items) to 0 so we only keep products where sum > 0
+            queryset = queryset.annotate(
+                _wh_total=Coalesce(Subquery(wh_subq[:1]), Value(Decimal('0')), output_field=DecimalField())
+            ).filter(_wh_total__gt=0)
         
         # Additional POS-specific filtering: Filter to only show products with available barcodes when search is present
         # This ensures POS only shows products that can actually be added to cart
