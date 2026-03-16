@@ -159,15 +159,6 @@ function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; upda
   });
 }
 
-/** True if the given ISO date string is today (local date). */
-function isToday(createdAt: string): boolean {
-  const d = new Date(createdAt);
-  const today = new Date();
-  return d.getDate() === today.getDate() &&
-    d.getMonth() === today.getMonth() &&
-    d.getFullYear() === today.getFullYear();
-}
-
 /** Effective date for grouping/sorting: prefer repair.updated_at, fallback to invoice.created_at. */
 function getRepairDisplayDate(inv: RepairInvoice): string {
   return inv.repair?.updated_at || inv.created_at;
