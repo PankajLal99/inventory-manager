@@ -38,7 +38,7 @@ class LedgerEntrySerializer(serializers.ModelSerializer):
         model = LedgerEntry
         fields = [
             'id', 'customer', 'customer_name', 'customer_group_name', 'invoice', 'invoice_number',
-            'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'quantity', 'description', 'created_by', 'created_by_username', 'created_at'
+            'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'quantity', 'description', 'is_sent', 'created_by', 'created_by_username', 'created_at'
         ]
 
     def validate(self, attrs):

@@ -164,6 +164,15 @@ function getRepairDisplayDate(inv: RepairInvoice): string {
   return inv.repair?.updated_at || inv.created_at;
 }
 
+function isToday(date: Date): boolean {
+  const today = new Date();
+  return (
+    date.getDate() === today.getDate() &&
+    date.getMonth() === today.getMonth() &&
+    date.getFullYear() === today.getFullYear()
+  );
+}
+
 function parseAmount(value: unknown): number {
   const parsed = parseFloat(String(value ?? '0'));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -847,6 +856,10 @@ export default function Repairs() {
           <div className="h-3 w-3 rounded-full bg-purple-100 border border-purple-200"></div>
           <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Repair Service</span>
         </div>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 rounded-full bg-red-50 border border-red-300"></div>
+          <span className="text-xs text-gray-600 font-medium whitespace-nowrap">Old Received / Work in Progress</span>
+        </div>
       </div>
 
       {/* Repairs Table */}
@@ -934,6 +947,9 @@ export default function Repairs() {
                   { label: '', align: 'right' },
                 ]}>
                   {sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
+                    const isOldActiveWork =
+                      !isToday(new Date(getRepairDisplayDate(invoice))) &&
+                      (invoice.repair?.status === 'work_in_progress' || invoice.repair?.status === 'received');
                     const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
@@ -942,7 +958,7 @@ export default function Repairs() {
                     return (
                       <TableRow
                         key={invoice.id}
-                        className={`cursor-pointer transition-colors ${statusColor} hover:opacity-80`}
+                        className={`cursor-pointer transition-colors ${statusColor} ${isOldActiveWork ? 'bg-red-50/70 border-l-4 border-red-300' : ''} hover:opacity-80`}
                       >
                         <TableCell>
                           <span
@@ -1131,6 +1147,9 @@ export default function Repairs() {
                     No repairs found for the selected date.
                   </div>
                 ) : sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
+                  const isOldActiveWork =
+                    !isToday(new Date(getRepairDisplayDate(invoice))) &&
+                    (invoice.repair?.status === 'work_in_progress' || invoice.repair?.status === 'received');
                   const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
@@ -1141,7 +1160,7 @@ export default function Repairs() {
                     <div
                       key={invoice.id}
                       onClick={() => navigate(`/invoices/${invoice.id}`)}
-                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor}`}
+                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor} ${isOldActiveWork ? 'bg-red-50/70 border-red-300' : ''}`}
                     >
                       <div className="p-4">
                         <div className="mb-3">

@@ -29,6 +29,7 @@ interface ManualCreditEntry {
   upi_amount?: number | string | null;
   amount: number | string;
   description?: string;
+  is_sent?: boolean;
   created_at?: string;
   created_by_username?: string;
 }
@@ -231,6 +232,37 @@ export default function Payments() {
     },
   });
 
+  const updateSentMutation = useMutation({
+    mutationFn: ({ id, is_sent }: { id: number; is_sent: boolean }) =>
+      customersApi.ledger.entries.update(id, { is_sent }),
+    onMutate: async ({ id, is_sent }) => {
+      await queryClient.cancelQueries({ queryKey: ['manual-credit-entries'] });
+      const previousData = queryClient.getQueryData(['manual-credit-entries', search, paymentMode, dateFrom, dateTo]);
+      queryClient.setQueryData(['manual-credit-entries', search, paymentMode, dateFrom, dateTo], (old: any) => {
+        if (!old) return old;
+        const updated = JSON.parse(JSON.stringify(old));
+        const results = updated.results || updated.data || (Array.isArray(updated) ? updated : []);
+        for (const entry of results) {
+          if (entry.id === id) {
+            entry.is_sent = is_sent;
+            break;
+          }
+        }
+        return updated;
+      });
+      return { previousData };
+    },
+    onError: (error: any, _variables, context: any) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(['manual-credit-entries', search, paymentMode, dateFrom, dateTo], context.previousData);
+      }
+      toast(error?.response?.data?.error || 'Failed to update sent status', 'error');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'], refetchType: 'none' });
+    },
+  });
+
   const handleCreatePayment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCustomer) {
@@ -416,7 +448,7 @@ export default function Payments() {
           />
         </Card>
       ) : (
-        <Table headers={['Date', 'Customer', 'Payment Mode', 'Description', 'Amount', 'Created By', 'Actions']}>
+        <Table headers={['Date', 'Customer', 'Payment Mode', 'Description', 'Amount', 'Created By', 'Sent', 'Actions']}>
           {entries.map((entry) => (
             <TableRow key={entry.id}>
               <TableCell className="text-base">{entry.created_at ? entry.created_at.slice(0, 10) : '-'}</TableCell>
@@ -438,6 +470,20 @@ export default function Payments() {
                 </div>
               </TableCell>
               <TableCell className="text-base">{entry.created_by_username || '-'}</TableCell>
+              <TableCell align="center">
+                <input
+                  type="checkbox"
+                  checked={entry.is_sent || false}
+                  onChange={(e) => {
+                    updateSentMutation.mutate({
+                      id: entry.id,
+                      is_sent: e.target.checked,
+                    });
+                  }}
+                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                  title={entry.is_sent ? 'Marked as sent' : 'Mark as sent'}
+                />
+              </TableCell>
               <TableCell>
                 <div className="flex items-center justify-end gap-2">
                   {!isRetail && (
