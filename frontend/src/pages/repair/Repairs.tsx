@@ -206,7 +206,7 @@ export default function Repairs() {
   // Date filter for each status group (independent controls)
   const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>({});
   const hasAnyGroupDateOverride = Object.entries(groupDateFilters).some(
-    ([status, date]) => status !== 'old_repair' && !!date
+    ([, date]) => !!date
   );
 
   useEffect(() => {
@@ -511,7 +511,6 @@ export default function Repairs() {
   ];
   // No default date filter: show all items in each group. User can optionally filter by date.
   const getGroupSelectedDate = (status: string, _items: RepairInvoice[]) => {
-    if (status === 'old_repair') return '';
     return groupDateFilters[status] ?? '';
   };
   /** Match if selected date equals repair date (created/updated) OR delivery date. */
@@ -880,7 +879,7 @@ export default function Repairs() {
           {groupsWithItems.map((group) => {
             const isNotRepairedGroup = group.status === 'not_repaired';
             const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
-            const hasGroupDateSelector = group.status !== 'old_repair';
+            const hasGroupDateSelector = true;
             const selectedGroupDate = getGroupSelectedDate(group.status, group.items);
             const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate));
             // Profit = sum(paid) - sum(total) for Super group summary row

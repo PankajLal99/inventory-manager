@@ -35,6 +35,10 @@ interface ManualCreditEntry {
 }
 
 const getTodayDateValue = (): string => toLocalDateString(new Date());
+const getCurrentTime = (): string => {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+};
 
 export default function Payments() {
   const queryClient = useQueryClient();
@@ -55,6 +59,7 @@ export default function Payments() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [form, setForm] = useState({
     date: getTodayDateValue(),
+    time: getCurrentTime(),
     amount: '',
     payment_mode: 'cash' as PaymentMode,
     cash_amount: '',
@@ -187,6 +192,7 @@ export default function Payments() {
     setCustomerSearch('');
     setForm({
       date: getTodayDateValue(),
+      time: getCurrentTime(),
       amount: '',
       payment_mode: 'cash',
       cash_amount: '',
@@ -293,7 +299,7 @@ export default function Payments() {
       upi_amount: form.payment_mode === 'mixed' ? Number(form.upi_amount || 0) : undefined,
       amount: Number(form.amount),
       description: form.description.trim(),
-      created_at: form.date ? `${form.date}T12:00:00` : undefined,
+      created_at: form.date ? `${form.date}T${form.time || '12:00'}:00` : undefined,
     });
   };
 
@@ -576,12 +582,21 @@ export default function Payments() {
             )}
           </div>
 
-          <DatePicker
-            label="Date"
-            value={form.date}
-            onChange={(date) => setForm((prev) => ({ ...prev, date }))}
-            required
-          />
+          <div className="grid grid-cols-2 gap-3">
+            <DatePicker
+              label="Date"
+              value={form.date}
+              onChange={(date) => setForm((prev) => ({ ...prev, date }))}
+              required
+            />
+            <Input
+              type="time"
+              label="Time"
+              value={form.time}
+              onChange={(e) => setForm((prev) => ({ ...prev, time: e.target.value }))}
+              required
+            />
+          </div>
 
           <Input
             type="number"

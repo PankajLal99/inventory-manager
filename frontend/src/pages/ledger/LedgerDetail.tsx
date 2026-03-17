@@ -297,6 +297,19 @@ export default function LedgerDetail() {
       .filter(Boolean);
   }, [allInvoicesLoaded, invoiceQueries]);
 
+  const invoiceItemsMap = useMemo(() => {
+    const map: Record<number, { product_name: string; quantity: number }[]> = {};
+    invoicesData.forEach((inv: any) => {
+      if (inv?.id && inv.items && Array.isArray(inv.items)) {
+        map[inv.id] = inv.items.map((item: any) => ({
+          product_name: item.product_name || 'Unknown',
+          quantity: parseInt(item.quantity || '0') || 0,
+        }));
+      }
+    });
+    return map;
+  }, [invoicesData]);
+
   // Number to words (Indian numbering) for the AIO invoice
   const numberToWords = (num: number): string => {
     const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
@@ -1022,7 +1035,8 @@ export default function LedgerDetail() {
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Debit</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Credit</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Balance</th>
-                  <th className="text-left py-3 px-4 font-semibold text-gray-700">Invoice</th>
+                  <th className="text-left py-3 px-2 font-semibold text-gray-700">Inv#</th>
+                  <th className="text-left py-3 px-4 font-semibold text-gray-700">Products</th>
                   {isAdmin && <th className="text-right py-3 px-4 font-semibold text-gray-700">Actions</th>}
                 </tr>
               </thead>
@@ -1054,16 +1068,30 @@ export default function LedgerDetail() {
                     <td className="py-3 px-4 text-right font-semibold text-gray-900">
                       ₹{formatAmountINR(entry.running_balance || 0)}
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="py-3 px-2">
                       {entry.invoice_number ? (
                         <button
                           onClick={() => navigate(`/invoices/${entry.invoice}`)}
-                          className="text-blue-600 hover:underline text-sm font-medium"
+                          className="text-blue-600 hover:underline text-xs font-medium"
+                          title={entry.invoice_number}
                         >
                           {entry.invoice_number}
                         </button>
                       ) : (
-                        <span className="text-gray-400">-</span>
+                        <span className="text-gray-400 text-xs">-</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4">
+                      {entry.invoice && invoiceItemsMap[entry.invoice] ? (
+                        <div className="flex flex-col gap-0.5">
+                          {invoiceItemsMap[entry.invoice].map((item, idx) => (
+                            <span key={idx} className="text-xs text-gray-700">
+                              {item.product_name} <span className="text-gray-400">×</span> {item.quantity}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400 text-xs">-</span>
                       )}
                     </td>
                     {isAdmin && (

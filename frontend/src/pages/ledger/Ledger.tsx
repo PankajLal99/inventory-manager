@@ -15,7 +15,7 @@ import {
   Plus, Minus, FileText, Users, TrendingUp, TrendingDown,
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search,
-  Store, ChevronDown, UserPlus, Receipt
+  Store, ChevronDown, UserPlus, Receipt, CheckCheck, Undo2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -73,6 +73,12 @@ export default function Ledger() {
   const [editingEntry, setEditingEntry] = useState<any>(null);
   const [editEntryData, setEditEntryData] = useState({ amount: '', description: '', date: '', entryType: 'credit' as 'credit' | 'debit' });
   const [deletingEntryId, setDeletingEntryId] = useState<number | null>(null);
+  const [showSettleAllModal, setShowSettleAllModal] = useState(false);
+  const [settlingCustomer, setSettlingCustomer] = useState<{ id: number; name: string; amount: number } | null>(null);
+  const [isSettling, setIsSettling] = useState(false);
+  const [lastSettledEntryIds, setLastSettledEntryIds] = useState<number[]>([]);
+  const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -492,6 +498,95 @@ export default function Ledger() {
     return filteredEntries.length > 0;
   }, [showCreditInvoicesOnly, ledgerByCustomer, filteredEntries.length]);
 
+  const settlableCustomers = useMemo(() => {
+    if (!showCreditInvoicesOnly || !Array.isArray(ledgerByCustomer)) return [];
+    const creditCustomerIds = new Set(
+      ledgerByCustomer
+        .filter((row: any) => row.customer_id != null)
+        .map((row: any) => row.customer_id)
+    );
+    return Object.values(groupedByCustomer)
+      .filter((g: any) => g.customer.id !== null && g.netAmount < 0 && creditCustomerIds.has(g.customer.id))
+      .map((g: any) => ({
+        id: g.customer.id,
+        name: g.customer.name,
+        netAmount: g.netAmount,
+        settleAmount: Math.abs(g.netAmount),
+      }));
+  }, [groupedByCustomer, showCreditInvoicesOnly, ledgerByCustomer]);
+
+  const handleSettleAll = async () => {
+    if (settlableCustomers.length === 0) return;
+    setIsSettling(true);
+    try {
+      const responses = await Promise.all(
+        settlableCustomers.map((c) =>
+          customersApi.ledger.entries.create({
+            customer: c.id,
+            entry_type: 'credit',
+            amount: c.settleAmount,
+            description: 'ALL OKAY LEDGER',
+          })
+        )
+      );
+      const createdIds = responses.map((r: any) => r.data?.id).filter(Boolean);
+      setLastSettledEntryIds(createdIds);
+      queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
+      toast(`Settled ${settlableCustomers.length} customer${settlableCustomers.length !== 1 ? 's' : ''} successfully`, 'success');
+      setShowSettleAllModal(false);
+    } catch (err: any) {
+      toast(err?.response?.data?.error || 'Failed to settle some customers', 'error');
+    } finally {
+      setIsSettling(false);
+    }
+  };
+
+  const handleSettleOne = async () => {
+    if (!settlingCustomer) return;
+    setIsSettling(true);
+    try {
+      const response = await customersApi.ledger.entries.create({
+        customer: settlingCustomer.id,
+        entry_type: 'credit',
+        amount: settlingCustomer.amount,
+        description: 'ALL OKAY LEDGER',
+      });
+      const createdId = response.data?.id;
+      if (createdId) setLastSettledEntryIds((prev) => [...prev, createdId]);
+      queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
+      toast(`${settlingCustomer.name} settled successfully`, 'success');
+      setSettlingCustomer(null);
+    } catch (err: any) {
+      toast(err?.response?.data?.error || 'Failed to settle customer', 'error');
+    } finally {
+      setIsSettling(false);
+    }
+  };
+
+  const handleRollback = async () => {
+    if (lastSettledEntryIds.length === 0) return;
+    setIsRollingBack(true);
+    try {
+      await Promise.all(
+        lastSettledEntryIds.map((id) => customersApi.ledger.entries.delete(id))
+      );
+      queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
+      toast(`Rolled back ${lastSettledEntryIds.length} settlement entr${lastSettledEntryIds.length !== 1 ? 'ies' : 'y'} successfully`, 'success');
+      setLastSettledEntryIds([]);
+      setShowRollbackConfirm(false);
+    } catch (err: any) {
+      toast(err?.response?.data?.error || 'Failed to rollback some entries', 'error');
+    } finally {
+      setIsRollingBack(false);
+    }
+  };
+
   const handleExportExcel = () => {
     const data = showCreditInvoicesOnly
       ? Object.values(groupedByCustomer).map((group: any) => ({
@@ -887,6 +982,16 @@ export default function Ledger() {
               <Printer className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
               <span className="hidden sm:inline">Print</span>
             </Button>
+            {showCreditInvoicesOnly && settlableCustomers.length > 0 && (
+              <Button
+                onClick={() => setShowSettleAllModal(true)}
+                className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 sm:py-2 bg-amber-600 hover:bg-amber-700"
+              >
+                <CheckCheck className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
+                <span className="hidden sm:inline">Settle All</span>
+                <span className="sm:hidden">Settle</span>
+              </Button>
+            )}
           </div>
         </div>
 
@@ -1023,6 +1128,36 @@ export default function Ledger() {
           </div>
         )}
 
+        {/* Rollback Banner */}
+        {lastSettledEntryIds.length > 0 && (
+          <div className="mt-4 flex items-center justify-between gap-3 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">
+            <div className="flex items-center gap-2 text-sm text-amber-800">
+              <Undo2 className="h-4 w-4 flex-shrink-0" />
+              <span>
+                <strong>{lastSettledEntryIds.length}</strong> settlement entr{lastSettledEntryIds.length !== 1 ? 'ies' : 'y'} created. You can undo this action.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLastSettledEntryIds([])}
+                className="text-xs text-gray-600 border-gray-300"
+              >
+                Dismiss
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setShowRollbackConfirm(true)}
+                className="text-xs bg-red-600 hover:bg-red-700 flex items-center gap-1.5"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+                Rollback
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Ledger Entries Table */}
         {error ? (
           <div className="mt-6 text-center py-16 bg-red-50 rounded-lg border-2 border-dashed border-red-300">
@@ -1141,9 +1276,21 @@ export default function Ledger() {
                                 </>
                               )}
                               <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                                <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
-                                  {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
-                                </span>
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                                    {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
+                                  </span>
+                                  {group.netAmount < 0 && group.customer.id !== null && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); setSettlingCustomer({ id: group.customer.id, name: group.customer.name, amount: Math.abs(group.netAmount) }); }}
+                                      className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 hover:text-amber-700 transition-colors"
+                                      title={`Settle ${group.customer.name}`}
+                                    >
+                                      <CheckCheck className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1227,10 +1374,22 @@ export default function Ledger() {
                             ) : null}
                           </div>
                         </div>
-                        <div className={`text-lg font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                          <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
-                            {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
-                          </span>
+                        <div className="flex items-center gap-2">
+                          <div className={`text-lg font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                            <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                              {group.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(group.netAmount)}
+                            </span>
+                          </div>
+                          {group.netAmount < 0 && group.customer.id !== null && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSettlingCustomer({ id: group.customer.id, name: group.customer.name, amount: Math.abs(group.netAmount) }); }}
+                              className="p-2 rounded-lg text-amber-600 hover:bg-amber-50 hover:text-amber-700 transition-colors"
+                              title={`Settle ${group.customer.name}`}
+                            >
+                              <CheckCheck className="h-5 w-5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1558,6 +1717,112 @@ export default function Ledger() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Settle All Confirmation Modal */}
+      <Modal
+        isOpen={showSettleAllModal}
+        onClose={() => { if (!isSettling) setShowSettleAllModal(false); }}
+        title="Settle All Customers"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            This will create a <strong>credit entry</strong> for each customer below with the description <strong>"ALL OKAY LEDGER"</strong>, zeroing out their balance.
+          </p>
+          <div className="max-h-[28rem] overflow-y-auto border border-gray-200 rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 sticky top-0">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Customer</th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-700">Balance</th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-700">Credit Entry</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {settlableCustomers.map((c) => (
+                  <tr key={c.id}>
+                    <td className="px-3 py-2 text-gray-800">{c.name}</td>
+                    <td className={`px-3 py-2 text-right font-medium ${c.netAmount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      {c.netAmount >= 0 ? '+' : ''}₹{formatAmountINR(c.netAmount)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold text-green-700">
+                      +₹{formatAmountINR(c.settleAmount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-sm text-gray-500">
+            {settlableCustomers.length} customer{settlableCustomers.length !== 1 ? 's' : ''} will be settled.
+          </p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => setShowSettleAllModal(false)} disabled={isSettling}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700"
+              onClick={handleSettleAll}
+              disabled={isSettling}
+            >
+              {isSettling ? 'Settling...' : `Settle All (${settlableCustomers.length})`}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Settle One Customer Confirmation Modal */}
+      <Modal
+        isOpen={settlingCustomer !== null}
+        onClose={() => { if (!isSettling) setSettlingCustomer(null); }}
+        title="Settle Customer"
+      >
+        {settlingCustomer && (
+          <div className="space-y-4">
+            <p className="text-gray-600">
+              Create a <strong>credit entry</strong> of <strong className="text-green-700">₹{formatAmountINR(settlingCustomer.amount)}</strong> for <strong>{settlingCustomer.name}</strong> with description <strong>"ALL OKAY LEDGER"</strong>?
+            </p>
+            <p className="text-sm text-gray-500">This will zero out their balance.</p>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setSettlingCustomer(null)} disabled={isSettling}>
+                Cancel
+              </Button>
+              <Button
+                className="bg-amber-600 hover:bg-amber-700"
+                onClick={handleSettleOne}
+                disabled={isSettling}
+              >
+                {isSettling ? 'Settling...' : 'Settle'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Rollback Confirmation Modal */}
+      <Modal
+        isOpen={showRollbackConfirm}
+        onClose={() => { if (!isRollingBack) setShowRollbackConfirm(false); }}
+        title="Rollback Settlement"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            This will <strong>delete {lastSettledEntryIds.length}</strong> settlement credit entr{lastSettledEntryIds.length !== 1 ? 'ies' : 'y'} and restore the previous balances.
+          </p>
+          <p className="text-sm text-red-600 font-medium">This action cannot be undone.</p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => setShowRollbackConfirm(false)} disabled={isRollingBack}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={handleRollback}
+              disabled={isRollingBack}
+            >
+              {isRollingBack ? 'Rolling back...' : 'Confirm Rollback'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* Create Customer Modal */}

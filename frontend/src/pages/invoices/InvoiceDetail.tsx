@@ -3408,43 +3408,28 @@ export default function InvoiceDetail() {
                                             setCheckoutPriceErrors(newErrors);
                                           }
 
-                                          // Apply price to all items in group (auto-fill) unless they have been explicitly overridden
+                                          // Keep SKU (expanded) prices in sync with the parent price.
+                                          // If the parent price changes, it becomes the single source of truth for all rows in the group.
                                           const newPrices = { ...checkoutPrices };
-                                          const oldParentPrice = parentPrice; // Store old parent price before update
                                           group.items.forEach((item) => {
-                                            const currentItemPrice = checkoutPrices[item.id];
-                                            const originalItemPrice = (item.manual_unit_price || item.unit_price || '0').toString();
+                                            newPrices[item.id] = newPrice;
 
-                                            // Update item price if:
-                                            // 1. It doesn't have a price set in checkoutPrices, OR
-                                            // 2. It matches the old parent price, OR
-                                            // 3. It matches the original item price (meaning it hasn't been manually overridden)
-                                            const shouldUpdate = !currentItemPrice ||
-                                              currentItemPrice === oldParentPrice ||
-                                              currentItemPrice === originalItemPrice;
-
-                                            if (shouldUpdate) {
-                                              newPrices[item.id] = newPrice;
-
-                                              // Validate individual item price
-                                              const effectivePurchaseItem = item.product_name?.startsWith('Other -')
-                                                ? (parseFloat(checkoutPurchasePrices[item.id]) || undefined)
-                                                : undefined;
-                                              const itemError = validatePriceThreshold(newPrice, item, effectivePurchaseItem);
-                                              if (itemError) {
-                                                setCheckoutPriceErrors(prev => ({
-                                                  ...prev,
-                                                  [`item_${item.id} `]: itemError,
-                                                }));
-                                              } else {
-                                                setCheckoutPriceErrors(prev => {
-                                                  const updated = { ...prev };
-                                                  delete updated[`item_${item.id} `];
-                                                  return updated;
-                                                });
-                                              }
+                                            const effectivePurchaseItem = item.product_name?.startsWith('Other -')
+                                              ? (parseFloat(checkoutPurchasePrices[item.id]) || undefined)
+                                              : undefined;
+                                            const itemError = validatePriceThreshold(newPrice, item, effectivePurchaseItem);
+                                            if (itemError) {
+                                              setCheckoutPriceErrors((prev) => ({
+                                                ...prev,
+                                                [`item_${item.id} `]: itemError,
+                                              }));
+                                            } else {
+                                              setCheckoutPriceErrors((prev) => {
+                                                const updated = { ...prev };
+                                                delete updated[`item_${item.id} `];
+                                                return updated;
+                                              });
                                             }
-                                            // Otherwise, keep the manually overridden price
                                           });
                                           setCheckoutPrices(newPrices);
                                         }}
