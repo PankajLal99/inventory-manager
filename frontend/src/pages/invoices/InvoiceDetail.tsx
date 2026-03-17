@@ -3204,7 +3204,7 @@ export default function InvoiceDetail() {
                         <tr>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Product</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">SKU</th>
-                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Purchase Price</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Sell / Cost</th>
                           <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">Quantity</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Unit Price</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">Total</th>
@@ -3287,9 +3287,27 @@ export default function InvoiceDetail() {
                                         );
                                       }
                                       const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
-                                      const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
-                                      if (!Number.isNaN(displayVal) && !showPurchasePrice) return <span className="text-sm text-gray-400">•••</span>;
-                                      return <span className="text-sm text-gray-900">{Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`}</span>;
+                                      const hasValidPurchasePrice = !Number.isNaN(rawPurchase) && rawPurchase > 0;
+                                      const hasAnyRef = hasValidSellingPrice || hasValidPurchasePrice;
+                                      if (hasAnyRef && !showPurchasePrice) {
+                                        return <span className="text-sm text-gray-400">•••</span>;
+                                      }
+                                      if (!hasAnyRef) return <span className="text-sm text-gray-900">—</span>;
+                                      return (
+                                        <div
+                                          className="inline-flex px-2 py-1 bg-blue-50 rounded-md border border-blue-200 text-left"
+                                          title={hasValidSellingPrice ? (hasValidPurchasePrice ? 'Selling & cost' : 'Selling Price') : 'Purchase Price (cost)'}
+                                        >
+                                          <div className="flex flex-col gap-0.5 items-end">
+                                            {hasValidSellingPrice && (
+                                              <span className="text-xs font-medium text-blue-700">Sell: ₹{formatNumber(rawSelling)}</span>
+                                            )}
+                                            {hasValidPurchasePrice && (
+                                              <span className="text-xs font-medium text-blue-600">Cost: ₹{formatNumber(rawPurchase)}</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
                                     })()}
                                   </td>
                                   <td className="px-4 py-4">
@@ -3665,7 +3683,7 @@ export default function InvoiceDetail() {
                                     </button>
                                   </div>
                                   <div className="text-right">
-                                    <span className="text-xs text-gray-500 block">Purchase Price</span>
+                                    <span className="text-xs text-gray-500 block">Sell / Cost</span>
                                     {(() => {
                                       const isCustom = firstItem.product_name?.startsWith('Other -');
                                       if (isCustom) {
@@ -3690,9 +3708,25 @@ export default function InvoiceDetail() {
                                       const rawSelling = firstItem.product_selling_price != null ? parseFloat(String(firstItem.product_selling_price)) : NaN;
                                       const rawPurchase = firstItem.product_purchase_price != null ? parseFloat(String(firstItem.product_purchase_price)) : firstItem.purchase_price != null ? parseFloat(String(firstItem.purchase_price)) : NaN;
                                       const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
-                                      const displayVal = hasValidSellingPrice ? rawSelling : rawPurchase;
-                                      if (!Number.isNaN(displayVal) && !showPurchasePrice) return <span className="text-sm text-gray-400">•••</span>;
-                                      return <span className="text-sm font-medium text-gray-900">{Number.isNaN(displayVal) ? '—' : `₹${formatNumber(displayVal)}`}</span>;
+                                      const hasValidPurchasePrice = !Number.isNaN(rawPurchase) && rawPurchase > 0;
+                                      const hasAnyRef = hasValidSellingPrice || hasValidPurchasePrice;
+                                      if (hasAnyRef && !showPurchasePrice) return <span className="text-sm text-gray-400">•••</span>;
+                                      if (!hasAnyRef) return <span className="text-sm font-medium text-gray-900">—</span>;
+                                      return (
+                                        <div
+                                          className="inline-flex px-2 py-1 bg-blue-50 rounded-md border border-blue-200"
+                                          title={hasValidSellingPrice ? (hasValidPurchasePrice ? 'Selling & cost' : 'Selling Price') : 'Purchase Price (cost)'}
+                                        >
+                                          <div className="flex flex-col gap-0.5 items-end">
+                                            {hasValidSellingPrice && (
+                                              <span className="text-[11px] font-medium text-blue-700">Sell: ₹{formatNumber(rawSelling)}</span>
+                                            )}
+                                            {hasValidPurchasePrice && (
+                                              <span className="text-[11px] font-medium text-blue-600">Cost: ₹{formatNumber(rawPurchase)}</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
                                     })()}
                                   </div>
                                 </div>
