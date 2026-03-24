@@ -71,3 +71,4 @@ api_test_results_dev.json
 api_test_results dev.json
 notes
 *.dump
+mobile/*
