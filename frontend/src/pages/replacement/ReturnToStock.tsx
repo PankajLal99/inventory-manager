@@ -118,11 +118,7 @@ export default function ReturnToStock() {
       }
     });
     setSelectedItems(initialSelected);
-    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    contextualItems.forEach((item: InvoiceItem) => {
-      initialTags[item.id] = 'unknown';
-    });
-    setItemTags(initialTags);
+    setItemTags({});
   };
 
   // Find invoice by barcode/SKU or invoice number (no side effects)
@@ -208,13 +204,7 @@ export default function ReturnToStock() {
         }
         return next;
       });
-      setItemTags((prev) => {
-        const next = { ...prev };
-        for (const item of matchingItems) {
-          if (next[item.id] === undefined) next[item.id] = 'unknown';
-        }
-        return next;
-      });
+      setItemTags((prev) => ({ ...prev }));
       setSearchError(null);
       setSearchValue('');
       showToast(
@@ -243,11 +233,7 @@ export default function ReturnToStock() {
     });
     setSelectedItems(initialSelected);
 
-    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    contextualItems.forEach((item: InvoiceItem) => {
-      initialTags[item.id] = 'unknown';
-    });
-    setItemTags(initialTags);
+    setItemTags({});
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -282,11 +268,7 @@ export default function ReturnToStock() {
             initialSelected[item.id] = Math.min(1, item.available_quantity);
           });
           setSelectedItems(initialSelected);
-          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-          matchingItems.forEach((item: InvoiceItem) => {
-            initialTags[item.id] = 'unknown';
-          });
-          setItemTags(initialTags);
+          setItemTags({});
           showToast(`Switched to customer ${foundInvoice.customer_name || 'N/A'}.`, 'success');
           return;
         }
@@ -305,13 +287,7 @@ export default function ReturnToStock() {
           }
           return next;
         });
-        setItemTags((prev) => {
-          const next = { ...prev };
-          for (const item of matchingItems) {
-            if (next[item.id] === undefined) next[item.id] = 'unknown';
-          }
-          return next;
-        });
+        setItemTags((prev) => ({ ...prev }));
         showToast(
           foundInvoice.id === invoice.id
             ? `Added ${matchingItems.length} item(s) to return list`
@@ -330,11 +306,7 @@ export default function ReturnToStock() {
         initialSelected[item.id] = Math.min(1, item.available_quantity);
       });
       setSelectedItems(initialSelected);
-      const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-      matchingItems.forEach((item: InvoiceItem) => {
-        initialTags[item.id] = 'unknown';
-      });
-      setItemTags(initialTags);
+      setItemTags({});
       showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process return.`, 'success');
     } catch (error: any) {
       const status = error?.response?.status;
@@ -357,13 +329,7 @@ export default function ReturnToStock() {
       }
     });
 
-    // Ensure tag is initialized
-    setItemTags(prev => {
-      if (!prev[itemId]) {
-        return { ...prev, [itemId]: 'unknown' };
-      }
-      return prev;
-    });
+    // Do not auto-select status; user must choose it explicitly.
   };
 
   const handleReturnTagChange = (itemId: number, tag: 'returned' | 'defective' | 'unknown') => {
@@ -397,17 +363,30 @@ export default function ReturnToStock() {
         if (sourceItem?.source_invoice_id) {
           involvedInvoiceIds.add(sourceItem.source_invoice_id);
         }
+        const selectedTag = itemTags[itemId];
+        if (!selectedTag) {
+          return;
+        }
         itemsToReturn.push({
           invoice_item_id: itemId,
           quantity: quantityNum,
           store_id: sourceItem?.source_store ?? invoice.store,
-          return_tag: itemTags[itemId] || 'unknown',
+          return_tag: selectedTag,
         });
       }
     });
 
     if (itemsToReturn.length === 0) {
       showToast('Please select at least one item to return', 'info');
+      return;
+    }
+    const missingStatus = Object.entries(selectedItems).some(([itemIdStr, quantity]) => {
+      const quantityNum = Number(quantity);
+      if (quantityNum <= 0) return false;
+      return !itemTags[parseInt(itemIdStr)];
+    });
+    if (missingStatus) {
+      showToast('Please select return status for all selected items', 'error');
       return;
     }
 
@@ -696,10 +675,10 @@ export default function ReturnToStock() {
                                     ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
                                     : 'border-transparent opacity-30 hover:opacity-60'
                                     }`}
-                                  title="Unknown (Default)"
+                                  title="Unknown"
                                 />
                                 <span className="text-[10px] font-bold text-gray-500 capitalize min-w-[50px]">
-                                  {itemTags[item.id] || 'unknown'}
+                                  {itemTags[item.id] || 'select'}
                                 </span>
                               </div>
 

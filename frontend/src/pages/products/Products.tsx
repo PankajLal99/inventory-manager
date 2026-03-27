@@ -39,6 +39,7 @@ export default function Products() {
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<number, { all_generated: boolean; generating: boolean }>>({});
   const [expandedProducts, setExpandedProducts] = useState<Record<number, boolean>>({});
+  // Barcode-level selection for defective move-out.
   const [selectedDefectiveProducts, setSelectedDefectiveProducts] = useState<Set<number>>(new Set());
   const [selectedDefectiveProductsData, setSelectedDefectiveProductsData] = useState<Map<number, any>>(new Map());
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
@@ -652,15 +653,26 @@ export default function Products() {
     }
   };
 
-  // Handle barcode scan for defective product selection - uses loaded product list (EFFICIENT - no API calls)
+  const getDefectiveBarcodesForProduct = (product: any): any[] => {
+    const barcodes = Array.isArray(product?.barcodes) ? product.barcodes : [];
+    return barcodes.filter((b: any) => {
+      if (!b || typeof b !== 'object') return false;
+      if (!b.id) return false;
+      return !b.tag || String(b.tag) === 'defective';
+    });
+  };
+
+  // Handle barcode scan for defective barcode selection - uses loaded product list (EFFICIENT - no API calls)
   const handleBarcodeScan = (barcode: string) => {
     if (!barcode || !barcode.trim()) return;
 
     const trimmedBarcode = barcode.trim();
+    const normalizedScan = trimmedBarcode.toUpperCase();
     setBarcodeScanError(null);
 
     // Search in already loaded defective products (filteredProducts already contains only defective when tagFilter === 'defective')
     let matchedProduct = null;
+    let matchedBarcode: any = null;
 
     // Search through all filtered products
     for (const product of filteredProducts) {
@@ -669,53 +681,70 @@ export default function Products() {
 
       // Try to find matching barcode in the barcodes array
       const matchingBarcode = barcodes.find((b: any) => {
-        // Handle different barcode formats
-        const barcodeValue = typeof b === 'string' ? b : (b.barcode || b.id || '');
-        return String(barcodeValue).trim() === trimmedBarcode;
+        // Match by full barcode or short code, case-insensitive.
+        const barcodeValue = typeof b === 'string' ? b : (b.barcode || '');
+        const shortCodeValue = typeof b === 'string' ? '' : (b.short_code || '');
+        return String(barcodeValue).trim().toUpperCase() === normalizedScan
+          || String(shortCodeValue).trim().toUpperCase() === normalizedScan;
       });
 
       if (matchingBarcode) {
-        // Found matching barcode - product is already in defective list (filtered)
+        // Found matching barcode/short-code.
         matchedProduct = product;
+        matchedBarcode = matchingBarcode;
         break;
       }
 
       // Also check product SKU as fallback (if barcode matches SKU)
-      if (product.sku && String(product.sku).trim() === trimmedBarcode) {
+      if (product.sku && String(product.sku).trim().toUpperCase() === normalizedScan) {
         matchedProduct = product;
         break;
       }
     }
 
     if (matchedProduct) {
-      // Check if product is already selected
-      if (selectedDefectiveProducts.has(matchedProduct.id)) {
-        setBarcodeScanError(`"${matchedProduct.name}" is already selected.`);
-        setTimeout(() => setBarcodeScanError(null), 2000);
+      // Prefer exact barcode-level selection.
+      if (matchedBarcode?.id) {
+        if (selectedDefectiveProducts.has(matchedBarcode.id)) {
+          setBarcodeScanError(`"${matchedProduct.name}" barcode is already selected.`);
+          setTimeout(() => setBarcodeScanError(null), 2000);
+          return;
+        }
+        setSelectedDefectiveProducts(prev => new Set(prev).add(matchedBarcode.id));
+        setSelectedDefectiveProductsData(prev => {
+          const next = new Map(prev);
+          next.set(matchedBarcode.id, { product: matchedProduct, barcode: matchedBarcode });
+          return next;
+        });
+        setBarcodeInput('');
         return;
       }
 
-      // Add product to selection
+      // Fallback (e.g. SKU match): select all defective barcodes under product.
+      const barcodesForProduct = getDefectiveBarcodesForProduct(matchedProduct);
+      if (barcodesForProduct.length === 0) {
+        setBarcodeScanError(`No defective barcodes found under "${matchedProduct.name}".`);
+        setTimeout(() => setBarcodeScanError(null), 2000);
+        return;
+      }
       setSelectedDefectiveProducts(prev => {
-        const newSet = new Set(prev);
-        newSet.add(matchedProduct.id);
-        return newSet;
+        const next = new Set(prev);
+        barcodesForProduct.forEach((b: any) => next.add(b.id));
+        return next;
       });
-
-      // Store product data for summary
       setSelectedDefectiveProductsData(prev => {
-        const newMap = new Map(prev);
-        if (!newMap.has(matchedProduct.id)) {
-          newMap.set(matchedProduct.id, matchedProduct);
-        }
-        return newMap;
+        const next = new Map(prev);
+        barcodesForProduct.forEach((b: any) => {
+          next.set(b.id, { product: matchedProduct, barcode: b });
+        });
+        return next;
       });
 
       // Clear input after successful scan
       setBarcodeInput('');
     } else {
-      // Barcode not found in loaded defective products
-      setBarcodeScanError(`Barcode "${trimmedBarcode}" not found. Make sure the product is marked as defective.`);
+      // Barcode/short-code not found in loaded defective products
+      setBarcodeScanError(`Code "${trimmedBarcode}" not found. Try barcode or short code, and ensure product is defective.`);
       setTimeout(() => setBarcodeScanError(null), 3000);
     }
   };
@@ -749,16 +778,16 @@ export default function Products() {
     setBarcodeInput(e.target.value);
   };
 
-  // Handle removing product from selection
-  const handleRemoveFromSelection = (productId: number) => {
+  // Remove one selected barcode from selection.
+  const handleRemoveFromSelection = (barcodeId: number) => {
     setSelectedDefectiveProducts(prev => {
       const newSet = new Set(prev);
-      newSet.delete(productId);
+      newSet.delete(barcodeId);
       return newSet;
     });
     setSelectedDefectiveProductsData(prev => {
       const newMap = new Map(prev);
-      newMap.delete(productId);
+      newMap.delete(barcodeId);
       return newMap;
     });
   };
@@ -770,7 +799,7 @@ export default function Products() {
 
   // Move out defective products - create move-out record with invoice
   const moveOutDefectiveMutation = useMutation({
-    mutationFn: async (data: { productIds: number[]; reason: string; notes: string }) => {
+    mutationFn: async (data: { productIds: number[]; barcodeIds: number[]; reason: string; notes: string }) => {
       // Get first store for move-out
       const store = stores.length > 0 ? stores[0] : null;
       if (!store) {
@@ -781,6 +810,7 @@ export default function Products() {
       const response = await catalogApi.defectiveProducts.moveOut({
         store: store.id,
         product_ids: data.productIds,
+        barcode_ids: data.barcodeIds,
         reason: data.reason,
         notes: data.notes,
       });
@@ -811,7 +841,7 @@ export default function Products() {
 
   const handleMoveOutDefective = () => {
     if (selectedDefectiveProducts.size === 0) {
-      alert('Please select at least one defective product to move out.');
+      alert('Please select at least one defective barcode to move out.');
       return;
     }
 
@@ -820,10 +850,46 @@ export default function Products() {
 
   const handleMoveOutSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const selectedBarcodes = Array.from(selectedDefectiveProducts)
+      .map((barcodeId) => selectedDefectiveProductsData.get(barcodeId))
+      .filter(Boolean);
+    const barcodeIds = selectedBarcodes.map((row: any) => row?.barcode?.id).filter(Boolean);
+    const productIds = [...new Set(selectedBarcodes.map((row: any) => row?.product?.id).filter(Boolean))];
     moveOutDefectiveMutation.mutate({
-      productIds: Array.from(selectedDefectiveProducts),
+      productIds,
+      barcodeIds,
       reason: moveOutData.reason,
       notes: moveOutData.notes,
+    });
+  };
+
+  const handleToggleDefectiveProduct = (product: any, checked: boolean) => {
+    const barcodesForProduct = getDefectiveBarcodesForProduct(product);
+    if (barcodesForProduct.length === 0) return;
+
+    if (checked) {
+      setSelectedDefectiveProducts(prev => {
+        const next = new Set(prev);
+        barcodesForProduct.forEach((b: any) => next.add(b.id));
+        return next;
+      });
+      setSelectedDefectiveProductsData(prev => {
+        const next = new Map(prev);
+        barcodesForProduct.forEach((b: any) => next.set(b.id, { product, barcode: b }));
+        return next;
+      });
+      return;
+    }
+
+    setSelectedDefectiveProducts(prev => {
+      const next = new Set(prev);
+      barcodesForProduct.forEach((b: any) => next.delete(b.id));
+      return next;
+    });
+    setSelectedDefectiveProductsData(prev => {
+      const next = new Map(prev);
+      barcodesForProduct.forEach((b: any) => next.delete(b.id));
+      return next;
     });
   };
 
@@ -961,17 +1027,21 @@ export default function Products() {
   // Calculate defective products metrics
   const defectiveMetrics = useMemo(() => {
     if (tagFilter !== 'defective') {
-      return { count: 0, totalLoss: 0, totalItems: 0 };
+      return { count: 0, totalLoss: 0, totalItems: 0, purchaseValue: 0 };
     }
 
     // Use productsList (all defective products) instead of filteredProducts for accurate metrics
     const defectiveProducts = productsList.filter((p: any) => p.barcodeCount > 0);
     let totalCount = 0;
+    let purchaseValue = 0;
 
     defectiveProducts.forEach((product: any) => {
       const barcodes = product.barcodes || [];
       const defectiveBarcodes = barcodes.filter((b: any) => b.tag === 'defective');
       totalCount += defectiveBarcodes.length;
+      defectiveBarcodes.forEach((b: any) => {
+        purchaseValue += Number(b?.purchase_price || 0);
+      });
     });
 
     // Calculate net loss from move-outs (total_loss - total_adjustment)
@@ -1000,6 +1070,7 @@ export default function Products() {
       count: defectiveProducts.length,
       totalLoss,
       totalItems: totalCount,
+      purchaseValue,
     };
   }, [tagFilter, productsList, moveOutsData]);
 
@@ -1134,7 +1205,7 @@ export default function Products() {
 
       {/* Defective Products Summary Cards */}
       {tagFilter === 'defective' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
             <div className="flex items-center justify-between">
               <div>
@@ -1158,6 +1229,19 @@ export default function Products() {
               </div>
               <div className="p-3 bg-yellow-100 rounded-lg">
                 <Coins className="h-6 w-6 text-yellow-600" />
+              </div>
+            </div>
+          </Card>
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Defective Purchase Value</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">
+                  ₹{defectiveMetrics.purchaseValue.toFixed(2)}
+                </p>
+              </div>
+              <div className="p-3 bg-orange-100 rounded-lg">
+                <Coins className="h-6 w-6 text-orange-600" />
               </div>
             </div>
           </Card>
@@ -1233,7 +1317,7 @@ export default function Products() {
               {selectedDefectiveProducts.size > 0 ? (
                 <>
                   <span className="text-sm font-medium text-gray-700">
-                    {selectedDefectiveProducts.size} product(s) selected
+                    {selectedDefectiveProducts.size} barcode(s) selected
                   </span>
                   <button
                     onClick={handleDeselectAllDefective}
@@ -1243,8 +1327,25 @@ export default function Products() {
                   </button>
                 </>
               ) : (
-                <span className="text-sm text-gray-600">No products selected yet</span>
+                <span className="text-sm text-gray-600">No barcodes selected yet</span>
               )}
+              <button
+                onClick={() => {
+                  const next = new Set<number>();
+                  const nextMap = new Map<number, any>();
+                  filteredProducts.forEach((product: any) => {
+                    getDefectiveBarcodesForProduct(product).forEach((barcode: any) => {
+                      next.add(barcode.id);
+                      nextMap.set(barcode.id, { product, barcode });
+                    });
+                  });
+                  setSelectedDefectiveProducts(next);
+                  setSelectedDefectiveProductsData(nextMap);
+                }}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+              >
+                Select all visible
+              </button>
             </div>
             <div className="flex items-center gap-2">
               <Button
@@ -1399,7 +1500,7 @@ export default function Products() {
         {tagFilter === 'defective' ? (
           <div className="flex gap-4">
             {/* Main content area */}
-            <div className="flex-1">
+            <div className="flex-1 min-w-0 overflow-x-auto">
               <Table headers={getTableHeaders(tagFilter)}>
                 {filteredProducts.length > 0 ? filteredProducts.map((product: any) => {
                   // Store current tagFilter to avoid type narrowing issues - use type assertion
@@ -1456,6 +1557,18 @@ export default function Products() {
                         return (
                           <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
+                              {currentTagFilter === 'defective' && (
+                                <input
+                                  type="checkbox"
+                                  checked={(() => {
+                                    const rows = getDefectiveBarcodesForProduct(product);
+                                    return rows.length > 0 && rows.every((b: any) => selectedDefectiveProducts.has(b.id));
+                                  })()}
+                                  onChange={(e) => handleToggleDefectiveProduct(product, e.target.checked)}
+                                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                  title="Select product for move-out"
+                                />
+                              )}
                               <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
                               {currentTagFilter !== 'defective' && (
                                 <button
@@ -1820,6 +1933,16 @@ export default function Products() {
                             return (
                               <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
                                 <div className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={(() => {
+                                      const rows = getDefectiveBarcodesForProduct(product);
+                                      return rows.length > 0 && rows.every((b: any) => selectedDefectiveProducts.has(b.id));
+                                    })()}
+                                    onChange={(e) => handleToggleDefectiveProduct(product, e.target.checked)}
+                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    title="Select product for move-out"
+                                  />
                                   <button
                                     onClick={() => toggleProductExpand(product.id)}
                                     className="p-1 hover:bg-gray-100 rounded transition-colors"
@@ -1844,6 +1967,24 @@ export default function Products() {
                         <tr key={`${product.id}-barcode-${barcode.id}`} className="bg-gray-50 hover:bg-gray-100">
                           <td className="px-6 py-3">
                             <div className="flex items-center gap-2 pl-8">
+                              <input
+                                type="checkbox"
+                                checked={selectedDefectiveProducts.has(barcode.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedDefectiveProducts(prev => new Set(prev).add(barcode.id));
+                                    setSelectedDefectiveProductsData(prev => {
+                                      const next = new Map(prev);
+                                      next.set(barcode.id, { product, barcode });
+                                      return next;
+                                    });
+                                  } else {
+                                    handleRemoveFromSelection(barcode.id);
+                                  }
+                                }}
+                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                title="Select barcode for move-out"
+                              />
                               <Barcode className="h-3.5 w-3.5 text-gray-400" />
                               <span className="text-xs font-mono text-gray-700">{barcode.short_code || barcode.barcode}</span>
                               {barcode.tag && (
@@ -1928,35 +2069,33 @@ export default function Products() {
             <div className="w-80 flex-shrink-0">
               <Card>
                 <div className="p-4">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Selected Products</h3>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Selected Barcodes</h3>
                   {selectedDefectiveProducts.size === 0 ? (
                     <p className="text-sm text-gray-500 text-center py-8">
-                      No products selected. Scan barcodes to select products.
+                      No barcodes selected. Scan barcodes or tick checkboxes.
                     </p>
                   ) : (
                     <div className="space-y-3 max-h-[600px] overflow-y-auto">
-                      {Array.from(selectedDefectiveProducts).map((productId) => {
-                        const product = selectedDefectiveProductsData.get(productId) ||
-                          filteredProducts.find((p: any) => p.id === productId);
-                        if (!product) return null;
+                      {Array.from(selectedDefectiveProductsData.entries()).map(([barcodeId, row]) => {
+                        const product = row?.product;
+                        const barcode = row?.barcode;
+                        if (!product || !barcode) return null;
                         return (
                           <div
-                            key={productId}
+                            key={barcodeId}
                             className="flex items-start justify-between p-3 bg-gray-50 rounded-lg border border-gray-200"
                           >
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium text-gray-900 truncate" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
                                 {product.name}
                               </p>
-                              {product.sku && (
-                                <p className="text-xs text-gray-500 mt-1">SKU: {product.sku}</p>
-                              )}
+                              <p className="text-xs text-gray-500 mt-1">Code: {barcode.short_code || barcode.barcode || '-'}</p>
                               {product.brand_name && (
                                 <p className="text-xs text-gray-500">Brand: {product.brand_name}</p>
                               )}
                             </div>
                             <button
-                              onClick={() => handleRemoveFromSelection(productId)}
+                              onClick={() => handleRemoveFromSelection(barcodeId)}
                               className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-600 transition-colors"
                               title="Remove from selection"
                             >
@@ -1972,7 +2111,7 @@ export default function Products() {
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-gray-700">Total Selected:</span>
                         <span className="text-sm font-semibold text-gray-900">
-                          {selectedDefectiveProducts.size}
+                          {selectedDefectiveProducts.size} barcode(s)
                         </span>
                       </div>
                       <Button
@@ -2329,7 +2468,7 @@ export default function Products() {
               {selectedDefectiveProducts.size > 0 && (
                 <>
                   <span className="text-sm text-gray-600">
-                    {selectedDefectiveProducts.size} selected
+                    {selectedDefectiveProducts.size} barcode(s) selected
                   </span>
                   <Button
                     onClick={handleMoveOutDefective}
@@ -2946,10 +3085,10 @@ export default function Products() {
           <form onSubmit={handleMoveOutSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Selected Products
+                Selected Barcodes
               </label>
               <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm">
-                {selectedDefectiveProducts.size} product(s) selected
+                {selectedDefectiveProducts.size} barcode(s) selected
               </div>
             </div>
 

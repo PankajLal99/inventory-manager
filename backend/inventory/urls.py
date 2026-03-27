@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    stock_list, stock_detail, stock_low, stock_out_of_stock,
+    stock_detail,
     stock_batch_list, stock_batch_detail,
     stock_adjustment_list_create, stock_adjustment_detail,
     stock_transfer_list_create, stock_transfer_detail

@@ -309,7 +309,7 @@ export default function StockOverview() {
                                           {b.purchase_date ?? '—'}
                                         </td>
                                         <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold">
-                                          {formatNumber(b.warehouse_stock, 2)}
+                                          {formatNumber(b.warehouse_available ?? b.warehouse_stock, 2)}
                                         </td>
                                         <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold">
                                           {formatNumber(b.shop_barcode_count ?? b.shop_stock, 2)}

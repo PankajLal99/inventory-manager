@@ -61,7 +61,7 @@ export default function CreditNoteReplacement() {
   } | null>(null);
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkApplyLoading, setBulkApplyLoading] = useState(false);
-  const [bulkReturnTag, setBulkReturnTag] = useState<'returned' | 'defective' | 'unknown'>('returned');
+  const [bulkReturnTag, setBulkReturnTag] = useState<'returned' | 'defective' | 'unknown' | ''>('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
@@ -108,11 +108,7 @@ export default function CreditNoteReplacement() {
       }
     });
     setSelectedItems(initialSelected);
-    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    foundInvoice.items.forEach((item: InvoiceItem) => {
-      initialTags[item.id] = 'unknown';
-    });
-    setItemTags(initialTags);
+    setItemTags({});
   };
 
   // Find invoice by barcode/SKU or invoice number (fetches only - no side effects on success)
@@ -218,13 +214,7 @@ export default function CreditNoteReplacement() {
         }
         return next;
       });
-      setItemTags((prev) => {
-        const next = { ...prev };
-        for (const item of matchingItems) {
-          if (next[item.id] === undefined) next[item.id] = 'unknown';
-        }
-        return next;
-      });
+      setItemTags((prev) => ({ ...prev }));
       setSearchError(null);
       setSearchValue('');
       showToast(`Added ${matchingItems.length} item(s) to credit note`, 'success');
@@ -248,11 +238,7 @@ export default function CreditNoteReplacement() {
     });
     setSelectedItems(initialSelected);
 
-    const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-    selectedInvoice.items.forEach((item: InvoiceItem) => {
-      initialTags[item.id] = 'unknown';
-    });
-    setItemTags(initialTags);
+    setItemTags({});
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -289,11 +275,7 @@ export default function CreditNoteReplacement() {
             initialSelected[item.id] = Math.min(1, item.available_quantity);
           });
           setSelectedItems(initialSelected);
-          const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-          matchingItems.forEach((item: InvoiceItem) => {
-            initialTags[item.id] = 'unknown';
-          });
-          setItemTags(initialTags);
+          setItemTags({});
           showToast(`Switched to invoice ${foundInvoice.invoice_number}. Scan more items or generate credit note.`, 'success');
           return;
         }
@@ -320,13 +302,7 @@ export default function CreditNoteReplacement() {
           return next;
         });
 
-        setItemTags((prev) => {
-          const next = { ...prev };
-          for (const item of matchingItems) {
-            if (next[item.id] === undefined) next[item.id] = 'unknown';
-          }
-          return next;
-        });
+        setItemTags((prev) => ({ ...prev }));
 
         showToast(`Added ${matchingItems.length} item(s) to credit note`, 'success');
         setSearchValue('');
@@ -345,11 +321,7 @@ export default function CreditNoteReplacement() {
       });
       setSelectedItems(initialSelected);
 
-      const initialTags: Record<number, 'returned' | 'defective' | 'unknown'> = {};
-      matchingItems.forEach((item: InvoiceItem) => {
-        initialTags[item.id] = 'unknown';
-      });
-      setItemTags(initialTags);
+      setItemTags({});
 
       showToast(`Invoice ${foundInvoice.invoice_number} loaded. Scan more items or generate credit note.`, 'success');
       // Keep scanner open so user can scan more items
@@ -374,13 +346,7 @@ export default function CreditNoteReplacement() {
       }
     });
 
-    // Ensure tag is initialized if not already
-    setItemTags(prev => {
-      if (!prev[itemId]) {
-        return { ...prev, [itemId]: 'unknown' };
-      }
-      return prev;
-    });
+    // Do not auto-select status; user must choose it explicitly.
   };
 
   const handleReturnTagChange = (itemId: number, tag: 'returned' | 'defective' | 'unknown') => {
@@ -409,16 +375,29 @@ export default function CreditNoteReplacement() {
       const quantityNum = Number(quantity);
       if (quantityNum > 0) {
         const itemId = parseInt(itemIdStr);
+        const selectedTag = itemTags[itemId];
+        if (!selectedTag) {
+          return;
+        }
         items_to_replace.push({
           item_id: itemId,
           quantity: quantityNum,
-          status: itemTags[itemId] || 'unknown',
+          status: selectedTag,
         });
       }
     });
 
     if (items_to_replace.length === 0) {
       showToast('Please select at least one item for credit note', 'info');
+      return;
+    }
+    const missingStatus = Object.entries(selectedItems).some(([itemIdStr, quantity]) => {
+      const quantityNum = Number(quantity);
+      if (quantityNum <= 0) return false;
+      return !itemTags[parseInt(itemIdStr)];
+    });
+    if (missingStatus) {
+      showToast('Please select return status for all selected items', 'error');
       return;
     }
 
@@ -459,6 +438,10 @@ export default function CreditNoteReplacement() {
   };
 
   const handleBulkCheck = async () => {
+    if (!bulkReturnTag) {
+      showToast('Please select status before bulk check', 'error');
+      return;
+    }
     const barcodes = parseBulkBarcodes(bulkInput);
     if (barcodes.length === 0) {
       showToast('Paste at least one barcode (line or space separated)', 'info');
@@ -498,6 +481,10 @@ export default function CreditNoteReplacement() {
   };
 
   const handleBulkMarkReturned = async () => {
+    if (!bulkReturnTag) {
+      showToast('Please select status before apply', 'error');
+      return;
+    }
     const processable = bulkCheckResult?.processable ?? [];
     const freshProcessable = bulkCheckResult?.fresh_processable ?? [];
     const freshToDefective = bulkReturnTag === 'defective' ? freshProcessable : [];
@@ -543,7 +530,7 @@ export default function CreditNoteReplacement() {
       setShowBulkModal(false);
       setBulkInput('');
       setBulkCheckResult(null);
-      setBulkReturnTag('returned');
+      setBulkReturnTag('');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.response?.data?.message || 'Failed to mark as returned';
       showToast(msg, 'error');
@@ -554,7 +541,7 @@ export default function CreditNoteReplacement() {
 
   const soldBulkCount = bulkCheckResult?.processable?.length ?? 0;
   const freshBulkCount = bulkCheckResult?.fresh_processable?.length ?? 0;
-  const canApplyBulk = soldBulkCount > 0 || (bulkReturnTag === 'defective' && freshBulkCount > 0);
+  const canApplyBulk = Boolean(bulkReturnTag) && (soldBulkCount > 0 || (bulkReturnTag === 'defective' && freshBulkCount > 0));
 
   const handleReset = () => {
     setSearchValue('');
@@ -824,10 +811,10 @@ export default function CreditNoteReplacement() {
                                     ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
                                     : 'border-transparent opacity-30 hover:opacity-60'
                                     }`}
-                                  title="Unknown (Default)"
+                                  title="Unknown"
                                 />
                                 <span className="text-[10px] font-bold text-gray-500 capitalize min-w-[50px]">
-                                  {itemTags[item.id] || 'unknown'}
+                                  {itemTags[item.id] || 'select'}
                                 </span>
                               </div>
 
@@ -988,7 +975,7 @@ export default function CreditNoteReplacement() {
                   title="Unknown"
                 />
                 <span className="text-xs font-bold text-gray-500 capitalize min-w-[52px] hidden sm:inline">
-                  {bulkReturnTag}
+                  {bulkReturnTag || 'select'}
                 </span>
               </div>
               <button
@@ -1024,7 +1011,7 @@ export default function CreditNoteReplacement() {
                     onClick={handleBulkMarkReturned}
                     disabled={bulkApplyLoading}
                   >
-                    {bulkApplyLoading ? 'Applying...' : `Mark as ${bulkReturnTag}`}
+                    {bulkApplyLoading ? 'Applying...' : `Mark as ${bulkReturnTag || '...'}`}
                   </Button>
                 )}
               </div>

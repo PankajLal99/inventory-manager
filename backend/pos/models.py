@@ -307,7 +307,7 @@ class Expenses(models.Model):
     lender_name = models.CharField(max_length=50,default="Manish Traders")
     borrower_name = models.CharField(max_length=100, blank=True, default="")
     payment_choices_type = models.CharField(max_length=100,choices=payment_choices,default='CASH')
-    expense_amount = models.FloatField()
+    expense_amount = models.DecimalField(max_digits=12, decimal_places=2)
     created_on = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='expenses')
     last_updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='expenses_updated')

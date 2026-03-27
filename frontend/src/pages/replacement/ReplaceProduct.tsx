@@ -54,7 +54,7 @@ interface ReplacementItem {
   new_unit_price?: number | null;
   manual_unit_price?: number | null;
   scanned_barcode?: string | null; // Store the exact barcode that was scanned/searched
-  return_tag: 'returned' | 'defective' | 'unknown';
+  return_tag?: 'returned' | 'defective' | 'unknown';
 }
 
 export default function ReplaceProduct() {
@@ -196,7 +196,6 @@ export default function ReplaceProduct() {
           new_product_id: null,
           new_product_name: '',
           quantity: Math.min(1, item.available_quantity),
-          return_tag: 'unknown',
         };
       }
     });
@@ -355,7 +354,6 @@ export default function ReplaceProduct() {
               new_product_id: null,
               new_product_name: '',
               quantity: Math.min(1, item.available_quantity),
-              return_tag: 'unknown',
             };
           }
         }
@@ -422,7 +420,6 @@ export default function ReplaceProduct() {
               new_product_id: null,
               new_product_name: '',
               quantity: Math.min(1, item.available_quantity),
-              return_tag: 'unknown',
             };
           });
           setReplacements(initialReplacements);
@@ -446,7 +443,6 @@ export default function ReplaceProduct() {
                 new_product_id: null,
                 new_product_name: '',
                 quantity: Math.min(1, item.available_quantity),
-                return_tag: 'unknown',
               };
             }
           }
@@ -472,7 +468,6 @@ export default function ReplaceProduct() {
           new_product_id: null,
           new_product_name: '',
           quantity: Math.min(1, item.available_quantity),
-          return_tag: 'unknown',
         };
       });
       setReplacements(initialReplacements);
@@ -508,7 +503,6 @@ export default function ReplaceProduct() {
             new_product_id: null,
             new_product_name: '',
             quantity: 1,
-            return_tag: 'unknown',
           }
         };
       }
@@ -713,7 +707,7 @@ export default function ReplaceProduct() {
     console.log('=== handleProcessReplacement START ===');
     console.log('All replacements:', replacements);
 
-    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag: string }> = [];
+    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> = [];
     const involvedInvoiceIds = new Set<number>();
 
     Object.values(replacements).forEach(replacement => {
@@ -755,6 +749,11 @@ export default function ReplaceProduct() {
 
     if (replacementsToProcess.length === 0) {
       showToast('Please select at least one item with a replacement product', 'info');
+      return;
+    }
+    const missingStatus = replacementsToProcess.some((replacement) => !replacement.return_tag);
+    if (missingStatus) {
+      showToast('Please select return status for all selected items', 'error');
       return;
     }
 
@@ -801,6 +800,7 @@ export default function ReplaceProduct() {
   const selectedReplacementRows = Object.values(replacements).filter((r) => r.quantity > 0);
   const hasReplacements = selectedReplacementRows.length > 0;
   const allSelectedHaveReplacementProduct = selectedReplacementRows.every((r) => r.new_product_id !== null);
+  const allSelectedHaveReturnStatus = selectedReplacementRows.every((r) => Boolean(r.return_tag));
   const selectedReplacementItemIds = new Set(Object.keys(replacements).map((id) => Number(id)));
   const involvedInvoiceNumbers = invoice
     ? [...new Set(invoice.items
@@ -1122,13 +1122,14 @@ export default function ReplaceProduct() {
                                   ? 'border-gray-900 scale-110 shadow-sm ring-1 ring-yellow-200'
                                   : 'border-transparent opacity-30 hover:opacity-60'
                                   }`}
-                                title="Unknown (Default)"
+                                title="Unknown"
                               />
                               <span className={`text-xs font-bold px-2 py-0.5 rounded-full capitalize ${replacement.return_tag === 'returned' ? 'text-green-700 bg-green-50' :
                                 replacement.return_tag === 'defective' ? 'text-red-700 bg-red-50' :
-                                  'text-yellow-700 bg-yellow-50'
+                                  replacement.return_tag === 'unknown' ? 'text-yellow-700 bg-yellow-50' :
+                                    'text-gray-700 bg-gray-100'
                                 }`}>
-                                {replacement.return_tag}
+                                {replacement.return_tag || 'select'}
                               </span>
                             </div>
                           )}
@@ -1383,7 +1384,7 @@ export default function ReplaceProduct() {
                 <Button
                   variant="primary"
                   onClick={handleProcessReplacement}
-                  disabled={!hasReplacements || !allSelectedHaveReplacementProduct || processReplacementMutation.isPending}
+                  disabled={!hasReplacements || !allSelectedHaveReplacementProduct || !allSelectedHaveReturnStatus || processReplacementMutation.isPending}
                 >
                   {processReplacementMutation.isPending ? 'Processing...' : 'Process Replacement'}
                 </Button>

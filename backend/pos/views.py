@@ -2414,6 +2414,7 @@ def cart_checkout(request, pk):
                     )
                     b_obj.tag = 'sold'
                     b_obj.save(update_fields=['tag'])
+                    invalidate_barcode_cache(b_obj)
                     
                     subtotal += line_unit_total
                     discount_total += pd
@@ -2892,68 +2893,48 @@ def invoice_detail(request, pk):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # Reverse stock changes if requested and invoice was not draft
-        if restore_stock and invoice.status != 'draft' and invoice.store:
-            for item in invoice.items.all():
-                # Reverse stock for both tracked and non-tracked products
-                stock, created = Stock.objects.get_or_create(
-                    product=item.product,
-                    variant=item.variant,
-                    store=invoice.store,
-                    defaults={'quantity': Decimal('0.000')}
-                )
-                stock.quantity += item.quantity
-                stock.save()
-        
-        # Unmark barcodes as sold (change back to 'new') when restore_stock is true
-        # This applies to ALL invoices when items are returned to stock
-        if restore_stock:
-            for item in invoice.items.all():
-                if item.barcode:
-                    # Mark tracked product barcode as 'new' (fresh)
-                    old_tag = item.barcode.tag
-                    item.barcode.tag = 'new'
-                    item.barcode.save(update_fields=['tag'])
-                    
-                    # Audit log: Barcode tag changed (sold -> new)
-                    create_audit_log(
-                        request=request,
-                        action='barcode_tag_change',
-                        model_name='Barcode',
-                        object_id=str(item.barcode.id),
-                        object_name=item.product.name,
-                        object_reference=invoice.invoice_number,
-                        barcode=item.barcode.barcode,
-                        changes={
-                            'tag': {'old': old_tag, 'new': 'new'},
-                            'barcode': item.barcode.barcode,
-                            'product_id': item.product.id,
-                            'product_name': item.product.name,
-                            'invoice_id': invoice.id,
-                            'invoice_number': invoice.invoice_number,
-                            'context': 'invoice_deleted_stock_restored',
-                        }
+        # Wrap all mutations in a single atomic transaction to prevent partial state
+        with transaction.atomic():
+            # Re-fetch invoice with lock to prevent concurrent modifications
+            invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
+
+            # Reverse stock changes if requested and invoice was not draft
+            if restore_stock and invoice.status != 'draft' and invoice.store:
+                for item in invoice.items.all():
+                    # Reverse stock for both tracked and non-tracked products
+                    # Use select_for_update to prevent concurrent stock modifications
+                    stock, created = Stock.objects.select_for_update().get_or_create(
+                        product=item.product,
+                        variant=item.variant,
+                        store=invoice.store,
+                        defaults={'quantity': Decimal('0.000')}
                     )
-                elif not item.product.track_inventory:
-                    # For non-tracked products, restore product barcode to 'new'
-                    product_barcode = item.product.barcodes.first()
-                    if product_barcode:
-                        old_tag = product_barcode.tag
-                        product_barcode.tag = 'new'
-                        product_barcode.save(update_fields=['tag'])
+                    stock.quantity += item.quantity
+                    stock.save()
+            
+            # Unmark barcodes as sold (change back to 'new') when restore_stock is true
+            # This applies to ALL invoices when items are returned to stock
+            if restore_stock:
+                for item in invoice.items.all():
+                    if item.barcode:
+                        # Mark tracked product barcode as 'new' (fresh)
+                        old_tag = item.barcode.tag
+                        item.barcode.tag = 'new'
+                        item.barcode.save(update_fields=['tag'])
+                        invalidate_barcode_cache(item.barcode)
                         
-                        # Audit log: Product barcode tag changed
+                        # Audit log: Barcode tag changed (sold -> new)
                         create_audit_log(
                             request=request,
                             action='barcode_tag_change',
                             model_name='Barcode',
-                            object_id=str(product_barcode.id),
+                            object_id=str(item.barcode.id),
                             object_name=item.product.name,
                             object_reference=invoice.invoice_number,
-                            barcode=product_barcode.barcode,
+                            barcode=item.barcode.barcode,
                             changes={
                                 'tag': {'old': old_tag, 'new': 'new'},
-                                'barcode': product_barcode.barcode,
+                                'barcode': item.barcode.barcode,
                                 'product_id': item.product.id,
                                 'product_name': item.product.name,
                                 'invoice_id': invoice.id,
@@ -2961,57 +2942,85 @@ def invoice_detail(request, pk):
                                 'context': 'invoice_deleted_stock_restored',
                             }
                         )
-        
-        # Reverse ledger entries if customer exists (always reverse ledger entries)
-        if invoice.customer:
-            from backend.parties.models import LedgerEntry
-            # Find all ledger entries for this invoice
-            ledger_entries = LedgerEntry.objects.filter(invoice=invoice)
-            reverse_internal_ledger_entries_for_ledger_entries(
-                ledger_entries, request.user, 'Invoice deleted'
-            )
-            for entry in ledger_entries:
-                # Reverse the entry (if debit, credit it back; if credit, debit it back)
-                reverse_type = 'credit' if entry.entry_type == 'debit' else 'debit'
-                reverse_amount = entry.amount
-                
-                # Update customer credit_balance
-                if entry.entry_type == 'debit':
-                    # Original was debit (customer owes), so credit it back (customer paid)
-                    invoice.customer.credit_balance += reverse_amount
-                else:
-                    # Original was credit (customer paid), so debit it back (customer owes)
-                    invoice.customer.credit_balance -= reverse_amount
-                
-                invoice.customer.save()
+                    elif not item.product.track_inventory:
+                        # For non-tracked products, restore product barcode to 'new'
+                        product_barcode = item.product.barcodes.first()
+                        if product_barcode:
+                            old_tag = product_barcode.tag
+                            product_barcode.tag = 'new'
+                            product_barcode.save(update_fields=['tag'])
+                            invalidate_barcode_cache(product_barcode)
+                            
+                            # Audit log: Product barcode tag changed
+                            create_audit_log(
+                                request=request,
+                                action='barcode_tag_change',
+                                model_name='Barcode',
+                                object_id=str(product_barcode.id),
+                                object_name=item.product.name,
+                                object_reference=invoice.invoice_number,
+                                barcode=product_barcode.barcode,
+                                changes={
+                                    'tag': {'old': old_tag, 'new': 'new'},
+                                    'barcode': product_barcode.barcode,
+                                    'product_id': item.product.id,
+                                    'product_name': item.product.name,
+                                    'invoice_id': invoice.id,
+                                    'invoice_number': invoice.invoice_number,
+                                    'context': 'invoice_deleted_stock_restored',
+                                }
+                            )
             
-            # Delete all ledger entries for this invoice
-            ledger_entries.delete()
-        
-        # Audit log: Invoice deleted
-        invoice_number = invoice.invoice_number
-        invoice_id = str(invoice.id)
-        items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
-        
-        # Delete the invoice (this will cascade delete invoice items and payments)
-        invoice.delete()
-        
-        create_audit_log(
-            request=request,
-            action='delete',
-            model_name='Invoice',
-            object_id=invoice_id,
-            object_name=f"Invoice {invoice_number}",
-            object_reference=invoice_number,
-            barcode=None,
-            changes={
-                'invoice_number': invoice_number,
-                'items_count': len(items_summary),
-                'items': items_summary,
-                'total': str(invoice.total),
-                'status': invoice.status,
-            }
-        )
+            # Reverse ledger entries if customer exists (always reverse ledger entries)
+            if invoice.customer:
+                from backend.parties.models import LedgerEntry
+                # Find all ledger entries for this invoice
+                ledger_entries = LedgerEntry.objects.filter(invoice=invoice)
+                reverse_internal_ledger_entries_for_ledger_entries(
+                    ledger_entries, request.user, 'Invoice deleted'
+                )
+                for entry in ledger_entries:
+                    # Reverse the entry (if debit, credit it back; if credit, debit it back)
+                    reverse_type = 'credit' if entry.entry_type == 'debit' else 'debit'
+                    reverse_amount = entry.amount
+                    
+                    # Update customer credit_balance
+                    if entry.entry_type == 'debit':
+                        # Original was debit (customer owes), so credit it back (customer paid)
+                        invoice.customer.credit_balance += reverse_amount
+                    else:
+                        # Original was credit (customer paid), so debit it back (customer owes)
+                        invoice.customer.credit_balance -= reverse_amount
+                    
+                    invoice.customer.save()
+                
+                # Delete all ledger entries for this invoice
+                ledger_entries.delete()
+            
+            # Audit log: Invoice deleted
+            invoice_number = invoice.invoice_number
+            invoice_id = str(invoice.id)
+            items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
+            
+            # Delete the invoice (this will cascade delete invoice items and payments)
+            invoice.delete()
+            
+            create_audit_log(
+                request=request,
+                action='delete',
+                model_name='Invoice',
+                object_id=invoice_id,
+                object_name=f"Invoice {invoice_number}",
+                object_reference=invoice_number,
+                barcode=None,
+                changes={
+                    'invoice_number': invoice_number,
+                    'items_count': len(items_summary),
+                    'items': items_summary,
+                    'total': str(invoice.total),
+                    'status': invoice.status,
+                }
+            )
         
         return Response(status=status.HTTP_204_NO_CONTENT)
 

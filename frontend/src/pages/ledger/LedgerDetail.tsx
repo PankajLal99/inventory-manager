@@ -140,6 +140,7 @@ export default function LedgerDetail() {
   const customer = customerData?.data;
   const allEntries = ledgerDetail?.data?.entries || [];
   const finalBalance = ledgerDetail?.data?.final_balance || '0.00';
+  const pendingInvoiceTotal = Number(ledgerDetail?.data?.pending_invoice_total || 0);
 
   // Fetch all categories for the selector
   const { data: categoriesResponse } = useQuery({
@@ -861,9 +862,12 @@ export default function LedgerDetail() {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm text-gray-600">Current Balance</p>
-            <p className={`text-3xl font-bold mt-1 ${parseFloat(finalBalance) >= 0 ? 'text-green-600' : 'text-red-600'
+            <p className={`text-3xl font-bold mt-1 flex items-baseline gap-2 ${parseFloat(finalBalance) >= 0 ? 'text-green-600' : 'text-red-600'
               }`}>
               ₹{formatAmountINR(finalBalance)}
+              <span className="text-3xl font-bold text-yellow-500">
+                (Pending ₹{formatAmountINR(pendingInvoiceTotal)})
+              </span>
             </p>
           </div>
           <div className="flex gap-2">
