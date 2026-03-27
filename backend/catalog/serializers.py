@@ -358,10 +358,11 @@ def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
         .select_related('purchase__supplier')
         .order_by('purchase__supplier__name', '-purchase__purchase_date')
     )
-    # Actual barcode counts per purchase_item: available (new+returned) and total
-    available_per_item = dict(
+    # Old behavior: derive shop availability from allocation math.
+    # "used" means sold, defective, or currently in-cart from that purchase item.
+    used_per_item = dict(
         obj.barcodes.filter(
-            tag__in=['new', 'returned'],
+            tag__in=['sold', 'defective', 'in-cart'],
             purchase_item_id__isnull=False
         )
         .values('purchase_item')
@@ -373,9 +374,9 @@ def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
     for item in items:
         whse_allocated = float(item.warehouse_quantity)
         shop_allocated = float(item.shop_quantity)
-        # Use actual barcode count as source of truth (handles mismatched shop_quantity)
-        actual_available = float(available_per_item.get(item.id, 0))
-        shop_available = actual_available
+        used = float(used_per_item.get(item.id, 0))
+        # Sales/cart only come from shop; warehouse items aren't sold at POS.
+        shop_available = float(max(0, shop_allocated - used))
         whse_available = whse_allocated
         if shop_allocated == 0 and whse_allocated == 0 and shop_available == 0:
             continue
