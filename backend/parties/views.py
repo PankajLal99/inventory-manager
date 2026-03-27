@@ -514,6 +514,15 @@ def _ledger_entries_base_queryset(request):
     invoice_status = request.query_params.get('invoice_status', None)
     manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
 
+    # Ledger views should include:
+    # - all invoice-linked entries
+    # - manual entries only when marked as sent
+    # Payments page passes manual_only=true and needs unsent rows visible there.
+    if not manual_only:
+        queryset = queryset.filter(
+            Q(invoice__isnull=False) | Q(invoice__isnull=True, is_sent=True)
+        )
+
     if invoice_status:
         if invoice_status == 'credit':
             queryset = queryset.filter(_credit_invoice_plus_manual_payment_filter())
@@ -604,6 +613,12 @@ def ledger_entry_list_create(request):
         store_id = request.query_params.get('store', None)
         invoice_status = request.query_params.get('invoice_status', None)
         manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
+
+        # For ledger screens (manual_only=false), show only sent manual entries.
+        if not manual_only:
+            queryset = queryset.filter(
+                Q(invoice__isnull=False) | Q(invoice__isnull=True, is_sent=True)
+            )
         
         # Filter by invoice status if provided (only show entries from invoices with this status)
         if invoice_status:
@@ -659,13 +674,10 @@ def ledger_entry_list_create(request):
                 entry.created_at = timezone.now()
                 entry.save(update_fields=['created_at'])
             
-            # Update customer credit_balance based on entry type
-            if entry.customer:
-                if entry.entry_type == 'credit':
-                    entry.customer.credit_balance += entry.amount
-                elif entry.entry_type == 'debit':
-                    entry.customer.credit_balance -= entry.amount
-                entry.customer.save()
+            # Manual entries should affect ledger only when sent is checked.
+            # Invoice-linked entries always affect ledger balance.
+            if _entry_affects_customer_balance(entry):
+                _apply_ledger_entry_balance(entry)
             
             return Response(LedgerEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -691,6 +703,13 @@ def _apply_ledger_entry_balance(entry):
         entry.customer.save()
 
 
+def _entry_affects_customer_balance(entry):
+    """Invoice entries always count; manual entries count only when sent."""
+    if entry.invoice_id is not None:
+        return True
+    return bool(entry.is_sent)
+
+
 @api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def ledger_entry_retrieve_update_destroy(request, entry_id):
@@ -702,20 +721,25 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
         serializer = LedgerEntrySerializer(entry)
         return Response(serializer.data)
     if request.method == 'PATCH':
-        # Reverse old balance, update, then apply new balance
-        _reverse_ledger_entry_balance(entry)
+        # Reverse/apply only when entry participates in customer balance.
+        old_affects_balance = _entry_affects_customer_balance(entry)
+        if old_affects_balance:
+            _reverse_ledger_entry_balance(entry)
         partial_data = request.data
-        allowed = {'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'description', 'created_at'}
+        allowed = {'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'description', 'created_at', 'is_sent'}
         update_data = {k: v for k, v in partial_data.items() if k in allowed}
         serializer = LedgerEntrySerializer(entry, data=update_data, partial=True)
         if serializer.is_valid():
             entry = serializer.save()
-            _apply_ledger_entry_balance(entry)
+            if _entry_affects_customer_balance(entry):
+                _apply_ledger_entry_balance(entry)
             return Response(LedgerEntrySerializer(entry).data)
-        _apply_ledger_entry_balance(entry)  # Restore on validation error
+        if old_affects_balance:
+            _apply_ledger_entry_balance(entry)  # Restore on validation error
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     if request.method == 'DELETE':
-        _reverse_ledger_entry_balance(entry)
+        if _entry_affects_customer_balance(entry):
+            _reverse_ledger_entry_balance(entry)
         entry.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -733,7 +757,9 @@ def ledger_summary(request):
     # Base queryset - filter by store if provided (through invoice relationship)
     # Note: LedgerEntry doesn't have direct store field, but can filter via invoice__store
     # Include manual entries (without invoices) OR entries with invoices from the selected store
-    base_queryset = _exclude_repair_group_entries(LedgerEntry.objects.all())
+    base_queryset = _exclude_repair_group_entries(LedgerEntry.objects.all()).filter(
+        Q(invoice__isnull=False) | Q(invoice__isnull=True, is_sent=True)
+    )
     
     # Filter by invoice status if provided (only show entries from invoices with this status)
     if invoice_status:
@@ -797,7 +823,9 @@ def ledger_customer_detail(request, customer_id):
     invoice_status = request.query_params.get('invoice_status', None)
     
     # Base queryset for this customer
-    entries = LedgerEntry.objects.filter(customer=customer).select_related('customer', 'customer__customer_group', 'invoice', 'created_by')
+    entries = LedgerEntry.objects.filter(customer=customer).filter(
+        Q(invoice__isnull=False) | Q(invoice__isnull=True, is_sent=True)
+    ).select_related('customer', 'customer__customer_group', 'invoice', 'created_by')
     
     # Filter by invoice status if provided (e.g. only entries from invoices with status='credit')
     if invoice_status:
@@ -848,6 +876,45 @@ def ledger_customer_detail(request, customer_id):
             running_balance -= Decimal(str(entry['amount']))
         entry['running_balance'] = str(running_balance)
     
+    from backend.pos.models import Invoice, InvoiceItem
+    pending_invoices = Invoice.objects.filter(
+        customer=customer,
+        invoice_type='pending',
+    ).exclude(
+        status='void'
+    )
+    if store_id:
+        pending_invoices = pending_invoices.filter(store_id=store_id)
+    if date_from:
+        pending_invoices = pending_invoices.filter(created_at__date__gte=date_from)
+    if date_to:
+        pending_invoices = pending_invoices.filter(created_at__date__lte=date_to)
+    pending_total = Decimal('0.00')
+    for inv in pending_invoices:
+        invoice_total = inv.total or Decimal('0.00')
+        if invoice_total > 0:
+            pending_total += invoice_total
+            continue
+
+        # Fallback when invoice total is missing/zero:
+        # sum product purchase value = qty * COALESCE(barcode.purchase_item.unit_price, invoice_item.purchase_price, 0)
+        item_total = InvoiceItem.objects.filter(invoice=inv).aggregate(
+            total=Sum(
+                Case(
+                    When(
+                        barcode__purchase_item__unit_price__isnull=False,
+                        then=F('barcode__purchase_item__unit_price') * F('quantity'),
+                    ),
+                    When(
+                        purchase_price__isnull=False,
+                        then=F('purchase_price') * F('quantity'),
+                    ),
+                    default=Value(Decimal('0.00')),
+                )
+            )
+        )['total'] or Decimal('0.00')
+        pending_total += item_total
+
     return Response({
         'customer': {
             'id': customer.id,
@@ -855,7 +922,8 @@ def ledger_customer_detail(request, customer_id):
             'phone': customer.phone,
         },
         'entries': entries_data,
-        'final_balance': str(running_balance)
+        'final_balance': str(running_balance),
+        'pending_invoice_total': str(pending_total),
     })
 
 

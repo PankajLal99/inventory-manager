@@ -28,8 +28,8 @@ class Command(BaseCommand):
             "--fix-allocation",
             action="store_true",
             help=(
-                "Set shop_quantity = quantity - warehouse_quantity for rows with "
-                "positive allocation gap. Use with --dry-run to preview."
+                "Normalize allocations to match purchased quantity exactly. "
+                "Use with --dry-run to preview."
             ),
         )
         parser.add_argument(
@@ -118,16 +118,34 @@ class Command(BaseCommand):
                 f"defective={tags.get('defective', 0)}, unknown={tags.get('unknown', 0)}, in-cart={tags.get('in-cart', 0)})"
             )
 
-            if fix_allocation and alloc_gap > 0:
-                new_shop_qty = qty - whse_alloc
+            if fix_allocation and alloc_gap != 0:
+                # Keep warehouse allocation when possible, and correct shop allocation
+                # so shop + warehouse always equals purchased quantity.
+                if whse_alloc <= qty:
+                    new_whse_qty = whse_alloc
+                    new_shop_qty = qty - whse_alloc
+                else:
+                    # If warehouse itself exceeds purchased qty, clamp warehouse and zero shop.
+                    new_whse_qty = qty
+                    new_shop_qty = Decimal("0")
                 self.stdout.write(
                     self.style.NOTICE(
-                        f"  fix: shop_quantity {shop_alloc} -> {new_shop_qty} (warehouse kept {whse_alloc})"
+                        f"  fix: shop_quantity {shop_alloc} -> {new_shop_qty}, "
+                        f"warehouse_quantity {whse_alloc} -> {new_whse_qty}"
+                    )
+                )
+                final_total = new_shop_qty + new_whse_qty
+                final_gap = qty - final_total
+                self.stdout.write(
+                    self.style.NOTICE(
+                        f"  final: purchased={qty}, final_shop={new_shop_qty}, "
+                        f"final_whse={new_whse_qty}, final_alloc_total={final_total}, final_gap={final_gap}"
                     )
                 )
                 if not dry_run:
                     item.shop_quantity = new_shop_qty
-                    item.save(update_fields=["shop_quantity"])
+                    item.warehouse_quantity = new_whse_qty
+                    item.save(update_fields=["shop_quantity", "warehouse_quantity"])
                     changed_rows += 1
 
         self.stdout.write("")

@@ -18,7 +18,7 @@ export function getProductNameColor(name: string | null | undefined): string | u
 
 /**
  * Formats a number for display, stripping unnecessary trailing zeros (e.g., .00)
- * and adding comma separators for thousands.
+ * and adding Indian comma separators (thousand/lakh/crore style).
  * 
  * @param num The number to format
  * @param decimals The maximum number of decimal places
@@ -38,9 +38,9 @@ export const formatNumber = (num: number | string | undefined | null, decimals: 
         return value.toString();
     }
 
-    // Use toLocaleString but explicitly control fraction digits to avoid trailing zeros
+    // Use en-IN so comma grouping is Indian style for currency displays.
     // if 'value' is an integer, minimumFractionDigits: 0 will result in no decimals.
-    return value.toLocaleString(undefined, {
+    return value.toLocaleString('en-IN', {
         minimumFractionDigits: 0,
         maximumFractionDigits: decimals,
     });
