@@ -31,9 +31,11 @@ load_dotenv(dotenv_path=env_path)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', '')
+if not SECRET_KEY and os.getenv('DJANGO_ENV', 'development') == 'production':
+    raise ValueError('SECRET_KEY environment variable is required in production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
 if DEBUG:
     ALLOWED_HOSTS = ['*']
@@ -42,7 +44,7 @@ else:
 
     SECURE_SSL_REDIRECT = True
     USE_X_FORWARDED_HOST = True
-    SECURE_PROXY_SSL_HEADER = None
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Application definition
 
@@ -211,8 +213,8 @@ SIMPLE_JWT = {
 }
 
 # CORS
-# For development, allow all origins (change to specific origins in production)
-CORS_ALLOW_ALL_ORIGINS = True
+# Allow all origins only in development; production uses the explicit allowlist below
+CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",

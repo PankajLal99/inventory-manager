@@ -26,9 +26,13 @@ class Stock(models.Model):
 
     class Meta:
         db_table = 'stock'
-        # Note: unique_together with nullable fields can have issues
-        # We handle uniqueness at application level via get_or_create
-        unique_together = [['product', 'variant', 'store', 'warehouse']]
+        # UniqueConstraint handles nullable fields better than unique_together
+        constraints = [
+            models.UniqueConstraint(
+                fields=['product', 'variant', 'store', 'warehouse'],
+                name='unique_stock_product_variant_store_warehouse',
+            ),
+        ]
         indexes = [
             models.Index(fields=['product', 'store'], name='idx_stock_product_store'),
             models.Index(fields=['product', 'warehouse'], name='idx_stock_product_warehouse'),

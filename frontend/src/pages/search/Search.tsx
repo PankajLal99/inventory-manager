@@ -397,7 +397,7 @@ export default function Search() {
                       const breakdown = item.supplier_breakdown || [];
                       const totalFromTable = breakdown.reduce(
                         (sum: number, s: any) =>
-                          sum + (Number(s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
+                          sum + (Number(s.warehouse_available ?? s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
                         0
                       );
                       const total =
@@ -419,7 +419,7 @@ export default function Search() {
                       const breakdown = item.supplier_breakdown || [];
                       const totalFromTable = breakdown.reduce(
                         (sum: number, s: any) =>
-                          sum + (Number(s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
+                          sum + (Number(s.warehouse_available ?? s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
                         0
                       );
                       const warehousePlusAvailable =
@@ -525,7 +525,7 @@ export default function Search() {
                                     <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
                                       <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px] align-middle">{s.supplier}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600 align-middle">{s.purchase_date ?? '—'}</td>
-                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_stock, 2)}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_available ?? s.warehouse_stock, 2)}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
                                     </tr>

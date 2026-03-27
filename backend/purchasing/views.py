@@ -388,7 +388,7 @@ def purchase_item_update_printed(request, item_id):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([AllowAny])  # Public endpoint for vendors
+@permission_classes([IsAuthenticated])
 def vendor_purchases(request):
     """Public endpoint for vendors to view and create their purchases"""
     from backend.core.utils import create_audit_log
@@ -491,7 +491,7 @@ def vendor_purchases(request):
 
 
 @api_view(['GET', 'PATCH'])
-@permission_classes([AllowAny])  # Public endpoint for vendors
+@permission_classes([IsAuthenticated])
 def vendor_purchase_detail(request, pk):
     """Public endpoint for vendors to view and update their purchases"""
     supplier_id = request.query_params.get('supplier', None)
@@ -596,7 +596,7 @@ def purchase_finalize(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # Vendors can cancel their own drafts
+@permission_classes([IsAuthenticated])
 def vendor_purchase_cancel(request, pk):
     """Cancel a draft purchase (vendor endpoint) - deletes non-sold barcodes, keeps product"""
     from backend.catalog.models import Barcode

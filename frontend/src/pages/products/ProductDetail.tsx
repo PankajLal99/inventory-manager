@@ -230,7 +230,7 @@ export default function ProductDetail() {
                   <tr key={idx} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{s.supplier}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{s.purchase_date ?? '—'}</td>
-                    <td className="px-4 py-3 text-sm text-right text-gray-600">{Number(s.warehouse_stock).toLocaleString()}</td>
+                    <td className="px-4 py-3 text-sm text-right text-gray-600">{Number(s.warehouse_available ?? s.warehouse_stock).toLocaleString()}</td>
                     <td className="px-4 py-3 text-sm text-right font-medium text-blue-600">{(s.shop_barcode_count ?? s.shop_stock).toLocaleString()}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{s.price}</td>
                   </tr>

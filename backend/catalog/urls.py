@@ -18,15 +18,15 @@ from .views_optimized import _optimized_product_list_internal
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
-# Wrapper to handle both GET (optimized) and POST (original)
+# Wrapper: GET uses the optimized product list; POST delegates to the original create view.
+# We pass request._request (raw HttpRequest) so DRF's @api_view on product_list_create
+# can re-wrap it properly without double-wrapping the DRF Request.
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def product_list_wrapper(request):
     if request.method == 'GET':
         return _optimized_product_list_internal(request)
-    else:
-        # Pass the underlying Django request to avoid double-wrapping
-        return product_list_create(request._request)
+    return product_list_create(request._request)
 
 urlpatterns = [
     # Category endpoints
