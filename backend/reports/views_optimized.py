@@ -17,7 +17,9 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 from django.core.cache import cache
+from backend.locations.models import Store
 from backend.pos.models import Invoice, InvoiceItem, Expenses, CreditNote
+from backend.pos.views import annotate_invoice_list_profit, filter_repair_invoices_by_list_date
 from backend.parties.models import LedgerEntry
 from backend.catalog.models import Barcode, DefectiveProductMoveOut
 import logging
@@ -32,10 +34,10 @@ def _decimal_or_zero(value):
 @permission_classes([IsAuthenticated])
 def optimized_dashboard_kpis_new(request):
     """
-    Dashboard KPIs with mutually exclusive trade buckets:
-    - Retail (shop_type=retail) and wholesale (shop_type=wholesale) are separate; both require invoice.repair NULL.
-    - Repair: shop_type repair + linked Repair row + completion in range.
-    Credit profit split by shop_type. counter_profit = retail trade only; wholesale_profit = wholesale trade only.
+    Dashboard KPIs with mutually exclusive trade buckets.
+    Profit (counter / wholesale / repairing / splits / credit card) uses the same rules as list pages:
+    computed_paid − computed_total from annotate_invoice_list_profit (matches Invoices.tsx and Repairs.tsx footers).
+    Repair invoice date window matches repair_invoices_list (created_at OR repair.updated_at OR delivery_date).
     """
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
@@ -50,8 +52,7 @@ def optimized_dashboard_kpis_new(request):
     else:
         date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
 
-    # Profit component:
-    # line_total - COALESCE(purchase_item.unit_price * qty, invoice_item.purchase_price * qty, 0)
+    # Line-level margin (pending / monthly pending only; main KPIs use invoice list profit above).
     cost_component_expr = Case(
         When(
             barcode__purchase_item__unit_price__isnull=False,
@@ -74,6 +75,12 @@ def optimized_dashboard_kpis_new(request):
         F('line_total') - cost_component_expr,
         output_field=DecimalField(max_digits=18, decimal_places=2),
     )
+    money_18_2 = DecimalField(max_digits=18, decimal_places=2)
+
+    def _sum_list_profit(annotated_qs):
+        return _decimal_or_zero(
+            annotated_qs.aggregate(t=Sum('_list_profit', output_field=money_18_2))['t']
+        )
 
     def _get_month_window(now_dt):
         # Monthly window: 11th to next month 10th
@@ -91,71 +98,47 @@ def optimized_dashboard_kpis_new(request):
                 end = now_dt.replace(month=now_dt.month + 1, day=10, hour=23, minute=59, second=59, microsecond=999999)
         return start, end
 
-    # Retail only (not wholesale): no Repair row on invoice.
-    retail_items = InvoiceItem.objects.filter(
-        invoice__created_at__date__gte=date_from,
-        invoice__created_at__date__lte=date_to,
-        invoice__repair__isnull=True,
-        invoice__store__shop_type='retail',
-        invoice__status__in=['paid', 'credit'],
-    ).exclude(
-        invoice__invoice_type='pending'
-    )
-    retail_grouped = retail_items.values('invoice__invoice_type').annotate(
-        gross_profit=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
-    )
-    retail_map = {
-        row['invoice__invoice_type']: _decimal_or_zero(row['gross_profit'])
-        for row in retail_grouped
-    }
+    credit_invoice_q = Q(status='credit') | Q(invoice_type='credit')
 
-    # Wholesale: separate from retail; same no-repair rule.
-    wholesale_items = InvoiceItem.objects.filter(
-        invoice__created_at__date__gte=date_from,
-        invoice__created_at__date__lte=date_to,
-        invoice__repair__isnull=True,
-        invoice__store__shop_type='wholesale',
-        invoice__status__in=['paid', 'credit'],
-    ).exclude(
-        invoice__invoice_type='pending'
-    )
-    wholesale_grouped = wholesale_items.values('invoice__invoice_type').annotate(
-        gross_profit=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
-    )
-    wholesale_map = {
-        row['invoice__invoice_type']: _decimal_or_zero(row['gross_profit'])
-        for row in wholesale_grouped
-    }
+    repair_stores = Store.objects.filter(shop_type='repair', is_active=True)
+    repair_inv_base = Invoice.objects.filter(store__in=repair_stores, repair__isnull=False)
+    repair_inv_base = filter_repair_invoices_by_list_date(repair_inv_base, date_from, date_to)
+    repair_qs = annotate_invoice_list_profit(repair_inv_base, profile='repair_list')
 
-    # Repair: Repair shop + linked Repair model + completion window on repair (not invoice store/date alone).
-    # Same invoice lines never appear in retail_items because those require repair__isnull=True.
-    repair_items = InvoiceItem.objects.filter(
-        invoice__repair__created_at__date__gte=date_from,
-        invoice__repair__created_at__date__lte=date_to,
-        invoice__repair__status__in=['delivered', 'done'],
-        invoice__repair__isnull=False,
-        invoice__store__shop_type='repair',
-        invoice__status__in=['paid', 'credit'],
-    ).exclude(
-        invoice__invoice_type='pending'
-    )
-    repair_grouped = repair_items.values('invoice__invoice_type').annotate(
-        gross_profit=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
-    )
-    repair_map = {
-        row['invoice__invoice_type']: _decimal_or_zero(row['gross_profit'])
-        for row in repair_grouped
-    }
+    retail_inv_base = Invoice.objects.filter(
+        repair__isnull=True,
+        store__shop_type='retail',
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+    ).exclude(invoice_type='defective')
+    retail_qs = annotate_invoice_list_profit(retail_inv_base, profile='invoice_list')
 
-    retail_cash = _decimal_or_zero(retail_map.get('cash'))
-    retail_online = _decimal_or_zero(retail_map.get('upi'))
-    retail_mixed = _decimal_or_zero(retail_map.get('mixed'))
-    wholesale_cash = _decimal_or_zero(wholesale_map.get('cash'))
-    wholesale_online = _decimal_or_zero(wholesale_map.get('upi'))
-    wholesale_mixed = _decimal_or_zero(wholesale_map.get('mixed'))
-    repair_cash = _decimal_or_zero(repair_map.get('cash'))
-    repair_online = _decimal_or_zero(repair_map.get('upi'))
-    repair_mixed = _decimal_or_zero(repair_map.get('mixed'))
+    wholesale_inv_base = Invoice.objects.filter(
+        repair__isnull=True,
+        store__shop_type='wholesale',
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+    ).exclude(invoice_type='defective')
+    wholesale_qs = annotate_invoice_list_profit(wholesale_inv_base, profile='invoice_list')
+
+    repairing_profit = _sum_list_profit(repair_qs)
+    counter_profit = _sum_list_profit(retail_qs)
+    wholesale_profit = _sum_list_profit(wholesale_qs)
+
+    retail_cash = _sum_list_profit(retail_qs.filter(invoice_type='cash'))
+    retail_online = _sum_list_profit(retail_qs.filter(invoice_type='upi'))
+    retail_mixed = _sum_list_profit(retail_qs.filter(invoice_type='mixed'))
+    wholesale_cash = _sum_list_profit(wholesale_qs.filter(invoice_type='cash'))
+    wholesale_online = _sum_list_profit(wholesale_qs.filter(invoice_type='upi'))
+    wholesale_mixed = _sum_list_profit(wholesale_qs.filter(invoice_type='mixed'))
+    repair_cash = _sum_list_profit(repair_qs.filter(invoice_type='cash'))
+    repair_online = _sum_list_profit(repair_qs.filter(invoice_type='upi'))
+    repair_mixed = _sum_list_profit(repair_qs.filter(invoice_type='mixed'))
+
+    retail_credit = _sum_list_profit(retail_qs.filter(credit_invoice_q))
+    wholesale_credit = _sum_list_profit(wholesale_qs.filter(credit_invoice_q))
+    repair_credit = _sum_list_profit(repair_qs.filter(credit_invoice_q))
+    total_credit = retail_credit + wholesale_credit + repair_credit
 
     # Manual payments source aligned with Payments page:
     # LedgerEntry(entry_type='credit', invoice__isnull=True)
@@ -190,33 +173,7 @@ def optimized_dashboard_kpis_new(request):
     total_cash = retail_cash + wholesale_cash + repair_cash + manual_cash
     total_online = retail_online + wholesale_online + repair_online + manual_upi
     total_mixed = retail_mixed + wholesale_mixed + repair_mixed + manual_mixed
-    # Credit profit by shop type (retail / wholesale / repair) — no overlap with paid buckets above.
-    credit_items = InvoiceItem.objects.filter(
-        invoice__created_at__date__gte=date_from,
-        invoice__created_at__date__lte=date_to,
-        invoice__store__shop_type__in=['retail', 'wholesale', 'repair'],
-    ).filter(
-        Q(invoice__status='credit') | Q(invoice__invoice_type='credit')
-    ).exclude(
-        invoice__status='void'
-    )
-    credit_grouped = credit_items.values('invoice__store__shop_type').annotate(
-        gross_profit=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
-    )
-    credit_by_shop = {row['invoice__store__shop_type']: _decimal_or_zero(row['gross_profit']) for row in credit_grouped}
-    retail_credit = _decimal_or_zero(credit_by_shop.get('retail'))
-    wholesale_credit = _decimal_or_zero(credit_by_shop.get('wholesale'))
-    repair_credit = _decimal_or_zero(credit_by_shop.get('repair'))
-    total_credit = retail_credit + wholesale_credit + repair_credit
-    counter_profit = retail_cash + retail_online + retail_mixed + retail_credit
-    wholesale_profit = wholesale_cash + wholesale_online + wholesale_mixed + wholesale_credit
-    repairing_profit = repair_cash + repair_online + repair_mixed + repair_credit
-    overall_profit = (
-        (repair_cash + repair_online + repair_mixed) +
-        (retail_cash + retail_online + retail_mixed) +
-        (wholesale_cash + wholesale_online + wholesale_mixed) +
-        total_credit
-    )
+    overall_profit = counter_profit + wholesale_profit + repairing_profit
 
     total_expenses = Expenses.objects.filter(
         expense_date__gte=date_from,
@@ -357,35 +314,26 @@ def optimized_dashboard_kpis_new(request):
             total=Sum('amount', output_field=DecimalField(max_digits=18, decimal_places=2))
         )['total']
     )
-    monthly_retail_items = InvoiceItem.objects.filter(
-        invoice__created_at__gte=month_start,
-        invoice__created_at__lte=month_end,
-        invoice__repair__isnull=True,
-        invoice__store__shop_type='retail',
-        invoice__status__in=['paid', 'credit'],
-    ).exclude(invoice__invoice_type='pending')
-    monthly_wholesale_items = InvoiceItem.objects.filter(
-        invoice__created_at__gte=month_start,
-        invoice__created_at__lte=month_end,
-        invoice__repair__isnull=True,
-        invoice__store__shop_type='wholesale',
-        invoice__status__in=['paid', 'credit'],
-    ).exclude(invoice__invoice_type='pending')
-    monthly_repair_items = InvoiceItem.objects.filter(
-        invoice__repair__created_at__gte=month_start,
-        invoice__repair__created_at__lte=month_end,
-        invoice__repair__status__in=['delivered', 'done'],
-        invoice__repair__isnull=False,
-        invoice__store__shop_type='repair',
-        invoice__status__in=['paid', 'credit'],
-    ).exclude(invoice__invoice_type='pending')
-    monthly_credit_items = InvoiceItem.objects.filter(
-        invoice__created_at__gte=month_start,
-        invoice__created_at__lte=month_end,
-        invoice__store__shop_type__in=['retail', 'wholesale', 'repair'],
-    ).filter(
-        Q(invoice__status='credit') | Q(invoice__invoice_type='credit')
-    ).exclude(invoice__status='void')
+    monthly_retail_inv = Invoice.objects.filter(
+        created_at__gte=month_start,
+        created_at__lte=month_end,
+        repair__isnull=True,
+        store__shop_type='retail',
+    ).exclude(invoice_type='defective')
+    monthly_wholesale_inv = Invoice.objects.filter(
+        created_at__gte=month_start,
+        created_at__lte=month_end,
+        repair__isnull=True,
+        store__shop_type='wholesale',
+    ).exclude(invoice_type='defective')
+    monthly_repair_inv = filter_repair_invoices_by_list_date(
+        Invoice.objects.filter(store__in=repair_stores, repair__isnull=False),
+        month_start.date(),
+        month_end.date(),
+    )
+    monthly_retail_qs = annotate_invoice_list_profit(monthly_retail_inv, profile='invoice_list')
+    monthly_wholesale_qs = annotate_invoice_list_profit(monthly_wholesale_inv, profile='invoice_list')
+    monthly_repair_qs = annotate_invoice_list_profit(monthly_repair_inv, profile='repair_list')
     monthly_pending_items = InvoiceItem.objects.filter(
         invoice__created_at__gte=month_start,
         invoice__created_at__lte=month_end,
@@ -402,24 +350,13 @@ def optimized_dashboard_kpis_new(request):
         Q(invoice__status='pending') | Q(invoice__invoice_type='pending')
     ).exclude(invoice__status='void')
 
-    monthly_retail_profit = _decimal_or_zero(
-        monthly_retail_items.aggregate(total=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)))['total']
-    )
-    monthly_wholesale_profit = _decimal_or_zero(
-        monthly_wholesale_items.aggregate(total=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)))['total']
-    )
-    monthly_repair_profit = _decimal_or_zero(
-        monthly_repair_items.aggregate(total=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)))['total']
-    )
-    monthly_credit_profit = _decimal_or_zero(
-        monthly_credit_items.aggregate(total=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)))['total']
-    )
+    monthly_retail_profit = _sum_list_profit(monthly_retail_qs)
+    monthly_wholesale_profit = _sum_list_profit(monthly_wholesale_qs)
+    monthly_repair_profit = _sum_list_profit(monthly_repair_qs)
     monthly_pending_profit = _decimal_or_zero(
         monthly_pending_items.aggregate(total=Sum(profit_component_expr, output_field=DecimalField(max_digits=18, decimal_places=2)))['total']
     )
-    monthly_overall_profit = (
-        monthly_retail_profit + monthly_wholesale_profit + monthly_repair_profit + monthly_credit_profit
-    )
+    monthly_overall_profit = monthly_retail_profit + monthly_wholesale_profit + monthly_repair_profit
     monthly_profit = monthly_overall_profit + monthly_pending_profit
 
     response = Response({

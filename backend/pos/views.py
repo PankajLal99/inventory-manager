@@ -84,6 +84,77 @@ def _with_invoice_amount_annotations(queryset):
     )
 
 
+def annotate_invoice_list_profit(queryset, profile='invoice_list'):
+    """
+    Per-invoice (computed_paid - computed_total) matching InvoiceSerializer list behavior.
+
+    profile='invoice_list': matches Invoices page (non-repair). No items -> Total 0, Paid -> total.
+    profile='repair_list': matches Repairs page. No items -> Total from pending/total fallback like serializer.
+    """
+    money_field = DecimalField(max_digits=18, decimal_places=2)
+    qs = _with_invoice_amount_annotations(queryset)
+    if profile == 'repair_list':
+        zero_items_profit = ExpressionWrapper(
+            Case(
+                When(paid_amount__gt=0, then=F('paid_amount')),
+                default=F('total'),
+                output_field=money_field,
+            )
+            - Case(
+                When(invoice_type='pending', then=Value(Decimal('0.00'))),
+                default=F('total'),
+                output_field=money_field,
+            ),
+            output_field=money_field,
+        )
+    else:
+        zero_items_profit = ExpressionWrapper(
+            Case(
+                When(paid_amount__gt=0, then=F('paid_amount')),
+                default=F('total'),
+                output_field=money_field,
+            )
+            - Value(Decimal('0.00')),
+            output_field=money_field,
+        )
+    return qs.annotate(
+        _list_profit=Case(
+            When(
+                _items_count__gt=0,
+                then=ExpressionWrapper(
+                    F('_items_paid_agg') - F('_items_total_agg'),
+                    output_field=money_field,
+                ),
+            ),
+            default=zero_items_profit,
+            output_field=money_field,
+        )
+    )
+
+
+def filter_repair_invoices_by_list_date(queryset, date_from, date_to):
+    """Same date logic as repair_invoices_list (created_at OR repair.updated_at OR delivery_date)."""
+    if date_from and date_to:
+        return queryset.filter(
+            Q(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            | Q(repair__updated_at__date__gte=date_from, repair__updated_at__date__lte=date_to)
+            | Q(repair__delivery_date__gte=date_from, repair__delivery_date__lte=date_to)
+        )
+    if date_from:
+        return queryset.filter(
+            Q(created_at__date__gte=date_from)
+            | Q(repair__updated_at__date__gte=date_from)
+            | Q(repair__delivery_date__gte=date_from)
+        )
+    if date_to:
+        return queryset.filter(
+            Q(created_at__date__lte=date_to)
+            | Q(repair__updated_at__date__lte=date_to)
+            | Q(repair__delivery_date__lte=date_to)
+        )
+    return queryset
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def repair_invoices_list(request):
