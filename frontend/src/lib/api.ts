@@ -118,7 +118,8 @@ export const productsApi = {
   variants: (id: number) => api.get(`/products/${id}/variants/`),
   barcodes: (id: number, params?: any) => api.get(`/products/${id}/barcodes/`, { params }),
   barcodesFull: (id: number) => api.get(`/products/${id}/barcodes-full/`),
-  invoices: (id: number) => api.get(`/products/${id}/invoices/`),
+  invoices: (id: number, params?: { limit?: number; offset?: number }) =>
+    api.get(`/products/${id}/invoices/`, { params }),
   byBarcode: (barcode: string, barcodeOnly: boolean = false, noCache: boolean = false) => {
     const params: Record<string, string> = {};
     if (barcodeOnly) params.barcode_only = 'true';

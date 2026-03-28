@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { productsApi, catalogApi } from '../../lib/api';
 import Badge from '../../components/ui/Badge';
 import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { format } from 'date-fns';
+import Button from '../../components/ui/Button';
+
+const PRODUCT_INVOICES_PAGE_SIZE = 20;
 
 const TAG_LABELS: Record<string, string> = {
   new: 'New (Fresh)',
@@ -34,9 +37,27 @@ export default function ProductDetail() {
     enabled: !!productId && !!product?.data,
   });
 
-  const { data: invoicesData } = useQuery({
+  const {
+    data: invoicesInfiniteData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading: invoicesLoading,
+  } = useInfiniteQuery({
     queryKey: ['product-invoices', productId],
-    queryFn: () => productsApi.invoices(productId),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const res = await productsApi.invoices(productId, {
+        limit: PRODUCT_INVOICES_PAGE_SIZE,
+        offset: pageParam as number,
+      });
+      return res.data;
+    },
+    getNextPageParam: (lastPage) => {
+      if (!lastPage?.has_more) return undefined;
+      const next = (lastPage.offset ?? 0) + (lastPage.invoices?.length ?? 0);
+      return next;
+    },
     enabled: !!productId && !!product?.data,
   });
 
@@ -68,7 +89,9 @@ export default function ProductDetail() {
 
   const p = product.data;
   const byTag = barcodesFull?.data?.by_tag || {};
-  const invoices = invoicesData?.data?.invoices || [];
+  const invoices =
+    invoicesInfiniteData?.pages.flatMap((page) => page?.invoices ?? []) ?? [];
+  const invoicesTotal = invoicesInfiniteData?.pages[0]?.total ?? invoices.length;
   const tagOrder = ['new', 'returned', 'in-cart', 'defective', 'unknown', 'sold'];
 
   return (
@@ -317,49 +340,72 @@ export default function ProductDetail() {
         </div>
       )}
 
-      {/* Related Invoices */}
-      {invoices.length > 0 && (
+      {/* Related Invoices (paginated; backend was capped at 50, now limit/offset) */}
+      {(invoices.length > 0 || invoicesLoading) && (
         <div className="bg-white rounded-2xl shadow p-6">
           <h2 className="text-xl font-semibold mb-4 flex items-center">
             <FileText className="h-5 w-5 mr-2" />
-            Related Invoices ({invoices.length})
+            Related Invoices
+            {invoicesTotal > 0 && (
+              <span className="ml-2 text-base font-normal text-gray-500">
+                (showing {invoices.length} of {invoicesTotal})
+              </span>
+            )}
           </h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Invoice</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Date</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Customer</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Status</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Qty</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {invoices.map((inv: any) => (
-                  <tr
-                    key={inv.id}
-                    className="hover:bg-gray-50 cursor-pointer"
-                    onClick={() => navigate(`/invoices/${inv.id}`)}
+          {invoicesLoading && invoices.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">Loading invoices...</div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Invoice</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Date</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Customer</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Status</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Qty</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {invoices.map((inv: any) => (
+                      <tr
+                        key={inv.id}
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => navigate(`/invoices/${inv.id}`)}
+                      >
+                        <td className="px-4 py-3 text-sm font-medium text-blue-600">{inv.invoice_number}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">
+                          {inv.created_at ? format(new Date(inv.created_at), 'dd MMM yyyy') : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm">{inv.customer_name}</td>
+                        <td className="px-4 py-3 text-sm">
+                          <Badge variant={inv.status === 'paid' ? 'success' : inv.status === 'credit' ? 'info' : 'default'}>
+                            {inv.status}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right">{inv.product_quantity}</td>
+                        <td className="px-4 py-3 text-sm text-right font-medium">₹{inv.total?.toLocaleString('en-IN')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {hasNextPage && (
+                <div className="mt-4 flex justify-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fetchNextPage()}
+                    disabled={isFetchingNextPage}
                   >
-                    <td className="px-4 py-3 text-sm font-medium text-blue-600">{inv.invoice_number}</td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
-                      {inv.created_at ? format(new Date(inv.created_at), 'dd MMM yyyy') : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-sm">{inv.customer_name}</td>
-                    <td className="px-4 py-3 text-sm">
-                      <Badge variant={inv.status === 'paid' ? 'success' : inv.status === 'credit' ? 'info' : 'default'}>
-                        {inv.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-right">{inv.product_quantity}</td>
-                    <td className="px-4 py-3 text-sm text-right font-medium">₹{inv.total?.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    {isFetchingNextPage ? 'Loading...' : 'Load more'}
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 

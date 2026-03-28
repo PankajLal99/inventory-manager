@@ -734,13 +734,29 @@ def product_barcodes_full(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def product_invoices(request, pk):
-    """Get invoices that contain this product. For product detail page only."""
+    """Get invoices that contain this product. For product detail page only.
+    Query params: limit (default 20, max 100), offset (default 0).
+    """
     from backend.pos.models import InvoiceItem, Invoice
     product = get_object_or_404(Product, pk=pk)
+    try:
+        limit = int(request.query_params.get('limit', 20))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        offset = int(request.query_params.get('offset', 0))
+    except (TypeError, ValueError):
+        offset = 0
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
     invoice_ids = InvoiceItem.objects.filter(product=product).values_list('invoice_id', flat=True).distinct()
-    invoices = Invoice.objects.filter(id__in=invoice_ids).exclude(
+    invoices_qs = Invoice.objects.filter(id__in=invoice_ids).exclude(
         status='void'
-    ).select_related('store', 'customer').order_by('-created_at')[:50]
+    ).select_related('store', 'customer').order_by('-created_at')
+    total = invoices_qs.count()
+    invoices = list(invoices_qs[offset : offset + limit])
+    has_more = offset + len(invoices) < total
     data = []
     for inv in invoices:
         items_for_product = InvoiceItem.objects.filter(invoice=inv, product=product)
@@ -756,7 +772,13 @@ def product_invoices(request, pk):
             'created_at': inv.created_at.isoformat() if inv.created_at else None,
             'product_quantity': qty,
         })
-    return Response({'invoices': data})
+    return Response({
+        'invoices': data,
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+        'has_more': has_more,
+    })
 
 
 @api_view(['GET', 'POST'])
