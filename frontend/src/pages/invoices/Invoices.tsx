@@ -713,7 +713,7 @@ export default function Invoices() {
                     <TableCell>{' '}</TableCell>
                   </TableRow>
                   <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                    <TableCell colSpan={5}>Profit (Paid − Total)</TableCell>
+                    <TableCell colSpan={5}> </TableCell>
                     <TableCell align="right" className="text-emerald-700">
                       ₹{formatNumber(profitSum)}
                     </TableCell>
@@ -802,7 +802,7 @@ export default function Invoices() {
                   <span className="text-amber-800">₹{formatNumber(creditDifference)}</span>
                 </div>
                 <div className="flex justify-between items-center pt-2 border-t border-gray-200 font-semibold">
-                  <span className="text-gray-700">Profit (Paid − Total)</span>
+                  <span className="text-gray-700"> </span>
                   <span className="text-emerald-700">₹{formatNumber(profitSum)}</span>
                 </div>
               </div>

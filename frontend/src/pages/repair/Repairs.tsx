@@ -1130,7 +1130,7 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell colSpan={11}>Profit (Paid − Total)</TableCell>
+                      <TableCell colSpan={11}> </TableCell>
                       <TableCell align="right" className="text-emerald-700">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
@@ -1310,7 +1310,7 @@ export default function Repairs() {
                 })}
                 {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center">
-                    <span className="text-gray-700">Profit (Paid − Total)</span>
+                    <span className="text-gray-700"> </span>
                     <span className="text-emerald-700">₹{formatNumber(groupProfit)}</span>
                   </div>
                 )}

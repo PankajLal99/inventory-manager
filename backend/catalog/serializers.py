@@ -344,7 +344,7 @@ class ProductSerializer(serializers.ModelSerializer):
 def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
     """
     One row per purchase batch (PurchaseItem). Warehouse/Shop from that item; Shop Qty = available
-    (shop_quantity - sold - in-cart) for that batch. Ordered by supplier then latest purchase date first.
+    (shop_quantity - sold - in-cart) for that batch. Ordered by purchase date (newest first), then supplier name.
     If filter_shop_only=True, only include rows where shop stock (shop_barcode_count) > 0.
     """
     from backend.purchasing.models import PurchaseItem
@@ -356,7 +356,7 @@ def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
             purchase__status='finalized'
         )
         .select_related('purchase__supplier')
-        .order_by('purchase__supplier__name', '-purchase__purchase_date')
+        .order_by('-purchase__purchase_date', 'purchase__supplier__name')
     )
     # Old behavior: derive shop availability from allocation math.
     # "used" means sold, defective, or currently in-cart from that purchase item.

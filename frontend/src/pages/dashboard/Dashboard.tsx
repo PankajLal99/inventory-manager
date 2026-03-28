@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { reportsApi } from '../../lib/api';
 import { DateRangePreset, formatDateDDMMYYYY, formatNumber, getDateRangeByPreset } from '../../lib/utils';
 import { auth } from '../../lib/auth';
-import { BarChart3, Calendar, CreditCard, DollarSign, Lock, RefreshCw, Store, TrendingUp, Wallet, Wrench } from 'lucide-react';
+import { BarChart3, Calendar, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingUp, Wallet, Wrench } from 'lucide-react';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 const PIN_LENGTH = 6;
@@ -14,13 +14,14 @@ type BasicCardProps = {
   title: string;
   total: number;
   retail: number;
+  wholesale: number;
   repair: number;
   manual: number;
   icon: React.ComponentType<{ className?: string }>;
   tone: 'green' | 'blue' | 'purple';
 };
 
-function BasicKpiCard({ title, total, retail, repair, manual, icon: Icon, tone }: BasicCardProps) {
+function BasicKpiCard({ title, total, retail, wholesale, repair, manual, icon: Icon, tone }: BasicCardProps) {
   const toneClasses =
     tone === 'green'
       ? 'from-green-50 to-green-100 border-green-200 text-green-700'
@@ -34,8 +35,8 @@ function BasicKpiCard({ title, total, retail, repair, manual, icon: Icon, tone }
         <Icon className="h-5 w-5" />
       </div>
       <p className="text-3xl font-bold text-gray-900">₹{formatNumber(total, 2)}</p>
-      <p className="text-sm text-gray-600 mt-1">
-        Retail ₹{formatNumber(retail, 2)} / Repair ₹{formatNumber(repair, 2)} / Manual Payment ₹{formatNumber(manual, 2)}
+      <p className="text-sm text-gray-600 mt-1 leading-relaxed">
+        Retail ₹{formatNumber(retail, 2)} / Wholesale ₹{formatNumber(wholesale, 2)} / Repair ₹{formatNumber(repair, 2)} / Manual ₹{formatNumber(manual, 2)}
       </p>
     </div>
   );
@@ -78,6 +79,12 @@ export default function Dashboard() {
     retry: false,
   });
 
+  const clearPin = () => {
+    setPinDigits(Array(PIN_LENGTH).fill(''));
+    setPinError('');
+    pinInputRefs.current[0]?.focus();
+  };
+
   const handlePinChange = (index: number, value: string) => {
     const digit = value.replace(/\D/g, '').slice(-1);
     const next = [...pinDigits];
@@ -91,9 +98,15 @@ export default function Dashboard() {
         setUnlocked(true);
       } else {
         setPinError('Wrong PIN');
-        setPinDigits(Array(PIN_LENGTH).fill(''));
-        pinInputRefs.current[0]?.focus();
+        clearPin();
       }
+    }
+  };
+
+  const handlePinKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      clearPin();
     }
   };
 
@@ -123,6 +136,7 @@ export default function Dashboard() {
                   autoFocus={i === 0}
                   value={pinDigits[i]}
                   onChange={(e) => handlePinChange(i, e.target.value)}
+                  onKeyDown={handlePinKeyDown}
                   className="w-14 h-14 text-center text-lg font-semibold border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 border-gray-300"
                 />
               ))}
@@ -138,11 +152,14 @@ export default function Dashboard() {
   const totalCash = Number(kpis.total_cash || 0);
   const totalOnline = Number(kpis.total_online || 0);
   const retailCash = Number(kpis.retail_cash || 0);
+  const wholesaleCash = Number(kpis.wholesale_cash || 0);
   const repairCash = Number(kpis.repair_cash || 0);
   const retailOnline = Number(kpis.retail_online || 0);
+  const wholesaleOnline = Number(kpis.wholesale_online || 0);
   const repairOnline = Number(kpis.repair_online || 0);
   const totalMixed = Number(kpis.total_mixed || 0);
   const retailMixed = Number(kpis.retail_mixed || 0);
+  const wholesaleMixed = Number(kpis.wholesale_mixed || 0);
   const repairMixed = Number(kpis.repair_mixed || 0);
   const manualCash = Number(kpis.manual_cash || 0);
   const manualOnline = Number(kpis.manual_online || 0);
@@ -155,6 +172,7 @@ export default function Dashboard() {
   const inhandTotal = Number(kpis.inhand_total || 0);
   const repairingProfit = Number(kpis.repairing_profit || 0);
   const counterProfit = Number(kpis.counter_profit || 0);
+  const wholesaleProfit = Number(kpis.wholesale_profit || 0);
   const overallProfit = Number(kpis.overall_profit || 0);
   const billPendingTotal = Number(kpis.bill_pending_total || 0);
   const retailBillPending = Number(kpis.retail_bill_pending || 0);
@@ -179,7 +197,9 @@ export default function Dashboard() {
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="text-sm text-gray-500 mt-1 flex items-center gap-1">
               <Calendar className="h-3 w-3" />
-              {formatDateDDMMYYYY(new Date())}
+              {dateFrom === dateTo
+                ? formatDateDDMMYYYY(dateFrom)
+                : `${formatDateDDMMYYYY(dateFrom)} – ${formatDateDDMMYYYY(dateTo)}`}
             </p>
           </div>
           <DateRangeSelector
@@ -206,6 +226,7 @@ export default function Dashboard() {
               title="Total Cash"
               total={totalCash}
               retail={retailCash}
+              wholesale={wholesaleCash}
               repair={repairCash}
               manual={manualCash}
               icon={DollarSign}
@@ -215,6 +236,7 @@ export default function Dashboard() {
               title="Total Online"
               total={totalOnline}
               retail={retailOnline}
+              wholesale={wholesaleOnline}
               repair={repairOnline}
               manual={manualOnline}
               icon={CreditCard}
@@ -224,6 +246,7 @@ export default function Dashboard() {
               title="Total Mixed"
               total={totalMixed}
               retail={retailMixed}
+              wholesale={wholesaleMixed}
               repair={repairMixed}
               manual={manualMixed}
               icon={CreditCard}
@@ -248,10 +271,17 @@ export default function Dashboard() {
             </div>
             <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200 rounded-xl border p-5">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-medium text-gray-700">Counter Profit</p>
+                <p className="text-sm font-medium text-gray-700">Counter Profit (Retail)</p>
                 <Store className="h-5 w-5 text-indigo-700" />
               </div>
               <p className="text-3xl font-bold text-gray-900">₹{formatNumber(counterProfit, 2)}</p>
+            </div>
+            <div className="bg-gradient-to-br from-sky-50 to-sky-100 border-sky-200 rounded-xl border p-5">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-medium text-gray-700">Wholesale Profit</p>
+                <Package className="h-5 w-5 text-sky-700" />
+              </div>
+              <p className="text-3xl font-bold text-gray-900">₹{formatNumber(wholesaleProfit, 2)}</p>
             </div>
             <div className="bg-gradient-to-br from-red-50 to-red-100 border-red-200 rounded-xl border p-5">
               <div className="flex items-center justify-between mb-2">
@@ -266,6 +296,9 @@ export default function Dashboard() {
                 <DollarSign className="h-5 w-5 text-amber-700" />
               </div>
               <p className="text-3xl font-bold text-gray-900">₹{formatNumber(manualPaymentTotal, 2)}</p>
+              <p className="text-sm text-gray-600 mt-1 leading-relaxed">
+                Cash ₹{formatNumber(manualCash, 2)} / UPI ₹{formatNumber(manualOnline, 2)} / Mixed ₹{formatNumber(manualMixed, 2)}
+              </p>
             </div>
             <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200 rounded-xl border p-5">
               <div className="flex items-center justify-between mb-2">
