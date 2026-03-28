@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Sum, Count, Max, Q, DecimalField, Prefetch, F, Value, Case, When, ExpressionWrapper
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 from django.core.cache import cache
@@ -82,6 +83,13 @@ def optimized_dashboard_kpis_new(request):
             annotated_qs.aggregate(t=Sum('_list_profit', output_field=money_18_2))['t']
         )
 
+    def _sum_invoice_total(qs):
+        return _decimal_or_zero(
+            qs.exclude(status__in=['void', 'draft']).aggregate(
+                t=Sum('total', output_field=money_18_2)
+            )['t']
+        )
+
     def _get_month_window(now_dt):
         # Monthly window: 11th to next month 10th
         if now_dt.day < 11:
@@ -140,6 +148,70 @@ def optimized_dashboard_kpis_new(request):
     repair_credit = _sum_list_profit(repair_qs.filter(credit_invoice_q))
     total_credit = retail_credit + wholesale_credit + repair_credit
 
+    collected_retail_cash = _sum_invoice_total(retail_inv_base.filter(invoice_type='cash'))
+    collected_retail_online = _sum_invoice_total(retail_inv_base.filter(invoice_type='upi'))
+    collected_retail_mixed = _sum_invoice_total(retail_inv_base.filter(invoice_type='mixed'))
+    collected_retail_credit = _sum_invoice_total(retail_inv_base.filter(credit_invoice_q))
+    collected_wholesale_cash = _sum_invoice_total(wholesale_inv_base.filter(invoice_type='cash'))
+    collected_wholesale_online = _sum_invoice_total(wholesale_inv_base.filter(invoice_type='upi'))
+    collected_wholesale_mixed = _sum_invoice_total(wholesale_inv_base.filter(invoice_type='mixed'))
+    collected_wholesale_credit = _sum_invoice_total(wholesale_inv_base.filter(credit_invoice_q))
+    collected_repair_cash = _sum_invoice_total(repair_inv_base.filter(invoice_type='cash'))
+    collected_repair_online = _sum_invoice_total(repair_inv_base.filter(invoice_type='upi'))
+    collected_repair_mixed = _sum_invoice_total(repair_inv_base.filter(invoice_type='mixed'))
+    collected_repair_credit = _sum_invoice_total(repair_inv_base.filter(credit_invoice_q))
+    collected_total_credit = collected_retail_credit + collected_wholesale_credit + collected_repair_credit
+    collected_retail_invoice_total = _sum_invoice_total(retail_inv_base)
+    collected_wholesale_invoice_total = _sum_invoice_total(wholesale_inv_base)
+    collected_repair_invoice_total = _sum_invoice_total(repair_inv_base)
+    collected_invoice_grand = (
+        collected_retail_invoice_total
+        + collected_wholesale_invoice_total
+        + collected_repair_invoice_total
+    )
+
+    # Incoming (Σ Invoice.total) by store — same invoice sets as collected_* invoice totals.
+    rw_invoice_incoming_base = Invoice.objects.filter(
+        repair__isnull=True,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+        store__shop_type__in=['retail', 'wholesale'],
+    ).exclude(invoice_type='defective')
+
+    def _invoice_total_by_store_rows(qs):
+        return list(
+            qs.exclude(status__in=['void', 'draft'])
+            .values('store_id', 'store__name', 'store__shop_type')
+            .annotate(invoice_total=Sum('total', output_field=money_18_2))
+        )
+
+    incoming_by_store_acc = defaultdict(
+        lambda: {'invoice_total': Decimal('0.00'), 'store_name': '', 'shop_type': ''}
+    )
+    for row in _invoice_total_by_store_rows(rw_invoice_incoming_base):
+        sid = row['store_id']
+        incoming_by_store_acc[sid]['store_name'] = row['store__name'] or ''
+        incoming_by_store_acc[sid]['shop_type'] = row['store__shop_type'] or ''
+        incoming_by_store_acc[sid]['invoice_total'] += _decimal_or_zero(row['invoice_total'])
+    for row in _invoice_total_by_store_rows(repair_inv_base):
+        sid = row['store_id']
+        incoming_by_store_acc[sid]['store_name'] = row['store__name'] or ''
+        incoming_by_store_acc[sid]['shop_type'] = row['store__shop_type'] or ''
+        incoming_by_store_acc[sid]['invoice_total'] += _decimal_or_zero(row['invoice_total'])
+
+    incoming_by_store_list = sorted(
+        (
+            {
+                'store_id': sid,
+                'store_name': v['store_name'],
+                'shop_type': v['shop_type'],
+                'invoice_total': float(v['invoice_total']),
+            }
+            for sid, v in incoming_by_store_acc.items()
+        ),
+        key=lambda x: (-x['invoice_total'], x['store_name']),
+    )
+
     # Manual payments source aligned with Payments page:
     # LedgerEntry(entry_type='credit', invoice__isnull=True)
     manual_entries = LedgerEntry.objects.filter(
@@ -168,6 +240,10 @@ def optimized_dashboard_kpis_new(request):
             total=Sum('amount', output_field=DecimalField(max_digits=18, decimal_places=2))
         )['total']
     )
+
+    collected_total_cash = collected_retail_cash + collected_wholesale_cash + collected_repair_cash + manual_cash
+    collected_total_online = collected_retail_online + collected_wholesale_online + collected_repair_online + manual_upi
+    collected_total_mixed = collected_retail_mixed + collected_wholesale_mixed + collected_repair_mixed + manual_mixed
 
     # Include manual payment in cash / online / mixed totals.
     total_cash = retail_cash + wholesale_cash + repair_cash + manual_cash
@@ -364,6 +440,7 @@ def optimized_dashboard_kpis_new(request):
             'from': date_from.isoformat(),
             'to': date_to.isoformat(),
         },
+        'incoming_by_store': incoming_by_store_list,
         'kpis': {
             'total_cash': float(total_cash),
             'total_online': float(total_online),
@@ -406,6 +483,26 @@ def optimized_dashboard_kpis_new(request):
             'retail_credit': float(retail_credit),
             'wholesale_credit': float(wholesale_credit),
             'repair_credit': float(repair_credit),
+            'collected_retail_cash': float(collected_retail_cash),
+            'collected_wholesale_cash': float(collected_wholesale_cash),
+            'collected_repair_cash': float(collected_repair_cash),
+            'collected_retail_online': float(collected_retail_online),
+            'collected_wholesale_online': float(collected_wholesale_online),
+            'collected_repair_online': float(collected_repair_online),
+            'collected_retail_mixed': float(collected_retail_mixed),
+            'collected_wholesale_mixed': float(collected_wholesale_mixed),
+            'collected_repair_mixed': float(collected_repair_mixed),
+            'collected_retail_credit': float(collected_retail_credit),
+            'collected_wholesale_credit': float(collected_wholesale_credit),
+            'collected_repair_credit': float(collected_repair_credit),
+            'collected_total_cash': float(collected_total_cash),
+            'collected_total_online': float(collected_total_online),
+            'collected_total_mixed': float(collected_total_mixed),
+            'collected_total_credit': float(collected_total_credit),
+            'collected_invoice_grand': float(collected_invoice_grand),
+            'collected_retail_invoice_total': float(collected_retail_invoice_total),
+            'collected_wholesale_invoice_total': float(collected_wholesale_invoice_total),
+            'collected_repair_invoice_total': float(collected_repair_invoice_total),
         }
     })
     response['X-Cache'] = 'DISABLED'

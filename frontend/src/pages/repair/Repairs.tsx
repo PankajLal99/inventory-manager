@@ -531,6 +531,21 @@ export default function Repairs() {
     });
   };
 
+  /** Repair row created_at (registration time), same source as POS Repair Registration. */
+  const formatRepairRegisteredAt = (dateString: string | undefined) => {
+    if (!dateString) return '—';
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString('en-IN', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
   const getStatusBadge = (status: string) => {
     const Icon = STATUS_ICONS[status] || Clock;
     return (
@@ -937,6 +952,7 @@ export default function Repairs() {
                 <Table compact headers={[
                   { label: 'Invoice #', align: 'left' },
                   { label: 'Date', align: 'left' },
+                  { label: 'Registered', align: 'left' },
                   { label: 'Delivery date', align: 'left' },
                   { label: 'Customer', align: 'left' },
                   { label: 'Contact', align: 'left' },
@@ -974,6 +990,11 @@ export default function Repairs() {
                         <TableCell>
                           <span className="text-gray-600">
                             {formatDate(getRepairDisplayDate(invoice))}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-gray-600 text-sm whitespace-nowrap" title={invoice.repair?.created_at || undefined}>
+                            {formatRepairRegisteredAt(invoice.repair?.created_at)}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -1130,7 +1151,7 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell colSpan={11}> </TableCell>
+                      <TableCell colSpan={12}> </TableCell>
                       <TableCell align="right" className="text-emerald-700">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
@@ -1181,6 +1202,11 @@ export default function Repairs() {
                           <div className="text-sm text-gray-600 mb-1">
                             {formatDate(getRepairDisplayDate(invoice))}
                           </div>
+                          {invoice.repair?.created_at && (
+                            <div className="text-xs text-gray-500 mb-1" title="Repair registered">
+                              Registered: {formatRepairRegisteredAt(invoice.repair.created_at)}
+                            </div>
+                          )}
                           {invoice.repair?.delivery_date && (
                             <div className="text-sm text-gray-600 mb-1">
                               <span className="text-gray-500 font-medium">Delivery: </span>
