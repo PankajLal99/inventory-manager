@@ -4194,12 +4194,12 @@ export default function InvoiceDetail() {
                         onChange={(e) => {
                           const value = e.target.value;
                           setCheckoutCashAmount(value);
-                          // Auto-calculate UPI amount if total is known
+                          // Auto-calculate UPI amount if total is known (plain number string — commas break type="number")
                           if (inv?.items && value) {
                             const total = calculateCheckoutTotal();
                             const cash = parseFloat(value) || 0;
                             const remaining = Math.max(0, total - cash);
-                            setCheckoutUpiAmount(formatNumber(remaining));
+                            setCheckoutUpiAmount(formatNumber(remaining, 2, false));
                           }
                         }}
                         className="w-full text-xs"
@@ -4216,12 +4216,12 @@ export default function InvoiceDetail() {
                         onChange={(e) => {
                           const value = e.target.value;
                           setCheckoutUpiAmount(value);
-                          // Auto-calculate Cash amount if total is known
+                          // Auto-calculate Cash amount if total is known (plain number string — commas break type="number")
                           if (inv?.items && value) {
                             const total = calculateCheckoutTotal();
                             const upi = parseFloat(value) || 0;
                             const remaining = Math.max(0, total - upi);
-                            setCheckoutCashAmount(formatNumber(remaining));
+                            setCheckoutCashAmount(formatNumber(remaining, 2, false));
                           }
                         }}
                         className="w-full text-xs"
