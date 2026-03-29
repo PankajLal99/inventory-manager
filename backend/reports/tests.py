@@ -4,12 +4,13 @@ Tests: Sales Summary, Top Products, Inventory Summary, Revenue, Customers, Stock
 """
 from django.test import TestCase
 from rest_framework import status
+from datetime import timedelta
 from django.utils import timezone
 from decimal import Decimal
 from django.core.cache import cache
 from backend.core.test_utils import TestDataFactory, AuthenticatedAPIClient
-from backend.pos.models import Payment, Expenses
-from backend.parties.models import LedgerEntry
+from backend.pos.models import Expenses, Payment, InvoiceItem
+from backend.catalog.models import DefectiveProductMoveOut
 
 
 class ReportsTests(TestCase):
@@ -64,37 +65,27 @@ class ReportsTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsInstance(response.data, (list, dict))
 
-    def test_dashboard_kpis_cash_online_expense_inhand_formula(self):
-        """Dashboard should combine POS + manual ledger credits and subtract expenses from cash."""
-        invoice = TestDataFactory.create_invoice(
+    def test_dashboard_kpis_invoice_totals_cash_upi_expenses_inhand(self):
+        """Dashboard sums Invoice.total for cash/upi types, expenses, and inhand = cash - expenses."""
+        cash_inv = TestDataFactory.create_invoice(
             user=self.user,
             customer=self.customer,
             store=self.store,
             invoice_type='cash',
-            status='paid'
+            status='paid',
         )
-        Payment.objects.create(invoice=invoice, payment_method='cash', amount=Decimal('100.00'), created_by=self.user)
-        Payment.objects.create(invoice=invoice, payment_method='upi', amount=Decimal('40.00'), created_by=self.user)
+        cash_inv.total = Decimal('100.00')
+        cash_inv.save(update_fields=['total'])
 
-        # Manual receipt entries (Payments page) should contribute by payment_mode.
-        LedgerEntry.objects.create(
+        upi_inv = TestDataFactory.create_invoice(
+            user=self.user,
             customer=self.customer,
-            invoice=None,
-            entry_type='credit',
-            payment_mode='cash',
-            amount=Decimal('25.00'),
-            created_by=self.user,
-            created_at=timezone.now()
+            store=self.store,
+            invoice_type='upi',
+            status='paid',
         )
-        LedgerEntry.objects.create(
-            customer=self.customer,
-            invoice=None,
-            entry_type='credit',
-            payment_mode='upi',
-            amount=Decimal('10.00'),
-            created_by=self.user,
-            created_at=timezone.now()
-        )
+        upi_inv.total = Decimal('40.00')
+        upi_inv.save(update_fields=['total'])
 
         Expenses.objects.create(
             expense_date=timezone.now().date(),
@@ -102,245 +93,265 @@ class ReportsTests(TestCase):
             payment_choices_type='CASH',
             expense_amount=20.0,
             created_by=self.user,
-            last_updated_by=self.user
+            last_updated_by=self.user,
         )
 
         response = self.client.get('/api/v1/reports/dashboard-kpis/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         kpis = response.data['kpis']
 
-        self.assertEqual(kpis['total_cash'], 125.0)      # 100 + 25
-        self.assertEqual(kpis['total_online'], 50.0)     # 40 + 10
+        self.assertEqual(kpis['total_cash'], 100.0)
+        self.assertEqual(kpis['total_upi'], 40.0)
+        self.assertEqual(kpis['total_credit'], 0.0)
+        self.assertEqual(kpis['cash_from_mixed'], 0.0)
+        self.assertEqual(kpis['upi_from_mixed'], 0.0)
         self.assertEqual(kpis['total_expenses'], 20.0)
-        self.assertEqual(kpis['total_inhand'], 105.0)    # total_cash - expenses
+        self.assertEqual(kpis['total_inhand'], 80.0)
+        self.assertEqual(kpis['total_payments'], 0.0)
+        self.assertEqual(response.data['payments_by_method'], [])
+        self.assertEqual(kpis['pending_invoice_purchase_total'], 0.0)
+        self.assertEqual(response.data['pending_purchase_by_store'], [])
+        self.assertIn('counter_profit', kpis)
+        self.assertIn('repair_profit', kpis)
+        self.assertIn('overall_profit', kpis)
+        self.assertEqual(kpis['counter_profit'], kpis['overall_profit'] - kpis['repair_profit'])
+        self.assertIn('stock_value', kpis)
+        self.assertIn('defective_move_out_net_loss', kpis)
+        self.assertIn('defective_move_out_net_period', kpis)
 
-    def test_dashboard_kpis_excludes_void_and_manish_traders_loss_pos_payments(self):
-        """Dashboard should exclude POS payments from void invoices and internal loss customer."""
-        normal_invoice = TestDataFactory.create_invoice(
+        self.assertIsInstance(response.data.get('counter_profit_by_store'), list)
+        self.assertIsInstance(response.data.get('counter_profit_by_invoice_type'), list)
+        cp = float(kpis['counter_profit'])
+        sum_by_store = sum(float(r['amount']) for r in response.data['counter_profit_by_store'])
+        sum_by_type = sum(float(r['profit']) for r in response.data['counter_profit_by_invoice_type'])
+        self.assertAlmostEqual(sum_by_store, cp, places=5)
+        self.assertAlmostEqual(sum_by_type, cp, places=5)
+
+        self.assertEqual(len(response.data['cash_by_store']), 1)
+        self.assertEqual(response.data['cash_by_store'][0]['amount'], 100.0)
+        self.assertEqual(response.data['cash_by_store'][0]['from_invoice_cash'], 100.0)
+        self.assertEqual(response.data['cash_by_store'][0]['from_mixed_cash'], 0.0)
+        self.assertEqual(len(response.data['upi_by_store']), 1)
+        self.assertEqual(response.data['upi_by_store'][0]['amount'], 40.0)
+        self.assertEqual(response.data['upi_by_store'][0]['from_invoice_upi'], 40.0)
+        self.assertEqual(response.data['upi_by_store'][0]['from_mixed_upi'], 0.0)
+        self.assertEqual(response.data['credit_by_store'], [])
+
+    def test_dashboard_kpis_excludes_void_and_draft_invoices(self):
+        """Void and draft invoices are excluded from cash/upi totals."""
+        paid = TestDataFactory.create_invoice(
             user=self.user,
             customer=self.customer,
             store=self.store,
             invoice_type='cash',
-            status='paid'
+            status='paid',
         )
-        void_invoice = TestDataFactory.create_invoice(
+        paid.total = Decimal('50.00')
+        paid.save(update_fields=['total'])
+
+        void_inv = TestDataFactory.create_invoice(
             user=self.user,
             customer=self.customer,
             store=self.store,
             invoice_type='cash',
-            status='void'
+            status='void',
         )
-        loss_customer = TestDataFactory.create_customer(
-            name='Manish Traders Loss',
-            phone=f"8{timezone.now().strftime('%H%M%S%f')[:9]}"
-        )
-        loss_invoice = TestDataFactory.create_invoice(
+        void_inv.total = Decimal('999.00')
+        void_inv.save(update_fields=['total'])
+
+        draft_inv = TestDataFactory.create_invoice(
             user=self.user,
-            customer=loss_customer,
+            customer=self.customer,
             store=self.store,
             invoice_type='cash',
-            status='paid'
+            status='draft',
         )
-
-        Payment.objects.create(invoice=normal_invoice, payment_method='cash', amount=Decimal('70.00'), created_by=self.user)
-        Payment.objects.create(invoice=void_invoice, payment_method='cash', amount=Decimal('999.00'), created_by=self.user)
-        Payment.objects.create(invoice=loss_invoice, payment_method='cash', amount=Decimal('888.00'), created_by=self.user)
+        draft_inv.total = Decimal('888.00')
+        draft_inv.save(update_fields=['total'])
 
         response = self.client.get('/api/v1/reports/dashboard-kpis/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        kpis = response.data['kpis']
+        self.assertEqual(response.data['kpis']['total_cash'], 50.0)
 
-        self.assertEqual(kpis['total_cash'], 70.0)
-
-    def test_dashboard_kpis_repair_cash_upi_invoice_and_payment_breakdown(self):
-        """Dashboard should return repair invoice-type and payment-method cash/upi breakdown."""
-        repair_store = TestDataFactory.create_store(code=f"RPR_{TestDataFactory.random_string(6).upper()}")
-        repair_store.shop_type = 'repair'
-        repair_store.save(update_fields=['shop_type'])
-
-        retail_store = TestDataFactory.create_store(code=f"RTL_{TestDataFactory.random_string(6).upper()}")
-        retail_store.shop_type = 'retail'
-        retail_store.save(update_fields=['shop_type'])
-
-        repair_cash_invoice = TestDataFactory.create_invoice(
-            user=self.user,
-            customer=self.customer,
-            store=repair_store,
-            invoice_type='cash',
-            status='paid'
-        )
-        repair_cash_invoice.total = Decimal('150.00')
-        repair_cash_invoice.save(update_fields=['total'])
-
-        repair_upi_invoice = TestDataFactory.create_invoice(
-            user=self.user,
-            customer=self.customer,
-            store=repair_store,
-            invoice_type='upi',
-            status='paid'
-        )
-        repair_upi_invoice.total = Decimal('220.00')
-        repair_upi_invoice.save(update_fields=['total'])
-
-        retail_invoice = TestDataFactory.create_invoice(
-            user=self.user,
-            customer=self.customer,
-            store=retail_store,
-            invoice_type='cash',
-            status='paid'
-        )
-        retail_invoice.total = Decimal('500.00')
-        retail_invoice.save(update_fields=['total'])
-
-        # Repair payments received by method (can differ from invoice_type in real life partials/splits).
-        Payment.objects.create(invoice=repair_cash_invoice, payment_method='cash', amount=Decimal('100.00'), created_by=self.user)
-        Payment.objects.create(invoice=repair_cash_invoice, payment_method='upi', amount=Decimal('50.00'), created_by=self.user)
-        Payment.objects.create(invoice=repair_upi_invoice, payment_method='upi', amount=Decimal('220.00'), created_by=self.user)
-
-        # Non-repair payment should not affect repair-only breakdown.
-        Payment.objects.create(invoice=retail_invoice, payment_method='cash', amount=Decimal('500.00'), created_by=self.user)
-
-        response = self.client.get('/api/v1/reports/dashboard-kpis/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        kpis = response.data['kpis']
-
-        self.assertEqual(kpis['repair_invoice_cash_total'], 150.0)
-        self.assertEqual(kpis['repair_invoice_upi_total'], 220.0)
-        self.assertEqual(kpis['repair_invoice_cash_count'], 1)
-        self.assertEqual(kpis['repair_invoice_upi_count'], 1)
-
-        self.assertEqual(kpis['repair_payment_cash_total'], 100.0)
-        self.assertEqual(kpis['repair_payment_upi_total'], 270.0)
-        self.assertEqual(kpis['repair_payment_cash_count'], 1)
-        self.assertEqual(kpis['repair_payment_upi_count'], 2)
-
-    def test_dashboard_kpis_contains_all_kpi_debug_blocks(self):
-        """Dashboard should expose row-level debug blocks for all displayed KPI cards."""
-        invoice = TestDataFactory.create_invoice(
-            user=self.user,
-            customer=self.customer,
-            store=self.store,
-            invoice_type='cash',
-            status='paid'
-        )
-        invoice.total = Decimal('100.00')
-        invoice.save(update_fields=['total'])
-        Payment.objects.create(invoice=invoice, payment_method='cash', amount=Decimal('100.00'), created_by=self.user)
-
-        response = self.client.get('/api/v1/reports/dashboard-kpis/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-        debug_blocks = response.data.get('kpi_debug_rows', {})
-        expected_keys = [
-            'total_cash',
-            'total_online',
-            'total_expenses',
-            'total_inhand',
-            'repair_invoice_cash_total',
-            'repair_invoice_upi_total',
-            'repair_invoice_mixed_total',
-            'repair_payment_cash_total',
-            'repair_payment_upi_total',
-            'repair_payment_mixed_total',
-            'repairing_profit',
-            'counter_profit',
-            'pending_profit',
-            'overall_profit',
-            'monthly_profit',
-            'total_stock',
-            'total_stock_value',
-            'pending_invoices_total',
-            'total_replacement',
-            'todays_loss',
-            'monthly_loss',
-            'total_loss',
-        ]
-
-        for key in expected_keys:
-            self.assertIn(key, debug_blocks)
-            self.assertIn('label', debug_blocks[key])
-            self.assertIn('formula', debug_blocks[key])
-            self.assertIn('total', debug_blocks[key])
-            self.assertIn('rows', debug_blocks[key])
-            self.assertIsInstance(debug_blocks[key]['rows'], list)
-
-        store_grouping = response.data.get('kpi_store_grouping', {})
-        self.assertIn('total_cash', store_grouping)
-        self.assertIn('formula', store_grouping['total_cash'])
-        self.assertIn('stores', store_grouping['total_cash'])
-        self.assertIsInstance(store_grouping['total_cash']['stores'], list)
-
-    def test_dashboard_kpis_includes_cash_upi_contribution_rows(self):
-        """Dashboard should return invoice/manual contribution rows for cash and UPI."""
-        invoice = TestDataFactory.create_invoice(
+    def test_dashboard_kpis_mixed_invoice_splits_via_payments(self):
+        """Mixed invoices contribute cash/UPI totals from Payment rows, not Invoice.total alone."""
+        mixed = TestDataFactory.create_invoice(
             user=self.user,
             customer=self.customer,
             store=self.store,
             invoice_type='mixed',
-            status='paid'
+            status='paid',
         )
-        Payment.objects.create(invoice=invoice, payment_method='cash', amount=Decimal('120.00'), created_by=self.user)
-        Payment.objects.create(invoice=invoice, payment_method='upi', amount=Decimal('80.00'), created_by=self.user)
-
-        LedgerEntry.objects.create(
-            customer=self.customer,
-            invoice=None,
-            entry_type='credit',
-            payment_mode='cash',
-            amount=Decimal('10.00'),
-            created_by=self.user,
-            created_at=timezone.now()
+        mixed.total = Decimal('100.00')
+        mixed.save(update_fields=['total'])
+        Payment.objects.create(
+            invoice=mixed, payment_method='cash', amount=Decimal('65.00'), created_by=self.user
         )
-        LedgerEntry.objects.create(
-            customer=self.customer,
-            invoice=None,
-            entry_type='credit',
-            payment_mode='upi',
-            amount=Decimal('25.00'),
-            created_by=self.user,
-            created_at=timezone.now()
+        Payment.objects.create(
+            invoice=mixed, payment_method='upi', amount=Decimal('35.00'), created_by=self.user
         )
 
         response = self.client.get('/api/v1/reports/dashboard-kpis/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-        contributions = response.data.get('cash_online_contributions', {})
-        cash_data = contributions.get('cash', {})
-        upi_data = contributions.get('upi', {})
-
-        self.assertTrue(len(cash_data.get('invoice_payments', [])) >= 1)
-        self.assertTrue(len(upi_data.get('invoice_payments', [])) >= 1)
-        self.assertTrue(len(cash_data.get('manual_payments', [])) >= 1)
-        self.assertTrue(len(upi_data.get('manual_payments', [])) >= 1)
-
-        first_cash_invoice_payment = cash_data['invoice_payments'][0]
-        self.assertEqual(first_cash_invoice_payment['invoice_number'], invoice.invoice_number)
-        self.assertEqual(first_cash_invoice_payment['party_name'], self.customer.name)
-
-    def test_dashboard_kpis_handles_mixed_manual_payment_split(self):
-        """Mixed manual ledger payments should split into cash and UPI totals and contribution rows."""
-        mixed_entry = LedgerEntry.objects.create(
-            customer=self.customer,
-            invoice=None,
-            entry_type='credit',
-            payment_mode='mixed',
-            cash_amount=Decimal('30.00'),
-            upi_amount=Decimal('70.00'),
-            amount=Decimal('100.00'),
-            created_by=self.user,
-            created_at=timezone.now()
-        )
-
-        response = self.client.get('/api/v1/reports/dashboard-kpis/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
         kpis = response.data['kpis']
-        self.assertEqual(kpis['total_cash'], 30.0)
-        self.assertEqual(kpis['total_online'], 70.0)
+        self.assertEqual(kpis['total_cash'], 65.0)
+        self.assertEqual(kpis['total_upi'], 35.0)
+        self.assertEqual(kpis['cash_from_mixed'], 65.0)
+        self.assertEqual(kpis['upi_from_mixed'], 35.0)
+        self.assertEqual(kpis['cash_from_invoice_type_cash'], 0.0)
+        self.assertEqual(kpis['upi_from_invoice_type_upi'], 0.0)
 
-        contributions = response.data.get('cash_online_contributions', {})
-        cash_manual = contributions.get('cash', {}).get('manual_payments', [])
-        upi_manual = contributions.get('upi', {}).get('manual_payments', [])
+        row = response.data['cash_by_store'][0]
+        self.assertEqual(row['from_mixed_cash'], 65.0)
+        self.assertEqual(row['from_invoice_cash'], 0.0)
+        row_u = response.data['upi_by_store'][0]
+        self.assertEqual(row_u['from_mixed_upi'], 35.0)
+        self.assertEqual(row_u['from_invoice_upi'], 0.0)
 
-        self.assertTrue(any(row.get('id') == mixed_entry.id and row.get('amount') == 30.0 for row in cash_manual))
-        self.assertTrue(any(row.get('id') == mixed_entry.id and row.get('amount') == 70.0 for row in upi_manual))
+        self.assertEqual(kpis['total_payments'], 100.0)
+        pm = {r['payment_method']: r['amount'] for r in response.data['payments_by_method']}
+        self.assertEqual(pm.get('cash'), 65.0)
+        self.assertEqual(pm.get('upi'), 35.0)
+
+    def test_dashboard_kpis_payments_exclude_void_invoice(self):
+        """POS Payment rows on void invoices do not count toward dashboard payment totals."""
+        void_inv = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='cash',
+            status='void',
+        )
+        void_inv.total = Decimal('999.00')
+        void_inv.save(update_fields=['total'])
+        Payment.objects.create(
+            invoice=void_inv, payment_method='cash', amount=Decimal('999.00'), created_by=self.user
+        )
+
+        paid_inv = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='cash',
+            status='paid',
+        )
+        paid_inv.total = Decimal('10.00')
+        paid_inv.save(update_fields=['total'])
+        Payment.objects.create(
+            invoice=paid_inv, payment_method='cash', amount=Decimal('10.00'), created_by=self.user
+        )
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['kpis']['total_payments'], 10.0)
+        self.assertEqual(len(response.data['payments_by_method']), 1)
+        self.assertEqual(response.data['payments_by_method'][0]['payment_method'], 'cash')
+        self.assertEqual(response.data['payments_by_method'][0]['amount'], 10.0)
+
+    def test_dashboard_kpis_credit_by_store(self):
+        """Credit invoice type sums Invoice.total by store."""
+        cred = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='credit',
+            status='credit',
+        )
+        cred.total = Decimal('250.00')
+        cred.save(update_fields=['total'])
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['kpis']['total_credit'], 250.0)
+        self.assertEqual(len(response.data['credit_by_store']), 1)
+        self.assertEqual(response.data['credit_by_store'][0]['amount'], 250.0)
+
+    def test_dashboard_kpis_pending_invoice_purchase_cost_by_store(self):
+        """Pending invoices: Σ purchase cost on lines (purchase_item unit_price × qty or purchase_price × qty)."""
+        product = TestDataFactory.create_product()
+        pending_inv = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='pending',
+            status='pending',
+        )
+        InvoiceItem.objects.create(
+            invoice=pending_inv,
+            product=product,
+            quantity=Decimal('2'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('200.00'),
+            purchase_price=Decimal('35.50'),
+        )
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['kpis']['pending_invoice_purchase_total'], 71.0)
+        self.assertEqual(len(response.data['pending_purchase_by_store']), 1)
+        row = response.data['pending_purchase_by_store'][0]
+        self.assertEqual(row['amount'], 71.0)
+        self.assertEqual(row['store_id'], self.store.id)
+
+    def test_dashboard_kpis_stock_value_excludes_draft_purchase_barcodes(self):
+        """Stock value sums unit_price per new/returned barcode; draft purchase lines excluded."""
+        product = TestDataFactory.create_product()
+        purchase_ok = TestDataFactory.create_purchase(user=self.user, status='finalized')
+        pi = TestDataFactory.create_purchase_item(
+            purchase=purchase_ok,
+            product=product,
+            unit_price=Decimal('100.00'),
+        )
+        TestDataFactory.create_barcode(product=product, tag='new', purchase_item=pi)
+        TestDataFactory.create_barcode(product=product, tag='returned', purchase_item=pi)
+
+        purchase_draft = TestDataFactory.create_purchase(user=self.user, status='draft')
+        pi_draft = TestDataFactory.create_purchase_item(
+            purchase=purchase_draft,
+            product=product,
+            unit_price=Decimal('999.00'),
+        )
+        TestDataFactory.create_barcode(product=product, tag='new', purchase_item=pi_draft)
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['kpis']['stock_value'], 200.0)
+
+    def test_dashboard_kpis_defective_and_move_out_net(self):
+        """Defective counts/value and move-out net (all-time vs period) match catalog models."""
+        product = TestDataFactory.create_product()
+        purchase = TestDataFactory.create_purchase(user=self.user, status='finalized')
+        pi = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=product,
+            unit_price=Decimal('40.00'),
+        )
+        TestDataFactory.create_barcode(product=product, tag='defective', purchase_item=pi)
+        TestDataFactory.create_barcode(product=product, tag='defective', purchase_item=pi)
+
+        DefectiveProductMoveOut.objects.create(
+            move_out_number='DEF-DASH-TEST-001',
+            store=self.store,
+            total_loss=Decimal('100.00'),
+            total_adjustment=Decimal('30.00'),
+            total_items=2,
+        )
+
+        today = timezone.now().date().isoformat()
+        response = self.client.get(
+            f'/api/v1/reports/dashboard-kpis/?date_from={today}&date_to={today}'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        kpis = response.data['kpis']
+        self.assertEqual(kpis['defective_product_count'], 1)
+        self.assertEqual(kpis['defective_barcode_count'], 2)
+        self.assertEqual(kpis['defective_purchase_value'], 80.0)
+        self.assertEqual(kpis['defective_move_out_net_loss'], 70.0)
+        self.assertEqual(kpis['defective_move_out_net_period'], 70.0)
+
+        yesterday = (timezone.now().date() - timedelta(days=1)).isoformat()
+        response2 = self.client.get(
+            f'/api/v1/reports/dashboard-kpis/?date_from={yesterday}&date_to={yesterday}'
+        )
+        self.assertEqual(response2.data['kpis']['defective_move_out_net_period'], 0.0)
+        self.assertEqual(response2.data['kpis']['defective_move_out_net_loss'], 70.0)
