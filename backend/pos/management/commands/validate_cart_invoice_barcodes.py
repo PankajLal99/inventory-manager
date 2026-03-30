@@ -41,10 +41,10 @@ class Command(BaseCommand):
             self.style.SUCCESS('Checking: barcodes in active/held carts must not be on paid/credit invoices...\n')
         )
 
-        # Barcode IDs that are on a paid or credit invoice (sold)
+        # Barcode IDs that are on a paid/partial/credit invoice (sold)
         sold_barcode_ids = set(
             InvoiceItem.objects.filter(
-                invoice__status__in=['paid', 'credit']
+                invoice__status__in=['paid', 'partial', 'credit']
             ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
         )
         if not sold_barcode_ids:
@@ -54,7 +54,7 @@ class Command(BaseCommand):
         # Build barcode_id -> (barcode_str, invoice_number) for reporting
         sold_barcodes = {}
         for inv_item in InvoiceItem.objects.filter(
-            invoice__status__in=['paid', 'credit'],
+            invoice__status__in=['paid', 'partial', 'credit'],
             barcode_id__isnull=False
         ).select_related('invoice', 'barcode'):
             if inv_item.barcode_id and inv_item.barcode_id not in sold_barcodes:

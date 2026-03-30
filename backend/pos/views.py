@@ -700,9 +700,10 @@ def active_carts_overview(request):
     # Barcode IDs that are already on paid/credit invoices — don't show them in overview (they're sold, cart is stale)
     from backend.pos.models import InvoiceItem
     from backend.catalog.models import Barcode
+    # Treat PARTIAL invoices as sold too: their barcodes must never be reverted to "new" by cart cleanup.
     sold_barcode_ids = set(
         InvoiceItem.objects.filter(
-            invoice__status__in=['paid', 'credit']
+            invoice__status__in=['paid', 'partial', 'credit']
         ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
     )
     serializer = CartOverviewSerializer(carts, many=True, context={'sold_barcode_ids': sold_barcode_ids})
@@ -812,10 +813,10 @@ def cart_detail(request, pk):
                 {'error': 'Cart is locked.', 'detail': 'Unlock the cart before closing or discarding it.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # Barcodes already on paid/credit invoices must stay 'sold' — do not revert them when discarding
+        # Barcodes already on paid/partial/credit invoices must stay 'sold' — do not revert them when discarding
         sold_barcode_ids = set(
             InvoiceItem.objects.filter(
-                invoice__status__in=['paid', 'credit']
+                invoice__status__in=['paid', 'partial', 'credit']
             ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
         )
         # Release all SKUs/barcodes from scanned_barcodes back to available inventory (except those already sold)
@@ -843,7 +844,7 @@ def cart_detail(request, pk):
                             barcode_obj = Barcode.objects.get(barcode=b_upper)
                         except Barcode.DoesNotExist:
                             barcode_obj = Barcode.objects.get(short_code=b_upper)
-                        # Do not revert barcodes that are on a paid/credit invoice — they stay 'sold'
+                        # Do not revert barcodes that are on a paid/partial/credit invoice — they stay 'sold'
                         if barcode_obj.id in sold_barcode_ids:
                             continue
                         # Restore from 'in-cart' or 'sold' back to 'new' when cart is deleted
@@ -1863,11 +1864,11 @@ def cart_item_update(request, pk, item_id):
                 stock.quantity += cart_item.quantity
                 stock.save()
         
-        # Handle barcodes for tracked inventory items - restore from 'in-cart' to 'new' only if not on paid/credit invoice
+        # Handle barcodes for tracked inventory items - restore from 'in-cart' to 'new' only if not on paid/partial/credit invoice
         if cart_item.product.track_inventory and cart_item.scanned_barcodes:
             sold_barcode_ids_item = set(
                 InvoiceItem.objects.filter(
-                    invoice__status__in=['paid', 'credit']
+                    invoice__status__in=['paid', 'partial', 'credit']
                 ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
             )
             for barcode_value in cart_item.scanned_barcodes:
@@ -1879,7 +1880,7 @@ def cart_item_update(request, pk, item_id):
                         barcode_obj = Barcode.objects.get(barcode=b_upper)
                     except Barcode.DoesNotExist:
                         barcode_obj = Barcode.objects.get(short_code=b_upper)
-                    # Do not revert barcodes that are on a paid/credit invoice — they stay 'sold'
+                    # Do not revert barcodes that are on a paid/partial/credit invoice — they stay 'sold'
                     if barcode_obj.id in sold_barcode_ids_item:
                         continue
                     # Restore from 'in-cart' or 'sold' back to 'new' when cart item is deleted
