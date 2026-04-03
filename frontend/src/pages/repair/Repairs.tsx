@@ -41,7 +41,6 @@ import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Button from '../../components/ui/Button';
-import Pagination from '../../components/ui/Pagination';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 
@@ -205,6 +204,7 @@ export default function Repairs() {
   const [notRepairedCollapsed, setNotRepairedCollapsed] = useState(true);
   // Date filter for each status group (independent controls)
   const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>({});
+  const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
   const hasAnyGroupDateOverride = Object.entries(groupDateFilters).some(
     ([, date]) => !!date
   );
@@ -247,14 +247,12 @@ export default function Repairs() {
   const repairStore = repairStores.find((s: any) => s.id === defaultStore?.id) || repairStores[0];
   const useFilteredMode = !!statusFilter || !!dateFrom || !!dateTo || !!search.trim() || !!barcodeSearch.trim() || hasAnyGroupDateOverride;
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['repair-invoices', statusFilter, dateFrom, dateTo, repairStore?.id, useFilteredMode ? 1 : currentPage, barcodeSearch, search],
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ['repair-invoices', statusFilter, dateFrom, dateTo, repairStore?.id, currentPage, barcodeSearch, search],
     queryFn: async () => {
       const params: any = {};
-      if (!useFilteredMode) {
-        params.page = currentPage;
-        params.limit = 50;
-      }
+      params.page = currentPage;
+      params.limit = 50;
       if (statusFilter) {
         params.repair_status = statusFilter;
       }
@@ -316,7 +314,23 @@ export default function Repairs() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
+    setLoadedRepairs([]);
   }, [statusFilter, dateFrom, dateTo, defaultStore?.id, search, barcodeSearch, useFilteredMode]);
+
+  useEffect(() => {
+    if (!data) return;
+    const page = Number(data.page || 1);
+    const pageRows: RepairInvoice[] = Array.isArray(data.results) ? data.results : [];
+    setLoadedRepairs((prev) => {
+      if (page <= 1) return pageRows;
+      const existing = new Set(prev.map((r) => r.id));
+      const merged = [...prev];
+      pageRows.forEach((row) => {
+        if (!existing.has(row.id)) merged.push(row);
+      });
+      return merged;
+    });
+  }, [data]);
 
   // Sync edit form when opening edit modal
   useEffect(() => {
@@ -455,13 +469,9 @@ export default function Repairs() {
     },
   });
 
-  const repairInvoices: RepairInvoice[] = data?.results || [];
-  const paginationInfo = data ? {
-    totalItems: data.count || 0,
-    totalPages: data.total_pages || 1,
-    currentPage: data.page || 1,
-    pageSize: data.page_size || 50,
-  } : null;
+  const repairInvoices: RepairInvoice[] = loadedRepairs;
+  const hasMoreRepairs =
+    Boolean(data) && Number(data.page || 1) < Number(data.total_pages || 1);
 
 
   // Search is applied server-side (invoice_number + customer_name)
@@ -1454,15 +1464,17 @@ export default function Repairs() {
       {/* Toast Container */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
-      {paginationInfo && !useFilteredMode && (
+      {hasMoreRepairs && (
         <Card>
-          <Pagination
-            currentPage={paginationInfo.currentPage}
-            totalPages={paginationInfo.totalPages}
-            totalItems={paginationInfo.totalItems}
-            pageSize={paginationInfo.pageSize}
-            onPageChange={(page) => setCurrentPage(page)}
-          />
+          <div className="flex justify-center">
+            <Button
+              variant="outline"
+              onClick={() => setCurrentPage((p) => p + 1)}
+              disabled={isFetching}
+            >
+              {isFetching ? 'Loading...' : 'Load more'}
+            </Button>
+          </div>
         </Card>
       )}
     </div>

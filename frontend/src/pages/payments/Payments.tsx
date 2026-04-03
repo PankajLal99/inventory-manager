@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, Coins, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
 import { customersApi } from '../../lib/api';
-import { DateRangePreset, formatAmountINR, getDateRangeByPreset, toLocalDateString } from '../../lib/utils';
+import { formatAmountINR, toLocalDateString } from '../../lib/utils';
+import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { toast } from '../../lib/toast';
 import { auth } from '../../lib/auth';
 import PageHeader from '../../components/ui/PageHeader';
@@ -51,10 +52,7 @@ export default function Payments() {
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
-  const initialDateRange = getDateRangeByPreset('one_day');
-  const [dateFrom, setDateFrom] = useState(initialDateRange.startDate || getTodayDateValue());
-  const [dateTo, setDateTo] = useState(initialDateRange.endDate || getTodayDateValue());
+  const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
   const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ManualCreditEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<ManualCreditEntry | null>(null);
@@ -92,6 +90,7 @@ export default function Payments() {
       const response = await customersApi.ledger.entries.list(params);
       return response.data;
     },
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -397,15 +396,7 @@ export default function Payments() {
           </Select>
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-2">Date Range</label>
-            <DateRangeSelector
-              preset={datePreset}
-              value={{ startDate: dateFrom, endDate: dateTo }}
-              onChange={({ preset, range }) => {
-                setDatePreset(preset);
-                setDateFrom(range.startDate);
-                setDateTo(range.endDate);
-              }}
-            />
+            <DateRangeSelector preset={datePreset} value={{ startDate: dateFrom, endDate: dateTo }} onChange={setListDateRange} />
           </div>
         </div>
         <div className="mt-4">

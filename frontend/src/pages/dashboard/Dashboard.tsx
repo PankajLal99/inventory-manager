@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Navigate } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { reportsApi } from '../../lib/api';
-import { DateRangePreset, formatDateDDMMYYYY, formatNumber, getDateRangeByPreset } from '../../lib/utils';
+import { formatDateDDMMYYYY, formatNumber } from '../../lib/utils';
+import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { auth } from '../../lib/auth';
 import { BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, Truck, Wallet, Wrench } from 'lucide-react';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
@@ -271,9 +272,8 @@ function PendingPurchaseItemStatsTable({
 
 export default function Dashboard() {
   const [user, setUser] = useState(auth.getUser());
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
-  const [dateRange, setDateRange] = useState(() => getDateRangeByPreset('one_day'));
-  const { startDate: dateFrom, endDate: dateTo } = dateRange;
+  const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
+  const dateRange = { startDate: dateFrom, endDate: dateTo };
 
   const [unlocked, setUnlocked] = useState(false);
   const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
@@ -609,10 +609,7 @@ export default function Dashboard() {
           <DateRangeSelector
             preset={datePreset}
             value={dateRange}
-            onChange={({ preset, range }) => {
-              setDatePreset(preset);
-              setDateRange(range);
-            }}
+            onChange={setListDateRange}
             className="w-full sm:w-[360px]"
           />
         </div>

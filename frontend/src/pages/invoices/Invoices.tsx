@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { DateRangePreset, formatNumber } from '../../lib/utils';
+import { readPersistedListDateRange, writePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -173,12 +174,24 @@ export default function Invoices() {
     if (preset === 'one_day' || preset === 'last_7_days' || preset === 'last_30_days' || preset === 'custom') {
       return preset;
     }
-    return persistedListStateRef.current?.datePreset ?? 'custom';
+    const global = readPersistedListDateRange();
+    return persistedListStateRef.current?.datePreset ?? global?.preset ?? 'custom';
   });
-  const [dateRange, setDateRange] = useState(() => ({
-    startDate: searchParams.get('date_from') ?? persistedListStateRef.current?.dateRange.startDate ?? '',
-    endDate: searchParams.get('date_to') ?? persistedListStateRef.current?.dateRange.endDate ?? '',
-  }));
+  const [dateRange, setDateRange] = useState(() => {
+    const global = readPersistedListDateRange();
+    return {
+      startDate:
+        searchParams.get('date_from') ??
+        persistedListStateRef.current?.dateRange.startDate ??
+        global?.startDate ??
+        '',
+      endDate:
+        searchParams.get('date_to') ??
+        persistedListStateRef.current?.dateRange.endDate ??
+        global?.endDate ??
+        '',
+    };
+  });
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => {
     const storeParam = searchParams.get('store');
     if (!storeParam) return persistedListStateRef.current?.selectedStoreId ?? null;
@@ -293,6 +306,7 @@ export default function Invoices() {
       currentPage,
     };
     window.sessionStorage.setItem(INVOICES_LIST_STATE_KEY, JSON.stringify(snapshot));
+    writePersistedListDateRange(datePreset, dateFrom, dateTo);
   }, [search, invoiceTypeFilter, datePreset, dateFrom, dateTo, selectedStoreId, currentPage]);
 
   const invoices: Invoice[] = data?.data?.results || data?.data?.results || data?.data || [];

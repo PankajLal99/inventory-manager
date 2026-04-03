@@ -1,16 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Coins, Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
-import {
-  DateRangePreset,
-  formatDateDDMMYYYY,
-  formatNumber,
-  getDateRangeByPreset,
-  getTodayDateString,
-} from '../../lib/utils';
+import { formatDateDDMMYYYY, formatNumber, getTodayDateString } from '../../lib/utils';
+import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
@@ -66,10 +61,7 @@ export default function Expenses() {
   const [search, setSearch] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
-  const initialDateRange = getDateRangeByPreset('one_day');
-  const [dateFrom, setDateFrom] = useState(initialDateRange.startDate || getTodayDateString());
-  const [dateTo, setDateTo] = useState(initialDateRange.endDate || getTodayDateString());
+  const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
@@ -103,6 +95,7 @@ export default function Expenses() {
       return response.data;
     },
     enabled: isUserLoaded && canSeeExpenseListing,
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -333,11 +326,7 @@ export default function Expenses() {
                 <DateRangeSelector
                   preset={datePreset}
                   value={{ startDate: dateFrom, endDate: dateTo }}
-                  onChange={({ preset, range }) => {
-                    setDatePreset(preset);
-                    setDateFrom(range.startDate);
-                    setDateTo(range.endDate);
-                  }}
+                  onChange={setListDateRange}
                 />
               </div>
             </div>

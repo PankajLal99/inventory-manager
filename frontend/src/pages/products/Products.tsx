@@ -13,7 +13,6 @@ import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import Card from '../../components/ui/Card';
 import Modal from '../../components/ui/Modal';
-import Pagination from '../../components/ui/Pagination';
 import ProductForm from './ProductForm';
 import BarcodeScanner from '../../components/BarcodeScanner';
 
@@ -61,6 +60,7 @@ export default function Products() {
     notes: '',
   });
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadedProducts, setLoadedProducts] = useState<any[]>([]);
   const queryClient = useQueryClient();
 
   // Fetch categories and brands for filters
@@ -150,7 +150,7 @@ export default function Products() {
   };
 
   // Fetch products
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['products', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
     queryFn: async () => {
       const response = await productsApi.list(buildQueryParams());
@@ -163,7 +163,29 @@ export default function Products() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
+    setLoadedProducts([]);
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
+
+  useEffect(() => {
+    if (!data) return;
+    const page = Number((data as any).page || 1);
+    const pageRows: any[] = Array.isArray((data as any).results)
+      ? (data as any).results
+      : Array.isArray((data as any).data)
+        ? (data as any).data
+        : Array.isArray(data)
+          ? data
+          : [];
+    setLoadedProducts((prev) => {
+      if (page <= 1) return pageRows;
+      const existing = new Set(prev.map((p: any) => p.id));
+      const merged = [...prev];
+      pageRows.forEach((row: any) => {
+        if (!existing.has(row.id)) merged.push(row);
+      });
+      return merged;
+    });
+  }, [data]);
 
   // Fetch stores and warehouses
   const { data: storesResponse } = useQuery({
@@ -185,12 +207,23 @@ export default function Products() {
   });
 
   // Handle different response formats
-  const allProducts = (() => {
-    if (!data) return [];
-    if (Array.isArray(data.results)) return data.results;
-    if (Array.isArray(data.data)) return data.data;
-    if (Array.isArray(data)) return data;
-    return [];
+  const allProducts = loadedProducts;
+  // Standard list includes total_pages; optimized list omits it and uses next + estimated count.
+  const hasMoreProducts = Boolean(data) && (() => {
+    const d = data as Record<string, unknown>;
+    const page = Number(d.page ?? 1);
+    const rawTp = d.total_pages;
+    if (rawTp != null && rawTp !== '' && !Number.isNaN(Number(rawTp))) {
+      return page < Number(rawTp);
+    }
+    const next = d.next;
+    if (next != null && next !== '') return true;
+    const pageSize = Number(d.page_size ?? d.limit ?? 50);
+    const count = d.count;
+    if (count != null && count !== '' && !Number.isNaN(Number(count)) && pageSize > 0) {
+      return page * pageSize < Number(count);
+    }
+    return false;
   })();
 
   // Get all product IDs that need label status checks (with caching)
@@ -283,14 +316,6 @@ export default function Products() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queriesDependencyString]);
-
-  const paginationInfo = data && typeof data === 'object' && 'count' in data ? {
-    totalItems: data.count as number,
-    totalPages: data.total_pages as number,
-    currentPage: data.page as number,
-    pageSize: data.page_size as number,
-  } : null;
-
 
   // Enhance products with calculated stock fields
   const productsWithStock = useMemo(() => {
@@ -2055,14 +2080,12 @@ export default function Products() {
                   </tr>
                 )}
               </Table>
-              {paginationInfo && (
-                <Pagination
-                  currentPage={paginationInfo.currentPage}
-                  totalPages={paginationInfo.totalPages}
-                  totalItems={paginationInfo.totalItems}
-                  pageSize={paginationInfo.pageSize}
-                  onPageChange={(page) => setCurrentPage(page)}
-                />
+              {hasMoreProducts && (
+                <div className="flex justify-center py-3">
+                  <Button variant="outline" onClick={() => setCurrentPage((p) => p + 1)} disabled={isFetching}>
+                    {isFetching ? 'Loading...' : 'Load more'}
+                  </Button>
+                </div>
               )}
             </div>
             {/* Summary Panel for Defective Products */}
@@ -2409,14 +2432,12 @@ export default function Products() {
                 </tr>
               )}
             </Table>
-            {paginationInfo && (
-              <Pagination
-                currentPage={paginationInfo.currentPage}
-                totalPages={paginationInfo.totalPages}
-                totalItems={paginationInfo.totalItems}
-                pageSize={paginationInfo.pageSize}
-                onPageChange={(page) => setCurrentPage(page)}
-              />
+            {hasMoreProducts && (
+              <div className="flex justify-center py-3">
+                <Button variant="outline" onClick={() => setCurrentPage((p) => p + 1)} disabled={isFetching}>
+                  {isFetching ? 'Loading...' : 'Load more'}
+                </Button>
+              </div>
             )}
           </>
         )}
@@ -2791,14 +2812,12 @@ export default function Products() {
                   : `No products found with tag "${tagFilter === 'new' ? 'Fresh (New)' : tagFilter === 'sold' ? 'Sold' : tagFilter === 'unknown' ? 'Unknown' : tagFilter === 'returned' ? 'Returned' : tagFilter === 'defective' ? 'Defective' : tagFilter === 'in-cart' ? 'In Cart' : tagFilter}"`}
           </div>
         )}
-        {paginationInfo && (
-          <Pagination
-            currentPage={paginationInfo.currentPage}
-            totalPages={paginationInfo.totalPages}
-            totalItems={paginationInfo.totalItems}
-            pageSize={paginationInfo.pageSize}
-            onPageChange={(page) => setCurrentPage(page)}
-          />
+        {hasMoreProducts && (
+          <div className="flex justify-center py-3">
+            <Button variant="outline" onClick={() => setCurrentPage((p) => p + 1)} disabled={isFetching}>
+              {isFetching ? 'Loading...' : 'Load more'}
+            </Button>
+          </div>
         )}
       </div>
 
