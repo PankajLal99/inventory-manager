@@ -89,7 +89,11 @@ def optimized_dashboard_kpis(request):
     Dashboard KPIs (date range on invoice.created_at date, expense.expense_date).
 
     - total_cash: pure cash invoices + mixed cash legs + manual LedgerEntry credits (cash / mixed cash leg).
+      Repair invoices (including mixed) are included by repair list date logic
+      (created_at OR repair.updated_at OR delivery_date).
     - total_upi: pure UPI invoices + mixed UPI legs + manual LedgerEntry credits (UPI / mixed UPI leg).
+      Repair invoices (including mixed) are included by repair list date logic
+      (created_at OR repair.updated_at OR delivery_date).
     - total_credit / credit_by_store: Σ Invoice.total where invoice_type=credit.
     - Per-store cash/upi rows include from_invoice_* and from_mixed_* bifurcation.
     - total_inhand: total_cash - total_expenses.
@@ -147,9 +151,41 @@ def optimized_dashboard_kpis(request):
 
     repair_stores_all = Store.objects.filter(shop_type='repair', is_active=True)
 
-    cash_inv_qs = inv_base.filter(invoice_type='cash')
-    upi_inv_qs = inv_base.filter(invoice_type='upi')
-    mixed_inv_qs = inv_base.filter(invoice_type='mixed')
+    # Counter invoices remain created_at date scoped.
+    cash_counter_qs = inv_base.filter(invoice_type='cash').exclude(store__shop_type='repair')
+    upi_counter_qs = inv_base.filter(invoice_type='upi').exclude(store__shop_type='repair')
+    # Repair invoices are included when created/updated/delivery date falls in range.
+    cash_repair_qs = filter_repair_invoices_by_list_date(
+        Invoice.objects.filter(invoice_type='cash', store__shop_type='repair').exclude(
+            status__in=['void', 'draft']
+        ),
+        date_from,
+        date_to,
+    )
+    upi_repair_qs = filter_repair_invoices_by_list_date(
+        Invoice.objects.filter(invoice_type='upi', store__shop_type='repair').exclude(
+            status__in=['void', 'draft']
+        ),
+        date_from,
+        date_to,
+    )
+    cash_inv_qs = Invoice.objects.filter(
+        Q(id__in=cash_counter_qs.values('id')) | Q(id__in=cash_repair_qs.values('id'))
+    )
+    upi_inv_qs = Invoice.objects.filter(
+        Q(id__in=upi_counter_qs.values('id')) | Q(id__in=upi_repair_qs.values('id'))
+    )
+    mixed_counter_qs = inv_base.filter(invoice_type='mixed').exclude(store__shop_type='repair')
+    mixed_repair_qs = filter_repair_invoices_by_list_date(
+        Invoice.objects.filter(invoice_type='mixed', store__shop_type='repair').exclude(
+            status__in=['void', 'draft']
+        ),
+        date_from,
+        date_to,
+    )
+    mixed_inv_qs = Invoice.objects.filter(
+        Q(id__in=mixed_counter_qs.values('id')) | Q(id__in=mixed_repair_qs.values('id'))
+    )
     credit_qs = inv_base.filter(invoice_type='credit')
 
     pure_cash_total = _decimal_or_zero(
@@ -200,16 +236,16 @@ def optimized_dashboard_kpis(request):
     total_upi = pure_upi_total + mixed_upi_total + manual_upi_total
 
     cash_retail_counter = _decimal_or_zero(
-        cash_inv_qs.exclude(store__shop_type='repair').aggregate(t=Sum('total', output_field=money))['t']
+        cash_counter_qs.aggregate(t=Sum('total', output_field=money))['t']
     )
     cash_repair_invoices = _decimal_or_zero(
-        cash_inv_qs.filter(store__shop_type='repair').aggregate(t=Sum('total', output_field=money))['t']
+        cash_repair_qs.aggregate(t=Sum('total', output_field=money))['t']
     )
     online_retail_counter = _decimal_or_zero(
-        upi_inv_qs.exclude(store__shop_type='repair').aggregate(t=Sum('total', output_field=money))['t']
+        upi_counter_qs.aggregate(t=Sum('total', output_field=money))['t']
     )
     online_repair_invoices = _decimal_or_zero(
-        upi_inv_qs.filter(store__shop_type='repair').aggregate(t=Sum('total', output_field=money))['t']
+        upi_repair_qs.aggregate(t=Sum('total', output_field=money))['t']
     )
 
     total_credit = _decimal_or_zero(
@@ -229,6 +265,23 @@ def optimized_dashboard_kpis(request):
             for r in rows
         }
 
+    def _merge_store_totals(base_map, extra_map):
+        merged = dict(base_map)
+        for sid, rec in extra_map.items():
+            if sid in merged:
+                merged[sid]['amount'] = _decimal_or_zero(merged[sid]['amount']) + _decimal_or_zero(rec['amount'])
+                if not merged[sid]['store_name']:
+                    merged[sid]['store_name'] = rec['store_name']
+                if not merged[sid]['shop_type']:
+                    merged[sid]['shop_type'] = rec['shop_type']
+            else:
+                merged[sid] = {
+                    'store_name': rec['store_name'],
+                    'shop_type': rec['shop_type'],
+                    'amount': _decimal_or_zero(rec['amount']),
+                }
+        return merged
+
     def _by_store_payment_totals(payment_qs):
         rows = payment_qs.values(
             'invoice__store_id',
@@ -244,8 +297,14 @@ def optimized_dashboard_kpis(request):
             for r in rows
         }
 
-    pure_cash_by_store = _by_store_invoice_totals(cash_inv_qs)
-    pure_upi_by_store = _by_store_invoice_totals(upi_inv_qs)
+    pure_cash_by_store = _merge_store_totals(
+        _by_store_invoice_totals(cash_counter_qs),
+        _by_store_invoice_totals(cash_repair_qs),
+    )
+    pure_upi_by_store = _merge_store_totals(
+        _by_store_invoice_totals(upi_counter_qs),
+        _by_store_invoice_totals(upi_repair_qs),
+    )
     mixed_cash_by_store = _by_store_payment_totals(mixed_cash_pmts)
     mixed_upi_by_store = _by_store_payment_totals(mixed_upi_pmts)
 
