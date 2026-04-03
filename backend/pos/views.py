@@ -5162,9 +5162,6 @@ def expense_list_create(request):
 @permission_classes([IsAuthenticated])
 def expense_type_suggestions(request):
     """Return distinct expense types for autocomplete suggestions."""
-    if not request.user.groups.filter(name='Super').exists():
-        return Response({'results': []})
-
     q = (request.query_params.get('q') or '').strip()
     queryset = Expenses.objects.exclude(expense_type__isnull=True).exclude(expense_type__exact='')
     if q:
@@ -5180,9 +5177,6 @@ def expense_type_suggestions(request):
 @permission_classes([IsAuthenticated])
 def expense_borrower_suggestions(request):
     """Return distinct borrower names for autocomplete suggestions."""
-    if not request.user.groups.filter(name='Super').exists():
-        return Response({'results': []})
-
     q = (request.query_params.get('q') or '').strip()
     queryset = Expenses.objects.exclude(borrower_name__isnull=True).exclude(borrower_name__exact='')
     if q:

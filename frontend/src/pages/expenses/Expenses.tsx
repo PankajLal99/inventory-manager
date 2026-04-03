@@ -116,10 +116,12 @@ export default function Expenses() {
   const { data: expenseTypeSuggestionsData } = useQuery({
     queryKey: ['expense-type-suggestions', debouncedExpenseType],
     queryFn: async () => {
-      const response = await posApi.expenses.types({ q: debouncedExpenseType });
+      const response = await posApi.expenses.types(
+        debouncedExpenseType ? { q: debouncedExpenseType } : {}
+      );
       return response.data;
     },
-    enabled: isModalOpen && debouncedExpenseType.length > 0,
+    enabled: isModalOpen,
     retry: false,
   });
 
@@ -134,10 +136,12 @@ export default function Expenses() {
   const { data: borrowerSuggestionsData } = useQuery({
     queryKey: ['expense-borrower-suggestions', debouncedBorrowerName],
     queryFn: async () => {
-      const response = await posApi.expenses.borrowers({ q: debouncedBorrowerName });
+      const response = await posApi.expenses.borrowers(
+        debouncedBorrowerName ? { q: debouncedBorrowerName } : {}
+      );
       return response.data;
     },
-    enabled: isModalOpen && debouncedBorrowerName.length > 0,
+    enabled: isModalOpen,
     retry: false,
   });
 
