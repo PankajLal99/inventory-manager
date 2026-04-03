@@ -16,7 +16,10 @@ export interface PosTradeInLine {
   source_invoice_number: string;
   product_name: string;
   barcode: string | null;
-  credit: number;
+  /** Original sale line total (reference; not editable) */
+  original_line_credit: number;
+  /** Credit to apply against this new sale (≤ original_line_credit) */
+  accepted_credit: number;
   return_tag: PosTradeInReturnTag | null;
 }
 
@@ -48,11 +51,24 @@ export function posTradeInPayload(lines: PosTradeInLine[]) {
     .map((l) => ({
       invoice_item_id: l.invoice_item_id,
       return_tag: l.return_tag as PosTradeInReturnTag,
+      accepted_credit: Number(l.accepted_credit.toFixed(2)),
     }));
 }
 
 export function posTradeInCreditTotal(lines: PosTradeInLine[]): number {
-  return lines.filter((l) => l.return_tag).reduce((s, l) => s + l.credit, 0);
+  return lines.filter((l) => l.return_tag).reduce((s, l) => s + (l.accepted_credit || 0), 0);
+}
+
+/** Empty list can close; otherwise every line needs condition + credit in (0, original_line_credit]. */
+export function isTradeInModalComplete(lines: PosTradeInLine[]): boolean {
+  if (lines.length === 0) return true;
+  return lines.every(
+    (l) =>
+      l.return_tag != null &&
+      Number.isFinite(l.accepted_credit) &&
+      l.accepted_credit > 0 &&
+      l.accepted_credit <= l.original_line_credit
+  );
 }
 
 export default function PosTradeInCartModal({
@@ -93,7 +109,7 @@ export default function PosTradeInCartModal({
           onError('This item is already in the trade-in list.');
           return;
         }
-        const credit = parseFloat(item.line_total || '0') || 0;
+        const original = parseFloat(item.line_total || '0') || 0;
         const line: PosTradeInLine = {
           id: randomId(),
           invoice_item_id: invoiceItemId,
@@ -101,7 +117,8 @@ export default function PosTradeInCartModal({
           source_invoice_number: inv.invoice_number || '',
           product_name: item.product_name || item.product?.name || 'Item',
           barcode: item.barcode_value || item.barcode_full || trimmed,
-          credit,
+          original_line_credit: original,
+          accepted_credit: original,
           return_tag: null,
         };
         onLinesChange([...lines, line]);
@@ -124,20 +141,54 @@ export default function PosTradeInCartModal({
     onLinesChange(lines.map((l) => (l.id === id ? { ...l, return_tag: tag } : l)));
   };
 
+  const setAcceptedCredit = (id: string, value: string) => {
+    onLinesChange(
+      lines.map((l) => {
+        if (l.id !== id) return l;
+        const cap = l.original_line_credit;
+        if (value === '' || value === '.') {
+          return { ...l, accepted_credit: 0 };
+        }
+        const n = parseFloat(value);
+        if (Number.isNaN(n)) return l;
+        const clamped = Math.min(Math.max(0, n), cap);
+        return { ...l, accepted_credit: clamped };
+      })
+    );
+  };
+
   const removeLine = (id: string) => {
     onLinesChange(lines.filter((l) => l.id !== id));
   };
 
   const creditApplied = posTradeInCreditTotal(lines);
+  const canClose = isTradeInModalComplete(lines);
+
+  const requestClose = () => {
+    if (!canClose) {
+      onError(
+        'Before closing: pick Returned, Unknown, or Defective for each line, and enter Credit this sale (greater than zero, max original line). Or remove lines you do not need.'
+      );
+      return;
+    }
+    onClose();
+  };
 
   return (
     <>
-      <Modal isOpen={open} onClose={onClose} title="Trade-in / exchange (same customer)" size="xl">
+      <Modal
+        isOpen={open}
+        onClose={requestClose}
+        title="Trade-in / exchange (same customer)"
+        size="xl"
+        closeOnBackdropClick={canClose}
+      >
         <div className="space-y-5 max-h-[70vh] overflow-y-auto -mx-1 min-w-0">
           <p className="text-sm text-gray-600 leading-relaxed">
-            Scan a <span className="font-medium text-gray-800">sold</span> barcode to add a return line. Then pick{' '}
+            Scan a <span className="font-medium text-gray-800">sold</span> barcode to add a return line. Pick{' '}
             <span className="font-medium">Returned</span>, <span className="font-medium">Unknown</span>, or{' '}
-            <span className="font-medium">Defective</span>. Credit follows the original sale line until checkout.
+            <span className="font-medium">Defective</span>. Set <span className="font-medium">Credit this sale</span> (cannot
+            exceed the original line total).
           </p>
           {!selectedCustomerId && (
             <div className="flex items-start gap-2 text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
@@ -203,16 +254,36 @@ export default function PosTradeInCartModal({
                       <p className="text-xs text-gray-500 font-mono">{line.barcode || '—'}</p>
                       <p className="text-xs text-gray-500">From {line.source_invoice_number}</p>
                     </div>
-                    <div className="flex items-start gap-1 flex-shrink-0">
-                      <span className="text-sm font-semibold text-gray-900">₹{formatNumber(line.credit)}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeLine(line.id)}
-                        className="p-1 text-red-600 hover:bg-red-50 rounded"
-                        title="Remove"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                    <button
+                      type="button"
+                      onClick={() => removeLine(line.id)}
+                      className="p-1 text-red-600 hover:bg-red-50 rounded flex-shrink-0"
+                      title="Remove"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-xs text-gray-500 block">Original sale (line)</span>
+                      <span className="font-medium text-gray-700">₹{formatNumber(line.original_line_credit)}</span>
+                      <span className="text-[10px] text-gray-400 block">Reference only</span>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-600 block mb-0.5" htmlFor={`ti-credit-${line.id}`}>
+                        Credit this sale
+                      </label>
+                      <Input
+                        id={`ti-credit-${line.id}`}
+                        type="number"
+                        min={0}
+                        max={line.original_line_credit}
+                        step="0.01"
+                        value={String(line.accepted_credit)}
+                        onChange={(e) => setAcceptedCredit(line.id, e.target.value)}
+                        className="h-9 text-sm"
+                      />
+                      <span className="text-[10px] text-gray-500 block mt-0.5">Max ₹{formatNumber(line.original_line_credit)}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -262,8 +333,14 @@ export default function PosTradeInCartModal({
               <span className="font-semibold text-gray-900">₹{formatNumber(creditApplied)}</span>
             </div>
           )}
-          <div className="flex justify-end pt-2">
-            <Button variant="outline" onClick={onClose}>
+          <div className="flex flex-col items-end gap-2 pt-2">
+            {lines.length > 0 && !canClose && (
+              <p className="text-xs text-amber-800 text-right max-w-md">
+                Set <span className="font-medium">Credit this sale</span> and{' '}
+                <span className="font-medium">Condition</span> for each line, or remove lines you do not need.
+              </p>
+            )}
+            <Button variant="outline" onClick={requestClose}>
               Done
             </Button>
           </div>

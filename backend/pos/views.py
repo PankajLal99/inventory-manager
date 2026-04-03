@@ -2711,8 +2711,24 @@ def process_pos_trade_ins_for_checkout(request, trade_ins_raw, customer_id, stor
             store_id=store_id,
             expected_customer_id=int(customer_id),
         )
-        total += result['credit']
-        details.append(result['detail'])
+        full_credit = result['credit']
+        accepted_raw = raw.get('accepted_credit')
+        if accepted_raw is not None and str(accepted_raw).strip() != '':
+            acc = Decimal(str(accepted_raw)).quantize(Decimal('0.01'))
+            if acc <= 0:
+                raise ValueError('accepted_credit must be greater than zero')
+            if acc > full_credit:
+                raise ValueError(
+                    f'accepted_credit ({acc}) cannot exceed the original line value ({full_credit})'
+                )
+            credit_for_new = acc
+        else:
+            credit_for_new = full_credit
+        total += credit_for_new
+        detail = dict(result['detail'])
+        detail['credit'] = str(credit_for_new.quantize(Decimal('0.01')))
+        detail['original_line_credit'] = str(full_credit.quantize(Decimal('0.01')))
+        details.append(detail)
 
     return total, details
 
@@ -5776,8 +5792,44 @@ def replacement_replace(request):
     # Recalculate line_total
     effective_price = invoice_item.manual_unit_price or invoice_item.unit_price
     invoice_item.line_total = invoice_item.quantity * effective_price - invoice_item.discount_amount + invoice_item.tax_amount
+
+    purchase_cost_str = None
+    if new_barcode:
+        try:
+            pp = new_barcode.get_purchase_price()
+            if pp is not None:
+                purchase_cost_str = str(pp)
+        except Exception:
+            pass
+
     invoice_item.save()
-    
+
+    snap = {
+        'invoice_item_id': invoice_item.id,
+        'old_product_id': old_product.id,
+        'old_product_name': old_product.name,
+        'old_barcode': old_barcode.barcode if old_barcode else None,
+        'original_sale_unit_price': str(old_unit_price),
+        'new_product_id': new_product.id,
+        'new_product_name': new_product.name,
+        'new_barcode': new_barcode.barcode if new_barcode else None,
+        'purchase_cost': purchase_cost_str,
+        'charge_unit_price': str(effective_price),
+    }
+    existing = invoice.exchange_snapshots or []
+    if not isinstance(existing, list):
+        existing = []
+    replaced = False
+    for i, row in enumerate(existing):
+        if isinstance(row, dict) and row.get('invoice_item_id') == invoice_item.id:
+            existing[i] = snap
+            replaced = True
+            break
+    if not replaced:
+        existing.append(snap)
+    invoice.exchange_snapshots = existing
+    invoice.save(update_fields=['exchange_snapshots'])
+
     # Update invoice totals
     update_invoice_totals(invoice)
     invoice.refresh_from_db()

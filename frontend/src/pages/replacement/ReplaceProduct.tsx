@@ -53,7 +53,9 @@ interface ReplacementItem {
   quantity: number;
   new_unit_price?: number | null;
   manual_unit_price?: number | null;
-  scanned_barcode?: string | null; // Store the exact barcode that was scanned/searched
+  /** Purchase/cost for the scanned new piece (read-only in UI; from barcode/product API) */
+  reference_purchase_cost?: number | null;
+  scanned_barcode?: string | null; // Exact barcode scanned or searched for the new piece
   return_tag?: 'returned' | 'defective' | 'unknown';
 }
 
@@ -524,8 +526,12 @@ export default function ReplaceProduct() {
   };
 
   const handleProductSelect = async (itemId: number, product: any, searchedValue?: string) => {
-    // Get price from product (selling_price or purchase_price)
-    const productPrice = product.selling_price || product.purchase_price || product.unit_price || 0;
+    // Default charge for the new line: prefer selling, then purchase (matches POS barcode lookup)
+    const productPrice = Number(product.selling_price || product.purchase_price || product.unit_price || 0);
+    const purchaseCost =
+      product.purchase_price != null && product.purchase_price !== ''
+        ? Number(product.purchase_price)
+        : null;
 
     // Get the barcode to use for replacement
     // Priority: searchedValue (what user typed) > matched_barcode (from API) > product.barcode
@@ -589,7 +595,8 @@ export default function ReplaceProduct() {
         reserved_barcode_id: barcodeIdToReserve,
         reserved_restore_tag: restoreTag === 'returned' ? 'returned' : 'new',
         new_unit_price: productPrice,
-        manual_unit_price: null, // Will be set if user manually adjusts
+        manual_unit_price: null, // Effective charge uses new_unit_price until user edits
+        reference_purchase_cost: purchaseCost,
         scanned_barcode: barcodeToUse, // Store the exact barcode that was searched
       }
     }));
@@ -715,13 +722,16 @@ export default function ReplaceProduct() {
 
       if (replacement.new_product_id && replacement.quantity > 0) {
         const sourceItem = invoice.items.find((item) => item.id === replacement.item_id);
-        if (sourceItem?.source_invoice_id) {
+        if (!sourceItem) {
+          return;
+        }
+        if (sourceItem.source_invoice_id) {
           involvedInvoiceIds.add(sourceItem.source_invoice_id);
         }
         const replacementData: any = {
           invoice_item_id: replacement.item_id,
           new_product_id: replacement.new_product_id,
-          store_id: sourceItem?.source_store ?? invoice.store,
+          store_id: sourceItem.source_store ?? invoice.store,
           return_tag: replacement.return_tag,
         };
 
@@ -733,11 +743,12 @@ export default function ReplaceProduct() {
           console.log('❌ NO scanned_barcode in replacement!', replacement);
         }
 
-        // Only include price if user manually adjusted it
-        // Don't send new_unit_price - let backend keep original sold price
-        if (replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined) {
-          replacementData.manual_unit_price = replacement.manual_unit_price;
-        }
+        const oldSale = parseFloat(sourceItem.manual_unit_price || sourceItem.unit_price || '0');
+        const chargePrice =
+          replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+            ? replacement.manual_unit_price
+            : (replacement.new_unit_price ?? oldSale);
+        replacementData.manual_unit_price = chargePrice;
 
         console.log('Final replacementData:', replacementData);
         replacementsToProcess.push(replacementData);
@@ -1246,40 +1257,54 @@ export default function ReplaceProduct() {
                                     )}
                                   </div>
 
-                                  {/* Price Adjustment */}
+                                  {/* Price: original sale + cost ref (read-only) + charge (editable) */}
                                   <div className="mt-3 space-y-2">
                                     <label className="block text-sm font-medium text-gray-700">
-                                      Price Adjustment:
+                                      Pricing (replacement)
                                     </label>
-                                    <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                                       <div>
-                                        <span className="text-gray-600 block text-xs">Old Price (per unit)</span>
-                                        <span className="font-medium">₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}</span>
+                                        <span className="text-gray-600 block text-xs">Original sale (this line)</span>
+                                        <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-900 font-medium">
+                                          ₹{formatNumber(item.manual_unit_price || item.unit_price || 0)}
+                                        </div>
+                                        <span className="text-[10px] text-gray-500 mt-0.5 block">From invoice — not editable</span>
                                       </div>
                                       <div>
-                                        <span className="text-gray-600 block text-xs">New Price (per unit)</span>
+                                        <span className="text-gray-600 block text-xs">Purchase cost (this piece)</span>
+                                        <div className="mt-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-900 font-medium">
+                                          {replacement.reference_purchase_cost != null && replacement.reference_purchase_cost !== undefined
+                                            ? `₹${formatNumber(replacement.reference_purchase_cost)}`
+                                            : '—'}
+                                        </div>
+                                        <span className="text-[10px] text-gray-500 mt-0.5 block">From barcode — not editable</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-gray-600 block text-xs">Charge for replacement (per unit)</span>
                                         <div className="flex items-center gap-2">
                                           <Input
                                             type="number"
                                             step="0.01"
                                             min="0"
-                                            value={replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined ? replacement.manual_unit_price.toString() : ''}
+                                            value={
+                                              replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
+                                                ? replacement.manual_unit_price.toString()
+                                                : (replacement.new_unit_price !== null && replacement.new_unit_price !== undefined
+                                                  ? replacement.new_unit_price.toString()
+                                                  : '')
+                                            }
                                             onChange={(e) => handlePriceChange(item.id, e.target.value)}
-                                            placeholder={replacement.new_unit_price !== null && replacement.new_unit_price !== undefined
-                                              ? `Default: ₹${formatNumber(replacement.new_unit_price)}`
-                                              : `Default: ₹${formatNumber(item.manual_unit_price || item.unit_price || 0)}`}
+                                            placeholder={
+                                              replacement.new_unit_price !== null && replacement.new_unit_price !== undefined
+                                                ? `e.g. ₹${formatNumber(replacement.new_unit_price)}`
+                                                : `e.g. ₹${formatNumber(item.manual_unit_price || item.unit_price || 0)}`
+                                            }
                                             className="w-full h-9"
                                           />
                                         </div>
-                                        {replacement.manual_unit_price === null || replacement.manual_unit_price === undefined ? (
-                                          <span className="text-[10px] text-gray-500 mt-1 block">
-                                            Default: ₹{formatNumber(replacement.new_unit_price || item.manual_unit_price || item.unit_price || 0)}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] text-gray-400 mt-1 block">
-                                            Custom: ₹{formatNumber(replacement.manual_unit_price)}
-                                          </span>
-                                        )}
+                                        <span className="text-[10px] text-gray-500 mt-1 block">
+                                          What you charge for the new item (defaults to list price from scan)
+                                        </span>
                                       </div>
                                     </div>
 

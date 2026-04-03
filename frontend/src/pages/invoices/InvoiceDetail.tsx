@@ -44,6 +44,106 @@ import {
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
 
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Plain-text line for on-screen invoice item rows */
+function formatExchangeSnapshotNote(snapshot: unknown): string {
+  if (!snapshot || typeof snapshot !== 'object') return '';
+  const o = snapshot as Record<string, unknown>;
+  const parts: string[] = [];
+  if (o.old_product_name != null) parts.push(`Replaced: ${String(o.old_product_name)}`);
+  if (o.old_barcode != null) parts.push(`old barcode ${String(o.old_barcode)}`);
+  if (o.original_sale_unit_price != null) parts.push(`sold ₹${String(o.original_sale_unit_price)}`);
+  if (o.charge_unit_price != null) parts.push(`charged ₹${String(o.charge_unit_price)}`);
+  if (o.purchase_cost != null) parts.push(`cost ref ₹${String(o.purchase_cost)}`);
+  return parts.join(' · ');
+}
+
+/** Small HTML block for A4 / print preview (description column) */
+function formatExchangeSnapshotPrintHtml(snapshot: unknown): string {
+  if (!snapshot || typeof snapshot !== 'object') return '';
+  const o = snapshot as Record<string, unknown>;
+  const bits: string[] = [];
+  if (o.old_product_name != null) bits.push(`Replaced: ${escapeHtml(String(o.old_product_name))}`);
+  if (o.old_barcode != null) bits.push(`old ${escapeHtml(String(o.old_barcode))}`);
+  if (o.original_sale_unit_price != null) bits.push(`sold ₹${escapeHtml(String(o.original_sale_unit_price))}`);
+  if (o.charge_unit_price != null) bits.push(`charged ₹${escapeHtml(String(o.charge_unit_price))}`);
+  if (o.purchase_cost != null) bits.push(`cost ref ₹${escapeHtml(String(o.purchase_cost))}`);
+  if (!bits.length) return '';
+  return `<div style="font-size:10px;color:#333;margin-top:4px;line-height:1.35;">${bits.join(' · ')}</div>`;
+}
+
+/** Replace-product metadata lives on the invoice (`exchange_snapshots`), keyed by line id */
+function exchangeSnapshotForItem(inv: { exchange_snapshots?: unknown }, itemId: number): unknown {
+  const rows = inv?.exchange_snapshots;
+  if (!Array.isArray(rows)) return null;
+  const match = rows.find((r: any) => Number(r?.invoice_item_id) === Number(itemId));
+  return match ?? null;
+}
+
+function formatTradeInReturnTag(tag: unknown): string {
+  if (tag == null || tag === '') return '—';
+  const s = String(tag).toLowerCase();
+  if (s === 'returned' || s === 'unknown' || s === 'defective') {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  return String(tag);
+}
+
+/** Extra table rows for A4 print after trade-in total line */
+function buildTradeInDetailRowsA4Html(inv: { pos_trade_ins?: unknown }): string {
+  const rows = inv?.pos_trade_ins;
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  return rows
+    .map((row: any) => {
+      const product = row.product_name ? escapeHtml(String(row.product_name)) : '—';
+      const bc = row.barcode ? escapeHtml(String(row.barcode)) : '—';
+      const src = row.source_invoice_number ? escapeHtml(String(row.source_invoice_number)) : '—';
+      const tag = row.return_tag ? escapeHtml(formatTradeInReturnTag(row.return_tag)) : '—';
+      const orig =
+        row.original_line_credit != null && String(row.original_line_credit) !== ''
+          ? `₹${escapeHtml(String(row.original_line_credit))}`
+          : '—';
+      const cred =
+        row.credit != null && String(row.credit) !== '' ? `₹${escapeHtml(String(row.credit))}` : '—';
+      return `<tr>
+        <td colspan="5" style="font-size:10px;padding:6px 8px;border-left:1px solid #000;border-right:1px solid #000;background:#f6fff6;text-align:left;line-height:1.4;">
+          <strong>Trade-in</strong> · ${product}${bc !== '—' ? ` · ${bc}` : ''}<br/>
+          Prior invoice ${src} · ${tag}<br/>
+          Original line ${orig} · Credit applied ${cred}
+        </td>
+      </tr>`;
+    })
+    .join('');
+}
+
+function buildTradeInDetailThermalHtml(invoice: { pos_trade_ins?: unknown }): string {
+  const rows = invoice?.pos_trade_ins;
+  if (!Array.isArray(rows) || rows.length === 0) return '';
+  return rows
+    .map((row: any) => {
+      const product = row.product_name ? escapeHtml(String(row.product_name)) : 'Item';
+      const bc = row.barcode ? escapeHtml(String(row.barcode)) : '';
+      const src = row.source_invoice_number ? escapeHtml(String(row.source_invoice_number)) : '—';
+      const tag = row.return_tag ? escapeHtml(formatTradeInReturnTag(row.return_tag)) : '—';
+      const orig =
+        row.original_line_credit != null && String(row.original_line_credit) !== ''
+          ? ` orig ${escapeHtml(String(row.original_line_credit))}`
+          : '';
+      const cred =
+        row.credit != null && String(row.credit) !== '' ? ` cr ${escapeHtml(String(row.credit))}` : '';
+      const line = `${product}${bc ? ` / ${bc}` : ''} · ${src} · ${tag}${orig}${cred}`;
+      return `<div style="font-size:8px;padding:3px 0;border-bottom:1px dotted #ccc;line-height:1.25;">${line}</div>`;
+    })
+    .join('');
+}
+
 export default function InvoiceDetail() {
   const user = auth.getUser();
   const userGroups = user?.groups || [];
@@ -295,6 +395,51 @@ export default function InvoiceDetail() {
     const n = parseFloat(String(raw ?? '0'));
     return Number.isFinite(n) && n > 0 ? n : 0;
   }, [inv]);
+
+  const posTradeInsRows = useMemo(() => {
+    const raw = (inv as { pos_trade_ins?: unknown })?.pos_trade_ins;
+    return Array.isArray(raw) ? raw : [];
+  }, [inv]);
+
+  const tradeInDetailTableEl = useMemo(() => {
+    if (!posTradeInsRows.length) return null;
+    return (
+      <div className="overflow-x-auto rounded-lg border border-emerald-200/60 bg-white shadow-sm">
+        <Table
+          headers={['Product', 'Barcode', 'Prior invoice', 'Condition', 'Orig. line', 'Credit applied']}
+        >
+          {posTradeInsRows.map((row: any, idx: number) => (
+            <TableRow key={idx}>
+              <TableCell>
+                <span className="text-sm text-gray-900">{row.product_name || '—'}</span>
+              </TableCell>
+              <TableCell>
+                <span className="font-mono text-xs text-gray-700">{row.barcode || '—'}</span>
+              </TableCell>
+              <TableCell>
+                <span className="text-sm text-gray-700">{row.source_invoice_number || '—'}</span>
+              </TableCell>
+              <TableCell>
+                <span className="text-sm text-gray-800">{row.return_tag ? formatTradeInReturnTag(row.return_tag) : '—'}</span>
+              </TableCell>
+              <TableCell align="right">
+                <span className="text-sm tabular-nums text-gray-800">
+                  {row.original_line_credit != null && String(row.original_line_credit) !== ''
+                    ? `₹${formatNumber(row.original_line_credit)}`
+                    : '—'}
+                </span>
+              </TableCell>
+              <TableCell align="right">
+                <span className="text-sm font-semibold text-emerald-900 tabular-nums">
+                  {row.credit != null && String(row.credit) !== '' ? `₹${formatNumber(row.credit)}` : '—'}
+                </span>
+              </TableCell>
+            </TableRow>
+          ))}
+        </Table>
+      </div>
+    );
+  }, [posTradeInsRows]);
 
   // Fetch stores list
   const { data: storesData } = useQuery({
@@ -1588,9 +1733,13 @@ export default function InvoiceDetail() {
           const productColor = getProductNameColor(group.name);
           const productColorStyle = productColor ? ` color: ${productColor};` : '';
 
+          const exchangeHtml = group.items
+            .map((item: any) => formatExchangeSnapshotPrintHtml(exchangeSnapshotForItem(inv, item.id)))
+            .join('');
+
           return `
                         <tr style="border-bottom: 1px solid #eee;">
-                          <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}</td>
+                          <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}${exchangeHtml}</td>
                           <td style="border-bottom: 1px solid #eee; text-align: center;">${formatNumber(group.totalQuantity, 3)}</td>
                           <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(avgUnitPrice, 2)}</td>
                           <td style="border-bottom: 1px solid #eee; text-align: center;">PCS</td>
@@ -1626,6 +1775,7 @@ export default function InvoiceDetail() {
                   <td colspan="4" style="text-align: right; font-size: 12px; padding-top: 6px;">Trade-in credit (prior sale)</td>
                   <td style="text-align: right; font-size: 12px; padding-top: 6px; color: #166534;">-₹${formatNumber(tradeInCreditAmount, 2)}</td>
                 </tr>
+                ${buildTradeInDetailRowsA4Html(inv)}
                 ` : ''}
                 <!-- Total Row -->
                 <tr class="total-row">
@@ -1924,6 +2074,14 @@ export default function InvoiceDetail() {
           const productColor = getProductNameColor(group.name);
           const productColorStyle = productColor ? ` style="color: ${productColor};"` : '';
 
+          const exchangeRows = group.items
+            .map((item: any) => {
+              const note = formatExchangeSnapshotNote(exchangeSnapshotForItem(invoice, item.id));
+              if (!note) return '';
+              return `<tr><td colspan="4" style="font-size:8px;padding-top:0;padding-bottom:4px;line-height:1.25;">${escapeHtml(note)}</td></tr>`;
+            })
+            .join('');
+
           return `
                     <tr>
                       <td${productColorStyle}>${displayText}</td>
@@ -1931,7 +2089,7 @@ export default function InvoiceDetail() {
                       <td class="text-right">₹${formatNumber(group.avgPrice)}</td>
                       <td class="text-right">₹${formatNumber(group.totalAmount)}</td>
                 </tr>
-                  `;
+                  ${exchangeRows}`;
         }).join('');
       })() : '<tr><td colspan="4">No items</td></tr>'}
           </tbody>
@@ -1958,6 +2116,7 @@ export default function InvoiceDetail() {
               <span>Trade-in:</span>
               <span>-₹${formatNumber(invoice.trade_in_credit || '0')}</span>
             </div>
+            ${buildTradeInDetailThermalHtml(invoice)}
             ` : ''}
           <div class="summary-row">
             <span>Transport Charge:</span>
@@ -2475,20 +2634,16 @@ export default function InvoiceDetail() {
                         −₹{formatNumber(tradeInCreditAmount)}
                       </span>
                     </div>
-                    {Array.isArray((inv as { pos_trade_ins?: unknown[] }).pos_trade_ins) &&
-                      (inv as { pos_trade_ins: unknown[] }).pos_trade_ins.length > 0 && (
-                        <ul className="text-xs text-gray-600 space-y-1 pl-1 border-l-2 border-emerald-200 ml-1 py-1">
-                          {(inv as { pos_trade_ins: any[] }).pos_trade_ins.map((row: any, idx: number) => (
-                            <li key={idx}>
-                              {(row.product_name as string) || 'Item'}
-                              {row.barcode ? ` · ${row.barcode}` : ''}
-                              {row.return_tag ? ` · ${String(row.return_tag)}` : ''}
-                              {row.source_invoice_number ? ` · from ${row.source_invoice_number}` : ''}
-                              {row.credit != null ? ` · credit ₹${formatNumber(row.credit)}` : ''}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                    {tradeInDetailTableEl ? (
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold text-emerald-900/90">Trade-in line detail</p>
+                        {tradeInDetailTableEl}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-amber-900 bg-amber-50/90 border border-amber-200 rounded-md px-2 py-2">
+                        Trade-in credit is applied on this invoice, but per-line detail was not stored (older checkout).
+                      </p>
+                    )}
                   </>
                 )}
                 {parseFloat(inv.discount_amount || '0') > 0 && (
@@ -2667,10 +2822,18 @@ export default function InvoiceDetail() {
                           </TableRow>
                           {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
                             const item = barcodeItem.item;
+                            const exNote = formatExchangeSnapshotNote(exchangeSnapshotForItem(inv, item.id));
                             return (
                               <TableRow key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50">
                                 <TableCell className="pl-12">
-                                  <span className="text-xs text-gray-500" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>↳ {group.productName}</span>
+                                  <div>
+                                    <span className="text-xs text-gray-500" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>↳ {group.productName}</span>
+                                    {exNote ? (
+                                      <div className="mt-1 text-[10px] text-gray-600 leading-snug max-w-xl">
+                                        {exNote}
+                                      </div>
+                                    ) : null}
+                                  </div>
                                 </TableCell>
                                 <TableCell>
                                   <span className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</span>
@@ -2774,6 +2937,7 @@ export default function InvoiceDetail() {
                         <div className="pt-3 space-y-2">
                           {barcodes.map((barcodeItem, barcodeIndex) => {
                             const item = barcodeItem.item;
+                            const exNote = formatExchangeSnapshotNote(exchangeSnapshotForItem(inv, item.id));
                             return (
                               <div key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-white rounded-md p-3 border border-gray-200">
                                 <div className="flex items-center justify-between mb-2">
@@ -2799,6 +2963,11 @@ export default function InvoiceDetail() {
                                     </div>
                                   </div>
                                 )}
+                                {exNote ? (
+                                  <div className="mt-2 text-[10px] text-gray-600 leading-snug border-t border-gray-100 pt-2">
+                                    {exNote}
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           })}
@@ -2811,33 +2980,44 @@ export default function InvoiceDetail() {
             })()}
           </div>
           {!isPending && tradeInCreditAmount > 0 && (
-            <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg print-area">
-              <p className="text-sm font-semibold text-gray-900 mb-2">Why the total differs from the lines above</p>
-              <p className="text-xs text-gray-600 mb-3">
-                Line totals above are the <strong>new items</strong> on this invoice. A trade-in from a prior sale reduces the amount due.
-              </p>
-              <div className="space-y-1.5 text-sm text-gray-800">
-                <div className="flex justify-between">
-                  <span>Sum of line items</span>
-                  <span className="tabular-nums">
-                    ₹
-                    {formatNumber(
-                      (inv?.items ?? []).reduce(
-                        (acc: number, item: any) => acc + parseFloat(String(item.line_total ?? '0')),
-                        0,
-                      ),
-                    )}
-                  </span>
-                </div>
-                <div className="flex justify-between text-emerald-900">
-                  <span>Trade-in credit</span>
-                  <span className="tabular-nums font-medium">−₹{formatNumber(tradeInCreditAmount)}</span>
-                </div>
-                <div className="flex justify-between font-semibold border-t border-slate-200 pt-2 mt-2">
-                  <span>Invoice total</span>
-                  <span className="tabular-nums">₹{formatNumber(inv.total || '0')}</span>
+            <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg print-area space-y-4">
+              <div>
+                <p className="text-sm font-semibold text-gray-900 mb-2">Why the total differs from the lines above</p>
+                <p className="text-xs text-gray-600 mb-3">
+                  Line totals above are the <strong>new items</strong> on this invoice. A trade-in from a prior sale reduces the amount due.
+                </p>
+                <div className="space-y-1.5 text-sm text-gray-800">
+                  <div className="flex justify-between">
+                    <span>Sum of line items</span>
+                    <span className="tabular-nums">
+                      ₹
+                      {formatNumber(
+                        (inv?.items ?? []).reduce(
+                          (acc: number, item: any) => acc + parseFloat(String(item.line_total ?? '0')),
+                          0,
+                        ),
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-emerald-900">
+                    <span>Trade-in credit</span>
+                    <span className="tabular-nums font-medium">−₹{formatNumber(tradeInCreditAmount)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold border-t border-slate-200 pt-2 mt-2">
+                    <span>Invoice total</span>
+                    <span className="tabular-nums">₹{formatNumber(inv.total || '0')}</span>
+                  </div>
                 </div>
               </div>
+              {tradeInDetailTableEl ? (
+                <div className="border-t border-slate-200 pt-3">
+                  <p className="text-sm font-semibold text-gray-900 mb-2">Trade-in line detail</p>
+                  <p className="text-xs text-gray-600 mb-2">
+                    Each returned line from a prior invoice: condition, original line value, and credit applied to this invoice.
+                  </p>
+                  {tradeInDetailTableEl}
+                </div>
+              ) : null}
             </div>
           )}
         </Card>

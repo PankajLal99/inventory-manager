@@ -2031,6 +2031,16 @@ export default function POS() {
         );
         return;
       }
+      if (
+        tradeInLines.some(
+          (l) => l.return_tag && (!Number.isFinite(l.accepted_credit) || l.accepted_credit <= 0)
+        )
+      ) {
+        alert(
+          'Enter a credit amount greater than zero for each trade-in line (max = original line total).'
+        );
+        return;
+      }
       if (tradeInCredit > cartGrossSubtotal + 0.01) {
         alert(
           `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal)}).`
@@ -2375,6 +2385,16 @@ export default function POS() {
       if (tradeInLines.some((l) => !l.return_tag)) {
         alert(
           'Choose Returned, Unknown, or Defective for every trade-in line, or remove lines from the trade-in list.'
+        );
+        return;
+      }
+      if (
+        tradeInLines.some(
+          (l) => l.return_tag && (!Number.isFinite(l.accepted_credit) || l.accepted_credit <= 0)
+        )
+      ) {
+        alert(
+          'Enter a credit amount greater than zero for each trade-in line (max = original line total).'
         );
         return;
       }
