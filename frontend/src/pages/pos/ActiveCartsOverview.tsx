@@ -14,6 +14,7 @@ import {
   Trash2,
   Loader2,
   Search,
+  Play,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
@@ -86,6 +87,25 @@ export default function ActiveCartsOverview() {
     },
   });
 
+  const resumeCartMutation = useMutation({
+    mutationFn: (cartId: number) => posApi.carts.resumeToMe(cartId),
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['pos/carts/overview'] });
+      queryClient.invalidateQueries({ queryKey: ['pos/carts'] });
+      const num = response?.data?.cart_number ?? response?.data?.id;
+      toast.success(
+        num
+          ? `Cart resumed under your account (${typeof num === 'string' ? num : `id ${num}`}). Open POS to continue.`
+          : 'Cart resumed under your account. Open POS to continue.'
+      );
+    },
+    onError: (err: any) => {
+      const d = err?.response?.data;
+      const msg = d?.error ?? d?.detail ?? err?.message ?? 'Failed to resume cart';
+      toast.error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    },
+  });
+
   useEffect(() => {
     const loadUser = async () => {
       try {
@@ -122,6 +142,9 @@ export default function ActiveCartsOverview() {
     (user?.groups && user.groups.includes('Admin'));
 
   const isSuper = user?.groups && user.groups.includes('Super');
+  const isAdminGroup = user?.groups && user.groups.includes('Admin');
+  /** Admin or Super may discard invoice-edit (EDIT-*) carts from this screen; others cannot. */
+  const canDiscardInvoiceEditCarts = Boolean(isSuper || isAdminGroup);
 
   const { data: overviewData, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['pos/carts/overview', storeId || undefined],
@@ -187,15 +210,15 @@ export default function ActiveCartsOverview() {
   };
 
   const isInvoiceEditCart = (cart: CartOverview) =>
-    (cart.cart_number || '').toUpperCase().startsWith('EDIT-');
+    (cart.cart_number || '').trim().toUpperCase().startsWith('EDIT-');
 
-  // Discard all: only regular carts (exclude EDIT-* / edit-* invoice-edit carts to avoid closing edit sessions)
+  // Discard all: non–invoice-edit carts for everyone; EDIT-* included only for Admin/Super (same as per-row Discard).
   const discardableCarts = matchingCarts.filter(
     (c) =>
       !c.locked &&
       user != null &&
       (c.created_by === user.id || isSuper) &&
-      !isInvoiceEditCart(c)
+      (!isInvoiceEditCart(c) || canDiscardInvoiceEditCarts)
   );
   const [isDiscardAllPending, setIsDiscardAllPending] = useState(false);
 
@@ -262,7 +285,7 @@ export default function ActiveCartsOverview() {
     <div className="p-6">
       <PageHeader
         title="Active Carts Overview"
-        subtitle="View which carts are active, who has them, and what’s in each. Discard removes the cart and returns items to inventory; barcodes already on a paid/credit invoice are never reverted. Invoice-edit (EDIT-*) carts are excluded from Discard all."
+        subtitle="View which carts are active, who has them, and what’s in each. Resume (staff) copies the cart to your user: all lines move to a new cart for you and the original is cancelled—barcodes stay reserved. Locked carts can be resumed too; you’ll get an extra warning. Discard removes the cart and returns items to inventory; barcodes already on a paid/credit invoice are never reverted. Invoice-edit (EDIT-*) carts cannot be resumed here; they are excluded from Discard all unless you are Admin or Super."
       />
 
       {isAdmin && stores.length > 1 && (
@@ -360,7 +383,11 @@ export default function ActiveCartsOverview() {
                   type="button"
                   onClick={handleDiscardAll}
                   disabled={isDiscardAllPending}
-                  title="Discard all non–invoice-edit carts you can discard. Barcodes on paid/credit invoices are never reverted."
+                  title={
+                    canDiscardInvoiceEditCarts
+                      ? 'Discard all carts you can discard (including invoice-edit carts for Admin/Super). Barcodes on paid/credit invoices are never reverted.'
+                      : 'Discard all carts you can discard; invoice-edit (EDIT-*) carts are skipped. Barcodes on paid/credit invoices are never reverted.'
+                  }
                   className="inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isDiscardAllPending ? (
@@ -389,7 +416,18 @@ export default function ActiveCartsOverview() {
               const isExpanded = expandedCartId === cart.id;
               const itemCount = cart.items?.length ?? 0;
               const productIds = cart.items?.length ? [...new Set(cart.items.map((item) => item.product))] : [];
-              const canDiscard = !cart.locked && user != null && (cart.created_by === user.id || isSuper);
+              const canDiscard =
+                !cart.locked &&
+                user != null &&
+                (cart.created_by === user.id || isSuper) &&
+                (!isInvoiceEditCart(cart) || canDiscardInvoiceEditCarts);
+              const canResume =
+                user != null &&
+                !isInvoiceEditCart(cart) &&
+                cart.created_by != null &&
+                cart.created_by !== user.id &&
+                (isSuper || isAdmin) &&
+                (cart.status === 'active' || cart.status === 'held');
               return [
                 <TableRow
                   key={cart.id}
@@ -443,39 +481,90 @@ export default function ActiveCartsOverview() {
                     {formatDate(cart.updated_at)}
                   </TableCell>
                   <TableCell>
-                    <div onClick={(e: React.MouseEvent) => e.stopPropagation()} role="presentation">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!canDiscard) return;
-                        const message =
-                          itemCount > 0
-                            ? `Discard cart ${cart.cart_number}? All ${itemCount} item(s) will be removed and returned to inventory. Barcodes already on a paid/credit invoice are left unchanged.`
-                            : `Discard cart ${cart.cart_number}?`;
-                        if (!window.confirm(message)) return;
-                        discardCartMutation.mutate({
-                          cartId: cart.id,
-                          productIds,
-                        });
-                      }}
-                      disabled={!canDiscard || isDiscardAllPending || (discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id)}
-                      title={
-                        cart.locked
-                          ? 'Unlock the cart before discarding'
-                          : !isSuper && cart.created_by !== user?.id
-                            ? 'You can only discard your own carts'
-                            : 'Discard cart and return items to inventory'
-                      }
-                      className="inline-flex items-center gap-1.5 rounded px-2 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    <div
+                      onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                      role="presentation"
+                      className="flex flex-wrap items-center gap-1"
                     >
-                      {discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-4 w-4" />
-                      )}
-                      Discard
-                    </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!canResume) return;
+                          const lockedWarning = cart.locked
+                            ? `\n\nWARNING: This cart is LOCKED. Resuming takes it over anyway—the original cart is cancelled and items move to a new unlocked cart for you. Only continue if you intend to override that lock.\n`
+                            : '';
+                          const message =
+                            `Resume cart ${cart.cart_number} under your account?${lockedWarning}\n` +
+                            `All ${itemCount} line(s) will move to a new cart for you. ` +
+                            `The original cart will be cancelled (it will disappear from this list). Barcodes stay on the sale; nothing is returned to inventory.`;
+                          if (!window.confirm(message)) return;
+                          resumeCartMutation.mutate(cart.id);
+                        }}
+                        disabled={
+                          !canResume ||
+                          isDiscardAllPending ||
+                          (resumeCartMutation.isPending && resumeCartMutation.variables === cart.id) ||
+                          (discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id)
+                        }
+                        title={
+                          !isSuper && !isAdmin
+                            ? 'Only staff (Admin/Super) can resume another user’s cart'
+                            : cart.created_by === user?.id
+                              ? 'This cart is already yours'
+                              : isInvoiceEditCart(cart)
+                                ? 'Invoice-edit carts cannot be resumed from here'
+                                : cart.locked
+                                  ? 'Cart is locked—you will be warned before resuming'
+                                  : 'Move all lines to a new cart for you; cancel the original'
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded px-2 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                          cart.locked ? 'ring-1 ring-amber-400/90 ring-offset-1' : ''
+                        }`}
+                      >
+                        {resumeCartMutation.isPending && resumeCartMutation.variables === cart.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Play className="h-4 w-4" />
+                        )}
+                        Resume{cart.locked ? ' (locked)' : ''}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!canDiscard) return;
+                          const message =
+                            itemCount > 0
+                              ? `Discard cart ${cart.cart_number}? All ${itemCount} item(s) will be removed and returned to inventory. Barcodes already on a paid/credit invoice are left unchanged.`
+                              : `Discard cart ${cart.cart_number}?`;
+                          if (!window.confirm(message)) return;
+                          discardCartMutation.mutate({
+                            cartId: cart.id,
+                            productIds,
+                          });
+                        }}
+                        disabled={!canDiscard || isDiscardAllPending || (discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id)}
+                        title={
+                          isInvoiceEditCart(cart) && !canDiscardInvoiceEditCarts
+                            ? 'Invoice-edit carts cannot be discarded here; finish or cancel from the invoice edit screen'
+                            : isInvoiceEditCart(cart) && canDiscardInvoiceEditCarts
+                              ? 'Admin/Super: discard invoice-edit cart (abandons in-progress invoice edit)'
+                              : cart.locked
+                                ? 'Unlock the cart before discarding'
+                                : !isSuper && cart.created_by !== user?.id
+                                  ? 'You can only discard your own carts'
+                                  : 'Discard cart and return items to inventory'
+                        }
+                        className="inline-flex items-center gap-1.5 rounded px-2 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {discardCartMutation.isPending && discardCartMutation.variables?.cartId === cart.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                        Discard
+                      </button>
                     </div>
                   </TableCell>
                 </TableRow>,

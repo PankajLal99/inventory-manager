@@ -11,7 +11,7 @@ interface TableProps {
   headers: (string | TableHeader)[];
   children: ReactNode;
   className?: string;
-  /** Use smaller padding (px-4) and no horizontal scroll */
+  /** Use smaller padding (px-3 py-2.5 on body cells) and horizontal scroll when needed */
   compact?: boolean;
 }
 
@@ -19,12 +19,13 @@ export default function Table({ headers, children, className = '', compact }: Ta
   const normalizedHeaders = headers.map(header => 
     typeof header === 'string' ? { label: header, align: 'left' as const } : header
   );
-  const px = compact ? 'px-4' : 'px-6';
+  const px = compact ? 'px-3' : 'px-6';
+  const thPy = compact ? 'py-2' : 'py-3';
 
   return (
     <TableCompactContext.Provider value={!!compact}>
       <div className={`bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden ${className}`}>
-        <div className={compact ? 'overflow-hidden' : 'overflow-x-auto'}>
+        <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
@@ -38,7 +39,7 @@ export default function Table({ headers, children, className = '', compact }: Ta
                 return (
                   <th
                     key={index}
-                    className={`${px} py-3 ${alignClass} text-xs font-semibold text-gray-700 uppercase tracking-wider`}
+                    className={`${px} ${thPy} ${alignClass} text-xs font-semibold text-gray-700 uppercase tracking-wider`}
                   >
                     {header.label}
                   </th>
@@ -90,10 +91,11 @@ export function TableCell({ children, className = '', align = 'left', colSpan, c
     right: 'text-right',
     center: 'text-center',
   }[align];
-  const px = compact ? 'px-4' : 'px-6';
+  const px = compact ? 'px-3' : 'px-6';
+  const py = compact ? 'py-2.5' : 'py-4';
 
   return (
-    <td colSpan={colSpan} className={`${px} py-4 whitespace-nowrap text-sm text-gray-900 ${alignClass} ${className}`}>
+    <td colSpan={colSpan} className={`${px} ${py} whitespace-nowrap text-sm text-gray-900 ${alignClass} ${className}`}>
       {children}
     </td>
   );

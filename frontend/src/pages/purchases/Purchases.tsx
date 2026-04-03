@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
-import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
 import { formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
@@ -13,7 +13,6 @@ import PageHeader from '../../components/ui/PageHeader';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
-import Pagination from '../../components/ui/Pagination';
 import { Plus, Edit, Trash2, FileText, UserPlus, Filter, Search, X, Printer, Loader2, RotateCcw, Store } from 'lucide-react';
 import Badge from '../../components/ui/Badge';
 import ProductForm from '../products/ProductForm';
@@ -36,6 +35,109 @@ interface PurchaseItem {
   sold_count?: number; // Number of items already sold (for validation)
   printed?: boolean;
   printed_at?: string | null;
+}
+
+const PURCHASES_PAGE_LIMIT = 15;
+
+function parsePurchasesPageMeta(payload: unknown): {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+} | null {
+  const d = payload as Record<string, unknown> | null;
+  if (!d) return null;
+  if (d.data && typeof d.data === 'object' && d.data !== null && 'count' in (d.data as object)) {
+    const inner = d.data as Record<string, unknown>;
+    return {
+      currentPage: Number(inner.page) || 1,
+      totalPages: Number(inner.total_pages) || 1,
+      totalItems: Number(inner.count) || 0,
+      pageSize: Number(inner.page_size) || PURCHASES_PAGE_LIMIT,
+    };
+  }
+  if ('count' in d) {
+    return {
+      currentPage: Number(d.page) || 1,
+      totalPages: Number(d.total_pages) || 1,
+      totalItems: Number(d.count) || 0,
+      pageSize: Number(d.page_size) || PURCHASES_PAGE_LIMIT,
+    };
+  }
+  return null;
+}
+
+/** Map all purchase rows from useInfiniteQuery `data.pages` into one list (dedupe by id). */
+function flattenPurchasesPages(pages: unknown[] | undefined): any[] {
+  if (!pages?.length) return [];
+  const out: any[] = [];
+  const seen = new Set<number>();
+  for (const page of pages) {
+    let chunk: any[] = [];
+    const p = page as Record<string, unknown>;
+    if (p?.data && Array.isArray((p.data as Record<string, unknown>).results)) {
+      chunk = (p.data as { results: any[] }).results;
+    } else if (Array.isArray(p?.results)) {
+      chunk = p.results as any[];
+    } else if (Array.isArray(p?.data)) {
+      chunk = p.data as any[];
+    } else if (Array.isArray(page)) {
+      chunk = page as any[];
+    }
+    for (const row of chunk) {
+      const id = row?.id;
+      if (typeof id === 'number') {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+function updatePrintedInPurchasesInfiniteCache(old: unknown, itemId: number, printed: boolean): unknown {
+  if (!old || typeof old !== 'object' || !('pages' in old)) return old;
+  const o = old as { pages: unknown[]; pageParams?: unknown[] };
+  const newPages = o.pages.map((page) => {
+    const updated = JSON.parse(JSON.stringify(page));
+    const rec = updated as Record<string, unknown>;
+    const results = (rec.data as Record<string, unknown>)?.results ?? rec.results;
+    if (!Array.isArray(results)) return updated;
+    for (const purchase of results as { items?: { id: number; printed?: boolean; printed_at?: string | null }[] }[]) {
+      if (purchase.items) {
+        for (const item of purchase.items) {
+          if (item.id === itemId) {
+            item.printed = printed;
+            item.printed_at = printed ? new Date().toISOString() : null;
+          }
+        }
+      }
+    }
+    return updated;
+  });
+  return { ...o, pages: newPages };
+}
+
+function clearPrintedFlagsInPurchasesInfiniteCache(old: unknown, purchaseId: number): unknown {
+  if (!old || typeof old !== 'object' || !('pages' in old)) return old;
+  const o = old as { pages: unknown[]; pageParams?: unknown[] };
+  const newPages = o.pages.map((page) => {
+    const updated = JSON.parse(JSON.stringify(page));
+    const rec = updated as Record<string, unknown>;
+    const results = (rec.data as Record<string, unknown>)?.results ?? rec.results;
+    if (!Array.isArray(results)) return updated;
+    for (const purchase of results as { id?: number; items?: { printed?: boolean; printed_at?: string | null }[] }[]) {
+      if (purchase.id === purchaseId && purchase.items) {
+        for (const item of purchase.items) {
+          item.printed = false;
+          item.printed_at = null;
+        }
+      }
+    }
+    return updated;
+  });
+  return { ...o, pages: newPages };
 }
 
 export default function Purchases() {
@@ -84,8 +186,9 @@ export default function Purchases() {
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
-  const [currentPage, setCurrentPage] = useState(1);
   const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
+
+  const purchasesInfiniteQueryKey = ['purchases', supplierFilter, productFilter, dateFrom, dateTo] as const;
 
   // Fetch products for search (must be before useEffect hooks that use products)
   const { data: productsData } = useQuery({
@@ -214,17 +317,19 @@ export default function Purchases() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supplierFilter, productFilter, dateFrom, dateTo]);
 
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [supplierFilter, productFilter, dateFrom, dateTo]);
-
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage],
-    queryFn: async () => {
-      const params: any = {
-        page: currentPage,
-        limit: 15,
+  const {
+    data: purchasesInfiniteData,
+    isLoading: purchasesLoading,
+    isError: purchasesError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: purchasesInfiniteQueryKey,
+    queryFn: async ({ pageParam }) => {
+      const params: Record<string, string | number> = {
+        page: pageParam,
+        limit: PURCHASES_PAGE_LIMIT,
       };
       if (supplierFilter) params.supplier = supplierFilter;
       if (productFilter) params.product = productFilter;
@@ -233,8 +338,14 @@ export default function Purchases() {
       const response = await purchasingApi.purchases.list(params);
       return response.data;
     },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => {
+      const meta = parsePurchasesPageMeta(lastPage);
+      if (!meta) return undefined;
+      if (meta.currentPage < meta.totalPages) return meta.currentPage + 1;
+      return undefined;
+    },
     retry: false,
-    placeholderData: keepPreviousData,
   });
 
   // Fetch suppliers for dropdown
@@ -590,23 +701,8 @@ export default function Purchases() {
       setShowForm(true);
 
       // Auto-uncheck "Printed" for all items of this purchase while editing (update list cache)
-      queryClient.setQueryData(
-        ['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage],
-        (old: any) => {
-          if (!old) return old;
-          const updated = JSON.parse(JSON.stringify(old));
-          const results = updated.data?.results || updated.results || [];
-          for (const p of results) {
-            if (p.id === fullPurchase.id && p.items) {
-              for (const item of p.items) {
-                item.printed = false;
-                item.printed_at = null;
-              }
-              break;
-            }
-          }
-          return updated;
-        }
+      queryClient.setQueryData(purchasesInfiniteQueryKey, (old: unknown) =>
+        clearPrintedFlagsInPurchasesInfiniteCache(old, fullPurchase.id)
       );
     } catch (error: any) {
       console.error('Error fetching purchase details:', error);
@@ -988,30 +1084,11 @@ export default function Purchases() {
       await queryClient.cancelQueries({ queryKey: ['purchases'] });
 
       // Snapshot the previous value for rollback
-      const previousData = queryClient.getQueryData(['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage]);
+      const previousData = queryClient.getQueryData(purchasesInfiniteQueryKey);
 
-      // Optimistically update the cache
-      queryClient.setQueryData(['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage], (old: any) => {
-        if (!old) return old;
-
-        // Deep clone and update the specific item
-        const updated = JSON.parse(JSON.stringify(old));
-        const results = updated.data?.results || updated.results || [];
-
-        for (const purchase of results) {
-          if (purchase.items) {
-            for (const item of purchase.items) {
-              if (item.id === itemId) {
-                item.printed = printed;
-                item.printed_at = printed ? new Date().toISOString() : null;
-                break;
-              }
-            }
-          }
-        }
-
-        return updated;
-      });
+      queryClient.setQueryData(purchasesInfiniteQueryKey, (old: unknown) =>
+        updatePrintedInPurchasesInfiniteCache(old, itemId, printed)
+      );
 
       // Return context with previous data for rollback
       return { previousData };
@@ -1019,7 +1096,7 @@ export default function Purchases() {
     // On error, rollback to previous data
     onError: (error: any, _variables, context: any) => {
       if (context?.previousData) {
-        queryClient.setQueryData(['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage], context.previousData);
+        queryClient.setQueryData(purchasesInfiniteQueryKey, context.previousData);
       }
       alert(error?.response?.data?.error || 'Failed to update printed status. Please try again.');
     },
@@ -1027,8 +1104,8 @@ export default function Purchases() {
     onSettled: () => {
       // Mark as stale but don't refetch to preserve optimistic update
       queryClient.invalidateQueries({
-        queryKey: ['purchases', supplierFilter, productFilter, dateFrom, dateTo, currentPage],
-        refetchType: 'none'
+        queryKey: [...purchasesInfiniteQueryKey],
+        refetchType: 'none',
       });
     },
   });
@@ -1126,16 +1203,16 @@ export default function Purchases() {
     }
   }, [productFilter, selectedProductForFilter?.data?.name]);
 
-  // Compute purchases array
-  const purchases = useMemo(() => {
-    if (!data) return [];
-    // Handle nested data structure (data.data.results)
-    if (data.data && Array.isArray(data.data.results)) return data.data.results;
-    if (Array.isArray(data.results)) return data.results;
-    if (Array.isArray(data.data)) return data.data;
-    if (Array.isArray(data)) return data;
-    return [];
-  }, [data]);
+  const purchases = useMemo(
+    () => flattenPurchasesPages(purchasesInfiniteData?.pages),
+    [purchasesInfiniteData?.pages],
+  );
+
+  const purchasesListMeta = (() => {
+    const pages = purchasesInfiniteData?.pages;
+    if (!pages?.length) return null;
+    return parsePurchasesPageMeta(pages[pages.length - 1]);
+  })();
 
   // Max label-status queries to avoid tab crash when many purchases/items are on the page
   const MAX_LABEL_STATUS_QUERIES = 25;
@@ -1277,11 +1354,11 @@ export default function Purchases() {
   };
 
   // Early returns must come AFTER all hooks
-  if (isLoading) {
+  if (purchasesLoading && !purchasesInfiniteData) {
     return <LoadingState message="Loading purchases..." />;
   }
 
-  if (error) {
+  if (purchasesError) {
     return (
       <ErrorState
         message="Error loading purchases. Please try again."
@@ -1289,28 +1366,6 @@ export default function Purchases() {
       />
     );
   }
-
-  const paginationInfo = (() => {
-    // Check if data.data exists (nested structure like Invoices)
-    if (data?.data && typeof data.data === 'object' && 'count' in data.data) {
-      return {
-        totalItems: data.data.count as number,
-        totalPages: data.data.total_pages as number,
-        currentPage: data.data.page as number,
-        pageSize: data.data.page_size as number,
-      };
-    }
-    // Check direct structure (like Products)
-    if (data && typeof data === 'object' && 'count' in data) {
-      return {
-        totalItems: data.count as number,
-        totalPages: data.total_pages as number,
-        currentPage: data.page as number,
-        pageSize: data.page_size as number,
-      };
-    }
-    return null;
-  })();
 
   return (
     <div className="space-y-6">
@@ -1718,15 +1773,34 @@ export default function Purchases() {
                 );
               })}
             </Table>
-            {paginationInfo && (
-              <Pagination
-                currentPage={paginationInfo.currentPage}
-                totalPages={paginationInfo.totalPages}
-                totalItems={paginationInfo.totalItems}
-                pageSize={paginationInfo.pageSize}
-                onPageChange={(page) => setCurrentPage(page)}
-              />
-            )}
+            <div className="flex flex-col items-center gap-2 py-4 border-t border-gray-100">
+              {hasNextPage ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                  className="min-w-[140px]"
+                >
+                  {isFetchingNextPage ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin inline" />
+                      Loading…
+                    </>
+                  ) : (
+                    'Load more'
+                  )}
+                </Button>
+              ) : null}
+              {purchases.length > 0 ? (
+                <p className="text-xs text-gray-500">
+                  Showing {purchases.length}
+                  {purchasesListMeta?.totalItems != null
+                    ? ` of ${purchasesListMeta.totalItems} purchases`
+                    : ' purchases'}
+                </p>
+              ) : null}
+            </div>
           </div>
 
           {/* Mobile Card View */}
@@ -1953,15 +2027,34 @@ export default function Purchases() {
                 </Card>
               );
             })}
-            {paginationInfo && (
-              <Pagination
-                currentPage={paginationInfo.currentPage}
-                totalPages={paginationInfo.totalPages}
-                totalItems={paginationInfo.totalItems}
-                pageSize={paginationInfo.pageSize}
-                onPageChange={(page) => setCurrentPage(page)}
-              />
-            )}
+            <div className="flex flex-col items-center gap-2 py-4">
+              {hasNextPage ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                  className="min-w-[140px]"
+                >
+                  {isFetchingNextPage ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin inline" />
+                      Loading…
+                    </>
+                  ) : (
+                    'Load more'
+                  )}
+                </Button>
+              ) : null}
+              {purchases.length > 0 ? (
+                <p className="text-xs text-gray-500 text-center">
+                  Showing {purchases.length}
+                  {purchasesListMeta?.totalItems != null
+                    ? ` of ${purchasesListMeta.totalItems} purchases`
+                    : ' purchases'}
+                </p>
+              ) : null}
+            </div>
           </div>
         </>
       )}

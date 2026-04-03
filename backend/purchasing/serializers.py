@@ -358,6 +358,50 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
             return 0
 
 
+def reconcile_purchase_item_shop_warehouse(old_quantity, new_quantity, old_shop, old_wh):
+    """Keep shop_quantity + warehouse_quantity aligned with line quantity when qty is edited.
+
+    Decrease: remove from warehouse first, then shop (same as trimming bulk before retail).
+    Increase: add the delta to shop (matches new lines: shop_quantity=quantity, warehouse=0).
+    If stored shop+warehouse does not match old quantity, normalize before applying the change.
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+
+    old_quantity = Decimal(str(old_quantity))
+    new_quantity = Decimal(str(new_quantity))
+    old_shop = Decimal(str(old_shop or 0))
+    old_wh = Decimal(str(old_wh or 0))
+
+    if new_quantity == old_quantity:
+        return old_shop, old_wh
+
+    alloc_sum = old_shop + old_wh
+    if old_quantity > 0 and alloc_sum != old_quantity:
+        if alloc_sum > 0:
+            old_shop = (old_shop * old_quantity / alloc_sum).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+            old_wh = old_quantity - old_shop
+        else:
+            old_shop, old_wh = old_quantity, Decimal('0')
+
+    if new_quantity < old_quantity:
+        delta_down = old_quantity - new_quantity
+        take_from_wh = min(delta_down, old_wh)
+        new_wh = old_wh - take_from_wh
+        new_shop = old_shop - (delta_down - take_from_wh)
+        if new_shop < 0 or new_wh < 0:
+            if old_quantity > 0:
+                new_shop = (old_shop * new_quantity / old_quantity).quantize(
+                    Decimal('0.001'), rounding=ROUND_HALF_UP
+                )
+                new_wh = new_quantity - new_shop
+            else:
+                new_shop, new_wh = new_quantity, Decimal('0')
+        return new_shop, new_wh
+
+    delta_up = new_quantity - old_quantity
+    return old_shop + delta_up, old_wh
+
+
 class PurchaseSerializer(serializers.ModelSerializer):
     items = PurchaseItemSerializer(many=True, read_only=True)
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
@@ -787,6 +831,16 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 old_quantity = old_item.quantity
                 new_quantity = Decimal(str(item_data.get('quantity', 0)))
                 new_price = Decimal(str(item_data.get('unit_price', old_item.unit_price)))
+
+                if new_quantity != old_quantity:
+                    sh, wh = reconcile_purchase_item_shop_warehouse(
+                        old_quantity,
+                        new_quantity,
+                        old_item.shop_quantity,
+                        old_item.warehouse_quantity,
+                    )
+                    old_item.shop_quantity = sh
+                    old_item.warehouse_quantity = wh
                 
                 # Update item fields
                 old_item.quantity = new_quantity

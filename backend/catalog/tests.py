@@ -180,6 +180,22 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(row['warehouse_stock'], 0.0)
         self.assertEqual(row['shop_barcode_count'], 8.0)  # 20 - 12 sold
 
+    def test_supplier_breakdown_keeps_warehouse_only_row_when_filtering_zeros(self):
+        """With exclude_fully_zero_rows, omit row only if both shop and warehouse available are zero."""
+        supp = TestDataFactory.create_supplier(name="SupplierWhOnly")
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=supp, status='finalized')
+        TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product,
+            quantity=Decimal('5'), shop_quantity=Decimal('0'), warehouse_quantity=Decimal('5')
+        )
+        hidden = _get_supplier_breakdown_for_product(self.product, exclude_fully_zero_rows=True)
+        shown = _get_supplier_breakdown_for_product(self.product, exclude_fully_zero_rows=False)
+        self.assertEqual(len(shown), 1)
+        self.assertEqual(shown[0]['warehouse_available'], 5.0)
+        self.assertEqual(shown[0]['shop_barcode_count'], 0.0)
+        self.assertEqual(len(hidden), 1)
+        self.assertEqual(hidden[0]['supplier'], supp.name)
+
     def test_product_serializer_shop_warehouse_tie_to_breakdown(self):
         """ProductSerializer (detail) shop_stock and warehouse_stock equal sum of breakdown columns."""
         supp_a = TestDataFactory.create_supplier(name="SupplierA")

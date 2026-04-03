@@ -311,23 +311,23 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_shop_stock(self, obj):
         """Available in shop from purchase view = sum of (shop_quantity - sold) so it ties to supplier breakdown."""
-        breakdown = _get_supplier_breakdown_for_product(obj, filter_shop_only=False)
+        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
         return int(round(sum(b['shop_barcode_count'] for b in breakdown)))
 
     def get_warehouse_stock(self, obj):
         """Warehouse from purchase view so it ties to supplier breakdown."""
-        breakdown = _get_supplier_breakdown_for_product(obj, filter_shop_only=False)
+        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
         return int(round(sum(b['warehouse_stock'] for b in breakdown)))
 
     def get_supplier_breakdown(self, obj):
         """Breakdown for display.
-        Default: only rows with available > 0. If request includes include_zero_shop_rows=true, include zero rows too.
+        Default: hide rows where both shop and warehouse available are zero. If include_zero_shop_rows=true, show those too.
         """
         request = self.context.get('request')
         include_zero = False
         if request:
             include_zero = str(request.query_params.get('include_zero_shop_rows', '')).lower() in ('1', 'true', 'yes', 'y')
-        return _get_supplier_breakdown_for_product(obj, filter_shop_only=not include_zero)
+        return _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=not include_zero)
 
     class Meta:
         model = Product
@@ -341,11 +341,11 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
 
-def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
+def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
     """
     One row per purchase batch (PurchaseItem). Warehouse/Shop from that item; Shop Qty = available
     (shop_quantity - sold - in-cart) for that batch. Ordered by purchase date (newest first), then supplier name.
-    If filter_shop_only=True, only include rows where shop stock (shop_barcode_count) > 0.
+    If exclude_fully_zero_rows=True, omit rows where both shop and warehouse available qty are <= 0.
     """
     from backend.purchasing.models import PurchaseItem
     from django.db.models import Count
@@ -380,8 +380,7 @@ def _get_supplier_breakdown_for_product(obj, filter_shop_only=False):
         whse_available = whse_allocated
         if shop_allocated == 0 and whse_allocated == 0 and shop_available == 0:
             continue
-        # For display: only show rows where shop stock > 0
-        if filter_shop_only and shop_available <= 0:
+        if exclude_fully_zero_rows and shop_available <= 0 and whse_available <= 0:
             continue
         supplier_name = "Unknown"
         if item.purchase and item.purchase.supplier:
@@ -547,12 +546,12 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_shop_stock(self, obj):
         """Shop available = sum of shop_barcode_count from supplier breakdown (accounts for sales)."""
-        breakdown = _get_supplier_breakdown_for_product(obj, filter_shop_only=False)
+        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
         return float(sum(b['shop_barcode_count'] for b in breakdown))
 
     def get_warehouse_stock(self, obj):
         """Warehouse available = sum of warehouse_available from supplier breakdown (accounts for sales)."""
-        breakdown = _get_supplier_breakdown_for_product(obj, filter_shop_only=False)
+        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
         return float(sum(b.get('warehouse_available', b['warehouse_stock']) for b in breakdown))
 
     def get_stock_quantity(self, obj):
@@ -684,7 +683,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         include_zero = False
         if request:
             include_zero = str(request.query_params.get('include_zero_shop_rows', '')).lower() in ('1', 'true', 'yes', 'y')
-        return _get_supplier_breakdown_for_product(obj, filter_shop_only=not include_zero)
+        return _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=not include_zero)
 
     class Meta:
         model = Product

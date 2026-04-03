@@ -176,6 +176,7 @@ export const posApi = {
     getActive: () => api.get('/pos/carts/?active=true&single=true'), // Backward compatible
     getAllActive: () => api.get('/pos/carts/?active=true'), // Get all active carts
     getOverview: (params?: { store?: number }) => api.get('/pos/carts/overview/', { params }), // Active/held carts by user (read-only)
+    resumeToMe: (id: number) => api.post(`/pos/carts/${id}/resume-to-me/`),
     update: (id: number, data: any) => api.patch(`/pos/carts/${id}/`, data),
     delete: (id: number) => api.delete(`/pos/carts/${id}/`),
     addItem: (id: number, data: any) => api.post(`/pos/carts/${id}/items/`, data),

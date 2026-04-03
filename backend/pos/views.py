@@ -722,6 +722,110 @@ def active_carts_overview(request):
     })
 
 
+def _can_resume_pos_cart_to_self(user):
+    """Allow taking another user’s active/held cart into your session (overview handoff)."""
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    return user.groups.filter(name__in=['Super', 'Admin']).exists()
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def cart_resume_to_me(request, pk):
+    """
+    Create a new cart for the current user, move all line items from the source cart onto it,
+    and mark the source cart cancelled so it leaves the active overview. Barcodes stay on the
+    moved items (no inventory release). Locked carts are allowed (caller should warn in UI).
+    Invoice-edit carts (EDIT-*) cannot be resumed.
+    """
+    if not _can_resume_pos_cart_to_self(request.user):
+        return Response(
+            {'error': 'Permission denied', 'detail': 'You do not have permission to resume another user’s cart.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    source = get_object_or_404(Cart.objects.select_for_update(), pk=pk)
+
+    if source.created_by_id == request.user.id:
+        return Response(
+            {'error': 'This cart is already yours.', 'detail': 'Nothing to resume.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (source.cart_number or '').upper().startswith('EDIT-'):
+        return Response(
+            {'error': 'Invoice-edit carts cannot be resumed from the overview.', 'detail': 'Open invoice edit from the invoice instead.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if source.status not in ('active', 'held'):
+        return Response(
+            {'error': 'Only active or held carts can be resumed.', 'detail': f'This cart is {source.status}.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    source_was_locked = getattr(source, 'locked', False)
+
+    if source.customer_id is not None:
+        existing = Cart.objects.filter(
+            created_by=request.user,
+            customer_id=source.customer_id,
+            status='active',
+        ).exclude(cart_number__istartswith='edit-').first()
+        if existing:
+            return Response(
+                {
+                    'error': 'You already have an active cart for this customer.',
+                    'detail': 'Open that cart in POS or discard it, then try again.',
+                    'existing_cart_id': existing.id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+    while Cart.objects.filter(cart_number=cart_number).exists():
+        cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+    new_cart = Cart.objects.create(
+        cart_number=cart_number,
+        store=source.store,
+        customer=source.customer,
+        status='active',
+        invoice_type=source.invoice_type,
+        session=source.session,
+        created_by=request.user,
+        locked=False,
+    )
+
+    moved = CartItem.objects.filter(cart_id=source.pk).update(cart=new_cart)
+
+    source.status = 'cancelled'
+    source.locked = False
+    source.save(update_fields=['status', 'locked', 'updated_at'])
+
+    create_audit_log(
+        request=request,
+        action='cart_resume_to_me',
+        model_name='Cart',
+        object_id=str(new_cart.id),
+        object_name=new_cart.cart_number,
+        object_reference=f'from {source.cart_number} (id {source.id})',
+        barcode=None,
+        changes={
+            'source_cart_id': source.id,
+            'source_cart_number': source.cart_number,
+            'source_created_by_id': source.created_by_id,
+            'source_was_locked': source_was_locked,
+            'new_cart_id': new_cart.id,
+            'items_moved': moved,
+        },
+    )
+
+    serializer = CartSerializer(new_cart)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def cart_list_create(request):

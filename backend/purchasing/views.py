@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
-from .models import Purchase, PurchaseItem
+from .models import Purchase, PurchaseItem, PurchaseStockMovement
 from .serializers import PurchaseSerializer, PurchaseItemSerializer
 from backend.core.utils import create_audit_log
 from backend.inventory.models import Stock
@@ -716,7 +716,9 @@ def purchase_redistribute_stock(request, pk):
             new_wh_qty = Decimal(str(dist.get('warehouse_quantity', 0)))
             
             item = get_object_or_404(PurchaseItem, pk=item_id, purchase=purchase)
-            
+            old_shop = item.shop_quantity
+            old_wh = item.warehouse_quantity
+
             # Validation: Sum must equal total quantity and quantities cannot be negative
             if new_shop_qty < 0 or new_wh_qty < 0:
                 return Response(
@@ -769,6 +771,20 @@ def purchase_redistribute_stock(request, pk):
             item.shop_quantity = new_shop_qty
             item.warehouse_quantity = new_wh_qty
             item.save()
+
+            shop_diff = new_shop_qty - old_shop
+            if shop_diff != 0:
+                PurchaseStockMovement.objects.create(
+                    purchase=purchase,
+                    purchase_item=item,
+                    quantity=abs(shop_diff),
+                    direction='warehouse_to_shop' if shop_diff > 0 else 'shop_to_warehouse',
+                    shop_quantity_before=old_shop,
+                    warehouse_quantity_before=old_wh,
+                    shop_quantity_after=new_shop_qty,
+                    warehouse_quantity_after=new_wh_qty,
+                    created_by=request.user if request.user.is_authenticated else None,
+                )
             
             # Update Shop Stock (use Store model: purchase.store or first retail store)
             if shop_diff != 0 and shop_store:

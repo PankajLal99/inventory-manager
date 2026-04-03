@@ -950,20 +950,18 @@ export default function Repairs() {
                   </div>
                 ) : (
                 <Table compact headers={[
-                  { label: 'Invoice #', align: 'left' },
-                  { label: 'Date', align: 'left' },
+                  { label: 'Invoice', align: 'left' },
                   { label: 'Registered', align: 'left' },
-                  { label: 'Delivery date', align: 'left' },
+                  { label: 'Delivery', align: 'left' },
                   { label: 'Customer', align: 'left' },
-                  { label: 'Contact', align: 'left' },
                   { label: 'Model', align: 'left' },
-                  { label: 'Booking Amt', align: 'right' },
-                  { label: 'Work Description', align: 'left' },
+                  { label: 'Booking', align: 'right' },
+                  { label: 'Work', align: 'left' },
                   { label: 'Status', align: 'left' },
-                  { label: 'Invoice Type', align: 'left' },
+                  { label: 'Type', align: 'left' },
                   ...(canSeeTotalColumn ? [{ label: 'Total', align: 'right' as const }] : []),
                   { label: 'Paid', align: 'right' },
-                  { label: '', align: 'right' },
+                  { label: 'Actions', align: 'right' },
                 ]}>
                   {sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
                     const isOldActiveWork =
@@ -983,83 +981,86 @@ export default function Repairs() {
                           <span
                             className="font-mono font-semibold text-gray-900 cursor-pointer hover:text-blue-600"
                             onClick={() => navigate(`/invoices/${invoice.id}`)}
+                            title={invoice.invoice_number}
                           >
                             {invoice.invoice_number.split('-').pop()}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-gray-600">
-                            {formatDate(getRepairDisplayDate(invoice))}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-gray-600 text-sm whitespace-nowrap" title={invoice.repair?.created_at || undefined}>
+                          <span
+                            className="text-gray-600 text-xs leading-snug"
+                            title={invoice.repair?.created_at ? formatRepairRegisteredAt(invoice.repair.created_at) : undefined}
+                          >
                             {formatRepairRegisteredAt(invoice.repair?.created_at)}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-gray-600">
+                          <span className="text-gray-600 text-xs">
                             {invoice.repair?.delivery_date ? formatDate(invoice.repair.delivery_date) : '—'}
                           </span>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <User className="h-4 w-4 text-gray-400" />
-                            <span className="text-gray-900">
-                              {invoice.customer_name || 'Walk-in Customer'}
-                            </span>
+                        <TableCell className="whitespace-normal max-w-[9rem]">
+                          <div className="flex items-start gap-1.5 min-w-0">
+                            <User className="h-3.5 w-3.5 text-gray-400 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <div className="text-gray-900 text-xs font-medium truncate" title={invoice.customer_name || 'Walk-in Customer'}>
+                                {invoice.customer_name || 'Walk-in'}
+                              </div>
+                              <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums">
+                                <Phone className="h-3 w-3 text-gray-400 shrink-0" />
+                                <span className="truncate" title={invoice.repair?.contact_no || undefined}>
+                                  {invoice.repair?.contact_no || '—'}
+                                </span>
+                              </div>
+                            </div>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Phone className="h-3.5 w-3.5 text-gray-400" />
-                            <span className="text-gray-600 text-sm">
-                              {invoice.repair?.contact_no || 'N/A'}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Package className="h-3.5 w-3.5 text-gray-400" />
-                            <span className="text-gray-600 text-sm">
-                              {invoice.repair?.model_name || 'N/A'}
+                        <TableCell className="max-w-[6.5rem]">
+                          <div className="flex items-center gap-1 min-w-0">
+                            <Package className="h-3 w-3 text-gray-400 shrink-0" />
+                            <span className="text-gray-600 text-xs truncate" title={invoice.repair?.model_name || undefined}>
+                              {invoice.repair?.model_name || '—'}
                             </span>
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <span className="text-gray-900 font-medium">
+                          <span className="text-gray-900 font-medium text-xs tabular-nums">
                             {invoice.repair?.booking_amount != null && invoice.repair.booking_amount !== ''
                               ? `₹${formatNumber(invoice.repair.booking_amount)}`
                               : '—'}
                           </span>
                         </TableCell>
-                        <TableCell>
-                          <span className="text-gray-600 text-sm line-clamp-2 max-w-[200px]" title={invoice.repair?.description || undefined}>
+                        <TableCell className="whitespace-normal max-w-[7rem]">
+                          <span className="text-gray-600 text-[11px] leading-snug line-clamp-2" title={invoice.repair?.description || undefined}>
                             {invoice.repair?.description || '—'}
                           </span>
                         </TableCell>
                         <TableCell>
-                          {invoice.repair ? getStatusBadge(invoice.repair.status) : 'N/A'}
+                          {invoice.repair ? (
+                            <span className="inline-flex scale-90 origin-left">{getStatusBadge(invoice.repair.status)}</span>
+                          ) : (
+                            'N/A'
+                          )}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="uppercase text-[10px] font-bold tracking-wider">
+                          <Badge variant="outline" className="uppercase text-[9px] font-bold tracking-wide px-1.5 py-0">
                             {invoice.invoice_type}
                           </Badge>
                         </TableCell>
                         {canSeeTotalColumn && (
                           <TableCell align="right">
-                            <span className="font-semibold text-gray-900">
+                            <span className="font-semibold text-gray-900 text-xs tabular-nums">
                               ₹{formatNumber(parseAmount(invoice.computed_total))}
                             </span>
                           </TableCell>
                         )}
                         <TableCell align="right">
-                          <span className="text-green-600 font-medium">
+                          <span className="text-green-600 font-medium text-xs tabular-nums">
                             ₹{formatNumber(parseAmount(invoice.computed_paid))}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-0.5 justify-end flex-nowrap" onClick={(e) => e.stopPropagation()}>
                             <Button
                               variant="outline"
                               size="sm"
@@ -1071,12 +1072,12 @@ export default function Repairs() {
                                   showToast('This invoice does not have a repair record', 'error');
                                 }
                               }}
-                              className="gap-1.5"
+                              className="!px-2 !py-1.5 min-w-0 shrink-0"
                               disabled={!invoice.repair}
-                              title="Edit repair details (contact, model, description, booking amount)"
+                              title="Edit repair details"
+                              aria-label="Edit repair details"
                             >
-                              <Pencil className="h-4 w-4 flex-shrink-0" />
-                              <span>Edit</span>
+                              <Pencil className="h-3.5 w-3.5" />
                             </Button>
                             <Button
                               variant="primary"
@@ -1085,11 +1086,12 @@ export default function Repairs() {
                                 e.stopPropagation();
                                 handleRepairStatusAction(invoice);
                               }}
-                              className="gap-1.5"
+                              className="!px-2 !py-1.5 min-w-0 shrink-0"
                               disabled={!invoice.repair}
+                              title="Update status"
+                              aria-label="Update repair status"
                             >
-                              <Edit className="h-4 w-4 flex-shrink-0" />
-                              <span>Status</span>
+                              <Edit className="h-3.5 w-3.5" />
                             </Button>
                             <Button
                               variant="outline"
@@ -1098,23 +1100,23 @@ export default function Repairs() {
                                 e.stopPropagation();
                                 handlePrintRepairLabel(invoice);
                               }}
-                              className="gap-1.5"
+                              className="!px-2 !py-1.5 min-w-0 shrink-0"
                               disabled={!invoice.repair || generateLabelMutation.isPending}
-                              title="Print Repair Barcode Label"
+                              title="Print repair barcode label"
+                              aria-label="Print repair barcode label"
                             >
-                              <Printer className="h-4 w-4 flex-shrink-0" />
-                              <span></span>
+                              <Printer className="h-3.5 w-3.5" />
                             </Button>
                             {regeneratingInvoiceId === invoice.id ? (
                               <Button
                                 variant="outline"
                                 size="sm"
                                 disabled
-                                className="gap-1.5 text-orange-700 bg-orange-50 border-orange-200"
+                                className="!px-2 !py-1.5 min-w-0 shrink-0 text-orange-700 bg-orange-50 border-orange-200"
                                 title="Generating barcode..."
+                                aria-label="Generating barcode"
                               >
-                                <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
-                                <span></span>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               </Button>
                             ) : (
                               <Button
@@ -1124,12 +1126,12 @@ export default function Repairs() {
                                   e.stopPropagation();
                                   handleRegenerateRepairLabel(invoice);
                                 }}
-                                className="gap-1.5 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
+                                className="!px-2 !py-1.5 min-w-0 shrink-0 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
                                 disabled={!invoice.repair || isRegenerateDisabled(invoice.id)}
                                 title={isRegenerateDisabled(invoice.id) ? 'Wait 30s before regenerating again' : 'Regenerate barcode label'}
+                                aria-label="Regenerate barcode label"
                               >
-                                <RotateCcw className="h-4 w-4 flex-shrink-0" />
-                                <span></span>
+                                <RotateCcw className="h-3.5 w-3.5" />
                               </Button>
                             )}
                             <Button
@@ -1139,10 +1141,11 @@ export default function Repairs() {
                                 e.stopPropagation();
                                 navigate(`/invoices/${invoice.id}`);
                               }}
-                              className="gap-1.5"
+                              className="!px-2 !py-1.5 min-w-0 shrink-0"
+                              title="View invoice"
+                              aria-label="View invoice"
                             >
-                              <Eye className="h-4 w-4 flex-shrink-0" />
-                              <span></span>
+                              <Eye className="h-3.5 w-3.5" />
                             </Button>
                           </div>
                         </TableCell>
@@ -1151,8 +1154,8 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell colSpan={12}> </TableCell>
-                      <TableCell align="right" className="text-emerald-700">
+                      <TableCell colSpan={10}> </TableCell>
+                      <TableCell align="right" className="text-emerald-700 text-xs tabular-nums">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
                       <TableCell>{' '}</TableCell>
@@ -1199,14 +1202,10 @@ export default function Repairs() {
                               {invoice.invoice_type}
                             </Badge>
                           </div>
-                          <div className="text-sm text-gray-600 mb-1">
-                            {formatDate(getRepairDisplayDate(invoice))}
+                          <div className="text-xs text-gray-600 mb-1" title={invoice.repair?.created_at ? 'Repair registered' : undefined}>
+                            <span className="text-gray-500 font-medium">Registered: </span>
+                            {invoice.repair?.created_at ? formatRepairRegisteredAt(invoice.repair.created_at) : '—'}
                           </div>
-                          {invoice.repair?.created_at && (
-                            <div className="text-xs text-gray-500 mb-1" title="Repair registered">
-                              Registered: {formatRepairRegisteredAt(invoice.repair.created_at)}
-                            </div>
-                          )}
                           {invoice.repair?.delivery_date && (
                             <div className="text-sm text-gray-600 mb-1">
                               <span className="text-gray-500 font-medium">Delivery: </span>

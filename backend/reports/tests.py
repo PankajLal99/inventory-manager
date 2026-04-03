@@ -111,6 +111,15 @@ class ReportsTests(TestCase):
         self.assertEqual(response.data['payments_by_method'], [])
         self.assertEqual(kpis['pending_invoice_purchase_total'], 0.0)
         self.assertEqual(response.data['pending_purchase_by_store'], [])
+        self.assertIn('total_pending', kpis)
+        self.assertEqual(kpis['total_pending'], 0.0)
+        self.assertEqual(response.data.get('total_pending_by_store'), [])
+        self.assertIn('total_pending_yet_to_finalize_purchase', kpis)
+        self.assertEqual(kpis['total_pending_yet_to_finalize_purchase'], 0.0)
+        self.assertIn('pending_invoice_purchase_yet_to_finalize_total', kpis)
+        self.assertEqual(kpis['pending_invoice_purchase_yet_to_finalize_total'], 0.0)
+        self.assertEqual(response.data.get('total_pending_yet_to_finalize_by_store'), [])
+        self.assertEqual(response.data.get('pending_purchase_yet_to_finalize_by_store'), [])
         self.assertIn('counter_profit', kpis)
         self.assertIn('repair_profit', kpis)
         self.assertIn('overall_profit', kpis)
@@ -136,6 +145,39 @@ class ReportsTests(TestCase):
         self.assertEqual(response.data['upi_by_store'][0]['from_invoice_upi'], 40.0)
         self.assertEqual(response.data['upi_by_store'][0]['from_mixed_upi'], 0.0)
         self.assertEqual(response.data['credit_by_store'], [])
+
+    def test_dashboard_kpis_total_pending_draft_and_invoice_type_pending(self):
+        """total_pending sums Invoice.total for status=draft, invoice_type=pending, by store."""
+        product = TestDataFactory.create_product()
+        draft_pending = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='pending',
+            status='draft',
+        )
+        InvoiceItem.objects.create(
+            invoice=draft_pending,
+            product=product,
+            quantity=Decimal('1'),
+            unit_price=Decimal('180.00'),
+            line_total=Decimal('180.00'),
+            purchase_price=Decimal('55.00'),
+        )
+        draft_pending.total = Decimal('180.00')
+        draft_pending.save(update_fields=['total'])
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['kpis']['total_pending'], 180.0)
+        self.assertEqual(response.data['kpis']['total_pending_yet_to_finalize_purchase'], 55.0)
+        rows = response.data.get('total_pending_by_store') or []
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['amount'], 180.0)
+        self.assertEqual(rows[0]['store_id'], self.store.id)
+        ytf = response.data.get('total_pending_yet_to_finalize_by_store') or []
+        self.assertEqual(len(ytf), 1)
+        self.assertEqual(ytf[0]['amount'], 55.0)
 
     def test_dashboard_kpis_excludes_void_and_draft_invoices(self):
         """Void and draft invoices are excluded from cash/upi totals."""
@@ -288,10 +330,13 @@ class ReportsTests(TestCase):
         response = self.client.get('/api/v1/reports/dashboard-kpis/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['kpis']['pending_invoice_purchase_total'], 71.0)
+        self.assertEqual(response.data['kpis']['pending_invoice_purchase_yet_to_finalize_total'], 71.0)
         self.assertEqual(len(response.data['pending_purchase_by_store']), 1)
         row = response.data['pending_purchase_by_store'][0]
         self.assertEqual(row['amount'], 71.0)
         self.assertEqual(row['store_id'], self.store.id)
+        self.assertEqual(len(response.data['pending_purchase_yet_to_finalize_by_store']), 1)
+        self.assertEqual(response.data['pending_purchase_yet_to_finalize_by_store'][0]['amount'], 71.0)
 
     def test_dashboard_kpis_stock_value_excludes_draft_purchase_barcodes(self):
         """Stock value sums unit_price per new/returned barcode; draft purchase lines excluded."""

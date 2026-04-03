@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Coins, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { BookOpen, Coins, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
 import { customersApi } from '../../lib/api';
 import { DateRangePreset, formatAmountINR, getDateRangeByPreset, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
@@ -23,6 +24,7 @@ type GroupBy = 'none' | 'date' | 'customer' | 'payment_mode';
 
 interface ManualCreditEntry {
   id: number;
+  customer?: number | null;
   customer_name?: string;
   payment_mode?: PaymentMode;
   cash_amount?: number | string | null;
@@ -41,6 +43,7 @@ const getCurrentTime = (): string => {
 };
 
 export default function Payments() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = auth.getUser();
   const isSuper = user?.groups && user.groups.includes('Super');
@@ -491,7 +494,20 @@ export default function Payments() {
                 />
               </TableCell>
               <TableCell>
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex items-center justify-end gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
+                    disabled={entry.customer == null}
+                    title={entry.customer == null ? 'No customer on this entry' : 'Open customer ledger'}
+                    onClick={() => {
+                      if (entry.customer != null) navigate(`/ledger/${entry.customer}`);
+                    }}
+                  >
+                    <BookOpen className="h-4 w-4" />
+                    Ledger
+                  </Button>
                   {!isRetail && (
                     <Button
                       variant="outline"

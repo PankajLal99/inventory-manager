@@ -6,7 +6,8 @@ import {
     Package,
     Store,
     Warehouse as WarehouseIcon,
-    Calculator
+    Calculator,
+    ArrowRightLeft
 } from 'lucide-react';
 import { purchasingApi } from '../../lib/api';
 import { formatNumber, formatDateOnlyDisplay } from '../../lib/utils';
@@ -36,6 +37,8 @@ interface PurchaseStockModalProps {
     onSuccess: () => void;
 }
 
+type MoveDirection = 'wh_to_shop' | 'shop_to_wh';
+
 const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
     purchase,
     isOpen,
@@ -43,6 +46,8 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
     onSuccess
 }) => {
     const [items, setItems] = useState<PurchaseItem[]>([]);
+    const [moveQtyByItem, setMoveQtyByItem] = useState<Record<number, string>>({});
+    const [moveDirByItem, setMoveDirByItem] = useState<Record<number, MoveDirection>>({});
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -53,45 +58,54 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                 shop_quantity: Number(item.shop_quantity).toString(),
                 warehouse_quantity: Number(item.warehouse_quantity).toString()
             })));
+            setMoveQtyByItem({});
+            setMoveDirByItem({});
         }
     }, [purchase]);
 
     if (!isOpen) return null;
 
-    const handleQuantityChange = (index: number, field: 'shop_quantity' | 'warehouse_quantity', value: string) => {
+    const formatVal = (v: number) => Number(v.toFixed(3)).toString();
+
+    const applyMoveForItem = (index: number) => {
+        const item = items[index];
+        const itemId = item.id;
+        const raw = (moveQtyByItem[itemId] ?? '').trim();
+        if (!raw) return;
+
+        let m = parseFloat(raw);
+        if (isNaN(m) || m <= 0) {
+            setMoveQtyByItem((prev) => ({ ...prev, [itemId]: '' }));
+            return;
+        }
+
+        const direction = moveDirByItem[itemId] || 'wh_to_shop';
+        const totalQty = parseFloat(item.quantity);
+        let wh = parseFloat(item.warehouse_quantity);
+        let sh = parseFloat(item.shop_quantity);
+        if (isNaN(wh)) wh = 0;
+        if (isNaN(sh)) sh = 0;
+
+        if (direction === 'wh_to_shop') {
+            m = Math.min(m, wh);
+            wh = wh - m;
+            sh = sh + m;
+        } else {
+            m = Math.min(m, sh);
+            sh = sh - m;
+            wh = wh + m;
+        }
+
+        sh = totalQty - wh;
+
         const newItems = [...items];
-        const totalQty = parseFloat(newItems[index].quantity);
-
-        // Handle empty or invalid input by treating as 0
-        let newVal = parseFloat(value);
-        if (isNaN(newVal)) newVal = 0;
-
-        // Strict validation: Non-negative and cannot exceed total
-        if (newVal < 0) newVal = 0;
-        if (newVal > totalQty) newVal = totalQty;
-
-        // Helper to format number string without trailing zeros
-        const formatVal = (v: number) => Number(v.toFixed(3)).toString();
-
         newItems[index] = {
             ...newItems[index],
-            [field]: newVal.toString() // Use the validated number string
-        };
-
-        // Auto-adjust the other field to maintain total
-        const otherField = field === 'shop_quantity' ? 'warehouse_quantity' : 'shop_quantity';
-        newItems[index][otherField] = formatVal(totalQty - newVal);
-
-        setItems(newItems);
-    };
-
-    const handleQuantityBlur = (index: number, field: 'shop_quantity' | 'warehouse_quantity', value: string) => {
-        const newItems = [...items];
-        newItems[index] = {
-            ...newItems[index],
-            [field]: Number(parseFloat(value) || 0).toString()
+            warehouse_quantity: formatVal(wh),
+            shop_quantity: formatVal(sh),
         };
         setItems(newItems);
+        setMoveQtyByItem((prev) => ({ ...prev, [itemId]: '' }));
     };
 
     const handleSave = async () => {
@@ -116,8 +130,7 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
-                {/* Header */}
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200 animate-in zoom-in-95 duration-200">
                 <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                     <div>
                         <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -136,7 +149,6 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                     </button>
                 </div>
 
-                {/* Content */}
                 <div className="flex-1 overflow-y-auto p-6">
                     {error && (
                         <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3 text-red-700 animate-in slide-in-from-top-2 duration-300">
@@ -145,14 +157,15 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                         </div>
                     )}
 
-                    <div className="overflow-hidden border border-slate-200 rounded-xl shadow-sm bg-white">
-                        <table className="w-full text-left border-collapse">
+                    <div className="overflow-x-auto overflow-hidden border border-slate-200 rounded-xl shadow-sm bg-white">
+                        <table className="w-full text-left border-collapse min-w-[720px]">
                             <thead>
                                 <tr className="bg-slate-50 border-b border-slate-200">
                                     <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Product</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-32">Total Qty</th>
-                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-40">Shop Qty</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-28">Total Qty</th>
                                     <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-40">Warehouse Qty</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-52">Move Qty</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider w-40">Shop Qty</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -177,27 +190,54 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                                             </span>
                                         </td>
                                         <td className="px-4 py-4">
-                                            <div className="relative group">
-                                                <Store className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
-                                                <input
-                                                    type="number"
-                                                    value={item.shop_quantity}
-                                                    onChange={(e) => handleQuantityChange(index, 'shop_quantity', e.target.value)}
-                                                    onBlur={(e) => handleQuantityBlur(index, 'shop_quantity', e.target.value)}
-                                                    className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-mono text-sm"
-                                                />
+                                            <div className="flex items-center gap-2 pl-1">
+                                                <WarehouseIcon className="w-4 h-4 text-slate-400 shrink-0" aria-hidden />
+                                                <span className="px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-lg font-mono text-sm font-semibold text-slate-800 min-w-[4.5rem] inline-block">
+                                                    {formatNumber(item.warehouse_quantity, 3)}
+                                                </span>
                                             </div>
                                         </td>
                                         <td className="px-4 py-4">
-                                            <div className="relative group">
-                                                <WarehouseIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
-                                                <input
-                                                    type="number"
-                                                    value={item.warehouse_quantity}
-                                                    onChange={(e) => handleQuantityChange(index, 'warehouse_quantity', e.target.value)}
-                                                    onBlur={(e) => handleQuantityBlur(index, 'warehouse_quantity', e.target.value)}
-                                                    className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-mono text-sm"
-                                                />
+                                            <div className="flex flex-col gap-2">
+                                                <select
+                                                    value={moveDirByItem[item.id] || 'wh_to_shop'}
+                                                    onChange={(e) =>
+                                                        setMoveDirByItem((prev) => ({
+                                                            ...prev,
+                                                            [item.id]: e.target.value as MoveDirection,
+                                                        }))
+                                                    }
+                                                    className="w-full text-xs font-medium border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                                                >
+                                                    <option value="wh_to_shop">Warehouse → Shop</option>
+                                                    <option value="shop_to_wh">Shop → Warehouse</option>
+                                                </select>
+                                                <div className="relative group flex items-center gap-1">
+                                                    <ArrowRightLeft className="w-4 h-4 text-slate-400 shrink-0" />
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        step="any"
+                                                        placeholder="Qty"
+                                                        value={moveQtyByItem[item.id] ?? ''}
+                                                        onChange={(e) =>
+                                                            setMoveQtyByItem((prev) => ({
+                                                                ...prev,
+                                                                [item.id]: e.target.value,
+                                                            }))
+                                                        }
+                                                        onBlur={() => applyMoveForItem(index)}
+                                                        className="w-full min-w-0 pl-2 pr-3 py-2 bg-amber-50/80 border border-amber-200/80 rounded-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono text-sm"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-4">
+                                            <div className="flex items-center gap-2 pl-1">
+                                                <Store className="w-4 h-4 text-slate-400 shrink-0" aria-hidden />
+                                                <span className="px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-lg font-mono text-sm font-semibold text-slate-800 min-w-[4.5rem] inline-block">
+                                                    {formatNumber(item.shop_quantity, 3)}
+                                                </span>
                                             </div>
                                         </td>
                                     </tr>
@@ -207,13 +247,14 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                     </div>
                 </div>
 
-                {/* Footer */}
-                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-slate-500 text-sm italic">
-                        <Calculator className="w-4 h-4" />
-                        Stock is synchronized in real-time between locations.
+                <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="flex items-start gap-2 text-slate-500 text-sm italic">
+                        <Calculator className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>
+                            Moves are logged when you save. Adjust quantities only via Move Qty (tab out to apply). Warehouse + Shop always equals total per line.
+                        </span>
                     </div>
-                    <div className="flex gap-3">
+                    <div className="flex gap-3 shrink-0">
                         <button
                             onClick={onClose}
                             className="px-6 py-2 border border-slate-200 rounded-xl font-semibold text-slate-600 hover:bg-white hover:border-slate-300 transition-all active:scale-95 disabled:opacity-50"

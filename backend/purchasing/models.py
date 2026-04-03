@@ -73,3 +73,29 @@ class PurchaseItem(models.Model):
         indexes = [
             models.Index(fields=['purchase', 'product'], name='idx_puritem_pur_product'),
         ]
+
+
+class PurchaseStockMovement(models.Model):
+    """Audit log for shop ↔ warehouse quantity changes on a purchase line."""
+    DIRECTION_CHOICES = [
+        ('warehouse_to_shop', 'Warehouse to shop'),
+        ('shop_to_warehouse', 'Shop to warehouse'),
+    ]
+
+    purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, related_name='stock_movements')
+    purchase_item = models.ForeignKey(PurchaseItem, on_delete=models.CASCADE, related_name='stock_movements')
+    quantity = models.DecimalField(max_digits=10, decimal_places=3)
+    direction = models.CharField(max_length=32, choices=DIRECTION_CHOICES)
+    shop_quantity_before = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    warehouse_quantity_before = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    shop_quantity_after = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    warehouse_quantity_after = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='purchase_stock_movements')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'purchase_stock_movements'
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['purchase', '-created_at'], name='idx_purstockmov_pur_created'),
+        ]

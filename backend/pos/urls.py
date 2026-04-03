@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     pos_session_list_create, pos_session_detail, pos_session_close,
     active_carts_overview,
-    cart_list_create, cart_detail, cart_items, cart_item_update, cart_item_remove_sku,
+    cart_list_create, cart_detail, cart_resume_to_me, cart_items, cart_item_update, cart_item_remove_sku,
     cart_hold, cart_unhold, cart_checkout, bulk_barcodes_check_pos,
     invoice_list_create, invoice_detail, invoice_payments, invoice_void,
     invoice_checkout, invoice_edit, invoice_update, invoice_mark_credit, invoice_return, invoice_exchange, invoice_items, invoice_item_detail,
@@ -25,6 +25,7 @@ urlpatterns = [
     # Cart endpoints
     path('pos/carts/', cart_list_create, name='cart-list-create'),
     path('pos/carts/overview/', active_carts_overview, name='active-carts-overview'),
+    path('pos/carts/<int:pk>/resume-to-me/', cart_resume_to_me, name='cart-resume-to-me'),
     path('pos/carts/<int:pk>/', cart_detail, name='cart-detail'),
     path('pos/carts/<int:pk>/items/', cart_items, name='cart-items'),
     path('pos/carts/<int:pk>/items/<int:item_id>/', cart_item_update, name='cart-item-update'),
