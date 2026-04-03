@@ -129,6 +129,9 @@ class Invoice(models.Model):
     voided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='voided_invoices')
     is_edited = models.BooleanField(default=False)
     edited_on = models.DateTimeField(null=True, blank=True)
+    # POS checkout: returns/trade-ins applied against prior invoices (same customer), netted on this invoice
+    trade_in_credit = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    pos_trade_ins = models.JSONField(null=True, blank=True)
 
     def __str__(self):
         return self.invoice_number

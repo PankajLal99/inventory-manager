@@ -23,11 +23,16 @@ import Modal from '../../components/ui/Modal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen, Eye, EyeOff, ListOrdered } from 'lucide-react';
+import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen, Eye, EyeOff, ListOrdered, RefreshCw } from 'lucide-react';
 import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
+import PosTradeInCartModal, {
+  posTradeInCreditTotal,
+  posTradeInPayload,
+  type PosTradeInLine,
+} from './PosTradeInCartModal';
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -76,6 +81,8 @@ export default function POS() {
   } | null>(null);
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkAddLoading, setBulkAddLoading] = useState(false);
+  const [showTradeInModal, setShowTradeInModal] = useState(false);
+  const [tradeInLines, setTradeInLines] = useState<PosTradeInLine[]>([]);
   // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
   // Live date/time for header (updates every second)
@@ -1745,6 +1752,7 @@ export default function POS() {
       setRepairContactNo('');
       setRepairModelName('');
       setRepairBookingAmount('');
+      setTradeInLines([]);
 
       // Remove cart tab after successful checkout
       if (username && cartId) {
@@ -1786,6 +1794,10 @@ export default function POS() {
       alert(error?.response?.data?.message || 'Checkout failed. Please try again.');
     },
   });
+
+  useEffect(() => {
+    setTradeInLines([]);
+  }, [cartId]);
 
   // Auto-save cart state to localStorage whenever cart data changes
   // Backend is already updated via mutations, this just syncs localStorage
@@ -2012,6 +2024,21 @@ export default function POS() {
       return;
     }
 
+    if (tradeInLines.length > 0) {
+      if (tradeInLines.some((l) => !l.return_tag)) {
+        alert(
+          'Choose Returned, Unknown, or Defective for every trade-in line, or remove lines from the trade-in list.'
+        );
+        return;
+      }
+      if (tradeInCredit > cartGrossSubtotal + 0.01) {
+        alert(
+          `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal)}).`
+        );
+        return;
+      }
+    }
+
     // Frontend safeguard: ensure all items have a valid selling price for non-pending invoices
     const isPendingInvoice = invoiceType === 'pending';
     if (!isPendingInvoice) {
@@ -2092,6 +2119,9 @@ export default function POS() {
       customer: selectedCustomer?.id || null,
       created_at: dateStringWithCurrentTimeISO(invoiceDate),
     };
+    if (tradeInLines.length > 0) {
+      checkoutData.pos_trade_ins = posTradeInPayload(tradeInLines);
+    }
 
     // Add repair data if it's a repair shop (regardless of invoice type)
     if (isRepairShop) {
@@ -2224,6 +2254,12 @@ export default function POS() {
               <span>₹{formatNumber(invoice.tax_amount || '0')}</span>
             </div>
             ` : ''}
+            ${parseFloat(invoice.trade_in_credit || '0') > 0 ? `
+            <div class="summary-row">
+              <span>Trade-in:</span>
+              <span>-₹{formatNumber(invoice.trade_in_credit || '0')}</span>
+            </div>
+            ` : ''}
             <div class="summary-row summary-total">
               <span>TOTAL:</span>
               <span>₹{formatNumber(invoice.total || '0')}</span>
@@ -2252,6 +2288,7 @@ export default function POS() {
   const checkoutAndPrintThermalMutation = useMutation({
     mutationFn: (data: any) => posApi.carts.checkout(cartId!, data),
     onSuccess: async (response: any) => {
+      setTradeInLines([]);
       // Get invoice ID from response
       const invoiceId = response?.data?.id || response?.id;
 
@@ -2334,6 +2371,21 @@ export default function POS() {
       return;
     }
 
+    if (tradeInLines.length > 0) {
+      if (tradeInLines.some((l) => !l.return_tag)) {
+        alert(
+          'Choose Returned, Unknown, or Defective for every trade-in line, or remove lines from the trade-in list.'
+        );
+        return;
+      }
+      if (tradeInCredit > cartGrossSubtotal + 0.01) {
+        alert(
+          `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal)}).`
+        );
+        return;
+      }
+    }
+
     // Frontend safeguard: ensure all items have a valid selling price for non-pending invoices
     const isPendingInvoice = invoiceType === 'pending';
     if (!isPendingInvoice) {
@@ -2400,6 +2452,9 @@ export default function POS() {
       customer: selectedCustomer?.id || null,
       created_at: dateStringWithCurrentTimeISO(invoiceDate),
     };
+    if (tradeInLines.length > 0) {
+      checkoutData.pos_trade_ins = posTradeInPayload(tradeInLines);
+    }
 
     // Add split payment amounts for mixed type
     if (invoiceType === 'mixed') {
@@ -2697,20 +2752,23 @@ export default function POS() {
     }
   }, [defaultStore?.shop_type, invoiceType, cartId, cart?.data?.invoice_type, isWholesaleGroup, isWholesaleAdmin]);
 
-  const calculateTotal = () => {
+  const tradeInCredit = useMemo(() => posTradeInCreditTotal(tradeInLines), [tradeInLines]);
+
+  const cartGrossSubtotal = useMemo(() => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
     return cart.data.items.reduce((sum: number, item: any) => {
       const quantity = parseInt(item.quantity || '0') || 0;
-      // Use editingManualPrice if user is typing, otherwise use saved price
       const editingPrice = editingManualPrice[item.id];
-      // Always use manual_unit_price (user-entered); no fallback to unit_price
-      const price = editingPrice !== undefined && editingPrice !== ''
-        ? (parseFloat(editingPrice) || 0)
-        : (parseFloat(item.manual_unit_price) || 0);
+      const price =
+        editingPrice !== undefined && editingPrice !== ''
+          ? parseFloat(editingPrice) || 0
+          : parseFloat(item.manual_unit_price) || 0;
       const discount = parseFloat(item.discount_amount || 0);
       return sum + (quantity * price - discount);
     }, 0);
-  };
+  }, [cart?.data?.items, editingManualPrice]);
+
+  const calculateTotal = () => cartGrossSubtotal - tradeInCredit;
 
   const calculateTotalQuantity = () => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
@@ -3809,6 +3867,16 @@ export default function POS() {
                   >
                     <ListOrdered className="h-4 w-4" />
                   </Button>
+                  <Button
+                    onClick={() => setShowTradeInModal(true)}
+                    variant="outline"
+                    size="sm"
+                    className="whitespace-nowrap"
+                    title="Trade-in / exchange (same customer)"
+                    disabled={!cartId || isCartLocked}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
                 </div>
                 {/* Queue Display */}
                 {scanQueue.length > 0 && (
@@ -4783,9 +4851,15 @@ export default function POS() {
                     </div>
                   )}
                   <div className="flex justify-between items-center py-2">
-                    <span className="text-sm font-medium text-gray-600">Subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(calculateTotal())}</span>
+                    <span className="text-sm font-medium text-gray-600">Items subtotal</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
                   </div>
+                  {tradeInCredit > 0 && (
+                    <div className="flex justify-between items-center py-2 text-green-800">
+                      <span className="text-sm font-medium">Trade-in credit</span>
+                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
+                    </div>
+                  )}
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
                     <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
@@ -4795,9 +4869,15 @@ export default function POS() {
                 // For other invoice types, show calculated totals
                 <>
                   <div className="flex justify-between items-center py-2">
-                    <span className="text-sm font-medium text-gray-600">Subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(calculateTotal())}</span>
+                    <span className="text-sm font-medium text-gray-600">Items subtotal</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
                   </div>
+                  {tradeInCredit > 0 && (
+                    <div className="flex justify-between items-center py-2 text-green-800">
+                      <span className="text-sm font-medium">Trade-in credit</span>
+                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Tax</span>
                     <span className="text-sm font-semibold text-gray-900">₹{formatNumber(0)}</span>
@@ -4874,6 +4954,15 @@ export default function POS() {
           </div>
         </div>
       </div>
+
+      <PosTradeInCartModal
+        open={showTradeInModal}
+        onClose={() => setShowTradeInModal(false)}
+        selectedCustomerId={selectedCustomer?.id ?? null}
+        lines={tradeInLines}
+        onLinesChange={setTradeInLines}
+        onError={(m) => showToast(m, 'error')}
+      />
 
       {/* Bulk add barcodes modal */}
       {showBulkModal && (

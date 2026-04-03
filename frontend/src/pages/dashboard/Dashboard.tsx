@@ -51,6 +51,20 @@ function shopTypeLabel(shopType: string) {
   return labels[shopType] || shopType || '—';
 }
 
+/** Roll up per-store dashboard rows into retail / wholesale / repair / other buckets. */
+const PENDING_ROLLUP_SHOP_TYPES = ['retail', 'wholesale', 'repair'] as const;
+
+function sumAmountsByShopType(rows: StoreAmountRow[]): Record<string, number> {
+  const acc: Record<string, number> = { retail: 0, wholesale: 0, repair: 0, other: 0 };
+  for (const r of rows) {
+    const t = String(r.shop_type || '').toLowerCase();
+    const key =
+      t === 'retail' || t === 'wholesale' || t === 'repair' ? t : 'other';
+    acc[key] = (acc[key] ?? 0) + Number(r.amount ?? 0);
+  }
+  return acc;
+}
+
 function paymentMethodLabel(method: string) {
   const labels: Record<string, string> = {
     cash: 'Cash',
@@ -468,38 +482,60 @@ export default function Dashboard() {
     amount: row.profit,
   }));
 
-  const totalPendingCardRows: BreakdownRow[] = (() => {
-    if (
-      totalPending <= 0 &&
-      totalPendingYtfPurchase <= 0 &&
-      totalPendingByStore.length === 0 &&
-      totalPendingYtfByStore.length === 0
-    ) {
-      return [{ label: 'No draft + pending-type invoices in this period', amount: 0 }];
+  const { totalPendingCardRows, totalPendingCardHeadline } = (() => {
+    const hasStrictPendingData =
+      totalPending > 0 ||
+      totalPendingYtfPurchase > 0 ||
+      totalPendingByStore.length > 0 ||
+      totalPendingYtfByStore.length > 0;
+    if (!hasStrictPendingData) {
+      return {
+        totalPendingCardRows: [{ label: 'No draft + pending-type invoices in this period', amount: 0 }],
+        totalPendingCardHeadline: 0,
+      };
     }
-    const rows: BreakdownRow[] = [
-      {
+
+    const useShopTypeRollup =
+      totalPendingYtfByStore.length > 0 || totalPendingByStore.length > 0;
+
+    if (useShopTypeRollup) {
+      const ytfByType = sumAmountsByShopType(totalPendingYtfByStore);
+      const invByType = sumAmountsByShopType(totalPendingByStore);
+      const rows: BreakdownRow[] = [];
+      for (const st of PENDING_ROLLUP_SHOP_TYPES) {
+        rows.push({
+          label: `Yet to finalize · ${shopTypeLabel(st)}`,
+          amount: ytfByType[st] ?? 0,
+        });
+      }
+      if ((ytfByType.other ?? 0) > 0) {
+        rows.push({ label: 'Yet to finalize · Other', amount: ytfByType.other });
+      }
+      for (const st of PENDING_ROLLUP_SHOP_TYPES) {
+        rows.push({
+          label: `Invoice total · ${shopTypeLabel(st)}`,
+          amount: invByType[st] ?? 0,
+        });
+      }
+      if ((invByType.other ?? 0) > 0) {
+        rows.push({ label: 'Invoice total · Other', amount: invByType.other });
+      }
+      const headline = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+      return { totalPendingCardRows: rows, totalPendingCardHeadline: headline };
+    }
+
+    const rows: BreakdownRow[] = [];
+    if (totalPendingYtfPurchase > 0) {
+      rows.push({
         label: 'Yet to finalize (purchase unit × qty, paid = 0)',
         amount: totalPendingYtfPurchase,
-      },
-    ];
-    totalPendingYtfByStore.forEach((r) => {
-      rows.push({
-        label: `Yet to finalize · ${r.store_name} (${shopTypeLabel(r.shop_type)})`,
-        amount: r.amount,
       });
-    });
-    if (totalPendingByStore.length > 0) {
-      totalPendingByStore.forEach((r) => {
-        rows.push({
-          label: `Invoice total · ${r.store_name} (${shopTypeLabel(r.shop_type)})`,
-          amount: r.amount,
-        });
-      });
-    } else if (totalPending > 0) {
+    }
+    if (totalPending > 0) {
       rows.push({ label: 'Invoice total (all stores)', amount: totalPending });
     }
-    return rows;
+    const headline = totalPendingYtfPurchase + totalPending;
+    return { totalPendingCardRows: rows, totalPendingCardHeadline: headline };
   })();
 
   return (
@@ -567,7 +603,7 @@ export default function Dashboard() {
               <DashboardMetricCard
                 title="Total pending"
                 icon={<Clock className="h-5 w-5 text-orange-800" />}
-                totalFormatted={`₹${formatNumber(totalPending, 2)}`}
+                totalFormatted={`₹${formatNumber(totalPendingCardHeadline, 2)}`}
                 gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                 borderClass="border-orange-200"
                 iconClass=""
@@ -806,16 +842,28 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
-                  breakdownRows={[
-                    {
-                      label: 'Yet to finalize (paid = 0, purchase unit × qty)',
-                      amount: pendingPurchaseYtfTotal,
-                    },
-                    { label: 'Yet to finalize · Retail', amount: pendingPurchaseYtfRetail },
-                    { label: 'Yet to finalize · Wholesale', amount: pendingPurchaseYtfWholesale },
-                    { label: 'All pending at cost · Retail', amount: pendingRetail },
-                    { label: 'All pending at cost · Wholesale', amount: pendingWholesale },
-                  ]}
+                  breakdownRows={(() => {
+                    const hasYtfRetailWholesaleSplit =
+                      pendingPurchaseYtfRetail > 0 || pendingPurchaseYtfWholesale > 0;
+                    const ytfRows: BreakdownRow[] = hasYtfRetailWholesaleSplit
+                      ? [
+                          { label: 'Yet to finalize · Retail', amount: pendingPurchaseYtfRetail },
+                          { label: 'Yet to finalize · Wholesale', amount: pendingPurchaseYtfWholesale },
+                        ]
+                      : pendingPurchaseYtfTotal > 0
+                        ? [
+                            {
+                              label: 'Yet to finalize (paid = 0, purchase unit × qty)',
+                              amount: pendingPurchaseYtfTotal,
+                            },
+                          ]
+                        : [];
+                    return [
+                      ...ytfRows,
+                      { label: 'All pending at cost · Retail', amount: pendingRetail },
+                      { label: 'All pending at cost · Wholesale', amount: pendingWholesale },
+                    ];
+                  })()}
                 />
                 <div className="min-h-0 space-y-4">
                   <StoreAmountList

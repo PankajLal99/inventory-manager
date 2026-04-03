@@ -290,6 +290,12 @@ export default function InvoiceDetail() {
     return Array.isArray(results) && results.length > 0;
   })();
 
+  const tradeInCreditAmount = useMemo(() => {
+    const raw = (inv as { trade_in_credit?: string | number })?.trade_in_credit;
+    const n = parseFloat(String(raw ?? '0'));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }, [inv]);
+
   // Fetch stores list
   const { data: storesData } = useQuery({
     queryKey: ['stores'],
@@ -1615,9 +1621,15 @@ export default function InvoiceDetail() {
                   <td></td>
                   <td style="text-align: right;">${formatNumber(0, 2)}</td>
                 </tr>
+                ${tradeInCreditAmount > 0 ? `
+                <tr>
+                  <td colspan="4" style="text-align: right; font-size: 12px; padding-top: 6px;">Trade-in credit (prior sale)</td>
+                  <td style="text-align: right; font-size: 12px; padding-top: 6px; color: #166534;">-₹${formatNumber(tradeInCreditAmount, 2)}</td>
+                </tr>
+                ` : ''}
                 <!-- Total Row -->
                 <tr class="total-row">
-                  <td><strong>Total</strong></td>
+                  <td><strong>${tradeInCreditAmount > 0 ? 'Net total' : 'Total'}</strong></td>
                   <td style="text-align: center;"><strong>${formatNumber(totalPcs, 3)}</strong></td>
                   <td></td>
                   <td></td>
@@ -1939,6 +1951,12 @@ export default function InvoiceDetail() {
             <div class="summary-row">
               <span>Tax:</span>
               <span>₹${formatNumber(invoice.tax_amount || '0')}</span>
+            </div>
+            ` : ''}
+          ${parseFloat(invoice.trade_in_credit || '0') > 0 ? `
+            <div class="summary-row">
+              <span>Trade-in:</span>
+              <span>-₹${formatNumber(invoice.trade_in_credit || '0')}</span>
             </div>
             ` : ''}
           <div class="summary-row">
@@ -2446,9 +2464,33 @@ export default function InvoiceDetail() {
               // For other invoices, show actual totals
               <>
                 <div className="flex justify-between items-center py-2">
-                  <span className="text-sm text-gray-600">Subtotal</span>
+                  <span className="text-sm text-gray-600">Subtotal (new sale lines)</span>
                   <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.subtotal || '0')}</span>
                 </div>
+                {tradeInCreditAmount > 0 && (
+                  <>
+                    <div className="flex justify-between items-center py-2 bg-emerald-50/80 -mx-1 px-2 rounded-md border border-emerald-100">
+                      <span className="text-sm font-medium text-emerald-900">Trade-in credit (prior sale)</span>
+                      <span className="text-sm font-semibold text-emerald-900 tabular-nums">
+                        −₹{formatNumber(tradeInCreditAmount)}
+                      </span>
+                    </div>
+                    {Array.isArray((inv as { pos_trade_ins?: unknown[] }).pos_trade_ins) &&
+                      (inv as { pos_trade_ins: unknown[] }).pos_trade_ins.length > 0 && (
+                        <ul className="text-xs text-gray-600 space-y-1 pl-1 border-l-2 border-emerald-200 ml-1 py-1">
+                          {(inv as { pos_trade_ins: any[] }).pos_trade_ins.map((row: any, idx: number) => (
+                            <li key={idx}>
+                              {(row.product_name as string) || 'Item'}
+                              {row.barcode ? ` · ${row.barcode}` : ''}
+                              {row.return_tag ? ` · ${String(row.return_tag)}` : ''}
+                              {row.source_invoice_number ? ` · from ${row.source_invoice_number}` : ''}
+                              {row.credit != null ? ` · credit ₹${formatNumber(row.credit)}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                  </>
+                )}
                 {parseFloat(inv.discount_amount || '0') > 0 && (
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm text-gray-600">Discount</span>
@@ -2768,6 +2810,36 @@ export default function InvoiceDetail() {
               });
             })()}
           </div>
+          {!isPending && tradeInCreditAmount > 0 && (
+            <div className="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg print-area">
+              <p className="text-sm font-semibold text-gray-900 mb-2">Why the total differs from the lines above</p>
+              <p className="text-xs text-gray-600 mb-3">
+                Line totals above are the <strong>new items</strong> on this invoice. A trade-in from a prior sale reduces the amount due.
+              </p>
+              <div className="space-y-1.5 text-sm text-gray-800">
+                <div className="flex justify-between">
+                  <span>Sum of line items</span>
+                  <span className="tabular-nums">
+                    ₹
+                    {formatNumber(
+                      (inv?.items ?? []).reduce(
+                        (acc: number, item: any) => acc + parseFloat(String(item.line_total ?? '0')),
+                        0,
+                      ),
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between text-emerald-900">
+                  <span>Trade-in credit</span>
+                  <span className="tabular-nums font-medium">−₹{formatNumber(tradeInCreditAmount)}</span>
+                </div>
+                <div className="flex justify-between font-semibold border-t border-slate-200 pt-2 mt-2">
+                  <span>Invoice total</span>
+                  <span className="tabular-nums">₹{formatNumber(inv.total || '0')}</span>
+                </div>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
@@ -2953,7 +3025,7 @@ export default function InvoiceDetail() {
           setCheckoutUpiAmount('');
           setCheckoutDeliveryDate('');
         }}
-        title="Checkout Invoice"
+        title={`Checkout Invoice (${inv.customer_name?.trim() || 'Walk-in'})`}
         size="xl-wide"
         closeOnBackdropClick={false}
       >

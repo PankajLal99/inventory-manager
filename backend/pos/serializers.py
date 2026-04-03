@@ -318,6 +318,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name', 'status',
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
+            'trade_in_credit', 'pos_trade_ins',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on', 'items', 'payments'
         ]
 

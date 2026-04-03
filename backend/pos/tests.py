@@ -188,6 +188,137 @@ class CheckoutTests(APITestCase):
             self.assertEqual(log.object_name, 'Blocked Duplicate Checkout')
             self.assertEqual(log.changes.get('reason'), 'Cart already completed')
 
+    def test_cart_checkout_pos_trade_in_same_customer(self):
+        """Trade-in during checkout removes prior line and reduces new invoice total."""
+        self.product.track_inventory = True
+        self.product.save(update_fields=['track_inventory'])
+
+        customer = Customer.objects.create(name='TradeIn Customer', phone='9000000001')
+        bc_old = Barcode.objects.filter(product=self.product, tag='new').first()
+        bc_new = Barcode.objects.filter(product=self.product, tag='new').exclude(pk=bc_old.pk).first()
+
+        cart1 = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=customer,
+            created_by=self.user,
+            invoice_type='cash',
+        )
+        CartItem.objects.create(
+            cart=cart1,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('100.00'),
+            manual_unit_price=Decimal('100.00'),
+            scanned_barcodes=[bc_old.barcode],
+        )
+        url = reverse('cart-checkout', args=[cart1.id])
+        r1 = self.client.post(
+            url,
+            {'invoice_type': 'cash', 'customer': customer.id},
+            format='json',
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
+        inv1 = Invoice.objects.get(id=r1.data['id'])
+        old_item = inv1.items.first()
+        self.assertIsNotNone(old_item)
+        trade_item_id = old_item.id
+
+        cart2 = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=customer,
+            created_by=self.user,
+            invoice_type='cash',
+        )
+        CartItem.objects.create(
+            cart=cart2,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('200.00'),
+            manual_unit_price=Decimal('200.00'),
+            scanned_barcodes=[bc_new.barcode],
+        )
+        url2 = reverse('cart-checkout', args=[cart2.id])
+        r2 = self.client.post(
+            url2,
+            {
+                'invoice_type': 'cash',
+                'customer': customer.id,
+                'pos_trade_ins': [{'invoice_item_id': trade_item_id, 'return_tag': 'returned'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED, r2.data)
+        new_inv = Invoice.objects.get(id=r2.data['id'])
+        self.assertEqual(new_inv.trade_in_credit, Decimal('100.00'))
+        self.assertEqual(new_inv.subtotal, Decimal('200.00'))
+        self.assertEqual(new_inv.total, Decimal('100.00'))
+        self.assertIsInstance(new_inv.pos_trade_ins, list)
+        self.assertEqual(len(new_inv.pos_trade_ins), 1)
+
+        inv1.refresh_from_db()
+        self.assertEqual(inv1.items.count(), 0)
+        bc_old.refresh_from_db()
+        self.assertEqual(bc_old.tag, 'returned')
+
+    def test_cart_checkout_pos_trade_in_wrong_customer_rejected(self):
+        self.product.track_inventory = True
+        self.product.save(update_fields=['track_inventory'])
+        c1 = Customer.objects.create(name='C1', phone='9000000002')
+        c2 = Customer.objects.create(name='C2', phone='9000000003')
+        bc_old = Barcode.objects.filter(product=self.product, tag='new').first()
+        bc_new = Barcode.objects.filter(product=self.product, tag='new').exclude(pk=bc_old.pk).first()
+
+        cart1 = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=c1,
+            created_by=self.user,
+            invoice_type='cash',
+        )
+        CartItem.objects.create(
+            cart=cart1,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('50.00'),
+            manual_unit_price=Decimal('50.00'),
+            scanned_barcodes=[bc_old.barcode],
+        )
+        r1 = self.client.post(
+            reverse('cart-checkout', args=[cart1.id]),
+            {'invoice_type': 'cash', 'customer': c1.id},
+            format='json',
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
+        trade_item_id = Invoice.objects.get(id=r1.data['id']).items.first().id
+
+        cart2 = Cart.objects.create(
+            cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=c2,
+            created_by=self.user,
+            invoice_type='cash',
+        )
+        CartItem.objects.create(
+            cart=cart2,
+            product=self.product,
+            quantity=1,
+            unit_price=Decimal('200.00'),
+            manual_unit_price=Decimal('200.00'),
+            scanned_barcodes=[bc_new.barcode],
+        )
+        r2 = self.client.post(
+            reverse('cart-checkout', args=[cart2.id]),
+            {
+                'invoice_type': 'cash',
+                'customer': c2.id,
+                'pos_trade_ins': [{'invoice_item_id': trade_item_id, 'return_tag': 'returned'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 class InvoiceEditTests(APITestCase):
     """Test cases for invoice editing functionality including ledger and payment consistency"""

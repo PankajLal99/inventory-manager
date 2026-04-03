@@ -9,6 +9,7 @@ from django.db import transaction
 from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
 import uuid
@@ -16,6 +17,8 @@ from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, R
 from backend.catalog.models import Barcode, Product, ProductVariant
 from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.inventory.models import Stock
+from backend.locations.models import Store
+from backend.parties.models import LedgerEntry
 from backend.core.utils import create_audit_log
 from backend.parties.internal_ledger_utils import (
     create_internal_ledger_entry_if_mtshop,
@@ -2393,6 +2396,327 @@ def cart_unhold(request, pk):
     return Response({'status': 'active'})
 
 
+def _pos_trade_in_customers_match(source_customer_id, expected_customer_id):
+    return (source_customer_id or None) == (expected_customer_id or None)
+
+
+def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, expected_customer_id):
+    """
+    Remove one invoice line from a prior sale, restore stock (unless defective), update source invoice.
+    Returns dict: credit (Decimal), detail (for JSON on new invoice).
+    Aligned with replacement_return / replacement_defective.
+    """
+    if return_tag not in ('returned', 'defective', 'unknown'):
+        raise ValueError(f'Invalid return_tag: {return_tag}')
+
+    try:
+        invoice_item = InvoiceItem.objects.select_for_update().get(pk=invoice_item_id)
+    except ObjectDoesNotExist:
+        raise ValueError('Trade-in invoice line no longer exists (it may have already been returned).') from None
+    invoice = Invoice.objects.select_for_update().get(pk=invoice_item.invoice_id)
+    product = invoice_item.product
+    variant = invoice_item.variant
+    barcode_obj = invoice_item.barcode
+
+    if not _pos_trade_in_customers_match(invoice.customer_id, expected_customer_id):
+        raise ValueError(
+            'Trade-in item belongs to a different customer than this sale. '
+            'Select the same customer or remove the trade-in line.'
+        )
+
+    if invoice.status == 'void':
+        raise ValueError('Cannot trade in from a void invoice')
+
+    if product.track_inventory and barcode_obj:
+        is_valid, error_msg = validate_barcode_for_replacement(barcode_obj)
+        if not is_valid:
+            raise ValueError(error_msg or 'Item not eligible for trade-in')
+    elif not product.track_inventory:
+        pb = product.barcodes.first()
+        if pb:
+            is_valid, error_msg = validate_barcode_for_replacement(pb)
+            if not is_valid:
+                raise ValueError(error_msg or 'Item not eligible for trade-in')
+
+    return_qty = invoice_item.quantity
+    original_quantity = invoice_item.quantity
+    original_line_total = invoice_item.line_total
+    if original_quantity > 0:
+        refund_amount = (original_line_total / original_quantity) * return_qty
+    else:
+        refund_amount = Decimal('0.00')
+
+    if return_tag == 'defective':
+        if return_qty >= invoice_item.quantity:
+            invoice_item.delete()
+        else:
+            invoice_item.quantity -= return_qty
+            invoice_item.line_total = (
+                invoice_item.quantity * (invoice_item.manual_unit_price or invoice_item.unit_price)
+                - invoice_item.discount_amount
+                + invoice_item.tax_amount
+            )
+            invoice_item.save()
+        update_invoice_totals(invoice)
+        invoice.refresh_from_db()
+
+        if invoice.paid_amount > invoice.total:
+            excess_payment = invoice.paid_amount - invoice.total
+            invoice.paid_amount = invoice.total
+            invoice.due_amount = Decimal('0.00')
+            if excess_payment > 0:
+                last_payment = invoice.payments.order_by('-created_at').first()
+                refund_payment_method = last_payment.payment_method if last_payment else 'cash'
+                refund_payment = Payment.objects.create(
+                    invoice=invoice,
+                    payment_method='refund',
+                    amount=-excess_payment,
+                    reference=f'REFUND-DEFECTIVE-{invoice.invoice_number}',
+                    notes=(
+                        f'Refund for defective items (POS trade-in, Qty: {return_qty}). '
+                        f'Original payment method: {refund_payment_method}'
+                    ),
+                    created_by=request.user,
+                )
+                create_audit_log(
+                    request=request,
+                    action='payment_refund',
+                    model_name='Payment',
+                    object_id=str(refund_payment.id),
+                    object_name=f"Refund Payment for Defective Items - Invoice {invoice.invoice_number}",
+                    object_reference=invoice.invoice_number,
+                    barcode=None,
+                    changes={
+                        'payment_id': refund_payment.id,
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'refund_amount': str(excess_payment),
+                        'payment_method': refund_payment_method,
+                        'defective_quantity': str(return_qty),
+                        'context': 'pos_trade_in',
+                    },
+                )
+        else:
+            invoice.due_amount = invoice.total - invoice.paid_amount
+
+        if invoice.due_amount <= Decimal('0.00'):
+            invoice.status = 'paid'
+        elif invoice.paid_amount > Decimal('0.00'):
+            invoice.status = 'partial'
+        else:
+            invoice.status = 'draft'
+        invoice.save()
+
+        if barcode_obj:
+            barcode_obj.tag = 'defective'
+            barcode_obj.save(update_fields=['tag'])
+            invalidate_barcode_cache(barcode_obj)
+
+        create_audit_log(
+            request=request,
+            action='replacement_defective',
+            model_name='InvoiceItem',
+            object_id='deleted',
+            object_name=f"{product.name} (defective, POS trade-in)",
+            object_reference=invoice.invoice_number,
+            barcode=barcode_obj.barcode if barcode_obj else None,
+            changes={
+                'invoice_id': invoice.id,
+                'invoice_number': invoice.invoice_number,
+                'product_id': product.id,
+                'barcode': barcode_obj.barcode if barcode_obj else None,
+                'defective_quantity': str(return_qty),
+                'context': 'pos_trade_in',
+            },
+        )
+    else:
+        item_deleted = False
+        if return_qty >= invoice_item.quantity:
+            invoice_item.delete()
+            item_deleted = True
+        else:
+            invoice_item.quantity -= return_qty
+            invoice_item.line_total = (
+                invoice_item.quantity * (invoice_item.manual_unit_price or invoice_item.unit_price)
+                - invoice_item.discount_amount
+                + invoice_item.tax_amount
+            )
+            invoice_item.save()
+        update_invoice_totals(invoice)
+        invoice.refresh_from_db()
+
+        if invoice.paid_amount > invoice.total:
+            excess_payment = invoice.paid_amount - invoice.total
+            invoice.paid_amount = invoice.total
+            invoice.due_amount = Decimal('0.00')
+            if excess_payment > 0:
+                last_payment = invoice.payments.order_by('-created_at').first()
+                refund_payment_method = last_payment.payment_method if last_payment else 'cash'
+                refund_payment = Payment.objects.create(
+                    invoice=invoice,
+                    payment_method='refund',
+                    amount=-excess_payment,
+                    reference=f'REFUND-{invoice.invoice_number}',
+                    notes=(
+                        f'Refund for returned items (POS trade-in, Qty: {return_qty}). '
+                        f'Original payment method: {refund_payment_method}'
+                    ),
+                    created_by=request.user,
+                )
+                if invoice.customer:
+                    LedgerEntry.objects.create(
+                        customer=invoice.customer,
+                        invoice=invoice,
+                        entry_type='credit',
+                        amount=excess_payment,
+                        description=(
+                            f'Refund for returned items from Invoice {invoice.invoice_number} '
+                            f'(POS trade-in, Qty: {return_qty})'
+                        ),
+                        created_by=request.user,
+                        created_at=timezone.now(),
+                    )
+                    create_internal_ledger_entry_if_mtshop(
+                        invoice.customer,
+                        'credit',
+                        excess_payment,
+                        f'Refund for returned items from Invoice {invoice.invoice_number} (POS trade-in)',
+                        request.user,
+                        timezone.now(),
+                    )
+                    invoice.customer.credit_balance += excess_payment
+                    invoice.customer.save(update_fields=['credit_balance'])
+                create_audit_log(
+                    request=request,
+                    action='payment_refund',
+                    model_name='Payment',
+                    object_id=str(refund_payment.id),
+                    object_name=f"Refund Payment for Invoice {invoice.invoice_number}",
+                    object_reference=invoice.invoice_number,
+                    barcode=None,
+                    changes={
+                        'payment_id': refund_payment.id,
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'refund_amount': str(excess_payment),
+                        'payment_method': refund_payment_method,
+                        'return_quantity': str(return_qty),
+                        'context': 'pos_trade_in',
+                    },
+                )
+        else:
+            invoice.due_amount = invoice.total - invoice.paid_amount
+
+        if invoice.due_amount <= Decimal('0.00'):
+            invoice.status = 'paid'
+        elif invoice.paid_amount > Decimal('0.00'):
+            invoice.status = 'partial'
+        else:
+            invoice.status = 'draft'
+        invoice.save()
+
+        if barcode_obj:
+            old_tag = barcode_obj.tag
+            barcode_obj.tag = return_tag
+            barcode_obj.save(update_fields=['tag'])
+            invalidate_barcode_cache(barcode_obj)
+            create_audit_log(
+                request=request,
+                action='barcode_tag_change',
+                model_name='Barcode',
+                object_id=str(barcode_obj.id),
+                object_name=product.name,
+                object_reference=invoice.invoice_number,
+                barcode=barcode_obj.barcode,
+                changes={
+                    'tag': {'old': old_tag, 'new': return_tag},
+                    'context': 'pos_trade_in',
+                },
+            )
+
+        if product.track_inventory:
+            try:
+                store = Store.objects.get(pk=store_id) if store_id else invoice.store
+                if store:
+                    stock, _created = Stock.objects.get_or_create(
+                        product=product,
+                        variant=variant,
+                        store=store,
+                        defaults={'quantity': Decimal('0.000')},
+                    )
+                    stock.quantity += return_qty
+                    stock.save(update_fields=['quantity'])
+            except Exception:
+                pass
+
+        create_audit_log(
+            request=request,
+            action='replacement_return',
+            model_name='InvoiceItem',
+            object_id=str(invoice_item_id) if not item_deleted else 'deleted',
+            object_name=f"{product.name} (POS trade-in return)",
+            object_reference=invoice.invoice_number,
+            barcode=barcode_obj.barcode if barcode_obj else None,
+            changes={
+                'tag': return_tag,
+                'invoice_id': invoice.id,
+                'invoice_number': invoice.invoice_number,
+                'return_quantity': str(return_qty),
+                'refund_amount': str(refund_amount),
+                'context': 'pos_trade_in',
+            },
+        )
+
+    detail = {
+        'source_invoice_id': invoice.id,
+        'source_invoice_number': invoice.invoice_number,
+        'invoice_item_id': invoice_item_id,
+        'product_name': product.name,
+        'barcode': barcode_obj.barcode if barcode_obj else None,
+        'credit': str(refund_amount.quantize(Decimal('0.01'))),
+        'return_tag': return_tag,
+    }
+    return {'credit': refund_amount.quantize(Decimal('0.01')), 'detail': detail}
+
+
+def process_pos_trade_ins_for_checkout(request, trade_ins_raw, customer_id, store_id):
+    """trade_ins_raw: list of {invoice_item_id, return_tag}. Returns (total_credit, details)."""
+    if not trade_ins_raw:
+        return Decimal('0.00'), []
+
+    if not customer_id:
+        raise ValueError('Customer is required when using trade-in returns')
+
+    if not isinstance(trade_ins_raw, list):
+        raise ValueError('pos_trade_ins must be a list')
+
+    seen_ids = set()
+    total = Decimal('0.00')
+    details = []
+
+    for raw in trade_ins_raw:
+        iid = raw.get('invoice_item_id')
+        tag = raw.get('return_tag')
+        if iid is None or tag is None:
+            raise ValueError('Each pos_trade_ins entry needs invoice_item_id and return_tag')
+        iid = int(iid)
+        if iid in seen_ids:
+            raise ValueError('Duplicate invoice_item_id in pos_trade_ins')
+        seen_ids.add(iid)
+
+        result = apply_pos_trade_in_line(
+            request,
+            invoice_item_id=iid,
+            return_tag=str(tag),
+            store_id=store_id,
+            expected_customer_id=int(customer_id),
+        )
+        total += result['credit']
+        details.append(result['detail'])
+
+    return total, details
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @transaction.atomic
@@ -2608,7 +2932,33 @@ def cart_checkout(request, pk):
         invoice.subtotal = subtotal
         invoice.discount_amount = discount_total
         invoice.tax_amount = tax_total
-        invoice.total = subtotal - discount_total + tax_total
+        gross_total = subtotal - discount_total + tax_total
+
+        trade_ins_raw = request.data.get('pos_trade_ins') or []
+        trade_credit = Decimal('0.00')
+        trade_details = []
+        if trade_ins_raw:
+            try:
+                trade_credit, trade_details = process_pos_trade_ins_for_checkout(
+                    request, trade_ins_raw, customer_id, cart.store_id
+                )
+            except ValueError as e:
+                transaction.set_rollback(True)
+                msg = str(e)
+                return Response({'error': msg, 'message': msg}, status=status.HTTP_400_BAD_REQUEST)
+            if trade_credit > gross_total + Decimal('0.01'):
+                transaction.set_rollback(True)
+                return Response(
+                    {
+                        'error': 'Trade-in credit cannot exceed this sale total',
+                        'message': f'Sale total is {gross_total}, trade-in credit is {trade_credit}',
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        invoice.trade_in_credit = trade_credit
+        invoice.pos_trade_ins = trade_details if trade_details else None
+        invoice.total = gross_total - trade_credit
 
         if invoice_type == 'pending':
             invoice.status = 'draft'
