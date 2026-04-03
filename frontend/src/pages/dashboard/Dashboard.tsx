@@ -30,6 +30,11 @@ type UpiStoreRow = StoreAmountRow & {
   from_mixed_upi?: number;
 };
 
+type PendingPurchaseItemStatsRow = StoreAmountRow & {
+  pending_qty: number;
+  distinct_product_count: number;
+};
+
 function counterInvoiceTypeLabel(invoiceType: string) {
   const labels: Record<string, string> = {
     cash: 'Cash',
@@ -220,6 +225,50 @@ function UpiStoreList({ title, rows }: { title: string; rows: UpiStoreRow[] }) {
   );
 }
 
+function PendingPurchaseItemStatsTable({
+  rows,
+}: {
+  rows: PendingPurchaseItemStatsRow[];
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden max-w-4xl">
+      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <p className="text-sm font-medium text-gray-700">
+          Pending item stats by store (all-time)
+        </p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-sm text-gray-500 p-4">No pending invoice lines.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50/80">
+                <th className="px-4 py-2.5 font-medium text-gray-700">Store</th>
+                <th className="px-4 py-2.5 font-medium text-gray-700">Shop</th>
+                <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Pending qty</th>
+                <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Product IDs</th>
+                <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.map((row) => (
+                <tr key={row.store_id} className="hover:bg-gray-50/80">
+                  <td className="px-4 py-2.5 font-medium text-gray-900">{row.store_name}</td>
+                  <td className="px-4 py-2.5 text-gray-600">{shopTypeLabel(row.shop_type)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(row.pending_qty, 2)}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{row.distinct_product_count}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums font-semibold">₹{formatNumber(row.amount, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [user, setUser] = useState(auth.getUser());
   const [datePreset, setDatePreset] = useState<DateRangePreset>('one_day');
@@ -307,6 +356,7 @@ export default function Dashboard() {
         total_pending_yet_to_finalize_by_store?: StoreAmountRow[];
         payments_by_method?: { payment_method: string; amount: number }[];
         pending_purchase_by_store?: StoreAmountRow[];
+        pending_purchase_item_stats_by_store?: PendingPurchaseItemStatsRow[];
         pending_purchase_yet_to_finalize_by_store?: StoreAmountRow[];
         counter_profit_by_store?: StoreAmountRow[];
         counter_profit_by_invoice_type?: { invoice_type: string; profit: number }[];
@@ -404,6 +454,11 @@ export default function Dashboard() {
   const pendingPurchaseTotal = Number(kpis.pending_invoice_purchase_total ?? 0);
   const pendingPurchaseByStore: StoreAmountRow[] = Array.isArray(dashboardData?.pending_purchase_by_store)
     ? dashboardData.pending_purchase_by_store
+    : [];
+  const pendingPurchaseItemStatsByStore: PendingPurchaseItemStatsRow[] = Array.isArray(
+    dashboardData?.pending_purchase_item_stats_by_store,
+  )
+    ? dashboardData.pending_purchase_item_stats_by_store
     : [];
   const counterProfit = Number(kpis.counter_profit ?? 0);
   const repairProfit = Number(kpis.repair_profit ?? 0);
@@ -869,14 +924,17 @@ export default function Dashboard() {
                   <StoreAmountList
                     title="By store (all pending)"
                     rows={pendingPurchaseByStore}
-                    emptyMessage="No pending invoice lines in this period."
+                    emptyMessage="No pending invoice lines."
                   />
                   <StoreAmountList
                     title="Yet to finalize by store (paid = 0)"
                     rows={pendingPurchaseYtfByStore}
-                    emptyMessage="No unpaid pending lines in this period."
+                    emptyMessage="No unpaid pending lines."
                   />
                 </div>
+              </div>
+              <div className="mt-4">
+                <PendingPurchaseItemStatsTable rows={pendingPurchaseItemStatsByStore} />
               </div>
             </div>
 

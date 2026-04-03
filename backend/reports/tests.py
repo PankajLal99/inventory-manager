@@ -335,8 +335,48 @@ class ReportsTests(TestCase):
         row = response.data['pending_purchase_by_store'][0]
         self.assertEqual(row['amount'], 71.0)
         self.assertEqual(row['store_id'], self.store.id)
+        self.assertEqual(len(response.data['pending_purchase_item_stats_by_store']), 1)
+        stats_row = response.data['pending_purchase_item_stats_by_store'][0]
+        self.assertEqual(stats_row['amount'], 71.0)
+        self.assertEqual(stats_row['pending_qty'], 2.0)
+        self.assertEqual(stats_row['distinct_product_count'], 1)
         self.assertEqual(len(response.data['pending_purchase_yet_to_finalize_by_store']), 1)
         self.assertEqual(response.data['pending_purchase_yet_to_finalize_by_store'][0]['amount'], 71.0)
+
+    def test_dashboard_kpis_pending_purchase_cost_is_all_time_not_date_scoped(self):
+        """Overall pending purchase-cost KPI includes pending invoices outside the selected date range."""
+        product = TestDataFactory.create_product()
+
+        old_pending = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=self.store,
+            invoice_type='pending',
+            status='pending',
+        )
+        old_pending.created_at = timezone.now() - timedelta(days=40)
+        old_pending.save(update_fields=['created_at'])
+        InvoiceItem.objects.create(
+            invoice=old_pending,
+            product=product,
+            quantity=Decimal('2'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('200.00'),
+            purchase_price=Decimal('25.00'),
+        )
+
+        response = self.client.get('/api/v1/reports/dashboard-kpis/?date_from=2100-01-01&date_to=2100-01-02')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # 2 * 25.00 from an invoice outside the requested date window should still be included.
+        self.assertEqual(response.data['kpis']['pending_invoice_purchase_total'], 50.0)
+        self.assertEqual(response.data['kpis']['pending_invoice_purchase_yet_to_finalize_total'], 50.0)
+        self.assertEqual(len(response.data['pending_purchase_by_store']), 1)
+        self.assertEqual(response.data['pending_purchase_by_store'][0]['amount'], 50.0)
+        self.assertEqual(len(response.data['pending_purchase_item_stats_by_store']), 1)
+        self.assertEqual(response.data['pending_purchase_item_stats_by_store'][0]['pending_qty'], 2.0)
+        self.assertEqual(response.data['pending_purchase_item_stats_by_store'][0]['distinct_product_count'], 1)
+        self.assertEqual(len(response.data['pending_purchase_yet_to_finalize_by_store']), 1)
+        self.assertEqual(response.data['pending_purchase_yet_to_finalize_by_store'][0]['amount'], 50.0)
 
     def test_dashboard_kpis_stock_value_excludes_draft_purchase_barcodes(self):
         """Stock value sums unit_price per new/returned barcode; draft purchase lines excluded."""

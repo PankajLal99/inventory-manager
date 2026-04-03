@@ -6,7 +6,7 @@ from collections import defaultdict
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, DecimalField, Q, F, Value, Case, When, ExpressionWrapper
+from django.db.models import Sum, DecimalField, Q, F, Value, Case, When, ExpressionWrapper, Count
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import date, datetime
@@ -103,9 +103,11 @@ def optimized_dashboard_kpis(request):
     - pending_invoice_purchase_yet_to_finalize_* / pending_purchase_yet_to_finalize_by_store: overall pending set with paid=0.
     - total_payments / payments_by_method: Σ pos.Payment.amount in range (Payment.created_at date),
       excluding invoices void/draft; grouped by payment_method.
-    - pending_invoice_purchase_total / pending_purchase_by_store: for invoices pending in the period
+    - pending_invoice_purchase_total / pending_purchase_by_store: for all-time invoices pending
       (status=pending OR invoice_type=pending; void/draft excluded), Σ (PurchaseItem.unit_price × qty) on lines
       with barcode→purchase_item; else Σ (InvoiceItem.purchase_price × qty) when purchase_price set.
+    - pending_purchase_item_stats_by_store: same all-time pending set grouped by store with
+      pending_qty (Σ InvoiceItem.quantity), distinct_product_count (distinct product_id), and purchase-cost amount.
     - counter_profit: Σ list-style profit (computed_paid − computed_total, annotate_invoice_list_profit) for
       retail/wholesale invoices with invoice_type in cash/upi/mixed/credit, no repair row — matches Invoices page
       (repair and defective excluded).
@@ -347,10 +349,10 @@ def optimized_dashboard_kpis(request):
         output_field=money,
     )
 
+    # All-time pending purchase-cost KPI (not date scoped): include every pending/pending-type non-draft invoice.
     pending_invoices = Invoice.objects.filter(
-        created_at__date__gte=date_from,
-        created_at__date__lte=date_to,
-    ).filter(Q(status='pending') | Q(invoice_type='pending')).exclude(status__in=['void', 'draft'])
+        Q(status='pending') | Q(invoice_type='pending')
+    ).exclude(status__in=['void'])
 
     pending_items_qs = InvoiceItem.objects.filter(invoice__in=pending_invoices)
 
@@ -375,6 +377,30 @@ def optimized_dashboard_kpis(request):
             'amount': float(_decimal_or_zero(r['total_sum'])),
         }
         for r in pending_purchase_store_rows
+    ]
+    pending_purchase_item_stats_rows = (
+        pending_items_qs.values(
+            'invoice__store_id',
+            'invoice__store__name',
+            'invoice__store__shop_type',
+        )
+        .annotate(
+            total_sum=Sum(pending_line_cost, output_field=money),
+            pending_qty=Sum('quantity', output_field=money),
+            distinct_product_count=Count('product_id', distinct=True),
+        )
+        .order_by('-total_sum', 'invoice__store__name')
+    )
+    pending_purchase_item_stats_by_store = [
+        {
+            'store_id': r['invoice__store_id'],
+            'store_name': r['invoice__store__name'] or '',
+            'shop_type': r['invoice__store__shop_type'] or '',
+            'amount': float(_decimal_or_zero(r['total_sum'])),
+            'pending_qty': float(_decimal_or_zero(r['pending_qty'])),
+            'distinct_product_count': int(r['distinct_product_count'] or 0),
+        }
+        for r in pending_purchase_item_stats_rows
     ]
 
     pending_invoice_purchase_retail = _decimal_or_zero(
@@ -702,6 +728,7 @@ def optimized_dashboard_kpis(request):
         'total_pending_yet_to_finalize_by_store': total_pending_yet_to_finalize_by_store,
         'payments_by_method': payments_by_method,
         'pending_purchase_by_store': pending_purchase_by_store,
+        'pending_purchase_item_stats_by_store': pending_purchase_item_stats_by_store,
         'pending_purchase_yet_to_finalize_by_store': pending_purchase_yet_to_finalize_by_store,
         'counter_profit_by_store': counter_profit_by_store,
         'counter_profit_by_invoice_type': counter_profit_by_invoice_type,
