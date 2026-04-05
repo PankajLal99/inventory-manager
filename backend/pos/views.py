@@ -2510,6 +2510,11 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
             if not is_valid:
                 raise ValueError(error_msg or 'Item not eligible for trade-in')
 
+    # Row to receive return_tag / defective: resolved line barcode, or the single representative barcode for non-tracked.
+    tag_barcode = barcode_obj
+    if tag_barcode is None and product and not product.track_inventory:
+        tag_barcode = single_barcode_for_untracked_product(product)
+
     return_qty = invoice_item.quantity
     original_quantity = invoice_item.quantity
     original_line_total = invoice_item.line_total
@@ -2579,10 +2584,10 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
             invoice.status = 'draft'
         invoice.save()
 
-        if barcode_obj:
-            barcode_obj.tag = 'defective'
-            barcode_obj.save(update_fields=['tag'])
-            invalidate_barcode_cache(barcode_obj)
+        if tag_barcode:
+            tag_barcode.tag = return_tag
+            tag_barcode.save(update_fields=['tag'])
+            invalidate_barcode_cache(tag_barcode)
 
         create_audit_log(
             request=request,
@@ -2591,12 +2596,12 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
             object_id='deleted',
             object_name=f"{product.name} (defective, POS trade-in)",
             object_reference=invoice.invoice_number,
-            barcode=barcode_obj.barcode if barcode_obj else None,
+            barcode=tag_barcode.barcode if tag_barcode else None,
             changes={
                 'invoice_id': invoice.id,
                 'invoice_number': invoice.invoice_number,
                 'product_id': product.id,
-                'barcode': barcode_obj.barcode if barcode_obj else None,
+                'barcode': tag_barcode.barcode if tag_barcode else None,
                 'defective_quantity': str(return_qty),
                 'context': 'pos_trade_in',
             },
@@ -2687,19 +2692,19 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
             invoice.status = 'draft'
         invoice.save()
 
-        if barcode_obj:
-            old_tag = barcode_obj.tag
-            barcode_obj.tag = return_tag
-            barcode_obj.save(update_fields=['tag'])
-            invalidate_barcode_cache(barcode_obj)
+        if tag_barcode:
+            old_tag = tag_barcode.tag
+            tag_barcode.tag = return_tag
+            tag_barcode.save(update_fields=['tag'])
+            invalidate_barcode_cache(tag_barcode)
             create_audit_log(
                 request=request,
                 action='barcode_tag_change',
                 model_name='Barcode',
-                object_id=str(barcode_obj.id),
+                object_id=str(tag_barcode.id),
                 object_name=product.name,
                 object_reference=invoice.invoice_number,
-                barcode=barcode_obj.barcode,
+                barcode=tag_barcode.barcode,
                 changes={
                     'tag': {'old': old_tag, 'new': return_tag},
                     'context': 'pos_trade_in',
@@ -2728,7 +2733,7 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
             object_id=str(invoice_item_id) if not item_deleted else 'deleted',
             object_name=f"{product.name} (POS trade-in return)",
             object_reference=invoice.invoice_number,
-            barcode=barcode_obj.barcode if barcode_obj else None,
+            barcode=tag_barcode.barcode if tag_barcode else None,
             changes={
                 'tag': return_tag,
                 'invoice_id': invoice.id,
@@ -2744,7 +2749,7 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
         'source_invoice_number': invoice.invoice_number,
         'invoice_item_id': invoice_item_id,
         'product_name': product.name,
-        'barcode': barcode_obj.barcode if barcode_obj else None,
+        'barcode': tag_barcode.barcode if tag_barcode else None,
         'credit': str(refund_amount.quantize(Decimal('0.01'))),
         'return_tag': return_tag,
     }
