@@ -489,7 +489,11 @@ export default function Products() {
   });
 
   const handleDeleteProduct = (productId: number, productName: string) => {
-    if (window.confirm(`Are you sure you want to delete "${productName}"? This action cannot be undone.`)) {
+    if (
+      window.confirm(
+        `Remove "${productName}" from the catalog? The product will be hidden and deactivated; existing invoices and history stay intact.`
+      )
+    ) {
       deleteProductMutation.mutate(productId);
     }
   };

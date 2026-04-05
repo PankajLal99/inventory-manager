@@ -264,7 +264,8 @@ def product_list_create(request):
             from backend.purchasing.models import PurchaseItem
             wh_subq = PurchaseItem.objects.filter(
                 product_id=OuterRef('pk'),
-                purchase__status='finalized'
+                purchase__status='finalized',
+                purchase__deleted_at__isnull=True,
             ).values('product_id').annotate(s=Sum('warehouse_quantity')).values('s')
             # Coalesce NULL (no purchase items) to 0 so we only keep products where sum > 0
             queryset = queryset.annotate(
@@ -638,7 +639,11 @@ def product_detail(request, pk):
             object_name=product_name,
             object_reference=product_sku,
             barcode=None,
-            changes={'name': product_name, 'sku': product_sku}
+            changes={
+                'name': product_name,
+                'sku': product_sku,
+                'note': 'Product soft-deleted (row retained in DB, hidden from default API lists).',
+            }
         )
         
         # Invalidate cache AFTER transaction commits
@@ -2269,6 +2274,7 @@ def defective_product_move_out(request):
                         product=product,
                         variant=None,  # Move-out doesn't track variants
                         barcode=barcode,
+                        sold_barcode_value=barcode.barcode or '',
                         quantity=Decimal('1.000'),  # Each barcode is quantity 1
                         unit_price=price,
                         manual_unit_price=price,
@@ -2392,7 +2398,8 @@ def defective_product_move_out_list(request):
         from backend.purchasing.models import PurchaseItem
         # Get product IDs that were purchased from this supplier
         supplier_product_ids = PurchaseItem.objects.filter(
-            purchase__supplier_id=supplier_id
+            purchase__supplier_id=supplier_id,
+            purchase__deleted_at__isnull=True,
         ).values_list('product_id', flat=True).distinct()
         # Filter move-outs that have items with products from this supplier
         move_outs = move_outs.filter(items__product_id__in=supplier_product_ids).distinct()

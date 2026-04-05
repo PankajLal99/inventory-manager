@@ -41,7 +41,13 @@ class Customer(models.Model):
 
 class PaymentReminder(models.Model):
     """Payment reminders linked to customers."""
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='payment_reminders')
+    customer = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_reminders',
+    )
     due_date = models.DateField()
     due_amount = models.DecimalField(max_digits=10, decimal_places=2)
     is_settled = models.BooleanField(default=False)
@@ -51,7 +57,8 @@ class PaymentReminder(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.customer.name} - {self.due_date} - {self.due_amount}"
+        cname = self.customer.name if self.customer else 'Unknown customer'
+        return f"{cname} - {self.due_date} - {self.due_amount}"
 
     class Meta:
         db_table = 'payment_reminders'
@@ -90,7 +97,13 @@ class LedgerEntry(models.Model):
         ('other', 'Other'),
     ]
     
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='ledger_entries', null=True, blank=True)
+    customer = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ledger_entries',
+    )
     invoice = models.ForeignKey('pos.Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='ledger_entries')
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
     payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES, default='other')
@@ -138,7 +151,13 @@ class PersonalLedgerEntry(models.Model):
         ('debit', 'Debit'),
     ]
     
-    customer = models.ForeignKey(PersonalCustomer, on_delete=models.CASCADE, related_name='personal_ledger_entries', null=True, blank=True)
+    customer = models.ForeignKey(
+        PersonalCustomer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='personal_ledger_entries',
+    )
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True)
@@ -185,7 +204,13 @@ class InternalLedgerEntry(models.Model):
         ('debit', 'Debit'),
     ]
     
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='internal_ledger_entries', null=True, blank=True)
+    customer = models.ForeignKey(
+        Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='internal_ledger_entries',
+    )
     entry_type = models.CharField(max_length=20, choices=ENTRY_TYPE_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True)

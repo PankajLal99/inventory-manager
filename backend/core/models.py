@@ -1,5 +1,41 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
+
+
+class SoftDeleteQuerySet(models.QuerySet):
+    """Bulk soft-delete: set deleted_at instead of removing rows."""
+
+    def delete(self):
+        count = self.update(deleted_at=timezone.now())
+        return count, {self.model._meta.label: count}
+
+
+class SoftDeleteManager(models.Manager):
+    def get_queryset(self):
+        return SoftDeleteQuerySet(self.model, using=self._db).filter(deleted_at__isnull=True)
+
+
+class AllObjectsManager(models.Manager):
+    """Unfiltered queryset; use for admin, hard purge, or uniqueness checks across all rows."""
+
+
+class SoftDeleteModel(models.Model):
+    """Rows stay in the DB; default manager hides deleted rows."""
+
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    objects = SoftDeleteManager()
+    all_objects = AllObjectsManager()
+
+    class Meta:
+        abstract = True
+
+    def delete(self, using=None, keep_parents=False, hard: bool = False):
+        if hard:
+            return super().delete(using=using, keep_parents=keep_parents)
+        self.deleted_at = timezone.now()
+        self.save(update_fields=['deleted_at'])
 
 
 class User(AbstractUser):

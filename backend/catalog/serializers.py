@@ -63,14 +63,20 @@ class BarcodeSerializer(serializers.ModelSerializer):
                     obj._active_invoice_item = invoice_item
                     return invoice_item
         
-        # Fallback to query
+        # Fallback: barcode should appear on at most one non-void line — use get(), not first()
         from backend.pos.models import InvoiceItem
-        invoice_item = InvoiceItem.objects.filter(
-            barcode=obj
-        ).exclude(
-            invoice__status='void'
-        ).select_related('invoice', 'invoice__customer').first()
-        
+
+        try:
+            invoice_item = InvoiceItem.objects.filter(
+                barcode=obj
+            ).exclude(
+                invoice__status='void'
+            ).select_related('invoice', 'invoice__customer').get()
+        except InvoiceItem.DoesNotExist:
+            invoice_item = None
+        except InvoiceItem.MultipleObjectsReturned:
+            invoice_item = None
+
         obj._active_invoice_item = invoice_item
         return invoice_item
 
@@ -209,9 +215,10 @@ class ProductSerializer(serializers.ModelSerializer):
                 Decimal(str(item.quantity)) for item in cart_items
             )
             
-            # Get the product's barcode (should be only one)
-            # For non-tracked products, barcode always stays as 'new' - we don't mark it as 'sold'
-            product_barcode = obj.barcodes.first()
+            # Non-tracked: at most one representative barcode (primary, or exactly one row)
+            from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+
+            product_barcode = single_barcode_for_untracked_product(obj)
             
             # If barcode exists and total cart quantity is less than 1, return the barcode
             # Otherwise, return empty list (all quantity is in carts)
@@ -353,7 +360,8 @@ def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
     items = (
         PurchaseItem.objects.filter(
             product=obj,
-            purchase__status='finalized'
+            purchase__status='finalized',
+            purchase__deleted_at__isnull=True,
         )
         .select_related('purchase__supplier')
         .order_by('-purchase__purchase_date', 'purchase__supplier__name')
@@ -526,7 +534,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         from backend.purchasing.models import PurchaseItem
         total = PurchaseItem.objects.filter(
             product=obj,
-            purchase__status='finalized'
+            purchase__status='finalized',
+            purchase__deleted_at__isnull=True,
         ).aggregate(s=Sum('shop_quantity'))['s']
         return float(total or 0)
 
@@ -535,14 +544,16 @@ class ProductListSerializer(serializers.ModelSerializer):
         from backend.purchasing.models import PurchaseItem
         total = PurchaseItem.objects.filter(
             product=obj,
-            purchase__status='finalized'
+            purchase__status='finalized',
+            purchase__deleted_at__isnull=True,
         ).aggregate(s=Sum('warehouse_quantity'))['s']
         return float(total or 0)
 
     def get_available_quantity(self, obj):
-        """Available to sell = barcodes with tag 'new' or 'returned'.
-        Single source of truth: barcode tag count."""
-        return self._get_new_returned_count(obj)
+        """Available in shop view: (new+returned barcodes) minus warehouse qty from finalized purchases (floored at 0)."""
+        nr = self._get_new_returned_count(obj)
+        wh = self._get_warehouse_from_purchase(obj)
+        return float(max(0, nr - wh))
 
     def get_shop_stock(self, obj):
         """Shop available = sum of shop_barcode_count from supplier breakdown (accounts for sales)."""
@@ -600,7 +611,9 @@ class ProductListSerializer(serializers.ModelSerializer):
         """Get purchase price from product's primary barcode or first barcode"""
         if self._get_tag_filter() == 'sold':
             return None
-        product_barcode = obj.barcodes.filter(is_primary=True).first() or obj.barcodes.first()
+        from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+
+        product_barcode = single_barcode_for_untracked_product(obj)
         if product_barcode:
             purchase_price = product_barcode.get_purchase_price()
             return float(purchase_price) if purchase_price else None
@@ -611,7 +624,9 @@ class ProductListSerializer(serializers.ModelSerializer):
         Returns None if selling_price is 0 or null, indicating fallback to purchase price."""
         if self._get_tag_filter() == 'sold':
             return None
-        product_barcode = obj.barcodes.filter(is_primary=True).first() or obj.barcodes.first()
+        from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+
+        product_barcode = single_barcode_for_untracked_product(obj)
         if product_barcode:
             selling_price = product_barcode.get_selling_price()
             return float(selling_price) if selling_price else None

@@ -1,6 +1,21 @@
 from django.db import models
 from decimal import Decimal
 
+from django.utils import timezone
+
+from backend.core.models import SoftDeleteModel, SoftDeleteQuerySet, SoftDeleteManager
+
+
+class ProductQuerySet(SoftDeleteQuerySet):
+    def delete(self):
+        count = self.update(deleted_at=timezone.now(), is_active=False)
+        return count, {self.model._meta.label: count}
+
+
+class ProductManager(SoftDeleteManager):
+    def get_queryset(self):
+        return ProductQuerySet(self.model, using=self._db).filter(deleted_at__isnull=True)
+
 
 class Category(models.Model):
     """Product categories"""
@@ -49,8 +64,10 @@ class TaxRate(models.Model):
         db_table = 'tax_rates'
 
 
-class Product(models.Model):
+class Product(SoftDeleteModel):
     """Product master"""
+    objects = ProductManager()
+
     PRODUCT_TYPE_CHOICES = [
         ('simple', 'Simple'),
         ('variant', 'Variant Parent'),
@@ -76,6 +93,13 @@ class Product(models.Model):
     def __str__(self):
         return f"{self.name} ({self.sku or 'NO-SKU'})"
 
+    def delete(self, using=None, keep_parents=False, hard: bool = False):
+        if hard:
+            return super().delete(using=using, keep_parents=keep_parents, hard=True)
+        self.is_active = False
+        self.deleted_at = timezone.now()
+        self.save(update_fields=['is_active', 'deleted_at'])
+
     class Meta:
         db_table = 'products'
         indexes = [
@@ -87,7 +111,7 @@ class Product(models.Model):
 
 class ProductVariant(models.Model):
     """Product variants (size, color, etc.)"""
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='variants')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='variants')
     name = models.CharField(max_length=200)  # e.g., "Red - Large"
     sku = models.CharField(max_length=100, unique=True)
     attributes = models.JSONField(default=dict)  # e.g., {"color": "red", "size": "L"}
@@ -103,7 +127,7 @@ class ProductVariant(models.Model):
         db_table = 'product_variants'
 
 
-class Barcode(models.Model):
+class Barcode(SoftDeleteModel):
     """Barcodes for products/variants - linked to purchases"""
     TAG_CHOICES = [
         ('new', 'NEW (Fresh)'),
@@ -114,8 +138,20 @@ class Barcode(models.Model):
         ('in-cart', 'In Cart'),
     ]
     
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='barcodes', null=True, blank=True)
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='barcodes', null=True, blank=True)
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        related_name='barcodes',
+        null=True,
+        blank=True,
+    )
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.SET_NULL,
+        related_name='barcodes',
+        null=True,
+        blank=True,
+    )
     barcode = models.CharField(max_length=100, unique=True, db_index=True)
     short_code = models.CharField(max_length=50, unique=True, db_index=True, null=True, blank=True, 
                                   help_text='Short barcode identifier without date (e.g., FRAM-0001)')
@@ -170,15 +206,14 @@ class Barcode(models.Model):
         """Override save to ensure short_code uniqueness before saving"""
         if self.short_code:
             # Check if short_code already exists for another barcode
-            existing = Barcode.objects.filter(short_code=self.short_code).exclude(pk=self.pk).first()
-            if existing:
+            if Barcode.all_objects.filter(short_code=self.short_code).exclude(pk=self.pk).exists():
                 # Generate a unique short_code if collision detected
                 if not self.pk:  # Only for new barcodes
                     # If this is a new barcode and short_code collides, generate a new one
                     base_short_code = self.short_code
                     counter = 1
                     max_attempts = 1000
-                    while Barcode.objects.filter(short_code=self.short_code).exists():
+                    while Barcode.all_objects.filter(short_code=self.short_code).exists():
                         counter += 1
                         if counter > max_attempts:
                             # Fallback: use UUID suffix
@@ -205,8 +240,20 @@ class Barcode(models.Model):
 
 class ProductComponent(models.Model):
     """Components for composite/bundle products"""
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='components')
-    component_product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='used_in_bundles')
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='components',
+    )
+    component_product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='used_in_bundles',
+    )
     quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('1.000'))
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -260,14 +307,21 @@ class DefectiveProductMoveOut(models.Model):
 class DefectiveProductItem(models.Model):
     """Individual items in a defective product move-out"""
     move_out = models.ForeignKey(DefectiveProductMoveOut, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='defective_move_out_items')
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='defective_move_out_items',
+    )
     barcode = models.ForeignKey(Barcode, on_delete=models.SET_NULL, null=True, blank=True, related_name='defective_move_outs')
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.move_out.move_out_number} - {self.product.name}"
+        pname = self.product.name if self.product else 'Unknown product'
+        return f"{self.move_out.move_out_number} - {pname}"
 
     class Meta:
         db_table = 'defective_product_items'

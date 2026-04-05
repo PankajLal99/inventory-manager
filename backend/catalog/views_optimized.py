@@ -117,7 +117,11 @@ def _optimized_product_list_internal(request):
     queryset = queryset.annotate(
         annotated_barcode_count=Count(
             'barcodes',
-            filter=Q(barcodes__tag__in=barcode_tags) & ~Q(barcodes__purchase__status='draft'),
+            filter=(
+                Q(barcodes__tag__in=barcode_tags)
+                & ~Q(barcodes__purchase__status='draft')
+                & Q(barcodes__purchase__deleted_at__isnull=True)
+            ),
             distinct=True
         )
     )
@@ -130,6 +134,8 @@ def _optimized_product_list_internal(request):
                     tag__in=barcode_tags
                 ).exclude(
                     purchase__status='draft'
+                ).filter(
+                    purchase__deleted_at__isnull=True
                 ).select_related('purchase', 'purchase__supplier')
             )
         )
@@ -151,6 +157,7 @@ def _optimized_product_list_internal(request):
         product_ids_with_wh = set(
             PurchaseItem.objects.filter(
                 purchase__status='finalized',
+                purchase__deleted_at__isnull=True,
                 warehouse_quantity__gt=0
             ).values_list('product_id', flat=True).distinct()
         )
@@ -187,6 +194,8 @@ def _optimized_product_list_internal(request):
                 tag__in=['new', 'returned']
             ).exclude(
                 purchase__status='draft'
+            ).filter(
+                purchase__deleted_at__isnull=True
             ).values_list('id', flat=True)
             
             sold_barcode_ids = set(
@@ -203,6 +212,8 @@ def _optimized_product_list_internal(request):
                 tag__in=['new', 'returned']
             ).exclude(
                 purchase__status='draft'
+            ).filter(
+                purchase__deleted_at__isnull=True
             ).exclude(
                 id__in=sold_barcode_ids
             )

@@ -10,6 +10,8 @@ import Card from '../../components/ui/Card';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { Search, Camera, AlertTriangle, Package, Plus, Minus, FileText, ArrowLeft, DollarSign, Barcode } from 'lucide-react';
+import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
+
 interface InvoiceItem {
   id: number;
   product: number;
@@ -24,6 +26,7 @@ interface InvoiceItem {
   barcode_id?: number;
   barcode_value?: string;
   barcode_full?: string;
+  sold_barcode_value?: string;
   source_invoice_id?: number;
   source_invoice_number?: string;
   source_store?: number;
@@ -192,7 +195,12 @@ export default function ReplaceProduct() {
     contextualItems.forEach((item: InvoiceItem) => {
       const itemBarcode = item.barcode_value?.toUpperCase() || '';
       const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
-      if (itemBarcode === searchUpper || itemBarcodeFull === searchUpper) {
+      const itemSnap = item.sold_barcode_value?.toUpperCase() || '';
+      if (
+        itemBarcode === searchUpper ||
+        itemBarcodeFull === searchUpper ||
+        itemSnap === searchUpper
+      ) {
         initialReplacements[item.id] = {
           item_id: item.id,
           new_product_id: null,
@@ -281,7 +289,19 @@ export default function ReplaceProduct() {
 
   // Process replacement mutation
   const processReplacementMutation = useMutation({
-    mutationFn: async (data: { invoiceIds: number[]; replacements: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> }) => {
+    mutationFn: async (data: {
+      invoiceIds: number[];
+      replacements: Array<{
+        invoice_item_id: number;
+        new_product_id: number;
+        store_id?: number;
+        new_unit_price?: number;
+        manual_unit_price?: number;
+        scanned_barcode?: string;
+        scanned_original_barcode?: string;
+        return_tag?: string;
+      }>;
+    }) => {
       const results = [];
       for (const replacement of data.replacements) {
         console.log('Calling API with:', replacement);
@@ -291,7 +311,8 @@ export default function ReplaceProduct() {
           store_id: replacement.store_id,
           new_unit_price: replacement.new_unit_price,
           manual_unit_price: replacement.manual_unit_price,
-          scanned_barcode: replacement.scanned_barcode, // Pass the scanned barcode!
+          scanned_barcode: replacement.scanned_barcode,
+          scanned_original_barcode: replacement.scanned_original_barcode,
           return_tag: replacement.return_tag,
         });
         results.push(result.data);
@@ -714,7 +735,16 @@ export default function ReplaceProduct() {
     console.log('=== handleProcessReplacement START ===');
     console.log('All replacements:', replacements);
 
-    const replacementsToProcess: Array<{ invoice_item_id: number; new_product_id: number; store_id?: number; new_unit_price?: number; manual_unit_price?: number; scanned_barcode?: string; return_tag?: string }> = [];
+    const replacementsToProcess: Array<{
+      invoice_item_id: number;
+      new_product_id: number;
+      store_id?: number;
+      new_unit_price?: number;
+      manual_unit_price?: number;
+      scanned_barcode?: string;
+      scanned_original_barcode?: string;
+      return_tag?: string;
+    }> = [];
     const involvedInvoiceIds = new Set<number>();
 
     Object.values(replacements).forEach(replacement => {
@@ -741,6 +771,11 @@ export default function ReplaceProduct() {
           console.log('✅ Adding scanned_barcode:', replacement.scanned_barcode);
         } else {
           console.log('❌ NO scanned_barcode in replacement!', replacement);
+        }
+
+        const origSticker = invoiceLineSticker(sourceItem);
+        if (origSticker) {
+          replacementData.scanned_original_barcode = origSticker;
         }
 
         const oldSale = parseFloat(sourceItem.manual_unit_price || sourceItem.unit_price || '0');

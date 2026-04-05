@@ -211,6 +211,9 @@ export const posApi = {
     addItem: (id: number, data: any) => api.post(`/pos/invoices/${id}/items/`, data),
     updateItem: (id: number, itemId: number, data: any) => api.patch(`/pos/invoices/${id}/items/${itemId}/`, data),
     deleteItem: (id: number, itemId: number) => api.delete(`/pos/invoices/${id}/items/${itemId}/`),
+    /** Re-link a line to catalog Barcode when FK was cleared (body: { scanned_barcode }). */
+    restoreItemBarcode: (invoiceId: number, itemId: number, scanned_barcode: string) =>
+      api.post(`/pos/invoices/${invoiceId}/items/${itemId}/restore-barcode/`, { scanned_barcode }),
     edit: (id: number) => api.post(`/pos/invoices/${id}/edit/`),
     updateFromCart: (id: number, cartId: number) => api.post(`/pos/invoices/${id}/update/`, { cart_id: cartId }),
   },

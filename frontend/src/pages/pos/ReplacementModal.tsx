@@ -6,6 +6,7 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import { Search, AlertTriangle, Package, Plus, Minus } from 'lucide-react';
 import { getProductNameColor } from '../../lib/utils';
+import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
 
 interface ReplacementModalProps {
   isOpen: boolean;
@@ -25,6 +26,8 @@ interface InvoiceItem {
   line_total: string;
   barcode_id?: number;
   barcode_value?: string;
+  barcode_full?: string;
+  sold_barcode_value?: string;
 }
 
 interface Invoice {
@@ -78,7 +81,10 @@ export default function ReplacementModal({ isOpen, onClose, onSuccess }: Replace
 
   // Process replacement mutation
   const processReplacementMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; items_to_replace: Array<{ item_id: number; quantity: number }> }) => {
+    mutationFn: async (data: {
+      invoice_id: number;
+      items_to_replace: Array<{ item_id: number; quantity: number; scanned_barcode?: string }>;
+    }) => {
       return await posApi.replacement.processReplacement(data.invoice_id, {
         items_to_replace: data.items_to_replace,
       });
@@ -130,12 +136,16 @@ export default function ReplacementModal({ isOpen, onClose, onSuccess }: Replace
     if (!invoice) return;
 
     // Build items_to_replace array
-    const items_to_replace: Array<{ item_id: number; quantity: number }> = [];
+    const items_to_replace: Array<{ item_id: number; quantity: number; scanned_barcode?: string }> = [];
     Object.entries(selectedItems).forEach(([itemId, quantity]) => {
       if (quantity > 0) {
+        const id = parseInt(itemId, 10);
+        const row = invoice.items.find((i) => i.id === id);
+        const sticker = row ? invoiceLineSticker(row) : undefined;
         items_to_replace.push({
-          item_id: parseInt(itemId),
-          quantity: quantity,
+          item_id: id,
+          quantity,
+          ...(sticker ? { scanned_barcode: sticker } : {}),
         });
       }
     });

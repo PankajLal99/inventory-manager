@@ -29,20 +29,26 @@ def _sum_list_profit(annotated_qs, money_field):
     )
 
 
+def _billing_period_start_for_date(d: date) -> date:
+    """First day (11th) of the billing period containing calendar date d (11th → 10th next month)."""
+    if d.day >= 11:
+        return date(d.year, d.month, 11)
+    if d.month == 1:
+        return date(d.year - 1, 12, 11)
+    return date(d.year, d.month - 1, 11)
+
+
+def _billing_period_end_for_start(start: date) -> date:
+    """End date (10th) of the billing period that starts on `start` (always the 11th)."""
+    if start.month == 12:
+        return date(start.year + 1, 1, 10)
+    return date(start.year, start.month + 1, 10)
+
+
 def _billing_period_11_to_10(today: date) -> tuple[date, date]:
-    """Fiscal slice: 11th → 10th (e.g. 3 Apr 2026 → 11 Mar–10 Apr)."""
-    if today.day >= 11:
-        start = today.replace(day=11)
-        if today.month == 12:
-            end = date(today.year + 1, 1, 10)
-        else:
-            end = date(today.year, today.month + 1, 10)
-    else:
-        if today.month == 1:
-            start = date(today.year - 1, 12, 11)
-        else:
-            start = date(today.year, today.month - 1, 11)
-        end = today.replace(day=10)
+    """Fiscal slice: 11th → 10th (e.g. 3 Apr 2026 → 11 Mar–10 Apr). Same rules as wholesale pending-cleared buckets."""
+    start = _billing_period_start_for_date(today)
+    end = _billing_period_end_for_start(start)
     return start, end
 
 
@@ -82,6 +88,28 @@ def _serialize_merged_rows(merged, pure_key, mixed_key):
     return rows
 
 
+def _invoice_item_pending_line_cost_case(money_field):
+    """Purchase-side line value (same basis as pending invoice purchase KPI)."""
+    return Case(
+        When(
+            barcode__purchase_item__unit_price__isnull=False,
+            then=ExpressionWrapper(
+                F('barcode__purchase_item__unit_price') * F('quantity'),
+                output_field=money_field,
+            ),
+        ),
+        When(
+            purchase_price__isnull=False,
+            then=ExpressionWrapper(
+                F('purchase_price') * F('quantity'),
+                output_field=money_field,
+            ),
+        ),
+        default=Value(Decimal('0.00')),
+        output_field=money_field,
+    )
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def optimized_dashboard_kpis(request):
@@ -104,7 +132,9 @@ def optimized_dashboard_kpis(request):
     - total_pending / total_pending_by_store: draft + invoice_type=pending (Σ invoice total, by store).
     - total_pending_yet_to_finalize_purchase / total_pending_yet_to_finalize_by_store: same invoices with paid_amount=0,
       Σ purchase cost on lines (barcode purchase_item unit × qty, else purchase_price × qty).
-    - pending_invoice_purchase_yet_to_finalize_* / pending_purchase_yet_to_finalize_by_store: overall pending set with paid=0.
+    - pending_invoice_purchase_yet_to_finalize_* / pending_purchase_yet_to_finalize_by_store: same all-time pending
+      invoice set as purchase_total, but only lines on invoices with paid_amount=0 (fully unpaid). Differs from
+      purchase_retail/wholesale when any pending invoice has partial payment.
     - total_payments / payments_by_method: Σ pos.Payment.amount in range (Payment.created_at date),
       excluding invoices void/draft; grouped by payment_method.
     - pending_invoice_purchase_total / pending_purchase_by_store: for all-time invoices pending
@@ -112,6 +142,10 @@ def optimized_dashboard_kpis(request):
       with barcode→purchase_item; else Σ (InvoiceItem.purchase_price × qty) when purchase_price set.
     - pending_purchase_item_stats_by_store: same all-time pending set grouped by store with
       pending_qty (Σ InvoiceItem.quantity), distinct_product_count (distinct product_id), and purchase-cost amount.
+    - wholesale_pending_cleared_* / wholesale_pending_cleared_by_month: wholesale only; pending_cleared_at
+      filtered to the billing window that contains dashboard date_to (11th → 10th, see _billing_period_11_to_10),
+      not the raw date_from/date_to span — so e.g. range ending 5 Apr includes all clearances from 11 Mar–10 Apr.
+      wholesale_pending_cleared_billing_window returns that from/to. Table buckets are the same fiscal months.
     - counter_profit: Σ list-style profit (computed_paid − computed_total, annotate_invoice_list_profit) for
       retail/wholesale invoices with invoice_type in cash/upi/mixed/credit, no repair row — matches Invoices page
       (repair and defective excluded).
@@ -389,24 +423,7 @@ def optimized_dashboard_kpis(request):
         for r in method_rows
     ]
 
-    pending_line_cost = Case(
-        When(
-            barcode__purchase_item__unit_price__isnull=False,
-            then=ExpressionWrapper(
-                F('barcode__purchase_item__unit_price') * F('quantity'),
-                output_field=money,
-            ),
-        ),
-        When(
-            purchase_price__isnull=False,
-            then=ExpressionWrapper(
-                F('purchase_price') * F('quantity'),
-                output_field=money,
-            ),
-        ),
-        default=Value(Decimal('0.00')),
-        output_field=money,
-    )
+    pending_line_cost = _invoice_item_pending_line_cost_case(money)
 
     # All-time pending purchase-cost KPI (not date scoped): include every pending/pending-type non-draft invoice.
     pending_invoices = Invoice.objects.filter(
@@ -719,10 +736,84 @@ def optimized_dashboard_kpis(request):
         ).aggregate(t=Sum(move_net_expr, output_field=money))['t']
     )
 
+    # Wholesale pending cleared: use billing month containing date_to (not calendar date_from/date_to),
+    # otherwise a single-day range hides clearances on other days in the same fiscal slice.
+    wc_from, wc_to = _billing_period_11_to_10(date_to)
+
+    cleared_wholesale_inv = Invoice.objects.filter(
+        pending_cleared_at__isnull=False,
+        store__shop_type='wholesale',
+        pending_cleared_at__date__gte=wc_from,
+        pending_cleared_at__date__lte=wc_to,
+    ).exclude(status='void')
+
+    cleared_wholesale_items = InvoiceItem.objects.filter(
+        invoice__pending_cleared_at__isnull=False,
+        invoice__store__shop_type='wholesale',
+        invoice__pending_cleared_at__date__gte=wc_from,
+        invoice__pending_cleared_at__date__lte=wc_to,
+    ).exclude(invoice__status='void')
+
+    # Bucket by fiscal month 11th → 10th (not calendar month), matching overall_profit_billing_period_window.
+    inv_valued = cleared_wholesale_inv.values('id', 'total', 'pending_cleared_at')
+    by_start: dict[date, dict] = {}
+    for row in inv_valued:
+        pca = row['pending_cleared_at']
+        if pca is None:
+            continue
+        d = pca.date() if hasattr(pca, 'date') else pca
+        ps = _billing_period_start_for_date(d)
+        if ps not in by_start:
+            by_start[ps] = {'ids': set(), 'selling_total': Decimal('0.00')}
+        by_start[ps]['ids'].add(row['id'])
+        by_start[ps]['selling_total'] += _decimal_or_zero(row['total'])
+
+    purchase_by_start: dict[date, Decimal] = defaultdict(lambda: Decimal('0.00'))
+    items_annotated = cleared_wholesale_items.annotate(
+        _line_pc=pending_line_cost,
+    ).select_related('invoice')
+    for it in items_annotated:
+        inv_obj = it.invoice
+        pca = inv_obj.pending_cleared_at
+        if pca is None:
+            continue
+        d = pca.date() if hasattr(pca, 'date') else pca
+        ps = _billing_period_start_for_date(d)
+        purchase_by_start[ps] += _decimal_or_zero(getattr(it, '_line_pc', None))
+
+    all_period_starts = sorted(set(by_start.keys()) | set(purchase_by_start.keys()))
+    wholesale_pending_cleared_by_month = []
+    for ps in all_period_starts:
+        pe = _billing_period_end_for_start(ps)
+        bucket = by_start.get(ps, {'ids': set(), 'selling_total': Decimal('0.00')})
+        wholesale_pending_cleared_by_month.append(
+            {
+                'period_start': ps.isoformat(),
+                'period_end': pe.isoformat(),
+                'invoice_count': len(bucket['ids']),
+                'selling_total': float(_decimal_or_zero(bucket['selling_total'])),
+                'purchase_cost_total': float(_decimal_or_zero(purchase_by_start.get(ps, Decimal('0.00')))),
+            }
+        )
+
+    wholesale_cleared_period_agg = cleared_wholesale_inv.aggregate(
+        n=Count('id'),
+        selling=Sum('total', output_field=money),
+    )
+    wholesale_cleared_purchase_period = _decimal_or_zero(
+        cleared_wholesale_items.aggregate(
+            t=Sum(pending_line_cost, output_field=money)
+        )['t']
+    )
+
     response = Response({
         'period': {
             'from': date_from.isoformat(),
             'to': date_to.isoformat(),
+        },
+        'wholesale_pending_cleared_billing_window': {
+            'from': wc_from.isoformat(),
+            'to': wc_to.isoformat(),
         },
         'kpis': {
             'total_cash': float(total_cash),
@@ -775,6 +866,11 @@ def optimized_dashboard_kpis(request):
             'defective_purchase_value': float(defective_purchase_value),
             'defective_move_out_net_loss': float(defective_move_out_net_loss),
             'defective_move_out_net_period': float(defective_move_out_net_period),
+            'wholesale_pending_cleared_invoice_count': int(wholesale_cleared_period_agg['n'] or 0),
+            'wholesale_pending_cleared_selling_total': float(
+                _decimal_or_zero(wholesale_cleared_period_agg['selling'])
+            ),
+            'wholesale_pending_cleared_purchase_cost_total': float(wholesale_cleared_purchase_period),
         },
         'overall_profit_billing_period_window': {
             'from': pb_from.isoformat(),
@@ -794,6 +890,7 @@ def optimized_dashboard_kpis(request):
         'repair_profit_by_invoice_type': repair_profit_by_invoice_type,
         'repair_profit_by_store': repair_profit_by_store,
         'manual_payments': manual_payments_rows,
+        'wholesale_pending_cleared_by_month': wholesale_pending_cleared_by_month,
     })
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response['Pragma'] = 'no-cache'

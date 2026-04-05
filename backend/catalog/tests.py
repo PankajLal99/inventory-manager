@@ -10,8 +10,8 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
     """Tests for ProductListSerializer: shop/warehouse from purchase, available = (new+returned) - warehouse."""
 
     def setUp(self):
-        Barcode.objects.all().delete()
-        Product.objects.all().delete()
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
         self.client = AuthenticatedAPIClient()
         self.user = TestDataFactory.create_user(is_staff=True)
         self.client.authenticate_user(self.user)
@@ -238,8 +238,8 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
 class ProductQuantityTests(TransactionTestCase):
     def setUp(self):
         # TransactionTestCase ensures a clean state, but let's be super sure
-        Barcode.objects.all().delete()
-        Product.objects.all().delete()
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
         
         self.client = AuthenticatedAPIClient()
         self.user = TestDataFactory.create_user(is_staff=True)

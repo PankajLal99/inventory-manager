@@ -103,7 +103,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS('  ✓ Purchase Items deleted'))
                 
                 self.stdout.write('Deleting Purchases...')
-                Purchase.objects.all().delete()
+                Purchase.all_objects.all().delete()
                 self.stdout.write(self.style.SUCCESS('  ✓ Purchases deleted'))
                 
                 # 3. Delete Cart-related items
@@ -143,7 +143,7 @@ class Command(BaseCommand):
                 
                 # 4. Delete Barcodes (references Product)
                 self.stdout.write('Deleting Barcodes...')
-                Barcode.objects.all().delete()
+                Barcode.all_objects.all().delete()
                 self.stdout.write(self.style.SUCCESS('  ✓ Barcodes deleted'))
                 
                 # 5. Delete Product Components (references Product)
@@ -158,7 +158,7 @@ class Command(BaseCommand):
                 
                 # 7. Delete Products
                 self.stdout.write('Deleting Products...')
-                Product.objects.all().delete()
+                Product.all_objects.all().delete()
                 self.stdout.write(self.style.SUCCESS('  ✓ Products deleted'))
                 
                 # 8. Delete Audit Logs (standalone, no dependencies)

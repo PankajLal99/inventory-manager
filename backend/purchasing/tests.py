@@ -177,6 +177,8 @@ class PurchaseAPITests(TestCase):
         response = self.client.delete(f'/api/v1/purchases/{purchase.id}/')
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(Purchase.objects.filter(id=purchase.id).exists())
+        archived = Purchase.all_objects.get(id=purchase.id)
+        self.assertIsNotNone(archived.deleted_at)
 
 
 class PurchaseStockUpdateTests(TestCase):

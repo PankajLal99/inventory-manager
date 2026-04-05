@@ -56,6 +56,7 @@ class LedgerAPITestCase(APITestCase):
             description='Entry 1',
             created_by=self.admin,
             created_at=timezone.now(),
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -64,6 +65,7 @@ class LedgerAPITestCase(APITestCase):
             description='Entry 2',
             created_by=self.admin,
             created_at=timezone.now(),
+            is_sent=True,
         )
         url = reverse('ledger-entry-list-create')
         response = self.client.get(url)
@@ -80,6 +82,7 @@ class LedgerAPITestCase(APITestCase):
             'entry_type': 'credit',
             'amount': '150.50',
             'description': 'Test credit',
+            'is_sent': True,
         }
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -97,6 +100,7 @@ class LedgerAPITestCase(APITestCase):
             'entry_type': 'debit',
             'amount': '50.25',
             'description': 'Test debit',
+            'is_sent': True,
         }
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -111,6 +115,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('100.00'),
             description='C1',
             created_by=self.admin,
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -118,6 +123,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('50.00'),
             description='C2',
             created_by=self.admin,
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -125,6 +131,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('30.00'),
             description='D1',
             created_by=self.admin,
+            is_sent=True,
         )
         url = reverse('ledger-summary')
         response = self.client.get(url)
@@ -146,6 +153,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('100.00'),
             description='A',
             created_by=self.admin,
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -153,6 +161,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('40.00'),
             description='B',
             created_by=self.admin,
+            is_sent=True,
         )
         url = reverse('ledger-customer-detail', kwargs={'customer_id': self.customer.id})
         response = self.client.get(url)
@@ -170,6 +179,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('100.00'),
             description='Original',
             created_by=self.admin,
+            is_sent=True,
         )
         self.customer.credit_balance = Decimal('100.00')
         self.customer.save()
@@ -214,6 +224,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('10.00'),
             description='X',
             created_by=self.admin,
+            is_sent=True,
         )
         detail_url = reverse('ledger-entry-retrieve-update-destroy', kwargs={'entry_id': entry.id})
         self.assertEqual(self.client.get(detail_url).status_code, status.HTTP_403_FORBIDDEN)
@@ -228,6 +239,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('100.00'),
             description='First',
             created_by=self.admin,
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -235,6 +247,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('25.00'),
             description='Second',
             created_by=self.admin,
+            is_sent=True,
         )
         customer2 = Customer.objects.create(
             name='Customer Two',
@@ -247,6 +260,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('50.00'),
             description='Other',
             created_by=self.admin,
+            is_sent=True,
         )
         url = reverse('ledger-by-customer')
         response = self.client.get(url)
@@ -278,6 +292,7 @@ class LedgerAPITestCase(APITestCase):
             description='In range',
             created_by=self.admin,
             created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -286,6 +301,7 @@ class LedgerAPITestCase(APITestCase):
             description='Out of range',
             created_by=self.admin,
             created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=10), datetime.min.time())),
+            is_sent=True,
         )
         url = reverse('ledger-by-customer')
         response = self.client.get(url, {
@@ -306,6 +322,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('80.00'),
             description='A',
             created_by=self.admin,
+            is_sent=True,
         )
         customer2 = Customer.objects.create(name='Other', phone='9999990022', credit_balance=Decimal('0.00'))
         LedgerEntry.objects.create(
@@ -314,6 +331,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('50.00'),
             description='B',
             created_by=self.admin,
+            is_sent=True,
         )
         url = reverse('ledger-by-customer')
         response = self.client.get(url, {'customer': self.customer.id})
@@ -340,6 +358,7 @@ class LedgerAPITestCase(APITestCase):
             description='In',
             created_by=self.admin,
             created_at=timezone.make_aware(datetime.combine(base_date, datetime.min.time())),
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -348,6 +367,7 @@ class LedgerAPITestCase(APITestCase):
             description='Out',
             created_by=self.admin,
             created_at=timezone.make_aware(datetime.combine(base_date - timedelta(days=15), datetime.min.time())),
+            is_sent=True,
         )
         url = reverse('ledger-customer-detail', kwargs={'customer_id': self.customer.id})
         response = self.client.get(url, {
@@ -374,6 +394,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('10.00'),
             description='UniqueWord',
             created_by=self.admin,
+            is_sent=True,
         )
         LedgerEntry.objects.create(
             customer=self.customer,
@@ -381,6 +402,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('5.00'),
             description='Other',
             created_by=self.admin,
+            is_sent=True,
         )
         url = reverse('ledger-customer-detail', kwargs={'customer_id': self.customer.id})
         response = self.client.get(url, {'entry_type': 'credit'})
@@ -403,6 +425,7 @@ class LedgerAPITestCase(APITestCase):
             amount=Decimal('88.00'),
             description='To delete',
             created_by=self.admin,
+            is_sent=True,
         )
         self.customer.credit_balance = Decimal('88.00')
         self.customer.save()
@@ -629,7 +652,7 @@ class InternalLedgerAPITestCase(APITestCase):
         self.admin = create_admin_user()
         self.mtshop_group = CustomerGroup.objects.create(name='MTSHOP', description='Shop boys')
         self.mtshop_customer = Customer.objects.create(
-            name='Shop Boy One',
+            name='MT SHOP Boy One',
             phone='9999990003',
             customer_group=self.mtshop_group,
             credit_balance=Decimal('0.00'),

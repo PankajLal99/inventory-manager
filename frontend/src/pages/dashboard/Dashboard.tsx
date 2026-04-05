@@ -5,7 +5,7 @@ import { reportsApi } from '../../lib/api';
 import { formatDateDDMMYYYY, formatNumber } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { auth } from '../../lib/auth';
-import { BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, Truck, Wallet, Wrench } from 'lucide-react';
+import { BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, TrendingUp, Truck, Wallet, Wrench } from 'lucide-react';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 const PIN_LENGTH = 6;
@@ -69,6 +69,20 @@ function sumAmountsByShopType(rows: StoreAmountRow[]): Record<string, number> {
     acc[key] = (acc[key] ?? 0) + Number(r.amount ?? 0);
   }
   return acc;
+}
+
+function formatMonthLabelFromPeriodStart(isoDate: string) {
+  const d = new Date(`${isoDate}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return isoDate;
+  return d.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+}
+
+/** Wholesale pending cleared: API sends billing window 11th → 10th (period_start / period_end). */
+function formatWholesaleBillingPeriodLabel(row: { period_start: string; period_end?: string }) {
+  if (row.period_end) {
+    return `${formatDateDDMMYYYY(row.period_start)} – ${formatDateDDMMYYYY(row.period_end)}`;
+  }
+  return formatMonthLabelFromPeriodStart(row.period_start);
 }
 
 function paymentMethodLabel(method: string) {
@@ -294,7 +308,7 @@ export default function Dashboard() {
   }, [unlocked]);
 
   const { data: dashboardData, isLoading } = useQuery({
-    queryKey: ['dashboard-kpis-v13', dateFrom, dateTo],
+    queryKey: ['dashboard-kpis-v16', dateFrom, dateTo],
     queryFn: async () => {
       const response = await reportsApi.dashboardKpis({
         date_from: dateFrom,
@@ -302,6 +316,7 @@ export default function Dashboard() {
       });
       return response.data as {
         period?: { from: string; to: string };
+        wholesale_pending_cleared_billing_window?: { from: string; to: string };
         overall_profit_billing_period_window?: { from: string; to: string };
         kpis?: {
           total_cash?: number;
@@ -348,6 +363,9 @@ export default function Dashboard() {
           defective_purchase_value?: number;
           defective_move_out_net_loss?: number;
           defective_move_out_net_period?: number;
+          wholesale_pending_cleared_invoice_count?: number;
+          wholesale_pending_cleared_selling_total?: number;
+          wholesale_pending_cleared_purchase_cost_total?: number;
         };
         cash_by_store?: CashStoreRow[];
         upi_by_store?: UpiStoreRow[];
@@ -363,6 +381,13 @@ export default function Dashboard() {
         repair_profit_by_invoice_type?: { invoice_type: string; profit: number }[];
         repair_profit_by_store?: StoreAmountRow[];
         manual_payments?: { name: string; cash_amount: number; upi_amount: number; note: string }[];
+        wholesale_pending_cleared_by_month?: {
+          period_start: string;
+          period_end?: string;
+          invoice_count: number;
+          selling_total: number;
+          purchase_cost_total: number;
+        }[];
       };
     },
     enabled: unlocked,
@@ -520,13 +545,18 @@ export default function Dashboard() {
   const pendingRetail = Number(kpis.pending_invoice_purchase_retail ?? 0);
   const pendingWholesale = Number(kpis.pending_invoice_purchase_wholesale ?? 0);
   const totalPendingYtfPurchase = Number(kpis.total_pending_yet_to_finalize_purchase ?? 0);
-  const pendingPurchaseYtfTotal = Number(kpis.pending_invoice_purchase_yet_to_finalize_total ?? 0);
-  const pendingPurchaseYtfRetail = Number(kpis.pending_invoice_purchase_yet_to_finalize_retail ?? 0);
-  const pendingPurchaseYtfWholesale = Number(kpis.pending_invoice_purchase_yet_to_finalize_wholesale ?? 0);
+  const wholesaleClearedCount = Number(kpis.wholesale_pending_cleared_invoice_count ?? 0);
+  const wholesaleClearedSelling = Number(kpis.wholesale_pending_cleared_selling_total ?? 0);
+  const wholesaleClearedPurchase = Number(kpis.wholesale_pending_cleared_purchase_cost_total ?? 0);
+  const wholesaleClearedProfit = wholesaleClearedSelling - wholesaleClearedPurchase;
+  const wholesaleClearedByMonth = Array.isArray(dashboardData?.wholesale_pending_cleared_by_month)
+    ? dashboardData.wholesale_pending_cleared_by_month
+    : [];
   const overallProfitBilling = Number(kpis.overall_profit_billing_period ?? 0);
   const counterProfitBilling = Number(kpis.counter_profit_billing_period ?? 0);
   const repairProfitBilling = Number(kpis.repair_profit_billing_period ?? 0);
   const billingWindow = dashboardData?.overall_profit_billing_period_window;
+  const wholesaleClearedBillingWindow = dashboardData?.wholesale_pending_cleared_billing_window;
 
   const counterProfitByTypeRows: BreakdownRow[] = counterProfitByInvoiceType.map((row) => ({
     label: counterInvoiceTypeLabel(row.invoice_type),
@@ -888,33 +918,22 @@ export default function Dashboard() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
                 <DashboardMetricCard
                   title="Overall pending (at purchase cost)"
-                  subtitle="Status pending OR type pending (non-draft). Unpaid lines use purchase unit × qty until finalized."
+                  subtitle="Non-draft invoices with status or type pending. Uses purchase unit × qty per line. The headline includes lines even when the invoice already has a partial payment (paid_amount > 0); the list on the right labelled fully unpaid is only paid_amount = 0."
                   icon={<ClipboardList className="h-5 w-5 text-orange-800" />}
                   totalFormatted={`₹${formatNumber(pendingPurchaseTotal, 2)}`}
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
                   breakdownRows={(() => {
-                    const hasYtfRetailWholesaleSplit =
-                      pendingPurchaseYtfRetail > 0 || pendingPurchaseYtfWholesale > 0;
-                    const ytfRows: BreakdownRow[] = hasYtfRetailWholesaleSplit
-                      ? [
-                          { label: 'Yet to finalize · Retail', amount: pendingPurchaseYtfRetail },
-                          { label: 'Yet to finalize · Wholesale', amount: pendingPurchaseYtfWholesale },
-                        ]
-                      : pendingPurchaseYtfTotal > 0
-                        ? [
-                            {
-                              label: 'Yet to finalize (paid = 0, purchase unit × qty)',
-                              amount: pendingPurchaseYtfTotal,
-                            },
-                          ]
-                        : [];
-                    return [
-                      ...ytfRows,
-                      { label: 'All pending at cost · Retail', amount: pendingRetail },
-                      { label: 'All pending at cost · Wholesale', amount: pendingWholesale },
+                    const rows: BreakdownRow[] = [
+                      { label: 'Retail', amount: pendingRetail },
+                      { label: 'Wholesale', amount: pendingWholesale },
                     ];
+                    const otherShops = pendingPurchaseTotal - pendingRetail - pendingWholesale;
+                    if (otherShops > 0.005) {
+                      rows.push({ label: 'Repair / other shop types', amount: otherShops });
+                    }
+                    return rows;
                   })()}
                 />
                 <div className="min-h-0 space-y-4">
@@ -924,7 +943,7 @@ export default function Dashboard() {
                     emptyMessage="No pending invoice lines."
                   />
                   <StoreAmountList
-                    title="Yet to finalize by store (paid = 0)"
+                    title="By store (fully unpaid pending, paid_amount = 0)"
                     rows={pendingPurchaseYtfByStore}
                     emptyMessage="No unpaid pending lines."
                   />
@@ -932,6 +951,187 @@ export default function Dashboard() {
               </div>
               <div className="mt-4">
                 <PendingPurchaseItemStatsTable rows={pendingPurchaseItemStatsByStore} />
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-gray-600" />
+                Wholesale: pending cleared in this period
+              </h2>
+              <p className="text-sm text-gray-600 max-w-3xl mb-4">
+                When draft pending invoices get final prices and move to credit (or cash / UPI / mixed), we record the
+                time once (not invoice creation date). Numbers below use the{' '}
+                <span className="font-medium text-gray-800">billing window that contains the end date</span> of your
+                range (11th → 10th next month — same rule as overall profit). Example: with range ending 5 Apr, cleared
+                totals include every clearance from 11 Mar through 10 Apr.
+              </p>
+              {wholesaleClearedBillingWindow?.from && wholesaleClearedBillingWindow?.to ? (
+                <p className="text-sm font-medium text-gray-800 mb-4">
+                  Applied billing window:{' '}
+                  {formatDateDDMMYYYY(wholesaleClearedBillingWindow.from)} –{' '}
+                  {formatDateDDMMYYYY(wholesaleClearedBillingWindow.to)}
+                </p>
+              ) : null}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 max-w-6xl mb-6">
+                <DashboardMetricCard
+                  title="Invoices cleared"
+                  icon={<TrendingUp className="h-5 w-5 text-emerald-800" />}
+                  totalFormatted={String(wholesaleClearedCount)}
+                  gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
+                  borderClass="border-emerald-200"
+                  iconClass=""
+                  breakdownRows={[
+                    {
+                      label: 'Wholesale stores (billing window above)',
+                      amount: wholesaleClearedCount,
+                    },
+                  ]}
+                />
+                <DashboardMetricCard
+                  title="Selling total cleared"
+                  subtitle="Σ invoice total at clearance"
+                  icon={<Coins className="h-5 w-5 text-amber-800" />}
+                  totalFormatted={`₹${formatNumber(wholesaleClearedSelling, 2)}`}
+                  gradientClass="bg-gradient-to-br from-amber-50 to-amber-100"
+                  borderClass="border-amber-200"
+                  iconClass=""
+                  breakdownRows={[{ label: 'Matches ledger / credit face value', amount: wholesaleClearedSelling }]}
+                />
+                <DashboardMetricCard
+                  title="Purchase cost cleared"
+                  subtitle="Same line basis as overall pending"
+                  icon={<ClipboardList className="h-5 w-5 text-orange-800" />}
+                  totalFormatted={`₹${formatNumber(wholesaleClearedPurchase, 2)}`}
+                  gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
+                  borderClass="border-orange-200"
+                  iconClass=""
+                  breakdownRows={[{ label: 'Barcode / purchase_price × qty', amount: wholesaleClearedPurchase }]}
+                />
+                <DashboardMetricCard
+                  title="Profit"
+                  subtitle="Selling total cleared − purchase cost cleared (calculated in browser for this window)"
+                  icon={<Wallet className="h-5 w-5 text-emerald-900" />}
+                  totalFormatted={`₹${formatNumber(wholesaleClearedProfit, 2)}`}
+                  gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
+                  borderClass="border-emerald-200"
+                  iconClass=""
+                  breakdownRows={[
+                    { label: 'Selling total cleared', amount: wholesaleClearedSelling },
+                    { label: 'Purchase cost cleared', amount: wholesaleClearedPurchase },
+                  ]}
+                />
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden max-w-5xl">
+                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                  <p className="text-sm font-medium text-gray-700">By billing month (11th → 10th)</p>
+                </div>
+                {wholesaleClearedByMonth.length === 0 ? (
+                  <p className="text-sm text-gray-500 p-4">
+                    No wholesale pending clearances in this range (or historical invoices before this tracking shipped).
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                      <thead>
+                        <tr className="border-b border-gray-100 bg-gray-50/80">
+                          <th className="px-4 py-2.5 font-medium text-gray-700">Billing period</th>
+                          <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Invoices</th>
+                          <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Selling total</th>
+                          <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Purchase cost</th>
+                          <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Profit</th>
+                          <th
+                            className="px-4 py-2.5 font-medium text-gray-700 min-w-[140px]"
+                            title="Bar length compares this row’s selling total to the largest selling total in this table (purely visual; not an extra rupee amount)."
+                          >
+                            Selling vs max in table
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {(() => {
+                          const maxSell = Math.max(
+                            ...wholesaleClearedByMonth.map((r) => Number(r.selling_total ?? 0)),
+                            1,
+                          );
+                          return wholesaleClearedByMonth.map((row) => {
+                            const sell = Number(row.selling_total ?? 0);
+                            const purchase = Number(row.purchase_cost_total ?? 0);
+                            const profit = sell - purchase;
+                            const pct = Math.min(100, Math.round((sell / maxSell) * 100));
+                            return (
+                              <tr
+                                key={`${row.period_start}-${row.period_end ?? ''}`}
+                                className="hover:bg-gray-50/80"
+                              >
+                                <td className="px-4 py-2.5 font-medium text-gray-900">
+                                  {formatWholesaleBillingPeriodLabel(row)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">{row.invoice_count}</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">
+                                  ₹{formatNumber(sell, 2)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">
+                                  ₹{formatNumber(purchase, 2)}
+                                </td>
+                                <td
+                                  className={`px-4 py-2.5 text-right tabular-nums ${
+                                    profit < 0 ? 'text-red-700' : 'text-gray-900'
+                                  }`}
+                                >
+                                  ₹{formatNumber(profit, 2)}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full bg-amber-500/90"
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })()}
+                      </tbody>
+                      {wholesaleClearedByMonth.length > 0 ? (
+                        <tfoot>
+                          {(() => {
+                            let inv = 0;
+                            let sellSum = 0;
+                            let purchaseSum = 0;
+                            for (const row of wholesaleClearedByMonth) {
+                              inv += Number(row.invoice_count ?? 0);
+                              sellSum += Number(row.selling_total ?? 0);
+                              purchaseSum += Number(row.purchase_cost_total ?? 0);
+                            }
+                            const profitSum = sellSum - purchaseSum;
+                            return (
+                              <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold text-gray-900">
+                                <td className="px-4 py-2.5">Total</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">{inv}</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">
+                                  ₹{formatNumber(sellSum, 2)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right tabular-nums">
+                                  ₹{formatNumber(purchaseSum, 2)}
+                                </td>
+                                <td
+                                  className={`px-4 py-2.5 text-right tabular-nums ${
+                                    profitSum < 0 ? 'text-red-700' : ''
+                                  }`}
+                                >
+                                  ₹{formatNumber(profitSum, 2)}
+                                </td>
+                                <td className="px-4 py-2.5" aria-hidden />
+                              </tr>
+                            );
+                          })()}
+                        </tfoot>
+                      ) : null}
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
 

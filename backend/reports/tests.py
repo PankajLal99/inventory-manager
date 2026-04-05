@@ -451,6 +451,64 @@ class ReportsTests(TestCase):
         self.assertEqual(len(response.data['pending_purchase_yet_to_finalize_by_store']), 1)
         self.assertEqual(response.data['pending_purchase_yet_to_finalize_by_store'][0]['amount'], 50.0)
 
+    def test_dashboard_kpis_wholesale_pending_cleared_series(self):
+        """Wholesale + pending_cleared_at in range: period totals and monthly breakdown."""
+        product = TestDataFactory.create_product()
+        wholesale_store = TestDataFactory.create_store()
+        wholesale_store.shop_type = 'wholesale'
+        wholesale_store.save(update_fields=['shop_type'])
+        inv = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=wholesale_store,
+            invoice_type='credit',
+            status='credit',
+        )
+        inv.total = Decimal('500.00')
+        inv.pending_cleared_at = timezone.now()
+        inv.save(update_fields=['total', 'pending_cleared_at'])
+        InvoiceItem.objects.create(
+            invoice=inv,
+            product=product,
+            quantity=Decimal('2'),
+            unit_price=Decimal('250.00'),
+            line_total=Decimal('500.00'),
+            purchase_price=Decimal('80.00'),
+        )
+        today = timezone.now().date().isoformat()
+        response = self.client.get(
+            f'/api/v1/reports/dashboard-kpis/?date_from={today}&date_to={today}'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        win = response.data.get('wholesale_pending_cleared_billing_window') or {}
+        self.assertIn('from', win)
+        self.assertIn('to', win)
+        kpis = response.data['kpis']
+        self.assertEqual(kpis['wholesale_pending_cleared_invoice_count'], 1)
+        self.assertEqual(kpis['wholesale_pending_cleared_selling_total'], 500.0)
+        self.assertEqual(kpis['wholesale_pending_cleared_purchase_cost_total'], 160.0)
+        series = response.data.get('wholesale_pending_cleared_by_month') or []
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0]['invoice_count'], 1)
+        self.assertEqual(series[0]['selling_total'], 500.0)
+        self.assertEqual(series[0]['purchase_cost_total'], 160.0)
+        # Billing bucket 11th → 10th (same as dashboard overall profit window), not calendar month.
+        from datetime import date as date_cls
+
+        d = timezone.now().date()
+        if d.day >= 11:
+            exp_start = date_cls(d.year, d.month, 11)
+        elif d.month == 1:
+            exp_start = date_cls(d.year - 1, 12, 11)
+        else:
+            exp_start = date_cls(d.year, d.month - 1, 11)
+        if exp_start.month == 12:
+            exp_end = date_cls(exp_start.year + 1, 1, 10)
+        else:
+            exp_end = date_cls(exp_start.year, exp_start.month + 1, 10)
+        self.assertEqual(series[0]['period_start'], exp_start.isoformat())
+        self.assertEqual(series[0]['period_end'], exp_end.isoformat())
+
     def test_dashboard_kpis_stock_value_excludes_draft_purchase_barcodes(self):
         """Stock value sums unit_price per new/returned barcode; draft purchase lines excluded."""
         product = TestDataFactory.create_product()

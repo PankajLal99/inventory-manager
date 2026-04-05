@@ -711,7 +711,11 @@ export default function Purchases() {
   };
 
   const handleDelete = (id: number) => {
-    if (confirm('Are you sure you want to delete this purchase?')) {
+    if (
+      confirm(
+        'Archive this purchase? It will be hidden from lists; related data is kept. Non-sold barcodes from this purchase are archived; sold units stay linked for invoices.'
+      )
+    ) {
       deleteMutation.mutate(id);
     }
   };

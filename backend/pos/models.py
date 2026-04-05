@@ -69,8 +69,20 @@ class Cart(models.Model):
 class CartItem(models.Model):
     """Cart items"""
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='cart_items')
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='cart_items', null=True, blank=True)
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cart_items',
+    )
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cart_items',
+    )
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     manual_unit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
@@ -125,6 +137,9 @@ class Invoice(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='invoices')
     created_at = models.DateTimeField(default=timezone.now)  # Set at creation; POS can pass custom invoice date
     updated_at = models.DateTimeField(auto_now=True)
+    # Set once when a draft pending invoice is finalized (checkout to sale/credit or mark credit).
+    # Used for wholesale dashboard: pending cleared by month (distinct from invoice created_at).
+    pending_cleared_at = models.DateTimeField(null=True, blank=True, db_index=True)
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='voided_invoices')
     is_edited = models.BooleanField(default=False)
@@ -177,9 +192,23 @@ class Repair(models.Model):
 class InvoiceItem(models.Model):
     """Invoice items"""
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='invoice_items')
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='invoice_items', null=True, blank=True)
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invoice_items',
+    )
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='invoice_items',
+    )
     barcode = models.ForeignKey('catalog.Barcode', on_delete=models.SET_NULL, null=True, blank=True, related_name='invoice_items')
+    # Immutable snapshot of Barcode.barcode at sale time so returns/replacements work if FK is cleared or row was recreated.
+    sold_barcode_value = models.CharField(max_length=100, blank=True, db_index=True, default='')
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     manual_unit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
@@ -255,7 +284,13 @@ class ReturnItem(models.Model):
     """Return items"""
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='items')
     invoice_item = models.ForeignKey(InvoiceItem, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='return_items', null=True, blank=True)
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='return_items',
+    )
     variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
     barcode = models.ForeignKey('catalog.Barcode', on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
     product_name = models.CharField(max_length=255, blank=True)

@@ -110,9 +110,11 @@ class CartItemSerializer(serializers.ModelSerializer):
                 except Barcode.DoesNotExist:
                     pass
 
-        # For non-tracked products or when scanned_barcodes is empty, get barcode from product's first barcode
+        # For non-tracked products or when scanned_barcodes is empty, primary or single catalog barcode only
         if obj.product:
-            product_barcode = obj.product.barcodes.first()
+            from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+
+            product_barcode = single_barcode_for_untracked_product(obj.product)
             if product_barcode:
                 return float(product_barcode.get_purchase_price())
 
@@ -133,9 +135,11 @@ class CartItemSerializer(serializers.ModelSerializer):
             except Barcode.DoesNotExist:
                 pass
         
-        # For non-tracked products or when scanned_barcodes is empty, get barcode from product's first barcode
+        # For non-tracked products or when scanned_barcodes is empty, primary or single catalog barcode only
         if obj.product:
-            product_barcode = obj.product.barcodes.first()
+            from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+
+            product_barcode = single_barcode_for_untracked_product(obj.product)
             if product_barcode:
                 selling_price = product_barcode.get_selling_price()
                 return float(selling_price) if selling_price else None
@@ -209,13 +213,15 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
         """Return short_code when available for display, else full barcode."""
         if obj.barcode:
             return obj.barcode.short_code or obj.barcode.barcode
-        return None
+        snap = (getattr(obj, 'sold_barcode_value', None) or '').strip()
+        return snap or None
 
     def get_barcode_full(self, obj):
         """Return the full barcode string."""
         if obj.barcode:
             return obj.barcode.barcode
-        return None
+        snap = (getattr(obj, 'sold_barcode_value', None) or '').strip()
+        return snap or None
 
     def get_available_quantity(self, obj):
         """Calculate available quantity for replacement (quantity - replaced_quantity)"""
@@ -248,7 +254,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
+        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -319,8 +325,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name', 'status',
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
             'trade_in_credit', 'pos_trade_ins', 'exchange_snapshots',
-            'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on', 'items', 'payments'
+            'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
+            'is_edited', 'edited_on', 'items', 'payments'
         ]
+        read_only_fields = ['pending_cleared_at']
 
     def get_display_total(self, obj):
         """

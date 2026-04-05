@@ -24,9 +24,9 @@ describe('formatNumber', () => {
     expect(formatNumber('not a number')).toBe('0')
   })
 
-  it('formats integers with commas', () => {
+  it('formats integers with commas (Indian grouping, en-IN)', () => {
     expect(formatNumber(1000)).toBe('1,000')
-    expect(formatNumber(1234567)).toBe('1,234,567')
+    expect(formatNumber(1234567)).toBe('12,34,567')
   })
 
   it('strips unnecessary trailing zeros', () => {

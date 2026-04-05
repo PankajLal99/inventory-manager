@@ -6,8 +6,14 @@ from backend.locations.models import Store, Warehouse
 
 class Stock(models.Model):
     """Stock entries per product/variant/location"""
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='stock_entries')
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='stock_entries', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='stock_entries')
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='stock_entries',
+    )
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='stock_entries', null=True, blank=True)
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='stock_entries', null=True, blank=True)
     quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
@@ -42,8 +48,14 @@ class Stock(models.Model):
 
 class StockBatch(models.Model):
     """Batches for products with expiry tracking"""
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='batches')
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='batches', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='batches')
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='batches',
+    )
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='batches', null=True, blank=True)
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='batches', null=True, blank=True)
     batch_number = models.CharField(max_length=100)
@@ -73,8 +85,14 @@ class StockAdjustment(models.Model):
     ]
 
     adjustment_type = models.CharField(max_length=10, choices=ADJUSTMENT_TYPE_CHOICES)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='adjustments')
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='adjustments', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='adjustments')
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='adjustments',
+    )
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='adjustments', null=True, blank=True)
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='adjustments', null=True, blank=True)
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
@@ -114,8 +132,14 @@ class StockTransfer(models.Model):
 class StockTransferItem(models.Model):
     """Items in a stock transfer"""
     transfer = models.ForeignKey(StockTransfer, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='transfer_items')
-    variant = models.ForeignKey(ProductVariant, on_delete=models.CASCADE, related_name='transfer_items', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='transfer_items')
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='transfer_items',
+    )
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     received_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
 

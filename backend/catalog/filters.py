@@ -394,7 +394,8 @@ class ProductFilter(django_filters.FilterSet):
         if not value:
             return queryset
         supplier_product_ids = PurchaseItem.objects.filter(
-            purchase__supplier_id=value
+            purchase__supplier_id=value,
+            purchase__deleted_at__isnull=True,
         ).values_list('product_id', flat=True).distinct()
         return queryset.filter(id__in=supplier_product_ids)
     

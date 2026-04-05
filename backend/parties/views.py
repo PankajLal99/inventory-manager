@@ -598,7 +598,9 @@ def ledger_by_customer(request):
 @permission_classes([IsAuthenticated])
 def ledger_entry_list_create(request):
     """List all ledger entries or create a new entry (Admin only)"""
-    
+    if not is_admin_user(request.user):
+        return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+
     if request.method == 'GET':
         queryset = _exclude_repair_group_entries(
             LedgerEntry.objects.select_related('customer', 'customer__customer_group', 'invoice', 'created_by').all()
@@ -816,7 +818,6 @@ def ledger_customer_detail(request, customer_id):
     )
     store_id = request.query_params.get('store', None)
     date_from = request.query_params.get('date_from', None)
-    print(f"[Ledger] customer_detail customer_id={customer_id} store={store_id} date_from={date_from} date_to={request.query_params.get('date_to')}")
     date_to = request.query_params.get('date_to', None)
     entry_type = request.query_params.get('entry_type', None)
     search = request.query_params.get('search', None)
@@ -856,16 +857,9 @@ def ledger_customer_detail(request, customer_id):
         )
     
     entries = entries.order_by('created_at')
-    entry_count = entries.count()
 
     serializer = LedgerEntrySerializer(entries, many=True)
     entries_data = serializer.data
-    # Log which invoice IDs (and store) are in the result for debugging
-    entry_infos = []
-    for e in entries:
-        inv = e.invoice
-        entry_infos.append(f"entry_id={e.id} invoice_id={inv.id if inv else None} invoice_store_id={inv.store_id if inv else None}")
-    print(f"[Ledger] customer_detail customer_id={customer_id} store={store_id} -> {entry_count} entries: {entry_infos}")
 
     # Calculate running balance
     running_balance = Decimal('0.00')
