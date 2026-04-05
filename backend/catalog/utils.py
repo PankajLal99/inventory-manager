@@ -16,7 +16,7 @@ def generate_unique_sku(base_name=None):
     sku = f"{prefix}-{timestamp}-{unique_id}"
     
     # Ensure uniqueness
-    while Product.objects.filter(sku=sku).exists():
+    while Product.all_objects.filter(sku=sku).exists():
         unique_id = str(uuid.uuid4())[:8].upper()
         sku = f"{prefix}-{timestamp}-{unique_id}"
     
@@ -44,7 +44,7 @@ def get_prefix_for_product(product):
 def get_max_number_for_prefix(prefix):
     """Get the maximum number already used for a given prefix"""
     # Find existing short_codes with this prefix
-    existing_codes = Barcode.objects.filter(
+    existing_codes = Barcode.all_objects.filter(
         short_code__startswith=f'{prefix}-'
     ).exclude(short_code__isnull=True)
     

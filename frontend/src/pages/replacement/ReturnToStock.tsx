@@ -10,6 +10,7 @@ import Card from '../../components/ui/Card';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { Search, Camera, AlertTriangle, Package, Plus, Minus, FileText, ArrowLeft, DollarSign } from 'lucide-react';
+import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
 
 interface InvoiceItem {
   id: number;
@@ -25,6 +26,7 @@ interface InvoiceItem {
   barcode_id?: number;
   barcode_value?: string;
   barcode_full?: string;
+  sold_barcode_value?: string;
   source_invoice_id?: number;
   source_invoice_number?: string;
   source_store?: number;
@@ -110,8 +112,13 @@ export default function ReturnToStock() {
     contextualItems.forEach((item: InvoiceItem) => {
       const itemBarcode = item.barcode_value?.toUpperCase() || '';
       const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
+      const itemSnap = item.sold_barcode_value?.toUpperCase() || '';
       const searchUpper = searchBarcode.toUpperCase();
-      if (itemBarcode === searchUpper || itemBarcodeFull === searchUpper) {
+      if (
+        itemBarcode === searchUpper ||
+        itemBarcodeFull === searchUpper ||
+        itemSnap === searchUpper
+      ) {
         initialSelected[item.id] = Math.min(1, item.available_quantity);
       } else {
         initialSelected[item.id] = 0;
@@ -155,7 +162,13 @@ export default function ReturnToStock() {
 
   // Process return mutation
   const processReturnMutation = useMutation({
-    mutationFn: async (data: { invoice_item_id: number; quantity: number; store_id?: number; return_tag?: string }) => {
+    mutationFn: async (data: {
+      invoice_item_id: number;
+      quantity: number;
+      store_id?: number;
+      return_tag?: string;
+      scanned_barcode?: string;
+    }) => {
       return await posApi.replacement.return(data);
     },
     onSuccess: () => {
@@ -353,7 +366,13 @@ export default function ReturnToStock() {
   const handleProcessReturn = async () => {
     if (!invoice) return;
 
-    const itemsToReturn: Array<{ invoice_item_id: number; quantity: number; store_id?: number; return_tag: string }> = [];
+    const itemsToReturn: Array<{
+      invoice_item_id: number;
+      quantity: number;
+      store_id?: number;
+      return_tag: string;
+      scanned_barcode?: string;
+    }> = [];
     const involvedInvoiceIds = new Set<number>();
     Object.entries(selectedItems).forEach(([itemIdStr, quantity]) => {
       const quantityNum = Number(quantity);
@@ -367,11 +386,13 @@ export default function ReturnToStock() {
         if (!selectedTag) {
           return;
         }
+        const sticker = sourceItem ? invoiceLineSticker(sourceItem) : undefined;
         itemsToReturn.push({
           invoice_item_id: itemId,
           quantity: quantityNum,
           store_id: sourceItem?.source_store ?? invoice.store,
           return_tag: selectedTag,
+          ...(sticker ? { scanned_barcode: sticker } : {}),
         });
       }
     });

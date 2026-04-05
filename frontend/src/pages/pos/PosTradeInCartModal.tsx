@@ -16,6 +16,8 @@ export interface PosTradeInLine {
   source_invoice_number: string;
   product_name: string;
   barcode: string | null;
+  /** Sticker used when adding this line (sent to checkout as scanned_barcode for barcode resolution). */
+  scanned_barcode?: string;
   /** Original sale line total (reference; not editable) */
   original_line_credit: number;
   /** Credit to apply against this new sale (≤ original_line_credit) */
@@ -52,6 +54,7 @@ export function posTradeInPayload(lines: PosTradeInLine[]) {
       invoice_item_id: l.invoice_item_id,
       return_tag: l.return_tag as PosTradeInReturnTag,
       accepted_credit: Number(l.accepted_credit.toFixed(2)),
+      ...(l.scanned_barcode ? { scanned_barcode: l.scanned_barcode } : {}),
     }));
 }
 
@@ -117,6 +120,7 @@ export default function PosTradeInCartModal({
           source_invoice_number: inv.invoice_number || '',
           product_name: item.product_name || item.product?.name || 'Item',
           barcode: item.barcode_value || item.barcode_full || trimmed,
+          scanned_barcode: trimmed.toUpperCase(),
           original_line_credit: original,
           accepted_credit: original,
           return_tag: null,

@@ -10,6 +10,7 @@ import Card from '../../components/ui/Card';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { Search, Camera, AlertTriangle, Plus, Minus, FileText, ArrowLeft, Receipt, ListOrdered, X } from 'lucide-react';
+import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
 
 interface InvoiceItem {
   id: number;
@@ -25,6 +26,7 @@ interface InvoiceItem {
   barcode_id?: number;
   barcode_value?: string;
   barcode_full?: string;
+  sold_barcode_value?: string;
 }
 
 interface Invoice {
@@ -100,8 +102,13 @@ export default function CreditNoteReplacement() {
     foundInvoice.items.forEach((item: InvoiceItem) => {
       const itemBarcode = item.barcode_value?.toUpperCase() || '';
       const itemBarcodeFull = item.barcode_full?.toUpperCase() || '';
+      const itemSnap = item.sold_barcode_value?.toUpperCase() || '';
       const searchUpper = searchBarcode.toUpperCase();
-      if (itemBarcode === searchUpper || itemBarcodeFull === searchUpper) {
+      if (
+        itemBarcode === searchUpper ||
+        itemBarcodeFull === searchUpper ||
+        itemSnap === searchUpper
+      ) {
         initialSelected[item.id] = Math.min(1, item.available_quantity);
       } else {
         initialSelected[item.id] = 0;
@@ -146,7 +153,12 @@ export default function CreditNoteReplacement() {
 
   // Process credit note mutation
   const processCreditNoteMutation = useMutation({
-    mutationFn: async (data: { invoice_id: number; items_to_replace: Array<{ item_id: number; quantity: number; status: string }>; store_id?: number; notes?: string }) => {
+    mutationFn: async (data: {
+      invoice_id: number;
+      items_to_replace: Array<{ item_id: number; quantity: number; status: string; scanned_barcode?: string }>;
+      store_id?: number;
+      notes?: string;
+    }) => {
       return await posApi.replacement.creditNote(data.invoice_id, {
         items_to_replace: data.items_to_replace,
         store_id: data.store_id,
@@ -370,7 +382,12 @@ export default function CreditNoteReplacement() {
   const handleProcessCreditNote = () => {
     if (!invoice) return;
 
-    const items_to_replace: Array<{ item_id: number; quantity: number; status: string }> = [];
+    const items_to_replace: Array<{
+      item_id: number;
+      quantity: number;
+      status: string;
+      scanned_barcode?: string;
+    }> = [];
     Object.entries(selectedItems).forEach(([itemIdStr, quantity]) => {
       const quantityNum = Number(quantity);
       if (quantityNum > 0) {
@@ -379,10 +396,13 @@ export default function CreditNoteReplacement() {
         if (!selectedTag) {
           return;
         }
+        const row = invoice.items.find((i) => i.id === itemId);
+        const sticker = row ? invoiceLineSticker(row) : undefined;
         items_to_replace.push({
           item_id: itemId,
           quantity: quantityNum,
           status: selectedTag,
+          ...(sticker ? { scanned_barcode: sticker } : {}),
         });
       }
     });
@@ -500,11 +520,19 @@ export default function CreditNoteReplacement() {
     let doneFresh = 0;
     try {
       for (const [invoiceId, items] of byInvoice) {
-        const items_to_replace = items.map((b) => ({
-          item_id: b.item_id,
-          quantity: 1,
-          status: bulkReturnTag,
-        }));
+        const items_to_replace = items.map((b) => {
+          const sticker =
+            (b.barcode_full && String(b.barcode_full).trim()) ||
+            (b.short_code && String(b.short_code).trim()) ||
+            (b.barcode && String(b.barcode).trim()) ||
+            '';
+          return {
+            item_id: b.item_id,
+            quantity: 1,
+            status: bulkReturnTag,
+            ...(sticker ? { scanned_barcode: sticker.toUpperCase() } : {}),
+          };
+        });
         await posApi.replacement.creditNote(invoiceId, {
           items_to_replace,
           notes: notes || 'Bulk return',

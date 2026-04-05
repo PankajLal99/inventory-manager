@@ -870,15 +870,6 @@ class PurchaseSerializer(serializers.ModelSerializer):
                         if count_to_delete > 0:
                             barcodes_to_delete = deletable_barcodes[:count_to_delete]
                             barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
-                            
-                            # Delete blobs (fire and forget)
-                            try:
-                                from backend.catalog.azure_label_service import delete_blobs_for_barcodes
-                                delete_blobs_for_barcodes(barcode_ids)
-                            except Exception:
-                                pass
-                            
-                            # Delete barcodes
                             Barcode.objects.filter(id__in=barcode_ids).delete()
                             
                     elif new_quantity > old_quantity:
@@ -941,15 +932,6 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 barcodes_to_delete = Barcode.objects.filter(
                     purchase_item=old_item
                 ).exclude(tag__in=['sold', 'in-cart'])
-                
-                barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
-                
-                if barcode_ids:
-                    try:
-                        from backend.catalog.azure_label_service import delete_blobs_for_barcodes
-                        delete_blobs_for_barcodes(barcode_ids)
-                    except Exception:
-                        pass
                 
                 barcodes_to_delete.delete()
                 
@@ -1071,31 +1053,14 @@ class PurchaseSerializer(serializers.ModelSerializer):
         if old_status != 'cancelled' and new_status == 'cancelled':
             from backend.catalog.models import Barcode
             from django.db import transaction
-            from django.db.models import Q
             
             with transaction.atomic():
-                # Delete all barcodes for this purchase that are NOT protected (sold or in-cart)
-                # Only delete barcodes with tags: 'new', 'returned', 'defective', 'unknown', or null
-                # Keep protected barcodes (sold or in-cart - they should not be deleted)
-                # Get barcode IDs before deletion for blob cleanup
+                # Soft-delete barcodes for this purchase that are NOT protected (sold or in-cart)
                 barcodes_to_delete = Barcode.objects.filter(
                     purchase=instance
                 ).exclude(
                     tag__in=['sold', 'in-cart']  # Exclude protected barcodes (sold or in-cart) - they should be kept
                 )
-                barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
-                
-                # Delete associated blobs from Azure Storage before deleting barcodes
-                if barcode_ids:
-                    try:
-                        from backend.catalog.azure_label_service import delete_blobs_for_barcodes
-                        delete_blobs_for_barcodes(barcode_ids)
-                    except Exception as e:
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Failed to delete blobs from Azure Storage: {str(e)}")
-                
-                # Use Q objects to combine conditions
                 deleted_count = barcodes_to_delete.delete()[0]
                 
                 # Create audit log
@@ -1112,8 +1077,8 @@ class PurchaseSerializer(serializers.ModelSerializer):
                         changes={
                             'purchase_number': instance.purchase_number,
                             'status': 'cancelled',
-                            'barcodes_deleted': deleted_count,
-                            'note': 'Non-sold barcodes deleted, product kept'
+                            'barcodes_soft_deleted': deleted_count,
+                            'note': 'Non-sold barcodes soft-deleted, product kept'
                         }
                     )
         

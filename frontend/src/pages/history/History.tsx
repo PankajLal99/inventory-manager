@@ -25,7 +25,7 @@ interface AuditLog {
   user: {
     id: number;
     username: string;
-    email: string;
+    email?: string;
   } | null;
   action: string;
   model_name: string;
@@ -131,17 +131,30 @@ export default function History() {
     return [];
   })();
 
+  /** Match inside audit `changes` (line items, barcodes list, product_name, sku, tag old/new, etc.) */
+  const changesTextMatches = (changes: Record<string, unknown> | undefined, needle: string): boolean => {
+    if (!changes || typeof changes !== 'object' || Object.keys(changes).length === 0) return false;
+    try {
+      return JSON.stringify(changes).toLowerCase().includes(needle);
+    } catch {
+      return false;
+    }
+  };
+
   const filteredLogs = logs.filter((log) => {
     if (!search) return true;
-    const searchLower = search.toLowerCase();
+    const searchLower = search.toLowerCase().trim();
+    if (!searchLower) return true;
     return (
       log.model_name.toLowerCase().includes(searchLower) ||
-      log.user?.username.toLowerCase().includes(searchLower) ||
+      (log.user?.username?.toLowerCase().includes(searchLower) ?? false) ||
+      (log.user?.email?.toLowerCase().includes(searchLower) ?? false) ||
       log.action.toLowerCase().includes(searchLower) ||
       log.object_id.toLowerCase().includes(searchLower) ||
-      log.object_name?.toLowerCase().includes(searchLower) ||
-      log.object_reference?.toLowerCase().includes(searchLower) ||
-      log.barcode?.toLowerCase().includes(searchLower)
+      (log.object_name?.toLowerCase().includes(searchLower) ?? false) ||
+      (log.object_reference?.toLowerCase().includes(searchLower) ?? false) ||
+      (log.barcode?.toLowerCase().includes(searchLower) ?? false) ||
+      changesTextMatches(log.changes as Record<string, unknown> | undefined, searchLower)
     );
   });
 
@@ -305,7 +318,7 @@ export default function History() {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search logs..."
+              placeholder="Search user, invoice #, barcode, line items…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"

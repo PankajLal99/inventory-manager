@@ -119,38 +119,22 @@ def purchase_detail(request, pk):
             return Response(PurchaseSerializer(serializer.instance, context=serializer.context).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE
-        from backend.catalog.models import Barcode, BarcodeLabel
+        from backend.catalog.models import Barcode
         from django.db import transaction
         
         purchase_number = purchase.purchase_number
         purchase_id = str(purchase.id)
         
-        # Get barcode IDs before transaction for blob deletion after response
-        barcodes_to_delete = Barcode.objects.filter(
-            purchase=purchase
-        ).exclude(tag='sold')
-        blob_deletion_ids = list(barcodes_to_delete.values_list('id', flat=True))
-        
         with transaction.atomic():
-            # Delete all barcodes associated with this purchase (except sold ones)
-            # Sold barcodes should be kept as they're already in invoices
+            # Soft-delete barcodes for this purchase (except sold — those stay visible for invoices)
             barcodes_to_delete = Barcode.objects.filter(
                 purchase=purchase
-            ).exclude(tag='sold').select_related('product', 'variant')  # Keep sold barcodes, load related for audit logs
+            ).exclude(tag='sold').select_related('product', 'variant')
             
-            # Get barcode details before deletion for audit logs
             barcode_details = list(barcodes_to_delete.values(
                 'id', 'barcode', 'product_id', 'product__name', 'product__sku', 'variant_id'
             ))
             
-            # Get barcode IDs before deletion for label cleanup
-            barcode_ids = [b['id'] for b in barcode_details]
-            
-            # Delete associated labels first
-            if barcode_ids:
-                BarcodeLabel.objects.filter(barcode_id__in=barcode_ids).delete()
-            
-            # Create audit logs for each barcode deletion BEFORE deleting them
             for barcode_detail in barcode_details:
                 create_audit_log(
                     request=request,
@@ -168,14 +152,12 @@ def purchase_detail(request, pk):
                         'variant_id': barcode_detail['variant_id'],
                         'purchase_id': purchase_id,
                         'purchase_number': purchase_number,
-                        'reason': 'Purchase deleted - non-sold barcodes removed'
+                        'reason': 'Purchase deleted - non-sold barcodes soft-deleted (rows retained)',
                     }
                 )
             
-            # Delete non-sold barcodes
             deleted_barcode_count = barcodes_to_delete.delete()[0]
             
-            # Get purchase items count and details BEFORE deletion (for audit logs)
             purchase_items = list(purchase.items.select_related('product', 'variant').all())
             purchase_items_count = len(purchase_items)
             
@@ -270,10 +252,9 @@ def purchase_detail(request, pk):
                             }
                         )
             
-            # Now delete the purchase (this will cascade delete PurchaseItems)
+            # Soft-delete purchase (line items and sold barcodes remain in DB)
             purchase.delete()
             
-            # Create audit log for purchase deletion
             create_audit_log(
                 request=request,
                 action='delete',
@@ -284,24 +265,14 @@ def purchase_detail(request, pk):
                 barcode=None,
                 changes={
                     'purchase_number': purchase_number,
-                    'barcodes_deleted': deleted_barcode_count,
+                    'barcodes_soft_deleted': deleted_barcode_count,
                     'purchase_items_count': purchase_items_count,
                     'purchase_status': purchase.status,
-                    'note': 'Purchase deleted along with non-sold barcodes, purchase items' + (', and stock reversed' if purchase.status == 'finalized' and (purchase.store or purchase.warehouse) else '') + '. Products were not deleted.'
+                    'note': 'Purchase soft-deleted; purchase rows, items, and sold barcodes kept in DB. Non-sold barcodes soft-deleted.'
+                    + (', stock reversed' if purchase.status == 'finalized' and (purchase.store or purchase.warehouse) else '')
+                    + '. Products were not deleted.',
                 }
             )
-        
-        # Fire-and-forget: Delete blobs from Azure Storage (non-blocking, errors suppressed)
-        # This runs after transaction but doesn't block the response
-        if blob_deletion_ids:
-            # Call deletion directly - all errors are caught internally, won't block or raise
-            try:
-                from backend.catalog.azure_label_service import delete_blobs_for_barcodes
-                # Call directly - function handles all errors internally
-                delete_blobs_for_barcodes(blob_deletion_ids)
-            except Exception:
-                # Silently ignore - blob cleanup is best effort, don't log or raise
-                pass
         
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -615,18 +586,13 @@ def vendor_purchase_cancel(request, pk):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Get barcode IDs before deletion for blob cleanup (outside transaction)
     barcodes_to_delete = Barcode.objects.filter(
         purchase=purchase
     ).exclude(
         tag='sold'  # Exclude sold barcodes - they should be kept
     )
-    barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
     
     with transaction.atomic():
-        # Delete all barcodes for this purchase that are NOT sold
-        # Keep 'sold' barcodes (they should not be deleted)
-        # Use exclude to keep sold barcodes and delete everything else
         deleted_count = barcodes_to_delete.delete()[0]
         
         # Update purchase status to cancelled
@@ -645,21 +611,10 @@ def vendor_purchase_cancel(request, pk):
             changes={
                 'purchase_number': purchase.purchase_number,
                 'status': 'cancelled',
-                'barcodes_deleted': deleted_count,
-                'note': 'Non-sold barcodes deleted, product kept'
+                'barcodes_soft_deleted': deleted_count,
+                'note': 'Non-sold barcodes soft-deleted, product kept'
             }
         )
-    
-    # Fire-and-forget: Delete blobs from Azure Storage (non-blocking, errors suppressed)
-    if barcode_ids:
-        # Call deletion directly - all errors are caught internally, won't block or raise
-        try:
-            from backend.catalog.azure_label_service import delete_blobs_for_barcodes
-            # Call directly - function handles all errors internally
-            delete_blobs_for_barcodes(barcode_ids)
-        except Exception:
-            # Silently ignore - blob cleanup is best effort, don't log or raise
-            pass
     
     return Response(PurchaseSerializer(purchase).data, status=status.HTTP_200_OK)
 @api_view(['POST'])
