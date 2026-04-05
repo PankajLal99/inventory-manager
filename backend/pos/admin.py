@@ -1,4 +1,7 @@
 from django.contrib import admin
+from django.contrib.admin.filters import DateFieldListFilter
+from django.db.models import Count
+from django.urls import reverse
 from django.utils.safestring import mark_safe
 from .models import (
     POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment,
@@ -31,16 +34,14 @@ class CartAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at']
 
 
-class InvoiceItemInline(admin.TabularInline):
-    model = InvoiceItem
-    extra = 0
-    readonly_fields = ['product', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total']
-
-
 class PaymentInline(admin.TabularInline):
     model = Payment
     extra = 0
     readonly_fields = ['payment_method', 'amount', 'reference', 'created_by', 'created_at']
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('created_by', 'invoice')
 
 
 @admin.register(Payment)
@@ -61,14 +62,186 @@ class PaymentAdmin(admin.ModelAdmin):
     )
 
 
+@admin.register(InvoiceItem)
+class InvoiceItemAdmin(admin.ModelAdmin):
+    """Line items on their own admin page — avoids loading hundreds of inline form rows on Invoice (very slow)."""
+
+    list_display = [
+        'id',
+        'invoice',
+        'product',
+        'variant',
+        'quantity',
+        'line_total',
+        'sold_barcode_value',
+        'barcode',
+    ]
+    search_fields = [
+        'invoice__invoice_number',
+        'product__name',
+        'product__sku',
+        'sold_barcode_value',
+        'barcode__barcode',
+    ]
+    autocomplete_fields = ['invoice', 'product', 'variant', 'barcode']
+    ordering = ['invoice_id', 'id']
+    list_select_related = ('invoice', 'product', 'variant', 'barcode')
+    show_full_result_count = False
+    readonly_fields = [
+        'invoice',
+        'product',
+        'variant',
+        'barcode',
+        'sold_barcode_value',
+        'quantity',
+        'unit_price',
+        'manual_unit_price',
+        'purchase_price',
+        'discount_amount',
+        'tax_amount',
+        'line_total',
+        'replaced_quantity',
+        'replaced_at',
+        'replaced_by',
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('invoice', 'product', 'variant', 'barcode', 'replaced_by')
+
+
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
-    list_display = ['invoice_number', 'store', 'customer', 'status', 'total', 'paid_amount', 'due_amount', 'created_by', 'created_at']
-    list_filter = ['status', 'store', 'created_at']
-    search_fields = ['invoice_number']
+    list_display = [
+        'invoice_number',
+        'store',
+        'customer',
+        'invoice_type',
+        'status',
+        'total',
+        'paid_amount',
+        'due_amount',
+        'pending_cleared_at',
+        'created_by',
+        'created_at',
+    ]
+    list_filter = [
+        'status',
+        'invoice_type',
+        'store',
+        ('created_at', DateFieldListFilter),
+        ('pending_cleared_at', DateFieldListFilter),
+    ]
+    search_fields = ['invoice_number', 'customer__name', 'customer__phone']
     ordering = ['-created_at']
-    inlines = [InvoiceItemInline, PaymentInline]
-    readonly_fields = ['created_at', 'updated_at', 'voided_at']
+    list_select_related = ('store', 'customer', 'created_by')
+    show_full_result_count = False
+    autocomplete_fields = ['cart', 'store', 'customer', 'created_by', 'voided_by', 'applied_promotions']
+    # Line items are NOT inlined — each row is an extra form in the DOM + ORM; use InvoiceItem admin + link below.
+    inlines = [PaymentInline]
+    readonly_fields = [
+        'created_at',
+        'updated_at',
+        'voided_at',
+        'pending_cleared_at',
+        'line_items_admin_link',
+        'pos_trade_ins',
+        'exchange_snapshots',
+    ]
+
+    fieldsets = (
+        (
+            None,
+            {
+                'fields': (
+                    'invoice_number',
+                    'cart',
+                    'store',
+                    'customer',
+                    'status',
+                    'invoice_type',
+                ),
+            },
+        ),
+        (
+            'Amounts',
+            {
+                'fields': (
+                    'subtotal',
+                    'discount_amount',
+                    'tax_amount',
+                    'total',
+                    'paid_amount',
+                    'due_amount',
+                    'trade_in_credit',
+                ),
+            },
+        ),
+        (
+            'Line items',
+            {
+                'fields': ('line_items_admin_link',),
+                'description': (
+                    'Open the filtered list to view all rows for this invoice (fast). '
+                    'Previously each line was an inline form here, which made this page very slow.'
+                ),
+            },
+        ),
+        (
+            'Promotions',
+            {'fields': ('applied_promotions',)},
+        ),
+        (
+            'Trade-in / exchange payloads (JSON)',
+            {
+                'classes': ('collapse',),
+                'fields': ('pos_trade_ins', 'exchange_snapshots'),
+            },
+        ),
+        (
+            'Pending / wholesale',
+            {
+                'fields': ('pending_cleared_at',),
+                'description': (
+                    'Set when a draft pending invoice is finalized (checkout to non-pending type, '
+                    'or Move to Ledger). Used for reporting; read-only here.'
+                ),
+            },
+        ),
+        (
+            'Void',
+            {'fields': ('voided_at', 'voided_by')},
+        ),
+        (
+            'Notes & edits',
+            {'fields': ('notes', 'is_edited', 'edited_on')},
+        ),
+        (
+            'Timestamps',
+            {'fields': ('created_by', 'created_at', 'updated_at')},
+        ),
+    )
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related('store', 'customer', 'created_by', 'voided_by', 'cart').annotate(
+            _admin_line_item_count=Count('items', distinct=True),
+        )
+
+    @admin.display(description='Line items')
+    def line_items_admin_link(self, obj):
+        if not obj or not obj.pk:
+            return '—'
+        url = reverse('admin:pos_invoiceitem_changelist') + f'?invoice__id__exact={obj.pk}'
+        n = getattr(obj, '_admin_line_item_count', None)
+        label = f'View {n} line item(s) in admin' if n is not None else 'View line items in admin'
+        return mark_safe(f'<a href="{url}">{label}</a>')
 
 
 class ReturnItemInline(admin.TabularInline):
