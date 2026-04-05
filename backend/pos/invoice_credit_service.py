@@ -274,3 +274,73 @@ def finalize_invoice_mark_credit_core(
         },
     )
     return invoice
+
+
+def reconcile_ledger_after_credit_invoice_total_change(
+    invoice: Invoice,
+    user,
+    *,
+    note: str = '',
+) -> None:
+    """
+    After line totals / invoice.total change on an invoice already in credit + ledger:
+    remove existing invoice-linked ledger rows (and restore customer balance), then post one
+    new debit for the current invoice.total. Mirrors the ledger tail of finalize_invoice_mark_credit_core.
+
+    Caller must have saved line items and run update_invoice_totals (or equivalent) first.
+    """
+    from backend.pos.views import update_invoice_totals
+
+    invoice.refresh_from_db()
+    if not invoice.customer_id:
+        raise ValueError('Invoice has no customer')
+    if invoice.status != 'credit' or invoice.invoice_type != 'credit':
+        raise ValueError(
+            f'Expected status=credit and invoice_type=credit, got {invoice.status!r} / {invoice.invoice_type!r}'
+        )
+
+    update_invoice_totals(invoice)
+    invoice.refresh_from_db()
+
+    invoice.paid_amount = invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    invoice.due_amount = invoice.total - invoice.paid_amount
+    invoice.save(update_fields=['paid_amount', 'due_amount', 'subtotal', 'total'])
+
+    if invoice.total <= 0:
+        raise ValueError('Invoice total must be greater than 0 after adjustment')
+
+    existing_entries = LedgerEntry.objects.filter(invoice=invoice)
+    net_balance_to_reverse = Decimal('0.00')
+    for entry in existing_entries:
+        if entry.entry_type == 'debit':
+            net_balance_to_reverse += entry.amount
+        else:
+            net_balance_to_reverse -= entry.amount
+
+    reverse_internal_ledger_entries_for_ledger_entries(
+        existing_entries,
+        user,
+        note or 'Credit invoice total adjustment (reconcile ledger)',
+    )
+    existing_entries.delete()
+    invoice.customer.credit_balance += net_balance_to_reverse
+
+    entry = LedgerEntry.objects.create(
+        customer=invoice.customer,
+        invoice=invoice,
+        entry_type='debit',
+        amount=invoice.total,
+        description=f'Credit Invoice {invoice.invoice_number}',
+        created_by=user,
+        created_at=invoice.created_at or timezone.now(),
+    )
+    create_internal_ledger_entry_if_mtshop(
+        invoice.customer,
+        'debit',
+        invoice.total,
+        f'Credit Invoice {invoice.invoice_number}',
+        user,
+        invoice.created_at or timezone.now(),
+    )
+    invoice.customer.credit_balance -= entry.amount
+    invoice.customer.save()

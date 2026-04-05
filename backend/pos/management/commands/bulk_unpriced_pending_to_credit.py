@@ -5,7 +5,12 @@ then move to credit / ledger (same as invoice_mark_credit + pending_cleared_at).
 
 Examples:
   python manage.py bulk_unpriced_pending_to_credit --dry-run
-  python manage.py bulk_unpriced_pending_to_credit --profit 20 --username admin
+  python manage.py bulk_unpriced_pending_to_credit --profit 10 --username admin
+
+If you already finalized with the wrong --profit (e.g. default 20 instead of 10) on credit invoices,
+fix line prices + totals + ledger with:
+  python manage.py adjust_credit_invoice_unit_price_delta --invoice-ids ID --from-profit 20 --to-profit 10 --username USER
+  # or: --subtract-per-unit 10
 """
 from decimal import Decimal, ROUND_HALF_UP
 
