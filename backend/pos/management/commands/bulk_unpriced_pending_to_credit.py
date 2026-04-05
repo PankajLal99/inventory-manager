@@ -3,9 +3,15 @@ Finalize draft + invoice_type=pending invoices where every line still has 0 sell
 set unit_price = purchase_unit_cost + profit (default ₹10), mark barcodes sold (checkout parity),
 then move to credit / ledger (same as invoice_mark_credit + pending_cleared_at).
 
+Prefer scoping by store: use --shop-type wholesale (or retail, repair, etc.) so you do not
+finalize every store by mistake. After a run, counts by shop for a given day:
+  python manage.py report_pending_cleared_credit_by_shop
+If retail/repair were finalized by error, revert (no payments) with:
+  python manage.py revert_bulk_credit_wrong_shops --username YOUR_USER --dry-run
+
 Examples:
   python manage.py bulk_unpriced_pending_to_credit --dry-run
-  python manage.py bulk_unpriced_pending_to_credit --username admin
+  python manage.py bulk_unpriced_pending_to_credit --username admin --shop-type wholesale
   python manage.py bulk_unpriced_pending_to_credit --profit 20 --username admin   # override default ₹10
 
 If you already finalized with the wrong --profit (e.g. used 20 but meant 10) on credit invoices,

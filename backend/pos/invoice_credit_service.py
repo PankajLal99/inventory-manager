@@ -344,3 +344,178 @@ def reconcile_ledger_after_credit_invoice_total_change(
     )
     invoice.customer.credit_balance -= entry.amount
     invoice.customer.save()
+
+
+def remove_invoice_ledger_entries_and_restore_customer(
+    invoice: Invoice,
+    user,
+    *,
+    note: str,
+) -> Decimal:
+    """
+    Delete all main LedgerEntry rows for this invoice and bump customer.credit_balance by the net
+    effect of removing those rows (same net formula as finalize_invoice_mark_credit_core).
+    Returns the net debit amount that was reversed (typically the former invoice total).
+    """
+    qs = LedgerEntry.objects.filter(invoice=invoice).select_related('customer')
+    entries = list(qs)
+    net_balance_to_reverse = Decimal('0.00')
+    for entry in entries:
+        if entry.entry_type == 'debit':
+            net_balance_to_reverse += entry.amount
+        else:
+            net_balance_to_reverse -= entry.amount
+    if not entries:
+        return Decimal('0.00')
+    reverse_internal_ledger_entries_for_ledger_entries(qs, user, note)
+    qs.delete()
+    if invoice.customer_id:
+        invoice.customer.credit_balance += net_balance_to_reverse
+        invoice.customer.save(update_fields=['credit_balance'])
+    return net_balance_to_reverse
+
+
+def revert_credit_invoice_to_draft_pending(
+    invoice: Invoice,
+    user,
+    *,
+    skip_barcode_restore: bool = False,
+) -> Invoice:
+    """
+    Undo a mark-credit / bulk_unpriced_pending_to_credit-style finalization for an invoice that
+    still has no real payments: remove ledger rows, restore customer balance, set credit -> draft
+    pending, clear pending_cleared_at, zero line sell prices, set barcodes back to new when sold.
+
+    Refuses if any non-refund payment sum is non-zero.
+    """
+    from backend.catalog.barcode_cache import invalidate_barcode_cache
+    from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+    from backend.pos.views import update_invoice_totals
+
+    inv = invoice
+    inv.refresh_from_db()
+    if inv.status != 'credit' or inv.invoice_type != 'credit':
+        raise ValueError(
+            f'Expected status=credit and invoice_type=credit, got {inv.status!r} / {inv.invoice_type!r}'
+        )
+    if not inv.customer_id:
+        raise ValueError('Invoice has no customer')
+
+    paid_non_refund = (
+        inv.payments.exclude(payment_method='refund').aggregate(t=Sum('amount'))['t'] or Decimal('0.00')
+    )
+    if paid_non_refund != Decimal('0.00'):
+        raise ValueError(
+            f'Refuse revert: non-refund payments total ₹{paid_non_refund}. '
+            'Adjust payments first or handle this invoice manually.'
+        )
+
+    remove_invoice_ledger_entries_and_restore_customer(
+        inv,
+        user,
+        note='Revert bulk credit (restore draft pending)',
+    )
+
+    if not skip_barcode_restore:
+        for it in inv.items.select_related('product', 'barcode').all():
+            if it.barcode_id and it.barcode and it.barcode.tag == 'sold':
+                b = it.barcode
+                old_tag = b.tag
+                b.tag = 'new'
+                b.save(update_fields=['tag'])
+                invalidate_barcode_cache(b)
+                create_audit_log(
+                    request=None,
+                    action='barcode_tag_change',
+                    model_name='Barcode',
+                    object_id=str(b.id),
+                    object_name=it.product.name if it.product else '',
+                    object_reference=inv.invoice_number,
+                    barcode=b.barcode,
+                    user=user,
+                    changes={
+                        'tag': {'old': old_tag, 'new': 'new'},
+                        'context': 'revert_bulk_credit_to_draft_pending',
+                        'invoice_id': inv.id,
+                    },
+                )
+            elif it.product_id and it.product and not it.product.track_inventory:
+                pb = single_barcode_for_untracked_product(it.product)
+                if pb and pb.tag == 'sold':
+                    old_tag = pb.tag
+                    pb.tag = 'new'
+                    pb.save(update_fields=['tag'])
+                    invalidate_barcode_cache(pb)
+                    create_audit_log(
+                        request=None,
+                        action='barcode_tag_change',
+                        model_name='Barcode',
+                        object_id=str(pb.id),
+                        object_name=it.product.name,
+                        object_reference=inv.invoice_number,
+                        barcode=pb.barcode,
+                        user=user,
+                        changes={
+                            'tag': {'old': old_tag, 'new': 'new'},
+                            'context': 'revert_bulk_credit_to_draft_pending_untracked',
+                            'invoice_id': inv.id,
+                        },
+                    )
+
+    for it in inv.items.all():
+        it.manual_unit_price = None
+        it.unit_price = Decimal('0.00')
+        it.line_total = (
+            Decimal('0') * it.quantity - it.discount_amount + it.tax_amount
+        ).quantize(Decimal('0.01'))
+        it.save(
+            update_fields=[
+                'manual_unit_price',
+                'unit_price',
+                'line_total',
+            ]
+        )
+
+    try:
+        repair = inv.repair
+        if repair and repair.status == 'work_in_progress':
+            repair.status = 'received'
+            repair.save(update_fields=['status'])
+    except Repair.DoesNotExist:
+        pass
+
+    inv.status = 'draft'
+    inv.invoice_type = 'pending'
+    inv.pending_cleared_at = None
+    inv.paid_amount = Decimal('0.00')
+    inv.save(
+        update_fields=[
+            'status',
+            'invoice_type',
+            'pending_cleared_at',
+            'paid_amount',
+        ]
+    )
+
+    update_invoice_totals(inv)
+    inv.refresh_from_db()
+    inv.due_amount = inv.total - inv.paid_amount
+    inv.save(update_fields=['due_amount'])
+
+    create_audit_log(
+        request=None,
+        action='invoice_update',
+        model_name='Invoice',
+        object_id=str(inv.id),
+        object_name=f'Invoice {inv.invoice_number}',
+        object_reference=inv.invoice_number,
+        barcode=None,
+        user=user,
+        changes={
+            'tool': 'revert_credit_invoice_to_draft_pending',
+            'status': {'old': 'credit', 'new': 'draft'},
+            'invoice_type': {'old': 'credit', 'new': 'pending'},
+            'pending_cleared_at': 'cleared',
+        },
+    )
+    return inv
