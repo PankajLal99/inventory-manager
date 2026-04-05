@@ -34,7 +34,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--profit',
             type=str,
-            default='20',
+            default='10',
             help='Fixed profit per unit (₹) added to purchase cost for unit_price. Default: 20',
         )
         parser.add_argument(
