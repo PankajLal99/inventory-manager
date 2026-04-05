@@ -1,13 +1,14 @@
 """
 Finalize draft + invoice_type=pending invoices where every line still has 0 sell price:
-set unit_price = purchase_unit_cost + profit (default ₹20), mark barcodes sold (checkout parity),
+set unit_price = purchase_unit_cost + profit (default ₹10), mark barcodes sold (checkout parity),
 then move to credit / ledger (same as invoice_mark_credit + pending_cleared_at).
 
 Examples:
   python manage.py bulk_unpriced_pending_to_credit --dry-run
-  python manage.py bulk_unpriced_pending_to_credit --profit 10 --username admin
+  python manage.py bulk_unpriced_pending_to_credit --username admin
+  python manage.py bulk_unpriced_pending_to_credit --profit 20 --username admin   # override default ₹10
 
-If you already finalized with the wrong --profit (e.g. default 20 instead of 10) on credit invoices,
+If you already finalized with the wrong --profit (e.g. used 20 but meant 10) on credit invoices,
 fix line prices + totals + ledger with:
   python manage.py adjust_credit_invoice_unit_price_delta --invoice-ids ID --from-profit 20 --to-profit 10 --username USER
   # or: --subtract-per-unit 10
@@ -40,7 +41,7 @@ class Command(BaseCommand):
             '--profit',
             type=str,
             default='10',
-            help='Fixed profit per unit (₹) added to purchase cost for unit_price. Default: 20',
+            help='Fixed profit per unit (₹) added to purchase cost for unit_price. Default: 10',
         )
         parser.add_argument(
             '--dry-run',
