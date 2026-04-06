@@ -1026,9 +1026,60 @@ export default function Purchases() {
     }
   };
 
+  const getLabelKey = (productId: number, purchaseId?: number) => `${productId}:${purchaseId ?? 'na'}`;
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const waitForLabelsToBeGenerated = async (
+    productId: number,
+    purchaseId: number,
+    maxAttempts = 12,
+    intervalMs = 3000
+  ) => {
+    const labelKey = getLabelKey(productId, purchaseId);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await productsApi.labelsStatus(productId, purchaseId);
+        const data = response.data || {};
+        const allGenerated = data.all_generated || false;
+
+        queryClient.setQueryData(['label-status', productId, purchaseId], { productId, purchaseId, data, error: null });
+        setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: !allGenerated } }));
+
+        if (allGenerated) return true;
+      } catch {
+        // Keep polling; generation can be eventually consistent.
+      }
+      await sleep(intervalMs);
+    }
+    return false;
+  };
+
+  const triggerGenerateAndWait = async (productId: number, purchaseId: number) => {
+    const labelKey = getLabelKey(productId, purchaseId);
+    setGeneratingLabelsFor(productId);
+    setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: true } }));
+    try {
+      await productsApi.regenerateLabels(productId, purchaseId);
+      const generated = await waitForLabelsToBeGenerated(productId, purchaseId);
+      if (generated) {
+        alert('Labels generated successfully. You can print now.');
+      } else {
+        alert('Label generation was triggered and is still processing. Please try Print in a few seconds.');
+      }
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to trigger label generation';
+      alert(errorMsg);
+    } finally {
+      setGeneratingLabelsFor(null);
+      await queryClient.invalidateQueries({ queryKey: ['label-status', productId, purchaseId] });
+      await queryClient.invalidateQueries({ queryKey: ['label-status', productId] });
+    }
+  };
+
   const handleCheckLabelStatus = async (productId: number, purchaseId: number) => {
     setCheckingStatusFor(productId);
-    const labelKey = `${productId} `;
+    const labelKey = getLabelKey(productId, purchaseId);
     try {
       const response = await productsApi.labelsStatus(productId, purchaseId);
       const data = response.data || {};
@@ -1040,12 +1091,12 @@ export default function Purchases() {
       if (total > 0) {
         alert(`Status: ${generated} of ${total} label(s) generated.${allGenerated ? ' All ready to print.' : ''}`);
       } else {
-        alert('No labels generated yet. Generate labels from the purchase detail page or backend.');
+        await triggerGenerateAndWait(productId, purchaseId);
       }
     } catch (error: any) {
       setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: false } }));
       if (error?.response?.status === 404) {
-        alert('No labels for this product yet. Generate labels from the purchase detail page or backend.');
+        await triggerGenerateAndWait(productId, purchaseId);
       } else {
         alert(error?.response?.data?.error || 'Failed to check label status.');
       }
@@ -1219,15 +1270,14 @@ export default function Purchases() {
   })();
 
   // Max label-status queries to avoid tab crash when many purchases/items are on the page
-  const MAX_LABEL_STATUS_QUERIES = 25;
+  const MAX_LABEL_STATUS_QUERIES = 15;
 
-  // Load all items; prioritize unprinted (they get status first), then printed, cap at MAX
+  // Load only unprinted items and cap at MAX to keep this page light.
   const labelStatusQueriesData = useMemo(() => {
     if (!purchases || purchases.length === 0) return [];
 
     const seenKeys = new Set<string>();
     const unprinted: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
-    const printed: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
 
     purchases.forEach((purchase: any) => {
       if (purchase.items && purchase.items.length > 0) {
@@ -1235,17 +1285,16 @@ export default function Purchases() {
           const productId = item.product;
           if (!productId || !item.product_track_inventory) return;
           const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
-          const labelKey = `${productId} `;
+          const labelKey = getLabelKey(productId, purchaseId);
           if (seenKeys.has(labelKey)) return;
           seenKeys.add(labelKey);
           const entry = { productId, purchaseId, labelKey };
-          if (item.printed) printed.push(entry);
-          else unprinted.push(entry);
+          if (!item.printed) unprinted.push(entry);
         });
       }
     });
 
-    return [...unprinted, ...printed].slice(0, MAX_LABEL_STATUS_QUERIES);
+    return unprinted.slice(0, MAX_LABEL_STATUS_QUERIES);
   }, [purchases]);
 
   // Use React Query to cache label status checks for all products in purchases
@@ -1633,7 +1682,7 @@ export default function Purchases() {
                                   {purchase.items.map((item: any, idx: number) => {
                                     const productId = item.product;
                                     const trackInventory = item.product_track_inventory;
-                                    const labelKey = `${productId} `;
+                                    const labelKey = getLabelKey(productId, purchase.id);
                                     const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
 
                                     return (
@@ -1717,7 +1766,7 @@ export default function Purchases() {
                                                       variant="outline"
                                                       size="sm"
                                                       onClick={() => handleCheckLabelStatus(productId, purchase.id)}
-                                                      disabled={isChecking}
+                                                      disabled={isChecking || isGenerating}
                                                       className="flex items-center gap-1.5 text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
                                                       title="Check label status via API"
                                                     >
@@ -1732,6 +1781,7 @@ export default function Purchases() {
                                                       variant="outline"
                                                       size="sm"
                                                       onClick={() => handlePrintLabels(productId, purchase.id)}
+                                                      disabled={isGenerating}
                                                       className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                                       title="Get barcodes and open print dialog"
                                                     >
@@ -1905,7 +1955,7 @@ export default function Purchases() {
                         {purchase.items.map((item: any, idx: number) => {
                           const productId = item.product;
                           const trackInventory = item.product_track_inventory;
-                          const labelKey = `${productId} `;
+                          const labelKey = getLabelKey(productId, purchase.id);
                           const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
 
                           return (
@@ -1995,7 +2045,7 @@ export default function Purchases() {
                                             variant="outline"
                                             size="sm"
                                             onClick={() => handleCheckLabelStatus(productId, purchase.id)}
-                                            disabled={isChecking}
+                                            disabled={isChecking || isGenerating}
                                             className="flex items-center gap-1.5 w-full text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
                                             title="Check label status via API"
                                           >
@@ -2010,6 +2060,7 @@ export default function Purchases() {
                                             variant="outline"
                                             size="sm"
                                             onClick={() => handlePrintLabels(productId, purchase.id)}
+                                            disabled={isGenerating}
                                             className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                             title="Get barcodes and open print dialog"
                                           >
