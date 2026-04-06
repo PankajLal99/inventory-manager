@@ -1188,12 +1188,12 @@ def product_generate_labels(request, pk):
                 blob_url = blob_urls.get(barcode_id)
                 
                 if blob_url:
-                    label_obj = item['label_obj']
-                    label_obj.label_image = blob_url
-                    if item['created']:
-                        label_obj.save()
-                    else:
-                        label_obj.save(update_fields=['label_image'])
+                    # Idempotent write to avoid unique-key races when another worker
+                    # creates BarcodeLabel between precheck and save.
+                    BarcodeLabel.objects.update_or_create(
+                        barcode_id=barcode_id,
+                        defaults={'label_image': blob_url},
+                    )
                     newly_generated.append(barcode_id)
                     # Add to generated_labels after processing
                     generated_labels.append({
@@ -1220,12 +1220,10 @@ def product_generate_labels(request, pk):
                         purchase_date=data['purchase_date'],
                         serial_number=data['serial_number']
                     )
-                    label_obj = item['label_obj']
-                    label_obj.label_image = image_data_url
-                    if item['created']:
-                        label_obj.save()
-                    else:
-                        label_obj.save(update_fields=['label_image'])
+                    BarcodeLabel.objects.update_or_create(
+                        barcode_id=barcode_id,
+                        defaults={'label_image': image_data_url},
+                    )
                     newly_generated.append(barcode_id)
                     # Add to generated_labels after processing
                     generated_labels.append({
@@ -1253,12 +1251,10 @@ def product_generate_labels(request, pk):
                         purchase_date=data['purchase_date'],
                         serial_number=data['serial_number']
                     )
-                    label_obj = item['label_obj']
-                    label_obj.label_image = image_data_url
-                    if item['created']:
-                        label_obj.save()
-                    else:
-                        label_obj.save(update_fields=['label_image'])
+                    BarcodeLabel.objects.update_or_create(
+                        barcode_id=item['barcode_id'],
+                        defaults={'label_image': image_data_url},
+                    )
                     newly_generated.append(item['barcode_id'])
                     # Add to generated_labels after processing
                     generated_labels.append({
