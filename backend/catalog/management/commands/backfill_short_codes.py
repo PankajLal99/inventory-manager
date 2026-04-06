@@ -112,7 +112,9 @@ class Command(BaseCommand):
                 collision_counter = 0
                 max_attempts = 10000
                 
-                while Barcode.objects.filter(short_code=short_code).exclude(id=barcode.id).exists():
+                # Use all_objects to include soft-deleted rows because DB unique
+                # constraints still apply to them.
+                while Barcode.all_objects.filter(short_code=short_code).exclude(id=barcode.id).exists():
                     collision_counter += 1
                     if collision_counter > max_attempts:
                         # Fallback: use UUID suffix if too many collisions
