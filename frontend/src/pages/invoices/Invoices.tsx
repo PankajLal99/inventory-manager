@@ -368,16 +368,19 @@ export default function Invoices() {
     return type !== 'pending' && status !== 'draft';
   });
   // Profit summary for Super group footer row; bifurcate Paid vs Credit
-  const paidSumNonCredit = footerTotalsInvoices
+  const paidSales = footerTotalsInvoices
     .filter((inv) => !isCreditInvoice(inv))
     .reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
+  const paidDifference = footerTotalsInvoices
+    .filter((inv) => !isCreditInvoice(inv))
+    .reduce((s, inv) => s + (parseAmount(inv.computed_paid) - parseAmount(inv.computed_total)), 0);
   const creditDifference = footerTotalsInvoices
     .filter((inv) => isCreditInvoice(inv))
     .reduce((s, inv) => s + (parseAmount(inv.computed_paid) - parseAmount(inv.computed_total)), 0);
   const pendingAmount = filteredInvoices
     .filter((inv) => String(inv.invoice_type || '').toLowerCase() === 'pending')
     .reduce((s, inv) => s + parseAmount(inv.display_total ?? inv.total), 0);
-  const combinedProfit = paidSumNonCredit + creditDifference;
+  const combinedProfit = paidDifference + creditDifference;
 
   const buildInvoiceDetailPath = (invoiceId: number) => {
     const params = new URLSearchParams();
@@ -719,10 +722,17 @@ export default function Invoices() {
               })}
               {canSeeTotalColumn && filteredInvoices.length > 0 && (
                 <>
-                  <TableRow className="bg-gray-50 border-t border-gray-200 font-medium">
-                    <TableCell colSpan={5}>Paid (non-credit)</TableCell>
+                  <TableRow className="bg-green-50/80 border-t border-gray-200 font-medium">
+                    <TableCell colSpan={5}>Sales</TableCell>
                     <TableCell align="right" className="text-green-700">
-                      ₹{formatNumber(paidSumNonCredit)}
+                      ₹{formatNumber(paidSales)}
+                    </TableCell>
+                    <TableCell>{' '}</TableCell>
+                  </TableRow>
+                  <TableRow className="bg-gray-50 border-t border-gray-200 font-medium">
+                    <TableCell colSpan={5}>Paid Profit (Paid − Total)</TableCell>
+                    <TableCell align="right" className="text-green-700">
+                      ₹{formatNumber(paidDifference)}
                     </TableCell>
                     <TableCell>{' '}</TableCell>
                   </TableRow>
@@ -822,8 +832,12 @@ export default function Invoices() {
             {canSeeTotalColumn && filteredInvoices.length > 0 && (
               <div className="rounded-lg border border-gray-200 bg-gray-50 space-y-2 px-4 py-3 text-sm font-medium">
                 <div className="flex justify-between items-center">
-                  <span className="text-gray-700">Paid (non-credit)</span>
-                  <span className="text-green-700">₹{formatNumber(paidSumNonCredit)}</span>
+                  <span className="text-gray-700">Paid (non-credit) / Sales</span>
+                  <span className="text-green-700">₹{formatNumber(paidSales)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Paid (Paid − Total)</span>
+                  <span className="text-green-700">₹{formatNumber(paidDifference)}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-gray-700">Credit (Paid − Total)</span>
