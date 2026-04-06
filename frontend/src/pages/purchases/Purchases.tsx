@@ -1019,9 +1019,14 @@ export default function Purchases() {
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
       } else {
-        alert('No labels found for this purchase. Generate labels from the purchase detail page or backend.');
+        await triggerGenerateAndWait(productId, purchaseId);
       }
     } catch (error: any) {
+      const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString();
+      if (backendMessage.toLowerCase().includes('no barcodes found')) {
+        await triggerGenerateAndWait(productId, purchaseId);
+        return;
+      }
       alert(error?.response?.data?.error || 'Failed to print labels. Please try again.');
     }
   };
