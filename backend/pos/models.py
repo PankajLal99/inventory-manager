@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 from decimal import Decimal
 from backend.catalog.models import Product, ProductVariant
@@ -15,7 +16,14 @@ class POSSession(models.Model):
         ('closed', 'Closed'),
     ]
 
-    session_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='pos_sessions',
+    )
+    session_number = models.CharField(max_length=100, db_index=True)
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='pos_sessions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pos_sessions')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
@@ -29,6 +37,9 @@ class POSSession(models.Model):
 
     class Meta:
         db_table = 'pos_sessions'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'session_number'], name='uniq_possession_retailer_session'),
+        ]
 
 
 class Cart(models.Model):
@@ -48,7 +59,14 @@ class Cart(models.Model):
         ('mixed', 'Mixed Payment (Cash + UPI)'),
     ]
 
-    cart_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='carts',
+    )
+    cart_number = models.CharField(max_length=100, db_index=True)
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='carts')
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True, related_name='carts')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
@@ -64,6 +82,9 @@ class Cart(models.Model):
 
     class Meta:
         db_table = 'carts'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'cart_number'], name='uniq_cart_retailer_number'),
+        ]
 
 
 class CartItem(models.Model):
@@ -120,7 +141,14 @@ class Invoice(models.Model):
         ('mixed', 'Mixed Payment (Cash + UPI)'),
     ]
 
-    invoice_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='invoices',
+    )
+    invoice_number = models.CharField(max_length=100, db_index=True)
     cart = models.ForeignKey(Cart, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices')
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='invoices')
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True, related_name='invoices')
@@ -155,6 +183,9 @@ class Invoice(models.Model):
 
     class Meta:
         db_table = 'invoices'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'invoice_number'], name='uniq_invoice_retailer_number'),
+        ]
 
 
 class Repair(models.Model):
@@ -168,13 +199,20 @@ class Repair(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='repairs',
+    )
     invoice = models.OneToOneField(Invoice, on_delete=models.CASCADE, related_name='repair', unique=True)
     contact_no = models.CharField(max_length=20, blank=True, help_text='Contact number for repair')
     model_name = models.CharField(max_length=200, help_text='Device model name given for repair')
     description = models.TextField(help_text='Description of the repair issue')
     booking_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Booking amount for repair')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='received', help_text='Repair status')
-    barcode = models.CharField(max_length=100, unique=True, db_index=True, help_text='Barcode for tracking repair')
+    barcode = models.CharField(max_length=100, db_index=True, help_text='Barcode for tracking repair')
     label_image = models.TextField(blank=True, null=True, help_text='Label image URL (blob URL or base64 data URL)')
     delivery_date = models.DateField(null=True, blank=True, help_text='Expected or actual delivery date')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -187,6 +225,9 @@ class Repair(models.Model):
     class Meta:
         db_table = 'repairs'
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'barcode'], name='uniq_repair_retailer_barcode'),
+        ]
 
 
 class InvoiceItem(models.Model):
@@ -264,7 +305,14 @@ class Return(models.Model):
         ('completed', 'Completed'),
     ]
 
-    return_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='returns',
+    )
+    return_number = models.CharField(max_length=100, db_index=True)
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='returns')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     reason = models.TextField()
@@ -278,6 +326,9 @@ class Return(models.Model):
 
     class Meta:
         db_table = 'returns'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'return_number'], name='uniq_return_retailer_number'),
+        ]
 
 
 class ReturnItem(models.Model):
@@ -306,7 +357,14 @@ class ReturnItem(models.Model):
 
 class CreditNote(models.Model):
     """Credit notes for returns"""
-    credit_note_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='credit_notes',
+    )
+    credit_note_number = models.CharField(max_length=100, db_index=True)
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='credit_notes')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
@@ -319,11 +377,21 @@ class CreditNote(models.Model):
 
     class Meta:
         db_table = 'credit_notes'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'credit_note_number'], name='uniq_creditnote_retailer_number'),
+        ]
 
 
 class Exchange(models.Model):
     """Product exchanges"""
-    exchange_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='exchanges',
+    )
+    exchange_number = models.CharField(max_length=100, db_index=True)
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='exchanges')
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='exchanges', null=True, blank=True)
     notes = models.TextField(blank=True)
@@ -335,12 +403,23 @@ class Exchange(models.Model):
 
     class Meta:
         db_table = 'exchanges'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'exchange_number'], name='uniq_exchange_retailer_number'),
+        ]
+
 
 class Expenses(models.Model):
     """
         Expenses -- This model will contain the expense informations for all 
                             entries
     """
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='expenses',
+    )
     payment_choices = (('CASH','CASH'),('ONLINE','ONLINE'))
     expense_date = models.DateField(auto_now=False, auto_now_add=False)
     expense_type = models.CharField(max_length=100)

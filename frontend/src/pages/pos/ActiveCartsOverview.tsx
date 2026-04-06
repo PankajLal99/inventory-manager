@@ -2,6 +2,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useMemo } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import {
+  canDiscardInvoiceEditCarts as resolveDiscardInvoiceEditCarts,
+  canSeeSuperMetrics,
+  isPosAdminContext,
+} from '../../lib/access';
 import { useToast } from '../../lib/toast';
 import {
   ShoppingCart,
@@ -135,16 +140,11 @@ export default function ActiveCartsOverview() {
     return [];
   })();
 
-  const isAdmin =
-    user?.is_admin ||
-    user?.is_superuser ||
-    user?.is_staff ||
-    (user?.groups && user.groups.includes('Admin'));
-
-  const isSuper = user?.groups && user.groups.includes('Super');
-  const isAdminGroup = user?.groups && user.groups.includes('Admin');
+  const sessionUser = user ?? auth.getUser();
+  const isAdmin = isPosAdminContext(sessionUser);
+  const isSuper = canSeeSuperMetrics(sessionUser);
   /** Admin or Super may discard invoice-edit (EDIT-*) carts from this screen; others cannot. */
-  const canDiscardInvoiceEditCarts = Boolean(isSuper || isAdminGroup);
+  const canDiscardInvoiceEditCarts = resolveDiscardInvoiceEditCarts(sessionUser);
 
   const { data: overviewData, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['pos/carts/overview', storeId || undefined],

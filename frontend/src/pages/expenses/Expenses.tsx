@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { Coins, Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { canSeeSuperMetrics } from '../../lib/access';
 import { toast } from '../../lib/toast';
 import { formatDateDDMMYYYY, formatNumber, getTodayDateString } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
@@ -67,7 +68,7 @@ export default function Expenses() {
   const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
   const [debouncedExpenseType, setDebouncedExpenseType] = useState('');
   const [debouncedBorrowerName, setDebouncedBorrowerName] = useState('');
-  const canSeeExpenseListing = (user?.groups || []).includes('Super');
+  const canSeeExpenseListing = canSeeSuperMetrics(user);
 
   useEffect(() => {
     const loadUser = async () => {

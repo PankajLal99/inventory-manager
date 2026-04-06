@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isPosAdminContext, isPosRetailLane, isPosWholesaleLane } from '../../lib/access';
 import {
   loadUserCarts,
   saveUserCarts,
@@ -194,18 +195,18 @@ export default function POS() {
 
   // Check if user is Admin (only Admin group gets store selector)
   // RetailAdmin, WholesaleAdmin, Retail, Wholesale, Repair → auto-select based on shop_type
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
-    (user?.groups && user.groups.includes('Admin'));
+  const sessionUser = user ?? auth.getUser();
+  const isAdmin = isPosAdminContext(sessionUser);
 
   // UI-only lock: active cart is frozen (no edits); persisted per-tab in localStorage
   const activeTab = cartTabs.find((t) => t.id === cartId);
   const isCartLocked = !!activeTab?.locked;
 
   // Check if user is in Retail group or RetailAdmin (both get store selector)
-  const isRetailGroup = user?.groups && (user.groups.includes('Retail') || user.groups.includes('RetailAdmin'));
+  const isRetailGroup = isPosRetailLane(sessionUser);
 
   // Check if user is in Wholesale or WholesaleAdmin group (invoice type should be 'pending' only)
-  const isWholesaleGroup = user?.groups && (user.groups.includes('Wholesale') || user.groups.includes('WholesaleAdmin'));
+  const isWholesaleGroup = isPosWholesaleLane(sessionUser);
 
   // Filter stores based on user group
   // - Admin: All stores

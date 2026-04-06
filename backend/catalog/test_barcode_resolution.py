@@ -19,17 +19,22 @@ class GetCatalogBarcodeByPrintedValueTests(TestCase):
     def test_finds_by_barcode_case_insensitive(self):
         p = TestDataFactory.create_product(track_inventory=True)
         b = TestDataFactory.create_barcode(p, barcode='ABC-RESOLVE-01', tag='new')
-        self.assertEqual(get_catalog_barcode_by_printed_value('abc-resolve-01').pk, b.pk)
+        self.assertEqual(
+            get_catalog_barcode_by_printed_value('abc-resolve-01', retailer_id=p.retailer_id).pk, b.pk
+        )
 
     def test_finds_by_short_code_when_barcode_differs(self):
         p = TestDataFactory.create_product(track_inventory=True)
         b = Barcode.objects.create(
+            retailer_id=p.retailer_id,
             product=p,
             barcode='LONG-UNIQUE-BARCODE-XYZ-001',
             short_code='SHORTY-777',
             tag='new',
         )
-        self.assertEqual(get_catalog_barcode_by_printed_value('shorty-777').pk, b.pk)
+        self.assertEqual(
+            get_catalog_barcode_by_printed_value('shorty-777', retailer_id=p.retailer_id).pk, b.pk
+        )
 
     def test_unknown_value_returns_none(self):
         self.assertIsNone(get_catalog_barcode_by_printed_value('NO-SUCH-CODE-999'))

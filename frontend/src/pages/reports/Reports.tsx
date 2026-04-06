@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { reportsApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isPosAdminContext } from '../../lib/access';
 import {
   BarChart3,
   TrendingUp,
@@ -53,8 +54,7 @@ export default function Reports() {
   })();
 
   // Check if user is Admin (only Admin group gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
-    (user?.groups && user.groups.includes('Admin'));
+  const isAdmin = isPosAdminContext(user);
 
   // Determine the active store:
   // - For Admin: Use selectedStoreId if set, otherwise first active store

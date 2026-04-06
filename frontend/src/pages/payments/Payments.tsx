@@ -7,6 +7,7 @@ import { formatAmountINR, toLocalDateString } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { toast } from '../../lib/toast';
 import { auth } from '../../lib/auth';
+import { canSeeSuperMetrics, hasPaymentsExtendedColumns } from '../../lib/access';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
@@ -47,8 +48,8 @@ export default function Payments() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = auth.getUser();
-  const isSuper = user?.groups && user.groups.includes('Super');
-  const isRetail = user?.groups && user.groups.includes('Retail');
+  const isSuper = canSeeSuperMetrics(user);
+  const showPaymentsExtendedColumns = hasPaymentsExtendedColumns(user);
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
@@ -499,7 +500,7 @@ export default function Payments() {
                     <BookOpen className="h-4 w-4" />
                     Ledger
                   </Button>
-                  {!isRetail && (
+                  {showPaymentsExtendedColumns && (
                     <Button
                       variant="outline"
                       size="sm"

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/rea
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { customersApi, catalogApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isLedgerAdminContext } from '../../lib/access';
 import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -97,8 +98,7 @@ export default function LedgerDetail() {
   })();
 
   // Check if user is Admin (any group containing "Admin" gets store selector)
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff ||
-    (user?.groups && user.groups.some((group: string) => group.includes('Admin')));
+  const isAdmin = isLedgerAdminContext(user);
 
   // Determine the active store:
   // - For Admin: Use selectedStoreId (0 = ALL), or first active store if none selected

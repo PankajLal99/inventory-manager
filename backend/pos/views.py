@@ -638,14 +638,15 @@ def _lookup_barcode_for_invoice_line(raw, product, variant):
     """Find a catalog Barcode row by printed value for this invoice line's product/variant.
 
     Uses all_objects so soft-deleted barcodes still resolve for historical invoices / returns.
-    Barcode.barcode and short_code are globally unique — resolve with get(), not first().
+    Barcode values are unique per retailer — resolve with get(), not first().
     """
     if not raw:
         return None
     raw = str(raw).strip().upper()
     if not raw:
         return None
-    b = get_catalog_barcode_by_printed_value(raw)
+    rid = getattr(product, 'retailer_id', None) if product else None
+    b = get_catalog_barcode_by_printed_value(raw, retailer_id=rid)
     if not b:
         return None
     if product and b.product_id != product.id:

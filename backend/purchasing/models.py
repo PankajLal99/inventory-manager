@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from decimal import Decimal
 from backend.catalog.models import Product, ProductVariant
 from backend.parties.models import Supplier
@@ -13,8 +14,15 @@ class Purchase(SoftDeleteModel):
         ('finalized', 'Finalized'),
         ('cancelled', 'Cancelled'),
     ]
-    
-    purchase_number = models.CharField(max_length=100, unique=True, blank=True, null=True)
+
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='purchases',
+    )
+    purchase_number = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     supplier = models.ForeignKey(
         Supplier,
         on_delete=models.SET_NULL,
@@ -51,6 +59,13 @@ class Purchase(SoftDeleteModel):
             models.Index(fields=['status'], name='idx_purchase_status'),
             models.Index(fields=['supplier', 'status'], name='idx_purchase_supplier_status'),
             models.Index(fields=['-purchase_date', '-created_at'], name='idx_purchase_date_created'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['retailer', 'purchase_number'],
+                condition=Q(purchase_number__isnull=False) & ~Q(purchase_number=''),
+                name='uniq_purchase_retailer_number_nonnull',
+            ),
         ]
 
 

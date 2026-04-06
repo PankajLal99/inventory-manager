@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from decimal import Decimal
 
 from django.utils import timezone
@@ -19,6 +20,13 @@ class ProductManager(SoftDeleteManager):
 
 class Category(models.Model):
     """Product categories"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='categories',
+    )
     name = models.CharField(max_length=200, db_index=True)
     parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='children')
     description = models.TextField(blank=True)
@@ -36,7 +44,14 @@ class Category(models.Model):
 
 class Brand(models.Model):
     """Product brands"""
-    name = models.CharField(max_length=200, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='brands',
+    )
+    name = models.CharField(max_length=200, db_index=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -47,10 +62,20 @@ class Brand(models.Model):
 
     class Meta:
         db_table = 'brands'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'name'], name='uniq_brand_retailer_name'),
+        ]
 
 
 class TaxRate(models.Model):
     """Tax rates"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='tax_rates',
+    )
     name = models.CharField(max_length=100)
     rate = models.DecimalField(max_digits=5, decimal_places=2)  # e.g., 18.00 for 18%
     is_active = models.BooleanField(default=True)
@@ -74,8 +99,15 @@ class Product(SoftDeleteModel):
         ('composite', 'Composite/Bundle'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='products',
+    )
     name = models.CharField(max_length=200, db_index=True)
-    sku = models.CharField(max_length=100, unique=True, blank=True, null=True, db_index=True)
+    sku = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     product_type = models.CharField(max_length=20, choices=PRODUCT_TYPE_CHOICES, default='simple')
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
     brand = models.ForeignKey(Brand, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
@@ -107,13 +139,27 @@ class Product(SoftDeleteModel):
             models.Index(fields=['category', 'is_active'], name='idx_product_category_active'),
             models.Index(fields=['brand', 'is_active'], name='idx_product_brand_active'),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['retailer', 'sku'],
+                condition=Q(sku__isnull=False) & ~Q(sku=''),
+                name='uniq_product_retailer_sku_nonnull',
+            ),
+        ]
 
 
 class ProductVariant(models.Model):
     """Product variants (size, color, etc.)"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='variants',
+    )
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='variants')
     name = models.CharField(max_length=200)  # e.g., "Red - Large"
-    sku = models.CharField(max_length=100, unique=True)
+    sku = models.CharField(max_length=100, db_index=True)
     attributes = models.JSONField(default=dict)  # e.g., {"color": "red", "size": "L"}
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -122,9 +168,11 @@ class ProductVariant(models.Model):
     def __str__(self):
         return f"{self.product.name} - {self.name}"
 
-
     class Meta:
         db_table = 'product_variants'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'sku'], name='uniq_variant_retailer_sku'),
+        ]
 
 
 class Barcode(SoftDeleteModel):
@@ -137,24 +185,33 @@ class Barcode(SoftDeleteModel):
         ('unknown', 'Unknown'),
         ('in-cart', 'In Cart'),
     ]
-    
+
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='barcodes',
+    )
     product = models.ForeignKey(
         Product,
         on_delete=models.SET_NULL,
-        related_name='barcodes',
         null=True,
         blank=True,
+        related_name='barcodes',
     )
     variant = models.ForeignKey(
         ProductVariant,
         on_delete=models.SET_NULL,
-        related_name='barcodes',
         null=True,
         blank=True,
+        related_name='barcodes',
     )
-    barcode = models.CharField(max_length=100, unique=True, db_index=True)
-    short_code = models.CharField(max_length=50, unique=True, db_index=True, null=True, blank=True, 
-                                  help_text='Short barcode identifier without date (e.g., FRAM-0001)')
+    barcode = models.CharField(max_length=100, db_index=True)
+    short_code = models.CharField(
+        max_length=50, db_index=True, null=True, blank=True,
+        help_text='Short barcode identifier without date (e.g., FRAM-0001)',
+    )
     is_primary = models.BooleanField(default=False)
     tag = models.CharField(max_length=20, choices=TAG_CHOICES, default='new', db_index=True)
     # Link to purchase - tracks which purchase this barcode came from
@@ -164,7 +221,7 @@ class Barcode(SoftDeleteModel):
 
     def __str__(self):
         return self.barcode
-    
+
     def generate_short_code(self):
         """Generate short code from barcode by removing the date part
         Format: {base_name}-{timestamp}-{serial_number} -> {base_name}-{serial_number}
@@ -172,7 +229,7 @@ class Barcode(SoftDeleteModel):
         """
         if not self.barcode:
             return None
-        
+
         parts = self.barcode.split('-')
         if len(parts) >= 3:
             # Standard format: BASE-TIMESTAMP-SERIAL or BASE-TIMESTAMP-SERIAL-COUNTER
@@ -190,7 +247,7 @@ class Barcode(SoftDeleteModel):
             return self.purchase_item.unit_price
         # If barcode doesn't have purchase_item, it's legacy data or not from a purchase
         return Decimal('0.00')
-    
+
     def get_selling_price(self):
         """Get the selling price for this specific barcode from its purchase_item.
         Returns None if selling_price is 0 or null, indicating fallback to purchase price."""
@@ -201,31 +258,30 @@ class Barcode(SoftDeleteModel):
                 return None
             return selling_price
         return None
-    
+
     def save(self, *args, **kwargs):
-        """Override save to ensure short_code uniqueness before saving"""
-        if self.short_code:
-            # Check if short_code already exists for another barcode
-            if Barcode.all_objects.filter(short_code=self.short_code).exclude(pk=self.pk).exists():
-                # Generate a unique short_code if collision detected
-                if not self.pk:  # Only for new barcodes
-                    # If this is a new barcode and short_code collides, generate a new one
+        """Override save to ensure short_code uniqueness before saving (per retailer)."""
+        if self.short_code and self.retailer_id:
+            qs = Barcode.all_objects.filter(
+                retailer_id=self.retailer_id,
+                short_code=self.short_code,
+            ).exclude(pk=self.pk)
+            if qs.exists():
+                if not self.pk:
                     base_short_code = self.short_code
                     counter = 1
                     max_attempts = 1000
-                    while Barcode.all_objects.filter(short_code=self.short_code).exists():
+                    while Barcode.all_objects.filter(
+                        retailer_id=self.retailer_id,
+                        short_code=self.short_code,
+                    ).exists():
                         counter += 1
                         if counter > max_attempts:
-                            # Fallback: use UUID suffix
                             import uuid
                             unique_suffix = str(uuid.uuid4())[:8]
                             self.short_code = f"{base_short_code}-{unique_suffix}"
                             break
                         self.short_code = f"{base_short_code}-{counter}"
-                else:
-                    # For existing barcodes, keep the original short_code
-                    # The database unique constraint will catch any issues
-                    pass
         super().save(*args, **kwargs)
 
     class Meta:
@@ -235,6 +291,14 @@ class Barcode(SoftDeleteModel):
             models.Index(fields=['product', 'tag'], name='idx_barcode_product_tag'),
             models.Index(fields=['tag', 'product'], name='idx_barcode_tag_product'),
             models.Index(fields=['purchase', 'tag'], name='idx_barcode_purchase_tag'),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'barcode'], name='uniq_barcode_retailer_barcode'),
+            models.UniqueConstraint(
+                fields=['retailer', 'short_code'],
+                condition=Q(short_code__isnull=False) & ~Q(short_code=''),
+                name='uniq_barcode_retailer_short_code_nonnull',
+            ),
         ]
 
 
@@ -284,7 +348,14 @@ class DefectiveProductMoveOut(models.Model):
         ('other', 'Other'),
     ]
 
-    move_out_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='defective_move_outs',
+    )
+    move_out_number = models.CharField(max_length=100, db_index=True)
     store = models.ForeignKey('locations.Store', on_delete=models.CASCADE, related_name='defective_move_outs')
     invoice = models.ForeignKey('pos.Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='defective_move_outs')
     reason = models.CharField(max_length=50, choices=REASON_CHOICES, default='defective')
@@ -302,6 +373,12 @@ class DefectiveProductMoveOut(models.Model):
     class Meta:
         db_table = 'defective_product_move_outs'
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['retailer', 'move_out_number'],
+                name='uniq_defective_moveout_retailer_number',
+            ),
+        ]
 
 
 class DefectiveProductItem(models.Model):

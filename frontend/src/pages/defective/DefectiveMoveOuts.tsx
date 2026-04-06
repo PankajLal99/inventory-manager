@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useMemo } from 'react';
 import { catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isPosAdminContext } from '../../lib/access';
 import { 
   FileText, 
   Search, 
@@ -124,8 +125,7 @@ export default function DefectiveMoveOuts() {
   });
 
   // Check if user is Admin
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || 
-    (user?.groups && user.groups.includes('Admin'));
+  const isAdmin = isPosAdminContext(user);
 
   // Update selectedStoreId when stores load and Admin hasn't selected one yet
   useEffect(() => {

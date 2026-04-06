@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     'django_filters',
     'corsheaders',
     'backend.core',
+    'backend.tenants',
     'backend.locations',
     'backend.catalog',
     'backend.inventory',
@@ -77,6 +78,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'backend.tenants.middleware.TenantMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -195,7 +197,7 @@ AUTH_USER_MODEL = 'core.User'
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'backend.core.jwt_tenant_auth.JWTAuthenticationWithTenant',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -239,6 +241,7 @@ CORS_ALLOW_HEADERS = [
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
+    'x-retailer-code',
 ]
 
 # Logging Configuration

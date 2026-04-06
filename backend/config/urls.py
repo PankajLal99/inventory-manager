@@ -26,6 +26,7 @@ admin.site.index_title = "Welcome to Manish Traders Admin Portal"
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/', include('backend.core.urls')),
+    path('api/v1/', include('backend.tenants.urls')),
     path('api/v1/', include('backend.locations.urls')),
     path('api/v1/', include('backend.catalog.urls')),
     path('api/v1/', include('backend.inventory.urls')),

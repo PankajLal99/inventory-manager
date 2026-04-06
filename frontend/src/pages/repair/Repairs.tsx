@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import { useState, useEffect } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { canSeeSuperMetrics } from '../../lib/access';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -476,8 +477,8 @@ export default function Repairs() {
 
   // Search is applied server-side (invoice_number + customer_name)
   const filteredRepairs = repairInvoices;
-  const canSeeSuperMetrics = (user?.groups || []).includes('Super');
-  const canSeeTotalColumn = canSeeSuperMetrics;
+  const repairsUser = user ?? auth.getUser();
+  const canSeeTotalColumn = canSeeSuperMetrics(repairsUser);
 
   // Old Repair: only delivered or done AND not from today.
   const oldRepairItems = filteredRepairs.filter((inv) => {

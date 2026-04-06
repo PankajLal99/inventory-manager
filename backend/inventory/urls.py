@@ -3,7 +3,8 @@ from .views import (
     stock_detail,
     stock_batch_list, stock_batch_detail,
     stock_adjustment_list_create, stock_adjustment_detail,
-    stock_transfer_list_create, stock_transfer_detail
+    stock_transfer_list_create, stock_transfer_detail,
+    stock_transfer_complete, stock_transfer_cancel,
 )
 from .views_optimized import optimized_stock_list, optimized_stock_low, optimized_stock_out_of_stock
 
@@ -22,7 +23,9 @@ urlpatterns = [
     path('stock-adjustments/', stock_adjustment_list_create, name='stock-adjustment-list-create'),
     path('stock-adjustments/<int:pk>/', stock_adjustment_detail, name='stock-adjustment-detail'),
     
-    # StockTransfer endpoints
+    # StockTransfer endpoints (specific paths before pk)
     path('stock-transfers/', stock_transfer_list_create, name='stock-transfer-list-create'),
+    path('stock-transfers/<int:pk>/complete/', stock_transfer_complete, name='stock-transfer-complete'),
+    path('stock-transfers/<int:pk>/cancel/', stock_transfer_cancel, name='stock-transfer-cancel'),
     path('stock-transfers/<int:pk>/', stock_transfer_detail, name='stock-transfer-detail'),
 ]

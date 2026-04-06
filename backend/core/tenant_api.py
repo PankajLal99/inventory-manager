@@ -1,0 +1,53 @@
+"""DRF helpers: require an active tenant (retailer) on scoped API routes."""
+
+from __future__ import annotations
+
+from rest_framework.response import Response
+from rest_framework import status
+
+from backend.tenants.tenancy import is_platform_user, resolve_request_retailer
+
+
+def get_active_retailer(request):
+    """Return Retailer instance or None."""
+    r = getattr(request, 'retailer', None)
+    if r is not None:
+        return r
+    return resolve_request_retailer(request)
+
+
+def require_active_retailer(request):
+    """
+    For tenant-scoped endpoints: ensure we have a retailer.
+    Platform users must send X-Retailer-Code.
+    Returns (retailer, None) or (None, Response).
+    """
+    r = get_active_retailer(request)
+    if r is not None:
+        return r, None
+    user = getattr(request, 'user', None)
+    if user and user.is_authenticated and is_platform_user(user):
+        return None, Response(
+            {'detail': 'Platform access requires X-Retailer-Code header for this resource.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None, Response(
+        {'detail': 'User is not assigned to a retailer.'},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def filter_for_retailer(qs, retailer, field_name='retailer_id'):
+    """Filter queryset by tenant when the model has a retailer FK."""
+    model = qs.model
+    if not hasattr(model, field_name):
+        return qs
+    return qs.filter(**{field_name: retailer.id})
+
+
+def assign_retailer_on_save(instance, retailer, field_name='retailer'):
+    """Set retailer on a model instance before save if missing."""
+    if retailer is None:
+        return
+    if getattr(instance, f'{field_name}_id', None) is None:
+        setattr(instance, f'{field_name}_id', retailer.id)

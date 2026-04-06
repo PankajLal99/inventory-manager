@@ -46,6 +46,7 @@ import PaymentReminders from './pages/payment-reminders/PaymentReminders';
 import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
 import StockOverview from './pages/stock/StockOverview';
+import StockTransfers from './pages/stock/StockTransfers';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -130,6 +131,7 @@ function App() {
                 <Route path="expenses" element={<Expenses />} />
                 <Route path="payments" element={<Payments />} />
                 <Route path="stock" element={<StockOverview />} />
+                <Route path="stock-transfers" element={<StockTransfers />} />
                 <Route path="stores" element={<Stores />} />
                 <Route path="search" element={<Search />} />
                 <Route path="vendors" element={<Vendors />} />

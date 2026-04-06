@@ -3,6 +3,7 @@ import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } f
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isRetailCatalogRestricted } from '../../lib/access';
 import { getStockInfo, getProductNameColor } from '../../lib/utils';
 import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, ChevronDown, ChevronRight, Coins, FileText, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
@@ -19,8 +20,7 @@ import BarcodeScanner from '../../components/BarcodeScanner';
 export default function Products() {
   const navigate = useNavigate();
   const user = auth.getUser();
-  const userGroups = user?.groups || [];
-  const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
+  const isRetailUser = isRetailCatalogRestricted(user);
   const [searchParams, setSearchParams] = useSearchParams();
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<number | undefined>();

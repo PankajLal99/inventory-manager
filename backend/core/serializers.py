@@ -4,10 +4,48 @@ from .models import User, Setting, AuditLog
 
 
 class UserSerializer(serializers.ModelSerializer):
+    retailer = serializers.SerializerMethodField(read_only=True)
+    default_store = serializers.SerializerMethodField(read_only=True)
+    assigned_stores = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone', 'is_active', 'is_staff', 'is_superuser', 'created_at', 'updated_at']
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name', 'phone',
+            'is_active', 'is_staff', 'is_superuser', 'retailer',
+            'default_store', 'assigned_stores',
+            'created_at', 'updated_at',
+        ]
         read_only_fields = ['created_at', 'updated_at']
+
+    def get_retailer(self, obj):
+        r = getattr(obj, 'retailer', None)
+        if not r:
+            return None
+        return {'id': r.id, 'code': r.code, 'name': r.name}
+
+    def get_default_store(self, obj):
+        s = getattr(obj, 'default_store', None)
+        if not s:
+            return None
+        return {
+            'id': s.id,
+            'name': s.name,
+            'code': s.code,
+            'shop_type': getattr(s, 'shop_type', 'retail'),
+        }
+
+    def get_assigned_stores(self, obj):
+        qs = obj.assigned_stores.all().order_by('name')
+        return [
+            {
+                'id': s.id,
+                'name': s.name,
+                'code': s.code,
+                'shop_type': getattr(s, 'shop_type', 'retail'),
+            }
+            for s in qs
+        ]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):

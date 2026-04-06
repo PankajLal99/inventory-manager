@@ -2,18 +2,28 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db import transaction
 from django.db.models import Q, Sum, F
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
 import uuid
-from .models import Stock, StockBatch, StockAdjustment, StockTransfer, StockTransferItem
+from .models import Stock, StockBatch, StockAdjustment, StockTransfer
 from .serializers import (
     StockSerializer, StockBatchSerializer, StockAdjustmentSerializer,
-    StockTransferSerializer, StockTransferItemSerializer
+    StockTransferReadSerializer, StockTransferCreateSerializer, StockTransferUpdateSerializer,
 )
+from .transfer_ops import generate_next_transfer_number, apply_stock_transfer_completion
 from backend.catalog.models import Barcode
 from backend.core.utils import create_audit_log
+from backend.core.tenant_api import require_active_retailer, filter_for_retailer
+from backend.tenants.models import Retailer
+
+
+def _stock_queryset_for_retailer(retailer):
+    return Stock.objects.filter(
+        Q(store__retailer_id=retailer.id) | Q(warehouse__retailer_id=retailer.id)
+    )
 
 
 # Stock views (read-only)
@@ -21,7 +31,10 @@ from backend.core.utils import create_audit_log
 @permission_classes([IsAuthenticated])
 def stock_list(request):
     """List all stock entries with optional filtering"""
-    queryset = Stock.objects.all()
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    queryset = _stock_queryset_for_retailer(retailer)
     product_id = request.query_params.get('product_id', None)
     store_id = request.query_params.get('store_id', None)
     warehouse_id = request.query_params.get('warehouse_id', None)
@@ -41,7 +54,10 @@ def stock_list(request):
 @permission_classes([IsAuthenticated])
 def stock_detail(request, pk):
     """Retrieve a stock entry"""
-    stock = get_object_or_404(Stock, pk=pk)
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    stock = get_object_or_404(_stock_queryset_for_retailer(retailer), pk=pk)
     serializer = StockSerializer(stock)
     return Response(serializer.data)
 
@@ -50,10 +66,13 @@ def stock_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def stock_low(request):
     """Get low stock items"""
-    stocks = Stock.objects.filter(
-        product__low_stock_threshold__gt=0
-    ).filter(
-        quantity__lte=F('product__low_stock_threshold')
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    stocks = (
+        _stock_queryset_for_retailer(retailer)
+        .filter(product__low_stock_threshold__gt=0)
+        .filter(quantity__lte=F('product__low_stock_threshold'))
     )
     serializer = StockSerializer(stocks, many=True)
     return Response(serializer.data)
@@ -63,7 +82,10 @@ def stock_low(request):
 @permission_classes([IsAuthenticated])
 def stock_out_of_stock(request):
     """Get out of stock items"""
-    stocks = Stock.objects.filter(quantity=0)
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    stocks = _stock_queryset_for_retailer(retailer).filter(quantity=0)
     serializer = StockSerializer(stocks, many=True)
     return Response(serializer.data)
 
@@ -210,44 +232,139 @@ def stock_adjustment_detail(request, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _transfer_base_qs(retailer):
+    return filter_for_retailer(
+        StockTransfer.objects.select_related(
+            'from_store', 'from_warehouse', 'to_store', 'to_warehouse'
+        ).prefetch_related('items__product', 'items__variant'),
+        retailer,
+    )
+
+
 # StockTransfer views
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def stock_transfer_list_create(request):
-    """List all stock transfers or create a new transfer"""
+    """List stock transfers for the active retailer or create a transfer with line items."""
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
     if request.method == 'GET':
-        transfers = StockTransfer.objects.all()
-        serializer = StockTransferSerializer(transfers, many=True)
-        return Response(serializer.data)
-    else:  # POST
-        serializer = StockTransferSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(created_by=request.user)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        transfers = _transfer_base_qs(retailer).order_by('-id')
+        return Response(StockTransferReadSerializer(transfers, many=True).data)
+
+    with transaction.atomic():
+        Retailer.objects.select_for_update().get(pk=retailer.pk)
+        transfer_number = generate_next_transfer_number(retailer)
+        serializer = StockTransferCreateSerializer(data=request.data, context={'retailer': retailer})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        transfer = serializer.save(
+            retailer=retailer,
+            transfer_number=transfer_number,
+            created_by=request.user,
+            status='pending',
+        )
+
+    transfer = _transfer_base_qs(retailer).get(pk=transfer.pk)
+    return Response(StockTransferReadSerializer(transfer).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def stock_transfer_detail(request, pk):
-    """Retrieve, update or delete a stock transfer"""
-    transfer = get_object_or_404(StockTransfer, pk=pk)
-    
+    """Retrieve, update notes/status, or delete a pending transfer."""
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
+    transfer = get_object_or_404(_transfer_base_qs(retailer), pk=pk)
+
     if request.method == 'GET':
-        serializer = StockTransferSerializer(transfer)
-        return Response(serializer.data)
-    elif request.method == 'PUT':
-        serializer = StockTransferSerializer(transfer, data=request.data)
+        return Response(StockTransferReadSerializer(transfer).data)
+    if request.method == 'PUT':
+        serializer = StockTransferUpdateSerializer(transfer, data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            transfer.refresh_from_db()
+            transfer = _transfer_base_qs(retailer).get(pk=transfer.pk)
+            return Response(StockTransferReadSerializer(transfer).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    elif request.method == 'PATCH':
-        serializer = StockTransferSerializer(transfer, data=request.data, partial=True)
+    if request.method == 'PATCH':
+        serializer = StockTransferUpdateSerializer(transfer, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            transfer.refresh_from_db()
+            transfer = _transfer_base_qs(retailer).get(pk=transfer.pk)
+            return Response(StockTransferReadSerializer(transfer).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    else:  # DELETE
-        transfer.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    if transfer.status != 'pending':
+        return Response(
+            {'error': 'Only pending transfers can be deleted.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    transfer.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def stock_transfer_complete(request, pk):
+    """Apply stock movements and mark the transfer completed."""
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
+    try:
+        with transaction.atomic():
+            transfer = get_object_or_404(
+                StockTransfer.objects.select_for_update(),
+                pk=pk,
+                retailer_id=retailer.id,
+            )
+            if transfer.status == 'completed':
+                return Response(
+                    {'error': 'Transfer is already completed.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if transfer.status == 'cancelled':
+                return Response(
+                    {'error': 'Cannot complete a cancelled transfer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            apply_stock_transfer_completion(transfer)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    transfer = _transfer_base_qs(retailer).get(pk=pk)
+    return Response(StockTransferReadSerializer(transfer).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def stock_transfer_cancel(request, pk):
+    """Cancel a pending or in-transit transfer (no stock movement)."""
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
+    with transaction.atomic():
+        transfer = get_object_or_404(
+            StockTransfer.objects.select_for_update(),
+            pk=pk,
+            retailer_id=retailer.id,
+        )
+        if transfer.status == 'completed':
+            return Response(
+                {'error': 'Cannot cancel a completed transfer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if transfer.status == 'cancelled':
+            return Response(StockTransferReadSerializer(transfer).data)
+        transfer.status = 'cancelled'
+        transfer.save(update_fields=['status', 'updated_at'])
+
+    transfer = _transfer_base_qs(retailer).get(pk=pk)
+    return Response(StockTransferReadSerializer(transfer).data)

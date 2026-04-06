@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { hasInvoiceHideCashCheckout, isInvoiceRestrictedUser } from '../../lib/access';
 import { formatNumber, getProductNameColor, getTodayDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
@@ -146,15 +147,10 @@ function buildTradeInDetailThermalHtml(invoice: { pos_trade_ins?: unknown }): st
 
 export default function InvoiceDetail() {
   const user = auth.getUser();
-  const userGroups = user?.groups || [];
-  const isRestrictedUser = (userGroups.includes('Retail') || userGroups.includes('Wholesale')) &&
-    !userGroups.includes('Admin') &&
-    !userGroups.includes('RetailAdmin') &&
-    !userGroups.includes('WholesaleAdmin');
+  const isRestrictedUser = isInvoiceRestrictedUser(user);
   // Hide CASH / UPI / CASH+UPI in checkout modal for Wholesale, WholesaleAdmin, or user sunny
   const hideCheckoutPaymentOptions =
-    userGroups.includes('Wholesale') ||
-    userGroups.includes('WholesaleAdmin') ||
+    hasInvoiceHideCashCheckout(user) ||
     user?.username === 'sunny' ||
     String(user?.id) === 'sunny';
   const { id } = useParams<{ id: string }>();

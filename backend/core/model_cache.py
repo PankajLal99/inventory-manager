@@ -40,9 +40,14 @@ def get_store_cache_key(store_id: int) -> str:
     return f"{STORE_KEY_PREFIX}{store_id}"
 
 
-def get_store_list_cache_key(user_groups_key: str = 'all') -> str:
-    """Get cache key for store list (filtered by user groups)"""
-    return f"{STORE_LIST_KEY_PREFIX}{user_groups_key}"
+def get_store_list_cache_key(
+    user_groups_key: str = 'all',
+    retailer_id: int | None = None,
+    assignment_key: str = 'all',
+) -> str:
+    """Get cache key for store list (tenant, group shop types, optional assigned-stores filter)."""
+    r = retailer_id if retailer_id is not None else 'na'
+    return f"{STORE_LIST_KEY_PREFIX}r{r}:{user_groups_key}:a{assignment_key}"
 
 
 def cache_store_data(store_obj, ttl: int = None):
@@ -103,9 +108,12 @@ def get_customer_phone_cache_key(phone: str) -> str:
     return f"{CUSTOMER_PHONE_KEY_PREFIX}{phone}"
 
 
-def get_customer_list_cache_key(search_query: str = '', customer_group: str = '') -> str:
+def get_customer_list_cache_key(
+    search_query: str = '', customer_group: str = '', retailer_id: int | None = None
+) -> str:
     """Get cache key for customer list"""
-    return f"{CUSTOMER_LIST_KEY_PREFIX}{search_query or 'all'}:{customer_group or 'any'}"
+    r = retailer_id if retailer_id is not None else 'na'
+    return f"{CUSTOMER_LIST_KEY_PREFIX}r{r}:{search_query or 'all'}:{customer_group or 'any'}"
 
 
 def cache_customer_data(customer_obj, ttl: int = None):
@@ -211,9 +219,10 @@ def get_product_sku_cache_key(sku: str) -> str:
     return f"{PRODUCT_SKU_KEY_PREFIX}{sku}"
 
 
-def get_product_list_cache_key(cache_key_suffix: str = '') -> str:
+def get_product_list_cache_key(cache_key_suffix: str = '', retailer_id: int | None = None) -> str:
     """Get cache key for product list"""
-    return f"{PRODUCT_LIST_KEY_PREFIX}{cache_key_suffix or 'default'}"
+    r = retailer_id if retailer_id is not None else 'na'
+    return f"{PRODUCT_LIST_KEY_PREFIX}r{r}:{cache_key_suffix or 'default'}"
 
 
 def cache_product_data(product_obj, ttl: int = None):

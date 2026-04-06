@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
 import { formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
 import { auth } from '../../lib/auth';
+import { isRetailCatalogRestricted } from '../../lib/access';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -142,8 +143,7 @@ function clearPrintedFlagsInPurchasesInfiniteCache(old: unknown, purchaseId: num
 
 export default function Purchases() {
   const user = auth.getUser();
-  const userGroups = user?.groups || [];
-  const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
+  const isRetailUser = isRetailCatalogRestricted(user);
   const [searchParams, setSearchParams] = useSearchParams();
   const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
   const [supplierFilterSearch, setSupplierFilterSearch] = useState(''); // For typable filter dropdown

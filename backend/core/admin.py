@@ -3,24 +3,98 @@ import json
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.db import connection
-from django.db.models import TextField
+from django.db.models import Count, TextField
 from django.db.models.functions import Cast
 
-from .models import User, Setting, AuditLog
+from backend.locations.models import Store
+
+from .models import AccessPermission, AuditLog, Role, Setting, User, UserStoreRole
+
+
+class UserStoreRoleInline(admin.TabularInline):
+    model = UserStoreRole
+    fk_name = 'user'
+    extra = 0
+    autocomplete_fields = ['store', 'role']
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        obj = getattr(request, "_obj_", None)
+        rid = getattr(obj, 'retailer_id', None) if obj else None
+        if rid and db_field.name == 'role':
+            kwargs['queryset'] = Role.objects.filter(retailer_id=rid)
+        if rid and db_field.name == 'store':
+            kwargs['queryset'] = Store.objects.filter(retailer_id=rid)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ['username', 'email', 'first_name', 'last_name', 'is_active', 'is_staff', 'date_joined']
-    list_filter = ['is_active', 'is_staff', 'is_superuser', 'date_joined']
+    inlines = (UserStoreRoleInline,)
+    list_display = [
+        'username',
+        'email',
+        'first_name',
+        'last_name',
+        'retailer',
+        'default_store',
+        'is_active',
+        'is_staff',
+        'date_joined',
+    ]
+    list_filter = ['is_active', 'is_staff', 'is_superuser', 'retailer', 'date_joined']
     search_fields = ['username', 'email', 'first_name', 'last_name']
     ordering = ['username']
+    filter_horizontal = ('assigned_stores',)
     fieldsets = BaseUserAdmin.fieldsets + (
+        ('Tenant & locations', {'fields': ('retailer', 'default_store', 'assigned_stores')}),
         ('Additional Info', {'fields': ('phone',)}),
     )
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
+        ('Tenant & locations', {'fields': ('retailer', 'default_store')}),
         ('Additional Info', {'fields': ('phone',)}),
     )
+
+    def get_form(self, request, obj=None, **kwargs):
+        # Pass parent object to inlines via request for queryset scoping.
+        request._obj_ = obj
+        return super().get_form(request, obj, **kwargs)
+
+
+@admin.register(AccessPermission)
+class AccessPermissionAdmin(admin.ModelAdmin):
+    list_display = ['codename', 'label', 'category', 'description']
+    search_fields = ['codename', 'label', 'description']
+    list_filter = ['category']
+    ordering = ['category', 'codename']
+
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ['name', 'retailer', 'permission_count']
+    list_filter = ['retailer']
+    search_fields = ['name', 'description']
+    autocomplete_fields = ['retailer']
+    filter_horizontal = ['permissions']
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(_permission_count=Count('permissions', distinct=True))
+
+    def permission_count(self, obj):
+        n = getattr(obj, '_permission_count', None)
+        if n is not None:
+            return n
+        return obj.permissions.count() if obj.pk else 0
+
+    permission_count.short_description = 'Permissions'
+
+
+@admin.register(UserStoreRole)
+class UserStoreRoleAdmin(admin.ModelAdmin):
+    list_display = ['user', 'store', 'role']
+    list_filter = ['role__retailer']
+    search_fields = ['user__username', 'store__name', 'role__name']
+    autocomplete_fields = ['user', 'store', 'role']
 
 
 @admin.register(Setting)

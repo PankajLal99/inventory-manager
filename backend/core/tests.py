@@ -1,13 +1,19 @@
 from decimal import Decimal
+from django.contrib.auth.models import Group
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APITestCase, APIClient
 from django.contrib.auth import get_user_model
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from backend.catalog.models import Product, Barcode, Category
+from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
+from backend.core.models import AccessPermission, Role, UserStoreRole
 from backend.locations.models import Store
 from backend.pos.models import Invoice, InvoiceItem
+from backend.tenants.models import Retailer
 
 User = get_user_model()
 
@@ -187,3 +193,101 @@ class GlobalSearchBarcodeTests(APITestCase):
         barcodes = response.data.get('barcodes', [])
         self.assertEqual(len(barcodes), 1, 'Backend normalizes query to upper; lowercase search should find EXACT-BARCODE-001')
         self.assertEqual(barcodes[0]['barcode'], 'EXACT-BARCODE-001')
+
+
+class AccessResolutionTests(TestCase):
+    def setUp(self):
+        self.retailer = Retailer.objects.create(code='AR1', name='Access Retailer', is_active=True)
+        self.store = Store.objects.create(
+            retailer=self.retailer, name='S1', code='S1', shop_type='retail', is_active=True
+        )
+        g, _ = Group.objects.get_or_create(name='Retail')
+        self.user = User.objects.create_user(username='acc_r', password='x', retailer=self.retailer)
+        self.user.groups.add(g)
+
+    def test_permissions_from_groups_includes_pos_for_retail(self):
+        perms = permissions_from_django_groups(['Retail'], self.user)
+        self.assertIn('nav.pos', perms)
+        self.assertNotIn('nav.dashboard', perms)
+        self.assertIn('feature.retail_catalog_restricted', perms)
+        self.assertIn('feature.invoice_restricted', perms)
+
+    def test_super_group_gets_super_metrics(self):
+        perms = permissions_from_django_groups(['Retail', 'Super'], self.user)
+        self.assertIn('feature.super_metrics', perms)
+
+    def test_wholesale_gets_hide_cash_checkout_permission(self):
+        perms = permissions_from_django_groups(['Wholesale'], self.user)
+        self.assertIn('feature.invoice_hide_cash_checkout', perms)
+        self.assertIn('feature.pos_wholesale', perms)
+
+    def test_retail_admin_gets_invoice_admin_stores_not_retail_restricted(self):
+        perms = permissions_from_django_groups(['RetailAdmin'], self.user)
+        self.assertIn('feature.invoice_admin_stores', perms)
+        self.assertNotIn('feature.retail_catalog_restricted', perms)
+
+    def test_user_me_includes_permissions_array(self):
+        client = APIClient()
+        t = RefreshToken.for_user(self.user)
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {t.access_token}')
+        r = client.get('/api/v1/auth/me/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIsInstance(r.data.get('permissions'), list)
+        self.assertIn('nav.pos', r.data['permissions'])
+
+    def test_store_role_adds_extra_nav_permission(self):
+        ap = AccessPermission.objects.get(codename='nav.history')
+        role = Role.objects.create(retailer=self.retailer, name='Night auditor')
+        role.permissions.add(ap)
+        UserStoreRole.objects.create(user=self.user, store=self.store, role=role)
+
+        base = permissions_from_django_groups(['Retail'], self.user)
+        merged = merge_store_role_permissions(self.user, base)
+        self.assertIn('nav.pos', merged)
+        self.assertIn('nav.history', merged)
+
+
+class UserStoreAssignmentTests(TestCase):
+    def setUp(self):
+        self.r1 = Retailer.objects.create(code='UA1', name='Retailer A', is_active=True)
+        self.r2 = Retailer.objects.create(code='UA2', name='Retailer B', is_active=True)
+        self.s1 = Store.objects.create(retailer=self.r1, name='Shop A1', code='A1', shop_type='retail', is_active=True)
+        self.s2 = Store.objects.create(retailer=self.r1, name='Shop A2', code='A2', shop_type='retail', is_active=True)
+        self.s_other = Store.objects.create(retailer=self.r2, name='Other', code='O1', shop_type='retail', is_active=True)
+
+    def test_default_store_must_match_retailer(self):
+        u = User(username='u1', retailer=self.r1)
+        u.default_store = self.s_other
+        with self.assertRaises(ValidationError):
+            u.full_clean()
+
+    def test_assigned_stores_m2m_rejects_other_retailer(self):
+        u = User.objects.create_user(username='u2', password='x', retailer=self.r1)
+        with self.assertRaises(ValidationError):
+            u.assigned_stores.add(self.s_other)
+
+    def test_user_me_includes_default_and_assigned(self):
+        u = User.objects.create_user(username='u3', password='x', retailer=self.r1, default_store=self.s1)
+        u.assigned_stores.add(self.s1, self.s2)
+        client = APIClient()
+        t = RefreshToken.for_user(u)
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {t.access_token}')
+        r = client.get('/api/v1/auth/me/')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data['retailer']['code'], 'UA1')
+        self.assertEqual(r.data['default_store']['id'], self.s1.id)
+        self.assertEqual(len(r.data['assigned_stores']), 2)
+        self.assertEqual(r.data['store']['id'], self.s1.id)
+
+    def test_store_list_filters_by_assigned_stores(self):
+        u = User.objects.create_user(username='u4', password='x', retailer=self.r1)
+        g, _ = Group.objects.get_or_create(name='Admin')
+        u.groups.add(g)
+        u.assigned_stores.add(self.s1)
+        client = APIClient()
+        t = RefreshToken.for_user(u)
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {t.access_token}')
+        r = client.get('/api/v1/stores/')
+        self.assertEqual(r.status_code, 200)
+        ids = {row['id'] for row in r.data}
+        self.assertEqual(ids, {self.s1.id})

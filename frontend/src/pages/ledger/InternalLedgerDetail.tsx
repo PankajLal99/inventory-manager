@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useEffect } from 'react';
 import { customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isPosAdminContext } from '../../lib/access';
 import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -54,7 +55,7 @@ export default function InternalLedgerDetail() {
     const loadUser = async () => { try { await auth.loadUser(); setUser(auth.getUser()); } catch (e) {} };
     loadUser();
   }, []);
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
+  const isAdmin = isPosAdminContext(user);
 
   // Use Customer API only (Shop Boys are Customers in MTSHOP group)
   const { data: customerData } = useQuery({
