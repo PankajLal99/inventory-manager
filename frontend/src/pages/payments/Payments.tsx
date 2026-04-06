@@ -49,6 +49,9 @@ export default function Payments() {
   const user = auth.getUser();
   const isSuper = user?.groups && user.groups.includes('Super');
   const isRetail = user?.groups && user.groups.includes('Retail');
+  const canManagePayments = !isRetail;
+  const userGroups = user?.groups ?? [];
+  const canDeletePayments = userGroups.includes('Admin') || userGroups.includes('RetailAdmin');
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('none');
@@ -367,12 +370,12 @@ export default function Payments() {
         title="Payments"
         subtitle="Manual credit entries recorded against customers"
         icon={Coins}
-        action={
+        action={canManagePayments ? (
           <Button onClick={() => setShowAddPaymentModal(true)} className="gap-2">
             <Plus className="h-5 w-5" />
             Add Payment
           </Button>
-        }
+        ) : undefined}
       />
 
       <Card>
@@ -471,18 +474,22 @@ export default function Payments() {
               </TableCell>
               <TableCell className="text-base">{entry.created_by_username || '-'}</TableCell>
               <TableCell align="center">
-                <input
-                  type="checkbox"
-                  checked={entry.is_sent || false}
-                  onChange={(e) => {
-                    updateSentMutation.mutate({
-                      id: entry.id,
-                      is_sent: e.target.checked,
-                    });
-                  }}
-                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
-                  title={entry.is_sent ? 'Marked as sent' : 'Mark as sent'}
-                />
+                {canManagePayments ? (
+                  <input
+                    type="checkbox"
+                    checked={entry.is_sent || false}
+                    onChange={(e) => {
+                      updateSentMutation.mutate({
+                        id: entry.id,
+                        is_sent: e.target.checked,
+                      });
+                    }}
+                    className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer"
+                    title={entry.is_sent ? 'Marked as sent' : 'Mark as sent'}
+                  />
+                ) : (
+                  <span className="text-gray-500 text-sm">{entry.is_sent ? 'Yes' : 'No'}</span>
+                )}
               </TableCell>
               <TableCell>
                 <div className="flex items-center justify-end gap-2 flex-wrap">
@@ -510,15 +517,17 @@ export default function Payments() {
                       Edit
                     </Button>
                   )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
-                    onClick={() => setDeletingEntry(entry)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete
-                  </Button>
+                  {canDeletePayments && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => setDeletingEntry(entry)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </Button>
+                  )}
                 </div>
               </TableCell>
             </TableRow>
@@ -526,7 +535,7 @@ export default function Payments() {
         </Table>
       )}
 
-      <Modal
+      {canManagePayments && <Modal
         isOpen={showAddPaymentModal}
         onClose={() => {
           setShowAddPaymentModal(false);
@@ -677,9 +686,9 @@ export default function Payments() {
             </Button>
           </div>
         </form>
-      </Modal>
+      </Modal>}
 
-      <Modal
+      {canManagePayments && <Modal
         isOpen={!!editingEntry}
         onClose={() => setEditingEntry(null)}
         title="Edit Payment"
@@ -758,9 +767,9 @@ export default function Payments() {
             </div>
           </form>
         )}
-      </Modal>
+      </Modal>}
 
-      <Modal
+      {canDeletePayments && <Modal
         isOpen={!!deletingEntry}
         onClose={() => setDeletingEntry(null)}
         title="Delete payment?"
@@ -781,7 +790,7 @@ export default function Payments() {
             {deletePaymentMutation.isPending ? 'Deleting...' : 'Delete'}
           </Button>
         </div>
-      </Modal>
+      </Modal>}
     </div>
   );
 }
