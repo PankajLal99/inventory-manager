@@ -915,6 +915,57 @@ def product_generate_label(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _ensure_purchase_barcodes_for_product(product, purchase_id):
+    """Ensure purchase-scoped barcodes exist before generating labels."""
+    if not purchase_id:
+        return 0
+
+    try:
+        purchase_id_int = int(purchase_id)
+    except (ValueError, TypeError):
+        return 0
+
+    from backend.purchasing.models import PurchaseItem
+    from backend.purchasing.serializers import generate_barcodes_for_purchase_item
+
+    created_total = 0
+    purchase_items = PurchaseItem.objects.filter(
+        purchase_id=purchase_id_int,
+        product=product
+    ).select_related('purchase', 'product', 'variant')
+
+    for purchase_item in purchase_items:
+        try:
+            # Existing rows for this purchase line (active rows only)
+            existing_count = Barcode.objects.filter(purchase_item=purchase_item).count()
+            try:
+                expected_count = int(purchase_item.quantity or 0)
+            except Exception:
+                expected_count = 0
+
+            if expected_count <= 0:
+                continue
+
+            # For tracked inventory we need one barcode per quantity.
+            # For non-tracked products, generator itself keeps one representative barcode.
+            qty_to_add = 0
+            if purchase_item.product and purchase_item.product.track_inventory:
+                qty_to_add = max(0, expected_count - existing_count)
+            elif existing_count == 0:
+                qty_to_add = 1
+
+            if qty_to_add > 0:
+                before_count = Barcode.objects.filter(purchase_item=purchase_item).count()
+                generate_barcodes_for_purchase_item(purchase_item, qty_to_add)
+                after_count = Barcode.objects.filter(purchase_item=purchase_item).count()
+                created_total += max(0, after_count - before_count)
+        except Exception:
+            # Best effort backfill: label generation should still proceed for existing rows.
+            continue
+
+    return created_total
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticatedOrVendorPurchaseLabels])
 def product_generate_labels(request, pk):
@@ -932,6 +983,9 @@ def product_generate_labels(request, pk):
     # Get purchase_id from request body if provided
     purchase_id = request.data.get('purchase_id', None)
     
+    # If purchase-scoped request has missing rows, auto-create barcodes first.
+    _ensure_purchase_barcodes_for_product(product, purchase_id)
+
     # Filter barcodes by product and optionally by purchase
     # OPTIMIZATION: Prefetch all related data upfront to avoid N+1 queries
     barcodes_query = product.barcodes.select_related('purchase', 'purchase__supplier').all()
@@ -1352,6 +1406,9 @@ def product_regenerate_labels(request, pk):
     # Get purchase_id from request body if provided
     purchase_id = request.data.get('purchase_id', None)
     
+    # If purchase-scoped request has missing rows, auto-create barcodes first.
+    _ensure_purchase_barcodes_for_product(product, purchase_id)
+
     # Filter barcodes by product and optionally by purchase
     barcodes_query = product.barcodes.select_related('product', 'purchase', 'purchase__supplier').all()
     if purchase_id:

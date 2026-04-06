@@ -186,6 +186,7 @@ export default function Purchases() {
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
+  const [labelScopeFallback, setLabelScopeFallback] = useState<Record<string, boolean>>({});
   const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
 
   const purchasesInfiniteQueryKey = ['purchases', supplierFilter, productFilter, dateFrom, dateTo] as const;
@@ -1014,8 +1015,10 @@ export default function Purchases() {
 
 
   const handlePrintLabels = async (productId: number, purchaseId: number) => {
+    const labelKey = getLabelKey(productId, purchaseId);
+    const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
     try {
-      const response = await productsApi.getLabels(productId, purchaseId);
+      const response = await productsApi.getLabels(productId, effectivePurchaseId);
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
       } else {
@@ -1037,7 +1040,7 @@ export default function Purchases() {
 
   const waitForLabelsToBeGenerated = async (
     productId: number,
-    purchaseId: number,
+    purchaseId?: number,
     maxAttempts = 12,
     intervalMs = 3000
   ) => {
@@ -1064,20 +1067,24 @@ export default function Purchases() {
     const labelKey = getLabelKey(productId, purchaseId);
     setGeneratingLabelsFor(productId);
     setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: true } }));
+    setLabelScopeFallback(prev => ({ ...prev, [labelKey]: false }));
     try {
       // Prefer generate-labels for missing labels; regenerate-labels is for rebuilding existing ones.
       // Fallback to product-level generation if purchase linkage is missing in older data.
+      let pollPurchaseId: number | undefined = purchaseId;
       try {
         await productsApi.generateLabels(productId, purchaseId);
       } catch (error: any) {
         const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString().toLowerCase();
         if (backendMessage.includes('no barcodes found')) {
           await productsApi.generateLabels(productId);
+          pollPurchaseId = undefined;
+          setLabelScopeFallback(prev => ({ ...prev, [labelKey]: true }));
         } else {
           throw error;
         }
       }
-      const generated = await waitForLabelsToBeGenerated(productId, purchaseId);
+      const generated = await waitForLabelsToBeGenerated(productId, pollPurchaseId);
       if (generated) {
         alert('Labels generated successfully. You can print now.');
       } else {
@@ -1096,13 +1103,14 @@ export default function Purchases() {
   const handleCheckLabelStatus = async (productId: number, purchaseId: number) => {
     setCheckingStatusFor(productId);
     const labelKey = getLabelKey(productId, purchaseId);
+    const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
     try {
-      const response = await productsApi.labelsStatus(productId, purchaseId);
+      const response = await productsApi.labelsStatus(productId, effectivePurchaseId);
       const data = response.data || {};
       const allGenerated = data.all_generated || false;
       const total = data.total_barcodes ?? 0;
       const generated = data.generated_labels ?? 0;
-      queryClient.setQueryData(['label-status', productId, purchaseId], { productId, purchaseId, data, error: null });
+      queryClient.setQueryData(['label-status', productId, effectivePurchaseId], { productId, purchaseId: effectivePurchaseId, data, error: null });
       setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: false } }));
       if (total > 0) {
         alert(`Status: ${generated} of ${total} label(s) generated.${allGenerated ? ' All ready to print.' : ''}`);
