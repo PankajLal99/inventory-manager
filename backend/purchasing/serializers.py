@@ -47,7 +47,9 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
             with transaction.atomic():
                 _locked_product = product.__class__.objects.select_for_update().get(pk=product.pk)
                 
-                existing_barcodes_query = Barcode.objects.filter(product=product)
+                # Use all_objects to include soft-deleted rows because DB unique
+                # constraints still apply to them.
+                existing_barcodes_query = Barcode.all_objects.filter(product=product)
                 if purchase_item.variant:
                     existing_barcodes_query = existing_barcodes_query.filter(variant=purchase_item.variant)
                 else:
@@ -83,7 +85,7 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
                     
                     # Ensure barcode uniqueness (in case of collision)
                     counter = 0
-                    while Barcode.objects.filter(barcode=barcode_value).exists():
+                    while Barcode.all_objects.filter(barcode=barcode_value).exists():
                         counter += 1
                         # If collision, append counter to make unique
                         barcode_value = f"{base_name}-{timestamp}-{serial_number}-{counter}"
@@ -114,7 +116,9 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
         # For non-tracked products, create single barcode if doesn't exist
         if not product.barcodes.filter(purchase_item=purchase_item).exists():
             # Find the highest serial number for this product (and variant) across all existing barcodes
-            existing_barcodes_query = Barcode.objects.filter(product=product)
+            # Use all_objects to include soft-deleted rows because DB unique
+            # constraints still apply to them.
+            existing_barcodes_query = Barcode.all_objects.filter(product=product)
             if purchase_item.variant:
                 existing_barcodes_query = existing_barcodes_query.filter(variant=purchase_item.variant)
             else:
@@ -140,7 +144,7 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
             barcode_value = f"{base_name}-{timestamp}-{serial_number}"
             
             counter = 0
-            while Barcode.objects.filter(barcode=barcode_value).exists():
+            while Barcode.all_objects.filter(barcode=barcode_value).exists():
                 counter += 1
                 barcode_value = f"{base_name}-{timestamp}-{serial_number}-{counter}"
             
@@ -445,7 +449,9 @@ class PurchaseSerializer(serializers.ModelSerializer):
             import uuid
             purchase_number = f"PUR-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
             # Ensure uniqueness
-            while Purchase.objects.filter(purchase_number=purchase_number).exists():
+            # Use all_objects to include soft-deleted rows because DB unique
+            # constraints still apply to them.
+            while Purchase.all_objects.filter(purchase_number=purchase_number).exists():
                 purchase_number = f"PUR-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
             validated_data['purchase_number'] = purchase_number
         
