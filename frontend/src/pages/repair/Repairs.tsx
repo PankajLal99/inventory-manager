@@ -173,6 +173,10 @@ function isToday(date: Date): boolean {
   );
 }
 
+function getTodayLocalDateString(): string {
+  return toLocalDateString(new Date());
+}
+
 function parseAmount(value: unknown): number {
   const parsed = parseFloat(String(value ?? '0'));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -519,9 +523,10 @@ export default function Repairs() {
       ? [{ status: 'not_repaired', label: 'Not Repaired', items: allNotRepaired }]
       : []),
   ];
-  // No default date filter: show all items in each group. User can optionally filter by date.
   const getGroupSelectedDate = (status: string, _items: RepairInvoice[]) => {
-    return groupDateFilters[status] ?? '';
+    if (status === 'old_repair') return groupDateFilters[status] ?? '';
+    // Default all non-old-repair sections to today's date.
+    return groupDateFilters[status] ?? getTodayLocalDateString();
   };
   /** Match if selected date equals repair date (created/updated) OR delivery date. */
   const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string) => {
