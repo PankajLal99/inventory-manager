@@ -258,10 +258,10 @@ export default function Repairs() {
       if (statusFilter) {
         params.repair_status = statusFilter;
       }
-      if (!hasAnyGroupDateOverride && dateFrom) {
+      if (dateFrom) {
         params.date_from = dateFrom;
       }
-      if (!hasAnyGroupDateOverride && dateTo) {
+      if (dateTo) {
         params.date_to = dateTo;
       }
       if (search.trim()) {
