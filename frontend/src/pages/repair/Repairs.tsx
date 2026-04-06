@@ -141,6 +141,7 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   other: 'bg-gray-400',
   old_repair: 'bg-violet-600', // static UI section: repairs not from today and not delivered
 };
+const OLD_REPAIR_MAX_ROWS = 500;
 
 /** Sort repair invoices by status for table display, then by most recently updated within each status. */
 function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; updated_at?: string } | null; created_at?: string }>(items: T[]): T[] {
@@ -251,8 +252,9 @@ export default function Repairs() {
     queryKey: ['repair-invoices', statusFilter, dateFrom, dateTo, repairStore?.id, currentPage, barcodeSearch, search],
     queryFn: async () => {
       const params: any = {};
-      params.page = currentPage;
-      params.limit = 50;
+      // Keep this page fully loaded by default so grouped sections
+      // (received/WIP/done/etc.) are not capped by pagination.
+      params.unpaginated = 1;
       if (statusFilter) {
         params.repair_status = statusFilter;
       }
@@ -275,9 +277,6 @@ export default function Repairs() {
       }
       if (dateFrom || dateTo) {
         params.ordering = 'created_at';
-      }
-      if (hasAnyGroupDateOverride) {
-        params.unpaginated = 1;
       }
       const response = await posApi.repair.invoices.list(params);
       return response.data;
@@ -480,11 +479,12 @@ export default function Repairs() {
   const canSeeTotalColumn = canSeeSuperMetrics;
 
   // Old Repair: only delivered or done AND not from today.
+  // Intentionally capped to keep this historical section lightweight.
   const oldRepairItems = filteredRepairs.filter((inv) => {
     const status = inv.repair?.status;
     if (status !== 'delivered' && status !== 'done') return false;
     return !isToday(new Date(getRepairDisplayDate(inv)));
-  });
+  }).slice(0, OLD_REPAIR_MAX_ROWS);
   // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
   const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
 
