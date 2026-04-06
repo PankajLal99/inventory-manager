@@ -361,16 +361,23 @@ export default function Invoices() {
   const isCreditInvoice = (inv: Invoice) =>
     String(inv.invoice_type || '').toLowerCase() === 'credit' ||
     String(inv.status || '').toLowerCase() === 'credit';
-  // Profit summary (Paid − Total) for Super group footer row; bifurcate Paid vs Credit
-  const totalSum = filteredInvoices.reduce((s, inv) => s + parseAmount(inv.computed_total), 0);
-  const paidSum = filteredInvoices.reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
-  const profitSum = paidSum - totalSum;
-  const paidSumNonCredit = filteredInvoices
+  // Footer totals should exclude pending type and draft status rows.
+  const footerTotalsInvoices = filteredInvoices.filter((inv) => {
+    const type = String(inv.invoice_type || '').toLowerCase();
+    const status = String(inv.status || '').toLowerCase();
+    return type !== 'pending' && status !== 'draft';
+  });
+  // Profit summary for Super group footer row; bifurcate Paid vs Credit
+  const paidSumNonCredit = footerTotalsInvoices
     .filter((inv) => !isCreditInvoice(inv))
     .reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
-  const creditDifference = filteredInvoices
+  const creditDifference = footerTotalsInvoices
     .filter((inv) => isCreditInvoice(inv))
     .reduce((s, inv) => s + (parseAmount(inv.computed_paid) - parseAmount(inv.computed_total)), 0);
+  const pendingAmount = filteredInvoices
+    .filter((inv) => String(inv.invoice_type || '').toLowerCase() === 'pending')
+    .reduce((s, inv) => s + parseAmount(inv.display_total ?? inv.total), 0);
+  const combinedProfit = paidSumNonCredit + creditDifference;
 
   const buildInvoiceDetailPath = (invoiceId: number) => {
     const params = new URLSearchParams();
@@ -726,10 +733,17 @@ export default function Invoices() {
                     </TableCell>
                     <TableCell>{' '}</TableCell>
                   </TableRow>
+                  <TableRow className="bg-yellow-50/80 border-t border-gray-200 font-medium">
+                    <TableCell colSpan={5}>Pending</TableCell>
+                    <TableCell align="right" className="text-yellow-800">
+                      ₹{formatNumber(pendingAmount)}
+                    </TableCell>
+                    <TableCell>{' '}</TableCell>
+                  </TableRow>
                   <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                    <TableCell colSpan={5}> </TableCell>
+                    <TableCell colSpan={5}>Profit (Paid + Credit)</TableCell>
                     <TableCell align="right" className="text-emerald-700">
-                      ₹{formatNumber(profitSum)}
+                      ₹{formatNumber(combinedProfit)}
                     </TableCell>
                     <TableCell>{' '}</TableCell>
                   </TableRow>
@@ -815,9 +829,13 @@ export default function Invoices() {
                   <span className="text-gray-700">Credit (Paid − Total)</span>
                   <span className="text-amber-800">₹{formatNumber(creditDifference)}</span>
                 </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-700">Pending</span>
+                  <span className="text-yellow-800">₹{formatNumber(pendingAmount)}</span>
+                </div>
                 <div className="flex justify-between items-center pt-2 border-t border-gray-200 font-semibold">
-                  <span className="text-gray-700"> </span>
-                  <span className="text-emerald-700">₹{formatNumber(profitSum)}</span>
+                  <span className="text-gray-700">Profit (Paid + Credit)</span>
+                  <span className="text-emerald-700">₹{formatNumber(combinedProfit)}</span>
                 </div>
               </div>
             )}
