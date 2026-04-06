@@ -1065,7 +1065,18 @@ export default function Purchases() {
     setGeneratingLabelsFor(productId);
     setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: true } }));
     try {
-      await productsApi.regenerateLabels(productId, purchaseId);
+      // Prefer generate-labels for missing labels; regenerate-labels is for rebuilding existing ones.
+      // Fallback to product-level generation if purchase linkage is missing in older data.
+      try {
+        await productsApi.generateLabels(productId, purchaseId);
+      } catch (error: any) {
+        const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString().toLowerCase();
+        if (backendMessage.includes('no barcodes found')) {
+          await productsApi.generateLabels(productId);
+        } else {
+          throw error;
+        }
+      }
       const generated = await waitForLabelsToBeGenerated(productId, purchaseId);
       if (generated) {
         alert('Labels generated successfully. You can print now.');
