@@ -3007,7 +3007,8 @@ def cart_checkout(request, pk):
                         discount_amount=pd, tax_amount=pt,
                         line_total=line_unit_total
                     )
-                    b_obj.tag = 'sold'
+                    # Pending invoices should reserve units as in-cart; only finalized sale/credit marks sold.
+                    b_obj.tag = 'in-cart' if invoice_type == 'pending' else 'sold'
                     b_obj.save(update_fields=['tag'])
                     invalidate_barcode_cache(b_obj)
                     
@@ -4001,6 +4002,12 @@ def invoice_checkout(request, pk):
                 if product_barcode and product_barcode.tag == 'new':
                     product_barcode.tag = 'sold'
                     product_barcode.save()
+    elif new_invoice_type == 'pending':
+        # Keep draft pending invoice barcodes reserved (not fresh, not sold).
+        for item in invoice.items.select_related('barcode').all():
+            if item.barcode and item.barcode.tag in ['new', 'returned', 'sold']:
+                item.barcode.tag = 'in-cart'
+                item.barcode.save(update_fields=['tag'])
     # Now recalculate invoice totals with actual prices
     update_invoice_totals(invoice)
     invoice.refresh_from_db()
@@ -4401,7 +4408,12 @@ def invoice_update(request, pk):
                 # Deduct stock for the new barcode in tracked mode
                 if invoice.store:
                     reduce_stock_for_cart_item(cart_item.product, cart_item.variant_id, invoice.store, Decimal('1.000'))
-                barcode_obj.tag = 'sold'
+                # Keep pending draft invoice units reserved as in-cart.
+                barcode_obj.tag = (
+                    'in-cart'
+                    if invoice.invoice_type == 'pending' and invoice.status == 'draft'
+                    else 'sold'
+                )
                 barcode_obj.save(update_fields=['tag'])
                 subtotal += line_total
                 discount_total += inv_item.discount_amount
@@ -4579,6 +4591,12 @@ def invoice_mark_credit(request, pk):
         # Now recalculate invoice totals (status is 'credit', so it will calculate from items)
         update_invoice_totals(invoice)
         invoice.refresh_from_db()
+
+        # Moving pending draft to ledger/credit finalizes reserved barcodes as sold.
+        for item in invoice.items.select_related('barcode', 'product').all():
+            if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
+                item.barcode.tag = 'sold'
+                item.barcode.save(update_fields=['tag'])
         
         # Ensure status is still 'credit' after refresh (should be, but double-check)
         if invoice.status != 'credit':
@@ -4882,7 +4900,6 @@ def invoice_items(request, pk):
         item.save()
         
         # Find and assign barcode for this item (if quantity is 1)
-        # Mark barcodes as sold when assigned to invoice items (same as cart_checkout)
         if item.quantity == Decimal('1.000') and not item.barcode:
             # Get all barcodes already in this invoice (to avoid duplicates)
             invoice_barcodes = set()
@@ -4931,7 +4948,11 @@ def invoice_items(request, pk):
                 item.barcode = barcode_obj
                 item.save()
                 old_tag = barcode_obj.tag
-                barcode_obj.tag = 'sold'
+                barcode_obj.tag = (
+                    'in-cart'
+                    if invoice.invoice_type == 'pending' and invoice.status == 'draft'
+                    else 'sold'
+                )
                 barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
@@ -4942,7 +4963,7 @@ def invoice_items(request, pk):
                     object_reference=invoice.invoice_number,
                     barcode=barcode_obj.barcode,
                     changes={
-                        'tag': {'old': old_tag, 'new': 'sold'},
+                        'tag': {'old': old_tag, 'new': barcode_obj.tag},
                         'barcode': barcode_obj.barcode,
                         'product_id': item.product.id,
                         'product_name': item.product.name,
@@ -4952,11 +4973,15 @@ def invoice_items(request, pk):
                     }
                 )
         elif item.quantity == Decimal('1.000') and item.barcode:
-            # Barcode was passed from frontend (exact scan) — mark as sold
+            # Barcode was passed from frontend (exact scan) — reserve for pending, sold for finalized invoices
             barcode_obj = item.barcode
             if barcode_obj.tag in ['new', 'returned']:
                 old_tag = barcode_obj.tag
-                barcode_obj.tag = 'sold'
+                barcode_obj.tag = (
+                    'in-cart'
+                    if invoice.invoice_type == 'pending' and invoice.status == 'draft'
+                    else 'sold'
+                )
                 barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
@@ -4967,7 +4992,7 @@ def invoice_items(request, pk):
                     object_reference=invoice.invoice_number,
                     barcode=barcode_obj.barcode,
                     changes={
-                        'tag': {'old': old_tag, 'new': 'sold'},
+                        'tag': {'old': old_tag, 'new': barcode_obj.tag},
                         'barcode': barcode_obj.barcode,
                         'product_id': item.product.id,
                         'product_name': item.product.name,
