@@ -425,31 +425,33 @@ def optimized_dashboard_kpis(request):
 
     pending_line_cost = _invoice_item_pending_line_cost_case(money)
 
-    # All-time pending purchase-cost KPI (not date scoped): include every pending/pending-type non-draft invoice.
+    # All-time pending KPI aligned with Invoices page pending filter:
+    # invoice_type='pending' and non-repair invoices, summed by invoice total.
     pending_invoices = Invoice.objects.filter(
-        Q(status='pending') | Q(invoice_type='pending')
-    ).exclude(status__in=['void'])
+        invoice_type='pending',
+        repair__isnull=True,
+    )
 
     pending_items_qs = InvoiceItem.objects.filter(invoice__in=pending_invoices)
 
     pending_invoice_purchase_total = _decimal_or_zero(
-        pending_items_qs.aggregate(t=Sum(pending_line_cost, output_field=money))['t']
+        pending_invoices.aggregate(t=Sum('total', output_field=money))['t']
     )
 
     pending_purchase_store_rows = (
-        pending_items_qs.values(
-            'invoice__store_id',
-            'invoice__store__name',
-            'invoice__store__shop_type',
+        pending_invoices.values(
+            'store_id',
+            'store__name',
+            'store__shop_type',
         )
-        .annotate(total_sum=Sum(pending_line_cost, output_field=money))
-        .order_by('-total_sum', 'invoice__store__name')
+        .annotate(total_sum=Sum('total', output_field=money))
+        .order_by('-total_sum', 'store__name')
     )
     pending_purchase_by_store = [
         {
-            'store_id': r['invoice__store_id'],
-            'store_name': r['invoice__store__name'] or '',
-            'shop_type': r['invoice__store__shop_type'] or '',
+            'store_id': r['store_id'],
+            'store_name': r['store__name'] or '',
+            'shop_type': r['store__shop_type'] or '',
             'amount': float(_decimal_or_zero(r['total_sum'])),
         }
         for r in pending_purchase_store_rows
@@ -480,13 +482,13 @@ def optimized_dashboard_kpis(request):
     ]
 
     pending_invoice_purchase_retail = _decimal_or_zero(
-        pending_items_qs.filter(invoice__store__shop_type='retail').aggregate(
-            t=Sum(pending_line_cost, output_field=money)
+        pending_invoices.filter(store__shop_type='retail').aggregate(
+            t=Sum('total', output_field=money)
         )['t']
     )
     pending_invoice_purchase_wholesale = _decimal_or_zero(
-        pending_items_qs.filter(invoice__store__shop_type='wholesale').aggregate(
-            t=Sum(pending_line_cost, output_field=money)
+        pending_invoices.filter(store__shop_type='wholesale').aggregate(
+            t=Sum('total', output_field=money)
         )['t']
     )
 

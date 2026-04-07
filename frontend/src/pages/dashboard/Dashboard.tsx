@@ -913,12 +913,12 @@ export default function Dashboard() {
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <ClipboardList className="h-5 w-5 text-gray-600" />
-                Overall pending bill value (purchase cost)
+                Overall pending invoice amount
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
                 <DashboardMetricCard
-                  title="Overall pending (at purchase cost)"
-                  subtitle="Non-draft invoices with status or type pending. Uses purchase unit × qty per line. The headline includes lines even when the invoice already has a partial payment (paid_amount > 0); the list on the right labelled fully unpaid is only paid_amount = 0."
+                  title="Overall pending (matches Invoices page)"
+                  subtitle="All-time non-repair invoices with type pending. Uses invoice total (same basis as Invoices page pending amount)."
                   icon={<ClipboardList className="h-5 w-5 text-orange-800" />}
                   totalFormatted={`₹${formatNumber(pendingPurchaseTotal, 2)}`}
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
@@ -938,7 +938,7 @@ export default function Dashboard() {
                 />
                 <div className="min-h-0 space-y-4">
                   <StoreAmountList
-                    title="By store (all pending)"
+                    title="By store (all pending, invoice total)"
                     rows={pendingPurchaseByStore}
                     emptyMessage="No pending invoice lines."
                   />
