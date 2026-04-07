@@ -53,6 +53,7 @@ export default function Payments() {
   const canEditPayments = !isRetail;
   const canMarkSent = canEditPayments || isRetail;
   const userGroups = user?.groups ?? [];
+  const canAccessLedger = userGroups.includes('Admin');
   const canDeletePayments = userGroups.includes('Admin') || userGroups.includes('RetailAdmin');
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');
@@ -495,19 +496,21 @@ export default function Payments() {
               </TableCell>
               <TableCell>
                 <div className="flex items-center justify-end gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
-                    disabled={entry.customer == null}
-                    title={entry.customer == null ? 'No customer on this entry' : 'Open customer ledger'}
-                    onClick={() => {
-                      if (entry.customer != null) navigate(`/ledger/${entry.customer}`);
-                    }}
-                  >
-                    <BookOpen className="h-4 w-4" />
-                    Ledger
-                  </Button>
+                  {canAccessLedger && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
+                      disabled={entry.customer == null}
+                      title={entry.customer == null ? 'No customer on this entry' : 'Open customer ledger'}
+                      onClick={() => {
+                        if (entry.customer != null) navigate(`/ledger/${entry.customer}`);
+                      }}
+                    >
+                      <BookOpen className="h-4 w-4" />
+                      Ledger
+                    </Button>
+                  )}
                   {canEditPayments && (
                     <Button
                       variant="outline"

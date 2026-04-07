@@ -65,6 +65,12 @@ def can_view_manual_payments_ledger(user):
     return bool(names & {'Retail', 'RetailAdmin'})
 
 
+def can_create_manual_payments(user):
+    """Whether user may create manual payment ledger entries from Payments page."""
+    names = set(user.groups.values_list('name', flat=True))
+    return bool(names & {'Retail', 'RetailAdmin'})
+
+
 # CustomerGroup views
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
@@ -613,20 +619,23 @@ def ledger_by_customer(request):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def ledger_entry_list_create(request):
-    """List ledger entries; create is Admin-only.
+    """List ledger entries; non-admin create is limited to manual payments.
 
-    Non-admin users are allowed read-only access ONLY for manual payments view
-    (`manual_only=true`), which is used by the Payments page.
+    Non-admin users are allowed:
+    - GET only for manual payments view (`manual_only=true`)
+    - POST only for manual credit payments (Payments page flow)
     """
     is_admin = is_admin_user(request.user)
     if not is_admin:
-        if request.method != 'GET':
-            return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
-        manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
-        if not manual_only:
-            return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
-        if not can_view_manual_payments_ledger(request.user):
-            return Response({'error': 'You do not have permission to view manual payments'}, status=status.HTTP_403_FORBIDDEN)
+        if request.method == 'GET':
+            manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
+            if not manual_only:
+                return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+            if not can_view_manual_payments_ledger(request.user):
+                return Response({'error': 'You do not have permission to view manual payments'}, status=status.HTTP_403_FORBIDDEN)
+        else:  # POST
+            if not can_create_manual_payments(request.user):
+                return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'GET':
         queryset = _exclude_repair_group_entries(
@@ -693,6 +702,11 @@ def ledger_entry_list_create(request):
         serializer = LedgerEntrySerializer(queryset, many=True)
         return Response(serializer.data)
     else:  # POST
+        if not is_admin:
+            entry_type = (request.data.get('entry_type') or '').strip().lower()
+            customer_id = request.data.get('customer')
+            if entry_type != 'credit' or not customer_id:
+                return Response({'error': 'Only manual credit payments are allowed'}, status=status.HTTP_403_FORBIDDEN)
         serializer = LedgerEntrySerializer(data=request.data)
         if serializer.is_valid():
             # Handle custom date if provided, otherwise use current time
@@ -742,7 +756,12 @@ def _entry_affects_customer_balance(entry):
 @api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def ledger_entry_retrieve_update_destroy(request, entry_id):
-    """Retrieve, update or delete a ledger entry (Admin only; RetailAdmin may GET/PATCH/DELETE manual entries only)."""
+    """Retrieve, update or delete a ledger entry.
+
+    Admin: full access.
+    RetailAdmin: full access for manual entries.
+    Retail: PATCH manual entries with `is_sent` only.
+    """
     entry = get_object_or_404(_exclude_repair_group_entries(LedgerEntry.objects.all()), pk=entry_id)
     is_admin = is_admin_user(request.user)
     retail_admin_manual = (
@@ -750,8 +769,17 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
         and is_retail_admin_user(request.user)
         and entry.invoice_id is None
     )
-    if not is_admin and not retail_admin_manual:
-        return Response({'error': 'Only Admin users can edit/delete ledger entries'}, status=status.HTTP_403_FORBIDDEN)
+    retail_manual = (
+        not is_admin
+        and can_view_manual_payments_ledger(request.user)
+        and entry.invoice_id is None
+    )
+    if request.method == 'DELETE':
+        if not is_admin and not retail_admin_manual:
+            return Response({'error': 'Only Admin users can edit/delete ledger entries'}, status=status.HTTP_403_FORBIDDEN)
+    else:
+        if not is_admin and not retail_manual:
+            return Response({'error': 'Only Admin users can edit/delete ledger entries'}, status=status.HTTP_403_FORBIDDEN)
     if request.method == 'GET':
         serializer = LedgerEntrySerializer(entry)
         return Response(serializer.data)
@@ -761,8 +789,15 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
         if old_affects_balance:
             _reverse_ledger_entry_balance(entry)
         partial_data = request.data
-        allowed = {'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'description', 'created_at', 'is_sent'}
+        if is_admin or is_retail_admin_user(request.user):
+            allowed = {'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'description', 'created_at', 'is_sent'}
+        else:
+            allowed = {'is_sent'}
         update_data = {k: v for k, v in partial_data.items() if k in allowed}
+        if not update_data:
+            if old_affects_balance:
+                _apply_ledger_entry_balance(entry)
+            return Response({'error': 'No editable fields provided'}, status=status.HTTP_400_BAD_REQUEST)
         serializer = LedgerEntrySerializer(entry, data=update_data, partial=True)
         if serializer.is_valid():
             entry = serializer.save()
