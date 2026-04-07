@@ -579,7 +579,7 @@ def optimized_dashboard_kpis(request):
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
         repair__isnull=True,
-        store__shop_type__in=['retail', 'wholesale'],
+        store__shop_type='retail',
         invoice_type__in=['cash', 'upi', 'mixed', 'credit'],
     ).exclude(invoice_type='defective').exclude(status__in=['void', 'draft'])
     counter_qs = annotate_invoice_list_profit(counter_inv, profile='invoice_list')
@@ -675,7 +675,7 @@ def optimized_dashboard_kpis(request):
     ).exclude(status__in=['void', 'draft'])
     counter_inv_pb = inv_base_pb.filter(
         repair__isnull=True,
-        store__shop_type__in=['retail', 'wholesale'],
+        store__shop_type='retail',
         invoice_type__in=['cash', 'upi', 'mixed', 'credit'],
     ).exclude(invoice_type='defective')
     counter_pb_qs = annotate_invoice_list_profit(counter_inv_pb, profile='invoice_list')
