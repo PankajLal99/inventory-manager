@@ -49,7 +49,9 @@ export default function Payments() {
   const user = auth.getUser();
   const isSuper = user?.groups && user.groups.includes('Super');
   const isRetail = user?.groups && user.groups.includes('Retail');
-  const canManagePayments = !isRetail;
+  const canAddPayments = true;
+  const canEditPayments = !isRetail;
+  const canMarkSent = canEditPayments || isRetail;
   const userGroups = user?.groups ?? [];
   const canDeletePayments = userGroups.includes('Admin') || userGroups.includes('RetailAdmin');
   const [search, setSearch] = useState('');
@@ -370,7 +372,7 @@ export default function Payments() {
         title="Payments"
         subtitle="Manual credit entries recorded against customers"
         icon={Coins}
-        action={canManagePayments ? (
+        action={canAddPayments ? (
           <Button onClick={() => setShowAddPaymentModal(true)} className="gap-2">
             <Plus className="h-5 w-5" />
             Add Payment
@@ -474,7 +476,7 @@ export default function Payments() {
               </TableCell>
               <TableCell className="text-base">{entry.created_by_username || '-'}</TableCell>
               <TableCell align="center">
-                {canManagePayments ? (
+                {canMarkSent ? (
                   <input
                     type="checkbox"
                     checked={entry.is_sent || false}
@@ -506,7 +508,7 @@ export default function Payments() {
                     <BookOpen className="h-4 w-4" />
                     Ledger
                   </Button>
-                  {!isRetail && (
+                  {canEditPayments && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -535,7 +537,7 @@ export default function Payments() {
         </Table>
       )}
 
-      {canManagePayments && <Modal
+      {canAddPayments && <Modal
         isOpen={showAddPaymentModal}
         onClose={() => {
           setShowAddPaymentModal(false);
@@ -688,7 +690,7 @@ export default function Payments() {
         </form>
       </Modal>}
 
-      {canManagePayments && <Modal
+      {canEditPayments && <Modal
         isOpen={!!editingEntry}
         onClose={() => setEditingEntry(null)}
         title="Edit Payment"
