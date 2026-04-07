@@ -395,10 +395,15 @@ def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
             supplier_name = item.purchase.supplier.code or item.purchase.supplier.name
         price_val = float(item.unit_price) if item.unit_price else 0
         price_str = f"₹{price_val:g}" if price_val else "—"
+        selling_price_val = float(item.selling_price) if item.selling_price else 0
+        selling_price_str = f"₹{selling_price_val:g}" if selling_price_val else "—"
         purchase_date = item.purchase.purchase_date.strftime('%d-%m-%Y') if item.purchase and item.purchase.purchase_date else None
         breakdown.append({
             'supplier': supplier_name,
             'price': price_str,
+            'purchase_price_value': price_val,
+            'selling_price': selling_price_str,
+            'selling_price_value': selling_price_val,
             'shop_stock': shop_allocated,
             'warehouse_stock': whse_allocated,
             'shop_barcode_count': shop_available,

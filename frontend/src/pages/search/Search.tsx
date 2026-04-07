@@ -409,14 +409,18 @@ export default function Search() {
                     }}
                     getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
                     customRender={(item, idx) => {
-                      // Get price (selling_price if available, otherwise purchase_price)
-                      const price = item.selling_price && item.selling_price > 0
-                        ? item.selling_price
-                        : (item.purchase_price || null);
+                      const breakdown = item.supplier_breakdown || [];
+                      const maxSellingPriceFromBreakdown = breakdown.reduce((max: number, s: any) => {
+                        const val = Number(s.selling_price_value ?? 0) || 0;
+                        return val > max ? val : max;
+                      }, 0);
+                      // Top-right price should prefer max selling price from all purchase rows.
+                      const price = maxSellingPriceFromBreakdown > 0
+                        ? maxSellingPriceFromBreakdown
+                        : (item.selling_price && item.selling_price > 0 ? item.selling_price : (item.purchase_price || null));
                       const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
 
                       // Warehouse + Available = sum of (Whse + Shop Qty) from table so total matches the breakdown
-                      const breakdown = item.supplier_breakdown || [];
                       const totalFromTable = breakdown.reduce(
                         (sum: number, s: any) =>
                           sum + (Number(s.warehouse_available ?? s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
@@ -517,7 +521,8 @@ export default function Search() {
                                     <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Purchase date</th>
                                     <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Whse</th>
                                     <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Available</th>
-                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Price</th>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Purchase Price</th>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Selling Price</th>
                                   </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-50">
@@ -527,7 +532,8 @@ export default function Search() {
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600 align-middle">{s.purchase_date ?? '—'}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_available ?? s.warehouse_stock, 2)}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</td>
-                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-700 font-medium align-middle">{s.price}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.selling_price ?? '—'}</td>
                                     </tr>
                                   ))}
                                 </tbody>
