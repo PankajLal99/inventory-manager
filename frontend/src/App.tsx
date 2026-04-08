@@ -47,6 +47,8 @@ import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
 import StockOverview from './pages/stock/StockOverview';
 import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingDetails';
+import OverallPendingInvoiceDetails from './pages/dashboard/OverallPendingInvoiceDetails';
+import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingClearedDetails';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -101,6 +103,14 @@ function App() {
                 <Route
                   path="dashboard/overall-profit-billing-details"
                   element={<OverallProfitBillingDetails />}
+                />
+                <Route
+                  path="dashboard/overall-pending-invoice-details"
+                  element={<OverallPendingInvoiceDetails />}
+                />
+                <Route
+                  path="dashboard/wholesale-pending-cleared-details"
+                  element={<WholesalePendingClearedDetails />}
                 />
                 <Route path="products" element={<Products />} />
                 <Route path="products/:id" element={<ProductDetail />} />

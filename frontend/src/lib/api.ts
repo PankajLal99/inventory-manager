@@ -442,6 +442,10 @@ export const reportsApi = {
   dashboardKpis: (params?: any) => api.get('/reports/dashboard-kpis/', { params }),
   overallProfitBillingPeriodDetails: (params?: any) =>
     api.get('/reports/overall-profit-billing-period-details/', { params }),
+  overallPendingInvoiceDetails: () =>
+    api.get('/reports/overall-pending-invoice-details/'),
+  wholesalePendingClearedDetails: (params?: any) =>
+    api.get('/reports/wholesale-pending-cleared-details/', { params }),
 };
 
 // Global Search API

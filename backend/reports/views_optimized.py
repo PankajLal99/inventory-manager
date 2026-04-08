@@ -915,6 +915,217 @@ def optimized_dashboard_kpis(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def overall_pending_invoice_details(request):
+    """
+    Detailed rows for Dashboard KPI: Overall pending invoice amount (all-time, non-repair, invoice_type=pending).
+    """
+    money = DecimalField(max_digits=18, decimal_places=2)
+    pending_line_cost = _invoice_item_pending_line_cost_case(money)
+
+    pending_invoices = (
+        Invoice.objects.filter(
+            invoice_type='pending',
+            repair__isnull=True,
+        )
+        .select_related('store', 'customer')
+        .order_by('-created_at', '-id')
+    )
+
+    purchase_rows = (
+        InvoiceItem.objects.filter(invoice__in=pending_invoices)
+        .values('invoice_id')
+        .annotate(total_sum=Sum(pending_line_cost, output_field=money))
+    )
+    purchase_by_invoice_id = {
+        int(r['invoice_id']): _decimal_or_zero(r['total_sum'])
+        for r in purchase_rows
+    }
+
+    store_map = {}
+    total_amount = Decimal('0.00')
+    total_paid = Decimal('0.00')
+    total_purchase_cost = Decimal('0.00')
+    invoice_count = 0
+
+    for inv in pending_invoices:
+        sid = int(inv.store_id or 0)
+        if sid not in store_map:
+            store_map[sid] = {
+                'store_id': sid,
+                'store_name': inv.store.name if inv.store else '',
+                'shop_type': inv.store.shop_type if inv.store else '',
+                'invoice_count': 0,
+                'total_amount': Decimal('0.00'),
+                'paid_amount': Decimal('0.00'),
+                'purchase_cost_total': Decimal('0.00'),
+                'invoices': [],
+            }
+        row_purchase_cost = _decimal_or_zero(purchase_by_invoice_id.get(inv.id))
+        row_total = _decimal_or_zero(inv.total)
+        row_paid = _decimal_or_zero(inv.paid_amount)
+
+        store_map[sid]['invoice_count'] += 1
+        store_map[sid]['total_amount'] += row_total
+        store_map[sid]['paid_amount'] += row_paid
+        store_map[sid]['purchase_cost_total'] += row_purchase_cost
+        store_map[sid]['invoices'].append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'status': inv.status,
+            'invoice_type': inv.invoice_type,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'customer_name': inv.customer.name if inv.customer else 'Walk-in',
+            'total': float(row_total),
+            'paid_amount': float(row_paid),
+            'purchase_cost': float(row_purchase_cost),
+        })
+
+        invoice_count += 1
+        total_amount += row_total
+        total_paid += row_paid
+        total_purchase_cost += row_purchase_cost
+
+    stores = []
+    for s in store_map.values():
+        stores.append({
+            'store_id': s['store_id'],
+            'store_name': s['store_name'],
+            'shop_type': s['shop_type'],
+            'invoice_count': s['invoice_count'],
+            'total_amount': float(s['total_amount']),
+            'paid_amount': float(s['paid_amount']),
+            'purchase_cost_total': float(s['purchase_cost_total']),
+            'invoices': s['invoices'],
+        })
+    stores.sort(key=lambda x: (-x['total_amount'], x['store_name']))
+
+    return Response({
+        'summary': {
+            'invoice_count': invoice_count,
+            'store_count': len(stores),
+            'total_amount': float(total_amount),
+            'paid_amount': float(total_paid),
+            'purchase_cost_total': float(total_purchase_cost),
+        },
+        'stores': stores,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def wholesale_pending_cleared_details(request):
+    """
+    Detailed rows for Dashboard KPI: Wholesale pending cleared in period (billing window containing date_to).
+    """
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    if not date_from:
+        date_from = timezone.now().date()
+    else:
+        date_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+    if not date_to:
+        date_to = timezone.now().date()
+    else:
+        date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+    money = DecimalField(max_digits=18, decimal_places=2)
+    pending_line_cost = _invoice_item_pending_line_cost_case(money)
+    wc_from, wc_to = _billing_period_11_to_10(date_to)
+
+    invoices = (
+        Invoice.objects.filter(
+            pending_cleared_at__isnull=False,
+            store__shop_type='wholesale',
+            pending_cleared_at__date__gte=wc_from,
+            pending_cleared_at__date__lte=wc_to,
+        )
+        .exclude(status='void')
+        .select_related('store', 'customer')
+        .order_by('-pending_cleared_at', '-id')
+    )
+    purchase_rows = (
+        InvoiceItem.objects.filter(invoice__in=invoices)
+        .values('invoice_id')
+        .annotate(total_sum=Sum(pending_line_cost, output_field=money))
+    )
+    purchase_by_invoice_id = {
+        int(r['invoice_id']): _decimal_or_zero(r['total_sum'])
+        for r in purchase_rows
+    }
+
+    store_map = {}
+    invoice_count = 0
+    selling_total = Decimal('0.00')
+    purchase_cost_total = Decimal('0.00')
+    for inv in invoices:
+        sid = int(inv.store_id or 0)
+        if sid not in store_map:
+            store_map[sid] = {
+                'store_id': sid,
+                'store_name': inv.store.name if inv.store else '',
+                'shop_type': inv.store.shop_type if inv.store else '',
+                'invoice_count': 0,
+                'selling_total': Decimal('0.00'),
+                'purchase_cost_total': Decimal('0.00'),
+                'invoices': [],
+            }
+        row_sell = _decimal_or_zero(inv.total)
+        row_purchase = _decimal_or_zero(purchase_by_invoice_id.get(inv.id))
+        row_profit = row_sell - row_purchase
+        store_map[sid]['invoice_count'] += 1
+        store_map[sid]['selling_total'] += row_sell
+        store_map[sid]['purchase_cost_total'] += row_purchase
+        store_map[sid]['invoices'].append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'pending_cleared_at': inv.pending_cleared_at.isoformat() if inv.pending_cleared_at else None,
+            'customer_name': inv.customer.name if inv.customer else 'Walk-in',
+            'status': inv.status,
+            'selling_total': float(row_sell),
+            'purchase_cost': float(row_purchase),
+            'profit': float(row_profit),
+        })
+        invoice_count += 1
+        selling_total += row_sell
+        purchase_cost_total += row_purchase
+
+    stores = []
+    for s in store_map.values():
+        stores.append({
+            'store_id': s['store_id'],
+            'store_name': s['store_name'],
+            'shop_type': s['shop_type'],
+            'invoice_count': s['invoice_count'],
+            'selling_total': float(s['selling_total']),
+            'purchase_cost_total': float(s['purchase_cost_total']),
+            'profit_total': float(s['selling_total'] - s['purchase_cost_total']),
+            'invoices': s['invoices'],
+        })
+    stores.sort(key=lambda x: (-x['selling_total'], x['store_name']))
+
+    return Response({
+        'period': {
+            'from': date_from.isoformat(),
+            'to': date_to.isoformat(),
+        },
+        'billing_window': {
+            'from': wc_from.isoformat(),
+            'to': wc_to.isoformat(),
+        },
+        'summary': {
+            'invoice_count': invoice_count,
+            'store_count': len(stores),
+            'selling_total': float(selling_total),
+            'purchase_cost_total': float(purchase_cost_total),
+            'profit_total': float(selling_total - purchase_cost_total),
+        },
+        'stores': stores,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def overall_profit_billing_period_details(request):
     """
     Detailed invoices used for "Overall profit (11th → 10th month)" KPI.

@@ -955,6 +955,7 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
+                detailPath="/dashboard/overall-pending-invoice-details"
                   breakdownRows={(() => {
                     const rows: BreakdownRow[] = [
                       { label: 'Retail', amount: pendingRetail },
@@ -1012,6 +1013,7 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
                   borderClass="border-emerald-200"
                   iconClass=""
+                  detailPath="/dashboard/wholesale-pending-cleared-details"
                   breakdownRows={[
                     {
                       label: 'Wholesale stores (billing window above)',
