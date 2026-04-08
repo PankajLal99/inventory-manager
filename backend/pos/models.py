@@ -184,6 +184,13 @@ class Repair(models.Model):
     def __str__(self):
         return f"Repair {self.barcode} - {self.invoice.invoice_number}"
 
+    @property
+    def customer_name(self):
+        """Convenience accessor for admin/UI usage."""
+        if self.invoice and self.invoice.customer:
+            return self.invoice.customer.name
+        return ''
+
     class Meta:
         db_table = 'repairs'
         ordering = ['-created_at']
