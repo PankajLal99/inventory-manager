@@ -100,7 +100,6 @@ const STATUS_ORDER: string[] = [
   'work_in_progress',
   'delivered',
   'not_repaired',
-  'cancelled',
 ];
 
 // Row order: when sorting table rows by status, received first, WIP second, not_repaired at the end
@@ -108,7 +107,6 @@ const ROW_STATUS_ORDER: string[] = [
   'received',
   'work_in_progress',
   'delivered',
-  'cancelled',
   'not_repaired',
 ];
 
@@ -864,7 +862,8 @@ export default function Repairs() {
           {groupsWithItems.map((group) => {
             const isNotRepairedGroup = group.status === 'not_repaired';
             const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
-            const hasGroupDateSelector = group.status === 'delivered';
+            // When status filter is active, show all rows for that status (no date slicing).
+            const hasGroupDateSelector = group.status === 'delivered' && !statusFilter;
             const selectedGroupDate = hasGroupDateSelector
               ? getGroupSelectedDate(group.status, group.items)
               : '';

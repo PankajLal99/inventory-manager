@@ -32,6 +32,7 @@ type StoreGroup = {
 };
 
 const toMonthInput = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function currentBillingMonthLabel(): string {
   const now = new Date();
@@ -52,6 +53,23 @@ function isDateWithinRange(date: string, from?: string, to?: string): boolean {
   if (from && date < from) return false;
   if (to && date > to) return false;
   return true;
+}
+
+function dateDiffInDaysInclusive(from: string, to: string): number {
+  const start = new Date(`${from}T12:00:00`);
+  const end = new Date(`${to}T12:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0;
+  return Math.floor((end.getTime() - start.getTime()) / ONE_DAY_MS) + 1;
+}
+
+function addDaysIso(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return dateIso;
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 export default function OverallProfitBillingDetails() {
@@ -96,13 +114,13 @@ export default function OverallProfitBillingDetails() {
     const stores = data?.stores ?? [];
     const rangeFrom = data?.billing_window?.from;
     const rangeTo = data?.billing_window?.to;
-    const byDate = new Map<string, { date: string; repairProfit: number; retailProfit: number }>();
+    const byDate = new Map<string, { date: string; repairProfit: number; retailProfit: number; isHoliday: boolean; holidayLabel: string | null }>();
     stores.forEach((store) => {
       (store.invoices ?? []).forEach((inv) => {
         if (!inv.created_at) return;
         const date = inv.created_at.slice(0, 10);
         if (!isDateWithinRange(date, rangeFrom, rangeTo)) return;
-        const existing = byDate.get(date) ?? { date, repairProfit: 0, retailProfit: 0 };
+        const existing = byDate.get(date) ?? { date, repairProfit: 0, retailProfit: 0, isHoliday: false, holidayLabel: null };
         if (inv.source === 'repair') {
           existing.repairProfit += Number(inv.profit || 0);
         } else {
@@ -111,6 +129,26 @@ export default function OverallProfitBillingDetails() {
         byDate.set(date, existing);
       });
     });
+
+    // Ensure every day in the billing window is shown (including no-activity days).
+    if (rangeFrom && rangeTo) {
+      const totalDays = dateDiffInDaysInclusive(rangeFrom, rangeTo);
+      for (let i = 0; i < totalDays; i += 1) {
+        const dayIso = addDaysIso(rangeFrom, i);
+        if (byDate.has(dayIso)) continue;
+        const day = new Date(`${dayIso}T12:00:00`);
+        const isSunday = day.getDay() === 0;
+        byDate.set(dayIso, {
+          date: dayIso,
+          repairProfit: 0,
+          retailProfit: 0,
+          // Mark zero-activity days as holiday; Sundays explicitly tagged.
+          isHoliday: true,
+          holidayLabel: isSunday ? 'Sunday' : 'Holiday',
+        });
+      }
+    }
+
     // Keep day-wise table in chronological order by date.
     return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
   }, [data?.stores, data?.billing_window?.from, data?.billing_window?.to]);
@@ -191,7 +229,16 @@ export default function OverallProfitBillingDetails() {
                     ) : (
                       dayWiseProfitRows.map((row) => (
                         <tr key={row.date} className="hover:bg-gray-50/80">
-                          <td className="px-4 py-2.5 text-gray-700">{formatDateDDMMYYYY(row.date)}</td>
+                          <td className="px-4 py-2.5 text-gray-700">
+                            <div className="flex items-center gap-2">
+                              <span>{formatDateDDMMYYYY(row.date)}</span>
+                              {row.isHoliday ? (
+                                <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                                  {row.holidayLabel || 'Holiday'}
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
                           <td className="px-4 py-2.5 text-right tabular-nums">₹{formatNumber(row.repairProfit, 2)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums">₹{formatNumber(row.retailProfit, 2)}</td>
                         </tr>
