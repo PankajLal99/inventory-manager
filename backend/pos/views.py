@@ -4038,6 +4038,34 @@ def invoice_checkout(request, pk):
             'message': '\n'.join(error_messages),
             'price_validation_errors': price_validation_errors
         }, status=status.HTTP_400_BAD_REQUEST)
+
+    # Repair rule:
+    # If invoice is moved away from pending, repair must be delivered and have a delivery_date.
+    try:
+        repair_for_transition = invoice.repair
+    except Repair.DoesNotExist:
+        repair_for_transition = None
+    if repair_for_transition and new_invoice_type != 'pending':
+        submitted_repair_status = request.data.get('repair_status', None)
+        target_repair_status = submitted_repair_status if submitted_repair_status not in (None, '') else repair_for_transition.status
+        if target_repair_status != 'delivered':
+            return Response(
+                {'error': 'For repair invoices, non-pending invoice type requires repair status Delivered.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        target_delivery_date = repair_for_transition.delivery_date
+        if 'delivery_date' in request.data:
+            v = request.data.get('delivery_date')
+            if v in (None, ''):
+                target_delivery_date = None
+            else:
+                try:
+                    target_delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    target_delivery_date = repair_for_transition.delivery_date
+        if not target_delivery_date:
+            # Ensure delivery date exists for delivered repairs.
+            target_delivery_date = timezone.now().date()
     
     # Update stock for all items (decrease stock as items are being sold)
     # Update stock for SALE and CREDIT invoices (not PENDING)
@@ -4305,6 +4333,12 @@ def invoice_checkout(request, pk):
                         barcode=repair.barcode,
                         changes={'delivery_date': {'old': str(old_delivery_date) if old_delivery_date else None, 'new': str(repair.delivery_date) if repair.delivery_date else None}},
                     )
+            # For non-pending transition, enforce Delivered + delivery_date on persisted repair.
+            if invoice.invoice_type != 'pending':
+                if repair.status != 'delivered':
+                    repair.status = 'delivered'
+                if not repair.delivery_date:
+                    repair.delivery_date = timezone.now().date()
             if invoice.items.exists() and repair.status == 'received':
                 repair.status = 'work_in_progress'
             repair.save()
@@ -4664,10 +4698,16 @@ def invoice_mark_credit(request, pk):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # If this invoice is linked to a repair: optionally update delivery_date from request (same as checkout)
+        # If this invoice is linked to a repair:
+        # moving to credit requires delivered status and a delivery_date.
         try:
             repair = invoice.repair
             if repair:
+                submitted_repair_status = request.data.get('repair_status', None)
+                if submitted_repair_status not in (None, ''):
+                    valid_statuses = [value for value, _ in Repair.STATUS_CHOICES]
+                    if submitted_repair_status in valid_statuses:
+                        repair.status = submitted_repair_status
                 if 'delivery_date' in request.data:
                     v = request.data.get('delivery_date')
                     if v is None or v == '':
@@ -4678,8 +4718,13 @@ def invoice_mark_credit(request, pk):
                             repair.delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
                         except (ValueError, TypeError):
                             pass
-                if invoice.items.exists() and repair.status == 'received':
-                    repair.status = 'work_in_progress'
+                if repair.status != 'delivered':
+                    return Response(
+                        {'error': 'For repair invoices, credit requires repair status Delivered.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                if not repair.delivery_date:
+                    repair.delivery_date = timezone.now().date()
                 repair.save()
         except Repair.DoesNotExist:
             pass
