@@ -197,8 +197,11 @@ export default function Repairs() {
   const [lastRegenerateAt, setLastRegenerateAt] = useState<Record<number, number>>({});
   // Not Repaired section collapsed by default
   const [notRepairedCollapsed, setNotRepairedCollapsed] = useState(true);
-  // Date filter for each status group (independent controls)
-  const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>({});
+  // Date filter for each status group (independent controls).
+  // Delivered defaults to today and should use delivery_date matching.
+  const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>(() => ({
+    delivered: toLocalDateString(new Date()),
+  }));
   const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
 
   useEffect(() => {
@@ -494,13 +497,15 @@ export default function Repairs() {
     // No default date filter: sections should show all dates unless user picks one.
     return groupDateFilters[status] ?? '';
   };
-  /** Match if selected date equals repair date (created/updated) OR delivery date. */
-  const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string) => {
+  /** Match group date. Delivered uses delivery_date only. */
+  const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string, status: string) => {
     if (!selectedDate) return true;
+    if (status === 'delivered') {
+      const deliveryDate = invoice.repair?.delivery_date ? toLocalDateString(invoice.repair.delivery_date) : '';
+      return deliveryDate === selectedDate;
+    }
     const repairDate = toLocalDateString(getRepairDisplayDate(invoice));
-    if (repairDate === selectedDate) return true;
-    const deliveryDate = invoice.repair?.delivery_date ? toLocalDateString(invoice.repair.delivery_date) : '';
-    return deliveryDate === selectedDate;
+    return repairDate === selectedDate;
   };
 
   const formatDate = (dateString: string) => {
@@ -863,7 +868,7 @@ export default function Repairs() {
             const selectedGroupDate = hasGroupDateSelector
               ? getGroupSelectedDate(group.status, group.items)
               : '';
-            const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate));
+            const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate, group.status));
             // Profit = sum(paid) - sum(total) for Super group summary row
             const groupTotalSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_total), 0);
             const groupPaidSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
