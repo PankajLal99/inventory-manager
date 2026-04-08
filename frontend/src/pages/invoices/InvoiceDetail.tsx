@@ -4723,10 +4723,17 @@ export default function InvoiceDetail() {
                       {limitedRepairStatusOptions
                         .filter((opt) => {
                           // For pending invoice type, allow only:
-                          // received, work_in_progress, not_repaired.
+                          // received, not_repaired.
+                          // If status is auto-set to work_in_progress (after adding products),
+                          // keep it visible as the current selection.
                           // If current status is outside this set, keep it visible as disabled "(current)".
                           if (checkoutInvoiceType === 'pending') {
-                            if (opt.value === 'received' || opt.value === 'work_in_progress' || opt.value === 'not_repaired') {
+                            const currentPendingStatus = (checkoutRepairStatus || inv.repair.status || '').trim();
+                            if (
+                              opt.value === 'received' ||
+                              opt.value === 'not_repaired' ||
+                              (opt.value === 'work_in_progress' && currentPendingStatus === 'work_in_progress')
+                            ) {
                               return true;
                             }
                             return !!opt.disabled && opt.value === inv.repair.status;
