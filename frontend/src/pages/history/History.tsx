@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { historyApi } from '../../lib/api';
+import { historyApi, productsApi } from '../../lib/api';
 import Modal from '../../components/ui/Modal';
 import { 
   History as HistoryIcon, 
@@ -107,7 +107,31 @@ export default function History() {
   // Default: show only invoice edits (invoice_edit + invoice_update). Toggle to show all logs.
   const [showOnlyInvoiceEdits, setShowOnlyInvoiceEdits] = useState(true);
 
-  const effectiveActionFilter = showOnlyInvoiceEdits ? 'invoice_update,invoice_edit' : (actionFilter || undefined);
+  const trimmedSearch = search.trim();
+  const isSearchActive = Boolean(trimmedSearch);
+  const effectiveActionFilter = isSearchActive
+    ? (actionFilter || undefined)
+    : (showOnlyInvoiceEdits ? 'invoice_update,invoice_edit' : (actionFilter || undefined));
+
+  const shouldTryBarcodeResolve =
+    trimmedSearch.length >= 3 &&
+    !trimmedSearch.includes(' ');
+
+  const { data: resolvedSearchBarcode } = useQuery({
+    queryKey: ['history-search-resolved-barcode', trimmedSearch],
+    queryFn: async () => {
+      try {
+        const response = await productsApi.byBarcode(trimmedSearch, false, true);
+        const matched = String(response?.data?.matched_barcode || '').trim();
+        if (matched) return matched;
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: shouldTryBarcodeResolve,
+    retry: false,
+  });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['audit-logs', search, effectiveActionFilter, modelFilter, dateFrom, dateTo],
@@ -145,17 +169,25 @@ export default function History() {
     if (!search) return true;
     const searchLower = search.toLowerCase().trim();
     if (!searchLower) return true;
-    return (
-      log.model_name.toLowerCase().includes(searchLower) ||
-      (log.user?.username?.toLowerCase().includes(searchLower) ?? false) ||
-      (log.user?.email?.toLowerCase().includes(searchLower) ?? false) ||
-      log.action.toLowerCase().includes(searchLower) ||
-      log.object_id.toLowerCase().includes(searchLower) ||
-      (log.object_name?.toLowerCase().includes(searchLower) ?? false) ||
-      (log.object_reference?.toLowerCase().includes(searchLower) ?? false) ||
-      (log.barcode?.toLowerCase().includes(searchLower) ?? false) ||
-      changesTextMatches(log.changes as Record<string, unknown> | undefined, searchLower)
+    const resolvedBarcodeLower = String(resolvedSearchBarcode || '').toLowerCase().trim();
+    const matchesNeedle = (needle: string) => (
+      log.model_name.toLowerCase().includes(needle) ||
+      (log.user?.username?.toLowerCase().includes(needle) ?? false) ||
+      (log.user?.email?.toLowerCase().includes(needle) ?? false) ||
+      log.action.toLowerCase().includes(needle) ||
+      log.object_id.toLowerCase().includes(needle) ||
+      (log.object_name?.toLowerCase().includes(needle) ?? false) ||
+      (log.object_reference?.toLowerCase().includes(needle) ?? false) ||
+      (log.barcode?.toLowerCase().includes(needle) ?? false) ||
+      changesTextMatches(log.changes as Record<string, unknown> | undefined, needle)
     );
+
+    if (matchesNeedle(searchLower)) return true;
+    if (resolvedBarcodeLower && resolvedBarcodeLower !== searchLower) {
+      return matchesNeedle(resolvedBarcodeLower);
+    }
+
+    return false;
   });
 
   const formatDate = (dateString: string) => {
