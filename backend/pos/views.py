@@ -4713,9 +4713,17 @@ def invoice_mark_credit(request, pk):
             if repair:
                 submitted_repair_status = request.data.get('repair_status', None)
                 if submitted_repair_status not in (None, ''):
+                    # Respect latest UI status selection (trim + case-insensitive).
+                    submitted_norm = str(submitted_repair_status).strip().lower()
                     valid_statuses = [value for value, _ in Repair.STATUS_CHOICES]
-                    if submitted_repair_status in valid_statuses:
-                        repair.status = submitted_repair_status
+                    valid_map = {v.lower(): v for v in valid_statuses}
+                    mapped_status = valid_map.get(submitted_norm)
+                    if not mapped_status:
+                        return Response(
+                            {'error': f'repair_status must be one of: {", ".join(valid_statuses)}'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    repair.status = mapped_status
                 if 'delivery_date' in request.data:
                     v = request.data.get('delivery_date')
                     if v is None or v == '':
