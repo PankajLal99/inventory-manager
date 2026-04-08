@@ -497,8 +497,14 @@ export default function InvoiceDetail() {
   });
 
   const markCreditMutation = useMutation({
-    mutationFn: (payload: { items: any[]; delivery_date?: string | null }) =>
-      posApi.invoices.markCredit(invoiceId, { items: payload.items, ...(payload.delivery_date !== undefined && payload.delivery_date !== null && payload.delivery_date !== '' ? { delivery_date: payload.delivery_date } : {}) }),
+    mutationFn: (payload: { items: any[]; delivery_date?: string | null; repair_status?: string }) =>
+      posApi.invoices.markCredit(invoiceId, {
+        items: payload.items,
+        ...(payload.delivery_date !== undefined && payload.delivery_date !== null && payload.delivery_date !== ''
+          ? { delivery_date: payload.delivery_date }
+          : {}),
+        ...(payload.repair_status ? { repair_status: payload.repair_status } : {}),
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
@@ -4675,6 +4681,9 @@ export default function InvoiceDetail() {
                     }>
                       {repairStatusOptions.find((o) => o.value === inv.repair.status)?.label ?? inv.repair.status}
                     </Badge>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Delivery: {inv.repair.delivery_date ? formatDate(inv.repair.delivery_date) : '—'}
+                    </p>
                   </div>
                   <div className="flex-1 min-w-[160px]">
                     <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -4730,7 +4739,7 @@ export default function InvoiceDetail() {
                       {isDraftPendingCheckout && (
                         <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
                       )}
-                      {inv.repair.delivery_date && !checkoutDeliveryDate && (
+                      {inv.repair.delivery_date && (
                         <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
                       )}
                     </div>
@@ -4847,12 +4856,15 @@ export default function InvoiceDetail() {
                     return;
                   }
 
-                  const payload: { items: any[]; delivery_date?: string | null } = { items };
+                  const payload: { items: any[]; delivery_date?: string | null; repair_status?: string } = { items };
                   const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
                   const canSubmitDeliveryDate =
                     submitRepairStatus === 'done' ||
                     submitRepairStatus === 'delivered' ||
                     submitRepairStatus === 'not_repaired';
+                  if (freshInv?.repair && submitRepairStatus) {
+                    payload.repair_status = submitRepairStatus;
+                  }
                   if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate?.trim()) {
                     payload.delivery_date = checkoutDeliveryDate.trim();
                   }

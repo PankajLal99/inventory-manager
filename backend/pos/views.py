@@ -4619,6 +4619,14 @@ def invoice_mark_credit(request, pk):
         pre_mark_invoice_type = invoice.invoice_type
         pre_mark_status = invoice.status
 
+        # Idempotent behavior: if already credit, do not block with transition validation.
+        if invoice.status == 'credit' and invoice.invoice_type == 'credit':
+            serializer = InvoiceSerializer(invoice)
+            return Response(
+                {'message': 'Invoice is already marked as credit', 'invoice': serializer.data},
+                status=status.HTTP_200_OK
+            )
+
         # Allow: draft pending/credit/repair (convert or save and move),
         # or paid cash/upi/mixed (move to ledger / mark as credit).
         draft_ok = invoice.status == 'draft' and invoice.invoice_type in ('pending', 'credit', 'repair', 'pos_repair')
