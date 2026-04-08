@@ -3007,8 +3007,8 @@ def cart_checkout(request, pk):
                         discount_amount=pd, tax_amount=pt,
                         line_total=line_unit_total
                     )
-                    # Pending invoices should reserve units as in-cart; only finalized sale/credit marks sold.
-                    b_obj.tag = 'in-cart' if invoice_type == 'pending' else 'sold'
+                    # Policy: even draft pending invoices mark units as sold.
+                    b_obj.tag = 'sold'
                     b_obj.save(update_fields=['tag'])
                     invalidate_barcode_cache(b_obj)
                     
@@ -3372,6 +3372,11 @@ def invoice_detail(request, pk):
                 invoice.paid_amount = Decimal('0.00')
                 invoice.due_amount = invoice.total
                 invoice.save()
+                # Policy: pending draft invoices mark units as sold (including repair invoices).
+                for item in invoice.items.select_related('barcode').all():
+                    if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
+                        item.barcode.tag = 'sold'
+                        item.barcode.save(update_fields=['tag'])
 
             # If invoice_type changed to cash/upi/mixed, set status to paid (fully paid)
             if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed'):
@@ -3379,6 +3384,18 @@ def invoice_detail(request, pk):
                 invoice.paid_amount = invoice.total
                 invoice.due_amount = Decimal('0.00')
                 invoice.save()
+                # Finalized invoice types mark reserved units as sold.
+                for item in invoice.items.select_related('barcode').all():
+                    if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
+                        item.barcode.tag = 'sold'
+                        item.barcode.save(update_fields=['tag'])
+
+            # If invoice_type changed directly to credit via PATCH, finalize reserved units as sold.
+            if invoice_type_changed and invoice.invoice_type == 'credit':
+                for item in invoice.items.select_related('barcode').all():
+                    if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
+                        item.barcode.tag = 'sold'
+                        item.barcode.save(update_fields=['tag'])
             
             if invoice_type_changed or not update_fields.issubset(allowed_fields_for_all):
                 update_invoice_totals(invoice)
@@ -4003,10 +4020,10 @@ def invoice_checkout(request, pk):
                     product_barcode.tag = 'sold'
                     product_barcode.save()
     elif new_invoice_type == 'pending':
-        # Keep draft pending invoice barcodes reserved (not fresh, not sold).
+        # Policy: draft pending invoices also mark units as sold.
         for item in invoice.items.select_related('barcode').all():
-            if item.barcode and item.barcode.tag in ['new', 'returned', 'sold']:
-                item.barcode.tag = 'in-cart'
+            if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
+                item.barcode.tag = 'sold'
                 item.barcode.save(update_fields=['tag'])
     # Now recalculate invoice totals with actual prices
     update_invoice_totals(invoice)
@@ -4408,12 +4425,8 @@ def invoice_update(request, pk):
                 # Deduct stock for the new barcode in tracked mode
                 if invoice.store:
                     reduce_stock_for_cart_item(cart_item.product, cart_item.variant_id, invoice.store, Decimal('1.000'))
-                # Keep pending draft invoice units reserved as in-cart.
-                barcode_obj.tag = (
-                    'in-cart'
-                    if invoice.invoice_type == 'pending' and invoice.status == 'draft'
-                    else 'sold'
-                )
+                # Policy: even draft pending invoices mark units as sold.
+                barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 subtotal += line_total
                 discount_total += inv_item.discount_amount
@@ -4948,11 +4961,8 @@ def invoice_items(request, pk):
                 item.barcode = barcode_obj
                 item.save()
                 old_tag = barcode_obj.tag
-                barcode_obj.tag = (
-                    'in-cart'
-                    if invoice.invoice_type == 'pending' and invoice.status == 'draft'
-                    else 'sold'
-                )
+                # Policy: even draft pending invoices mark units as sold.
+                barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
@@ -4973,15 +4983,12 @@ def invoice_items(request, pk):
                     }
                 )
         elif item.quantity == Decimal('1.000') and item.barcode:
-            # Barcode was passed from frontend (exact scan) — reserve for pending, sold for finalized invoices
+            # Barcode was passed from frontend (exact scan) — mark as sold
             barcode_obj = item.barcode
             if barcode_obj.tag in ['new', 'returned']:
                 old_tag = barcode_obj.tag
-                barcode_obj.tag = (
-                    'in-cart'
-                    if invoice.invoice_type == 'pending' and invoice.status == 'draft'
-                    else 'sold'
-                )
+                # Policy: even draft pending invoices mark units as sold.
+                barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
