@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper
+from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
@@ -139,6 +139,22 @@ def annotate_invoice_list_profit(queryset, profile='invoice_list'):
     )
 
 
+def _with_invoice_list_prefetches(queryset):
+    """
+    Preload nested relations used by InvoiceSerializer list payloads.
+    This avoids N+1 lookups for invoice items -> product/brand/barcode pricing.
+    """
+    items_qs = InvoiceItem.objects.select_related(
+        'product__brand',
+        'barcode__purchase_item',
+    )
+    payments_qs = Payment.objects.select_related('created_by')
+    return queryset.prefetch_related(
+        Prefetch('items', queryset=items_qs),
+        Prefetch('payments', queryset=payments_qs),
+    )
+
+
 def filter_repair_invoices_by_list_date(queryset, date_from, date_to):
     """Same date logic as repair_invoices_list (created_at OR repair.updated_at OR delivery_date)."""
     if date_from and date_to:
@@ -173,7 +189,8 @@ def repair_invoices_list(request):
     queryset = Invoice.objects.filter(
         store__in=repair_stores,
         repair__isnull=False  # Only invoices with Repair records
-    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('items', 'items__barcode', 'payments')
+    ).select_related('customer', 'store', 'created_by', 'repair')
+    queryset = _with_invoice_list_prefetches(queryset)
 
     ordering_param = request.query_params.get('ordering', '-repair__updated_at')
     if ordering_param == 'created_at':
@@ -3160,7 +3177,8 @@ def cart_checkout(request, pk):
 def invoice_list_create(request):
     """List all invoices or create a new invoice"""
     if request.method == 'GET':
-        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').prefetch_related('items', 'items__barcode', 'payments').all()
+        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').all()
+        queryset = _with_invoice_list_prefetches(queryset)
         date = request.query_params.get('date', None)
         store = request.query_params.get('store', None)
         customer = request.query_params.get('customer', None)
