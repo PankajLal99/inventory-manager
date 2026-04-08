@@ -4487,16 +4487,50 @@ export default function InvoiceDetail() {
                     alert('Please add at least one product before changing invoice type.');
                     return;
                   }
+                  const nextCheckoutPrices = { ...checkoutPrices };
+                  const nextCheckoutPurchasePrices = { ...checkoutPurchasePrices };
+                  const invalidCustomPurchaseItems: string[] = [];
                   const invalidLine = currentItems.find((item: any) => {
                     const quantity = checkoutQuantities[item.id]
                       ? parseInt(checkoutQuantities[item.id]) || 0
                       : parseInt(item.quantity) || 0;
-                    const price = checkoutPrices[item.id]
-                      ? parseFloat(checkoutPrices[item.id])
-                      : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+                    const existingSell = checkoutPrices[item.id];
+                    const fallbackSell = (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+                    const price = existingSell ? parseFloat(existingSell) : fallbackSell;
+                    if (!existingSell && fallbackSell > 0) {
+                      nextCheckoutPrices[item.id] = String(fallbackSell);
+                    }
+
+                    const isCustomProduct = item.product_name?.startsWith('Other -');
+                    if (isCustomProduct) {
+                      const existingPurchase = checkoutPurchasePrices[item.id];
+                      const fallbackPurchase =
+                        item.product_purchase_price != null
+                          ? parseFloat(item.product_purchase_price)
+                          : item.purchase_price != null
+                            ? parseFloat(item.purchase_price)
+                            : 0;
+                      if (!existingPurchase && fallbackPurchase > 0) {
+                        nextCheckoutPurchasePrices[item.id] = String(fallbackPurchase);
+                      }
+                      const effectivePurchase = existingPurchase ? parseFloat(existingPurchase) : fallbackPurchase;
+                      if (!(effectivePurchase > 0)) {
+                        invalidCustomPurchaseItems.push(item.product_name || 'Custom Product');
+                        return true;
+                      }
+                    }
+
                     const lineTotal = quantity * price;
                     return !(lineTotal > 0);
                   });
+
+                  setCheckoutPrices(nextCheckoutPrices);
+                  setCheckoutPurchasePrices(nextCheckoutPurchasePrices);
+
+                  if (invalidCustomPurchaseItems.length > 0) {
+                    alert(`Please enter purchase price (> 0) for custom product(s): ${invalidCustomPurchaseItems.join(', ')}`);
+                    return;
+                  }
                   if (invalidLine) {
                     alert('Each product line total must be greater than 0 before changing invoice type.');
                     return;
