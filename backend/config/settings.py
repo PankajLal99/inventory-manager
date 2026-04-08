@@ -247,12 +247,16 @@ LOGGING = {
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
+            '()': 'backend.config.logging_formatters.ISTFormatter',
             'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
             'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
         },
         'simple': {
+            '()': 'backend.config.logging_formatters.ISTFormatter',
             'format': '{levelname} {asctime} {message}',
             'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
         },
     },
     'filters': {
