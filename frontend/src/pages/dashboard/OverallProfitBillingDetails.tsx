@@ -85,6 +85,38 @@ export default function OverallProfitBillingDetails() {
     setCollapsedStoreIds(new Set());
   }, [billingMonth]);
 
+  const dayWiseProfitRows = useMemo(() => {
+    const stores = data?.stores ?? [];
+    const byDate = new Map<string, { date: string; repairProfit: number; retailProfit: number }>();
+    stores.forEach((store) => {
+      (store.invoices ?? []).forEach((inv) => {
+        if (!inv.created_at) return;
+        const date = inv.created_at.slice(0, 10);
+        const existing = byDate.get(date) ?? { date, repairProfit: 0, retailProfit: 0 };
+        if (inv.source === 'repair') {
+          existing.repairProfit += Number(inv.profit || 0);
+        } else {
+          existing.retailProfit += Number(inv.profit || 0);
+        }
+        byDate.set(date, existing);
+      });
+    });
+    return Array.from(byDate.values()).sort((a, b) => b.date.localeCompare(a.date));
+  }, [data?.stores]);
+
+  const dayWiseProfitTotals = useMemo(
+    () =>
+      dayWiseProfitRows.reduce(
+        (acc, row) => {
+          acc.repairProfit += row.repairProfit;
+          acc.retailProfit += row.retailProfit;
+          return acc;
+        },
+        { repairProfit: 0, retailProfit: 0 },
+      ),
+    [dayWiseProfitRows],
+  );
+
   return (
     <div className="min-h-screen bg-gray-50 pb-8">
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10 px-4 py-4 sm:px-6">
@@ -127,6 +159,51 @@ export default function OverallProfitBillingDetails() {
           </div>
         ) : (
           <>
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                <h2 className="text-sm font-semibold text-gray-900">Day-wise Profit (Repair vs Retail)</h2>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50/80">
+                      <th className="px-4 py-2.5 font-medium text-gray-700">Date</th>
+                      <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Repair Profit</th>
+                      <th className="px-4 py-2.5 font-medium text-gray-700 text-right">Retail Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {dayWiseProfitRows.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-3 text-gray-500" colSpan={3}>No day-wise profit data available.</td>
+                      </tr>
+                    ) : (
+                      dayWiseProfitRows.map((row) => (
+                        <tr key={row.date} className="hover:bg-gray-50/80">
+                          <td className="px-4 py-2.5 text-gray-700">{formatDateDDMMYYYY(row.date)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">₹{formatNumber(row.repairProfit, 2)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">₹{formatNumber(row.retailProfit, 2)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {dayWiseProfitRows.length > 0 && (
+                    <tfoot>
+                      <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
+                        <td className="px-4 py-2.5 text-gray-900">Total</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-gray-900">
+                          ₹{formatNumber(dayWiseProfitTotals.repairProfit, 2)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-gray-900">
+                          ₹{formatNumber(dayWiseProfitTotals.retailProfit, 2)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            </div>
+
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <p className="text-sm text-gray-600 flex items-center gap-1">
                 <Calendar className="h-4 w-4" />
