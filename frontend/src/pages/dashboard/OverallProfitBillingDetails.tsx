@@ -11,6 +11,7 @@ type InvoiceRow = {
   invoice_type: string;
   status: string;
   created_at: string | null;
+  activity_date?: string | null;
   customer_name: string;
   total: number;
   paid_amount: number;
@@ -117,8 +118,9 @@ export default function OverallProfitBillingDetails() {
     const byDate = new Map<string, { date: string; repairProfit: number; retailProfit: number; isHoliday: boolean; holidayLabel: string | null }>();
     stores.forEach((store) => {
       (store.invoices ?? []).forEach((inv) => {
-        if (!inv.created_at) return;
-        const date = inv.created_at.slice(0, 10);
+        const bucketDate = inv.activity_date || inv.created_at;
+        if (!bucketDate) return;
+        const date = bucketDate.slice(0, 10);
         if (!isDateWithinRange(date, rangeFrom, rangeTo)) return;
         const existing = byDate.get(date) ?? { date, repairProfit: 0, retailProfit: 0, isHoliday: false, holidayLabel: null };
         if (inv.source === 'repair') {

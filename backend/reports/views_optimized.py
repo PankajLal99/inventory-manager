@@ -1190,7 +1190,7 @@ def overall_profit_billing_period_details(request):
     ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
     repair_inv = filter_repair_invoices_by_list_date(repair_inv, date_from, date_to)
     repair_qs = annotate_invoice_list_profit(repair_inv, profile='repair_list').select_related(
-        'store', 'customer'
+        'store', 'customer', 'repair'
     )
 
     invoice_ids = list(counter_qs.values_list('id', flat=True)) + list(repair_qs.values_list('id', flat=True))
@@ -1249,12 +1249,22 @@ def overall_profit_billing_period_details(request):
         nonlocal cash_total, online_total
         cash_total += inv_cash
         online_total += inv_online
+        activity_date = inv.created_at.date() if inv.created_at else None
+        if bucket_label == 'repair':
+            repair_obj = getattr(inv, 'repair', None)
+            if repair_obj and repair_obj.delivery_date and date_from <= repair_obj.delivery_date <= date_to:
+                activity_date = repair_obj.delivery_date
+            elif repair_obj and repair_obj.updated_at:
+                updated_date = repair_obj.updated_at.date()
+                if date_from <= updated_date <= date_to:
+                    activity_date = updated_date
         rec['invoices'].append({
             'id': inv.id,
             'invoice_number': inv.invoice_number,
             'invoice_type': inv.invoice_type,
             'status': inv.status,
             'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'activity_date': activity_date.isoformat() if activity_date else None,
             'customer_name': (inv.customer.name if inv.customer else '') or 'Walk-in',
             'total': float(total),
             'paid_amount': float(_decimal_or_zero(inv.paid_amount)),
