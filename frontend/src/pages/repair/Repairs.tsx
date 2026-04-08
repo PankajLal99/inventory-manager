@@ -85,8 +85,8 @@ interface RepairInvoiceItem {
 
 // Matches backend pos.models.Repair.STATUS_CHOICES
 const STATUS_OPTIONS = [
-  { value: 'received', label: 'Received' },
   { value: 'work_in_progress', label: 'Work in Progress' },
+  { value: 'received', label: 'Received' },
   { value: 'delivered', label: 'Delivered' },
   { value: 'not_repaired', label: 'Not Repaired' },
   { value: 'cancelled', label: 'Cancelled' },
