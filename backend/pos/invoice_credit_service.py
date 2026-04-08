@@ -113,6 +113,7 @@ def _apply_repair_side_effects_on_mark_credit(invoice: Invoice, request) -> None
     except Repair.DoesNotExist:
         return
     if request is not None and hasattr(request, 'data') and 'delivery_date' in request.data:
+        old_delivery_date = repair.delivery_date
         v = request.data.get('delivery_date')
         if v is None or v == '':
             repair.delivery_date = None
@@ -123,6 +124,18 @@ def _apply_repair_side_effects_on_mark_credit(invoice: Invoice, request) -> None
                 repair.delivery_date = dt.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
             except (ValueError, TypeError):
                 pass
+        if old_delivery_date != repair.delivery_date:
+            # Keep history consistent when delivery_date changes via mark-credit path
+            create_audit_log(
+                request=request,
+                action='repair_delivery_date_update',
+                model_name='Repair',
+                object_id=str(repair.id),
+                object_name=f"Repair {repair.barcode}",
+                object_reference=repair.barcode,
+                barcode=repair.barcode,
+                changes={'delivery_date': {'old': str(old_delivery_date) if old_delivery_date else None, 'new': str(repair.delivery_date) if repair.delivery_date else None}},
+            )
     if invoice.items.exists() and repair.status == 'received':
         repair.status = 'work_in_progress'
     repair.save()

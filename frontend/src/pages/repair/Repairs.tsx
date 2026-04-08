@@ -1419,7 +1419,11 @@ export default function Repairs() {
                 onChange={(e) => setEditForm((f) => ({ ...f, delivery_date: e.target.value }))}
                 placeholder="YYYY-MM-DD"
                 className="h-11"
+                disabled={editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending'}
               />
+              {editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending' && (
+                <p className="text-xs text-gray-500">Delivery date is disabled for draft pending repairs.</p>
+              )}
             </div>
             <div className="flex gap-2 pt-2">
               <Button
@@ -1430,6 +1434,9 @@ export default function Repairs() {
                     showToast('Device model is required', 'error');
                     return;
                   }
+                  if (editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending') {
+                    showToast('Delivery date cannot be set for draft pending repairs', 'error');
+                  }
                   updateRepairMutation.mutate({
                     invoiceId: editingInvoice.id,
                     data: {
@@ -1437,7 +1444,10 @@ export default function Repairs() {
                       model_name: editForm.model_name.trim(),
                       description: editForm.description.trim() || undefined,
                       booking_amount: editForm.booking_amount.trim() ? editForm.booking_amount.trim() : null,
-                      delivery_date: editForm.delivery_date.trim() ? editForm.delivery_date.trim() : null,
+                      delivery_date:
+                        editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending'
+                          ? null
+                          : (editForm.delivery_date.trim() ? editForm.delivery_date.trim() : null),
                     },
                   });
                 }}

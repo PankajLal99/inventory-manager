@@ -863,11 +863,12 @@ export default function InvoiceDetail() {
     }
   }, [showCheckoutModal, invoice?.data?.repair?.status]);
 
-  // Always prefill repair delivery date to today when checkout opens
+  // Prefill repair delivery date from existing value (do not auto-set to today)
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
-      setCheckoutDeliveryDate(getTodayDateString());
+      const existing = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
+      setCheckoutDeliveryDate(existing);
     }
   }, [showCheckoutModal, invoice?.data?.repair?.id]);
 
@@ -1016,6 +1017,7 @@ export default function InvoiceDetail() {
   const canEditItems = inv.status !== 'void';
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
+  const isDraftPendingCheckout = inv.status === 'draft' && checkoutInvoiceType === 'pending';
 
   // Group items by product only (not by barcode)
   const groupItemsByProduct = (items: any[]) => {
@@ -4559,7 +4561,11 @@ export default function InvoiceDetail() {
                       value={checkoutDeliveryDate}
                       onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
                       className="w-full"
+                      disabled={isDraftPendingCheckout}
                     />
+                    {isDraftPendingCheckout && (
+                      <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
+                    )}
                     {inv.repair.delivery_date && !checkoutDeliveryDate && (
                       <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
                     )}

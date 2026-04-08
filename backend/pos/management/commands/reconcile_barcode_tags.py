@@ -1,10 +1,11 @@
 """
 Reconcile catalog.Barcode.tag based on pos.InvoiceItem usage.
 
-Policy (aligned with POS / InvoiceEdit / InvoiceDetail / repair flows):
-- Draft pending invoice (invoice_type=pending, status=draft) -> barcode tag sold.
+Policy (aligned with POS / InvoiceEdit / InvoiceDetail flows):
+- Draft pending invoice in repair shop (store.shop_type=repair) -> barcode tag in-cart.
+- Draft pending invoice in non-repair shops -> barcode tag sold.
 - Completed sale/ledger (status in paid,partial,credit by default) -> barcode tag sold.
-- If a barcode is linked to any invoice item, it must not remain new/in-cart.
+- If a barcode is linked to any completed invoice item, it must be sold.
 
 This command is dry-run by default. Use --apply to persist changes.
 
@@ -63,8 +64,8 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--pending-only-if-current',
-            default='new,returned,in-cart',
-            help='Comma-separated current tags eligible for sold updates from pending draft usage (default: new,returned,in-cart).',
+            default='new,returned,in-cart,sold',
+            help='Comma-separated current tags eligible for pending-draft reconciliation (default: new,returned,in-cart,sold).',
         )
         parser.add_argument(
             '--limit',
@@ -85,9 +86,9 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             '--phase',
-            choices=('both', 'sold'),
+            choices=('both', 'sold', 'pending'),
             default='both',
-            help='both: reconcile completed + pending-draft to sold; sold: only completed-invoice reconciliation.',
+            help='both: completed + pending-draft; sold: only completed; pending: only pending-draft.',
         )
 
     def handle(self, *args, **options):
@@ -136,39 +137,64 @@ class Command(BaseCommand):
             ).values_list('barcode_id', flat=True).distinct()
         )
 
-        # Barcode IDs on draft pending invoices -> should be sold (same policy as completed).
-        pending_barcode_ids = set(
+        # Barcode IDs on draft pending invoices, split by shop type.
+        pending_repair_ids = set(
+            InvoiceItem.objects.filter(
+                invoice__invoice_type='pending',
+                invoice__status='draft',
+                invoice__store__shop_type='repair',
+                barcode_id__isnull=False,
+                **store_filter,
+            ).values_list('barcode_id', flat=True).distinct()
+        )
+        pending_non_repair_ids = set(
             InvoiceItem.objects.filter(
                 invoice__invoice_type='pending',
                 invoice__status='draft',
                 barcode_id__isnull=False,
                 **store_filter,
-            ).values_list('barcode_id', flat=True).distinct()
+            ).exclude(invoice__store__shop_type='repair').values_list('barcode_id', flat=True).distinct()
         )
 
-        # Both completed and pending-draft require sold.
-        pending_only_ids = pending_barcode_ids - sold_barcode_ids
+        # Completed always wins: remove any overlaps.
+        pending_repair_only = pending_repair_ids - sold_barcode_ids
+        pending_non_repair_only = pending_non_repair_ids - sold_barcode_ids
 
         sold_qs = Barcode.objects.filter(id__in=sold_barcode_ids, tag__in=eligible_sold_tags).order_by('id')
-        pending_qs = Barcode.objects.filter(id__in=pending_only_ids, tag__in=eligible_pending_tags).order_by('id')
+        pending_repair_qs = Barcode.objects.filter(id__in=pending_repair_only, tag__in=eligible_pending_tags).order_by('id')
+        pending_non_repair_qs = Barcode.objects.filter(id__in=pending_non_repair_only, tag__in=eligible_pending_tags).order_by('id')
 
         if phase == 'sold':
-            pending_qs = Barcode.objects.none()
+            pending_repair_qs = Barcode.objects.none()
+            pending_non_repair_qs = Barcode.objects.none()
+        elif phase == 'pending':
+            sold_qs = Barcode.objects.none()
 
         sold_candidates = list(sold_qs.only('id', 'barcode', 'tag'))
-        pending_candidates = list(pending_qs.only('id', 'barcode', 'tag'))
+        pending_repair_candidates = list(pending_repair_qs.only('id', 'barcode', 'tag'))
+        pending_non_repair_candidates = list(pending_non_repair_qs.only('id', 'barcode', 'tag'))
 
         if limit > 0:
             if phase == 'both':
                 sold_candidates = sold_candidates[:limit]
                 remaining = max(0, limit - len(sold_candidates))
-                pending_candidates = pending_candidates[:remaining] if remaining else []
+                if remaining:
+                    pending_repair_candidates = pending_repair_candidates[:remaining]
+                    remaining2 = max(0, remaining - len(pending_repair_candidates))
+                    pending_non_repair_candidates = pending_non_repair_candidates[:remaining2] if remaining2 else []
+                else:
+                    pending_repair_candidates = []
+                    pending_non_repair_candidates = []
             elif phase == 'sold':
                 sold_candidates = sold_candidates[:limit]
-            else:
-                pending_candidates = pending_candidates[:limit]
+                pending_repair_candidates = []
+                pending_non_repair_candidates = []
+            else:  # pending
+                pending_repair_candidates = pending_repair_candidates[:limit]
+                remaining = max(0, limit - len(pending_repair_candidates))
+                pending_non_repair_candidates = pending_non_repair_candidates[:remaining] if remaining else []
 
-        if not sold_candidates and not pending_candidates:
+        if not sold_candidates and not pending_repair_candidates and not pending_non_repair_candidates:
             self.stdout.write(
                 self.style.SUCCESS(
                     'No barcode tag changes required for the selected rules.'
@@ -177,27 +203,36 @@ class Command(BaseCommand):
             return
 
         sold_before_counts = Counter(b.tag for b in sold_candidates)
-        pending_before_counts = Counter(b.tag for b in pending_candidates)
+        pending_repair_before = Counter(b.tag for b in pending_repair_candidates)
+        pending_non_repair_before = Counter(b.tag for b in pending_non_repair_candidates)
 
         for b in sold_candidates:
             b.tag = 'sold'
-        for b in pending_candidates:
+        for b in pending_repair_candidates:
+            b.tag = 'in-cart'
+        for b in pending_non_repair_candidates:
             b.tag = 'sold'
 
         if verbose:
             self.stdout.write(self.style.WARNING('\nSample sold updates (up to 25):'))
             for b in sold_candidates[:25]:
                 self.stdout.write(f'  Barcode id={b.id} barcode={b.barcode} -> tag=sold')
-            self.stdout.write(self.style.WARNING('\nSample pending-draft sold updates (up to 25):'))
-            for b in pending_candidates[:25]:
+            self.stdout.write(self.style.WARNING('\nSample pending-draft repair updates (up to 25):'))
+            for b in pending_repair_candidates[:25]:
+                self.stdout.write(f'  Barcode id={b.id} barcode={b.barcode} -> tag=in-cart')
+            self.stdout.write(self.style.WARNING('\nSample pending-draft non-repair updates (up to 25):'))
+            for b in pending_non_repair_candidates[:25]:
                 self.stdout.write(f'  Barcode id={b.id} barcode={b.barcode} -> tag=sold')
 
         self.stdout.write('\nReconcile summary:')
         self.stdout.write(f'  Completed-linked barcode ids: {len(sold_barcode_ids)}')
-        self.stdout.write(f'  Pending-draft-linked barcode ids: {len(pending_barcode_ids)}')
-        self.stdout.write(f'  Pending-only ids (after sold priority): {len(pending_only_ids)}')
+        self.stdout.write(f'  Pending-draft repair barcode ids: {len(pending_repair_ids)}')
+        self.stdout.write(f'  Pending-draft non-repair barcode ids: {len(pending_non_repair_ids)}')
+        self.stdout.write(f'  Pending-draft repair-only ids (after sold priority): {len(pending_repair_only)}')
+        self.stdout.write(f'  Pending-draft non-repair-only ids (after sold priority): {len(pending_non_repair_only)}')
         self.stdout.write(f'  To sold: {len(sold_candidates)} from {dict(sold_before_counts)}')
-        self.stdout.write(f'  Pending-draft to sold: {len(pending_candidates)} from {dict(pending_before_counts)}')
+        self.stdout.write(f'  Pending-draft repair to in-cart: {len(pending_repair_candidates)} from {dict(pending_repair_before)}')
+        self.stdout.write(f'  Pending-draft non-repair to sold: {len(pending_non_repair_candidates)} from {dict(pending_non_repair_before)}')
         self.stdout.write(f'  Limit: {limit or "none"}')
 
         if not apply_changes:
@@ -207,13 +242,16 @@ class Command(BaseCommand):
         with transaction.atomic():
             if sold_candidates:
                 Barcode.objects.bulk_update(sold_candidates, ['tag'], batch_size=1000)
-            if pending_candidates:
-                Barcode.objects.bulk_update(pending_candidates, ['tag'], batch_size=1000)
+            if pending_repair_candidates:
+                Barcode.objects.bulk_update(pending_repair_candidates, ['tag'], batch_size=1000)
+            if pending_non_repair_candidates:
+                Barcode.objects.bulk_update(pending_non_repair_candidates, ['tag'], batch_size=1000)
 
         self.stdout.write(
             self.style.SUCCESS(
-                f'Updated {len(sold_candidates)} completed-linked barcode(s) to tag=sold and '
-                f'{len(pending_candidates)} pending-draft-linked barcode(s) to tag=sold.'
+                f'Updated {len(sold_candidates)} completed-linked barcode(s) to tag=sold, '
+                f'{len(pending_repair_candidates)} repair pending-draft barcode(s) to tag=in-cart, and '
+                f'{len(pending_non_repair_candidates)} non-repair pending-draft barcode(s) to tag=sold.'
             )
         )
 

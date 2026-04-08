@@ -380,7 +380,9 @@ def update_repair_status(request, pk):
 def update_repair(request, pk):
     """Update repair registration details (contact_no, model_name, description, booking_amount, delivery_date)."""
     repair = get_object_or_404(Repair, invoice_id=pk)
+    invoice = repair.invoice
     allowed = ('contact_no', 'model_name', 'description', 'booking_amount', 'delivery_date')
+    old_values = {k: getattr(repair, k, None) for k in allowed}
     for key in allowed:
         if key in request.data:
             value = request.data[key]
@@ -393,6 +395,10 @@ def update_repair(request, pk):
                     except (InvalidOperation, TypeError):
                         pass
             elif key == 'delivery_date':
+                # Draft + pending invoices must not store a delivery date
+                if invoice.status == 'draft' and invoice.invoice_type == 'pending':
+                    setattr(repair, key, None)
+                    continue
                 if value is None or value == '':
                     setattr(repair, key, None)
                 else:
@@ -405,6 +411,14 @@ def update_repair(request, pk):
                 setattr(repair, key, value if value is not None else '')
     repair.updated_by = request.user
     repair.save()
+
+    changes = {}
+    for k in allowed:
+        if k in request.data:
+            before = old_values.get(k)
+            after = getattr(repair, k, None)
+            if before != after:
+                changes[k] = {'old': str(before) if before is not None else None, 'new': str(after) if after is not None else None}
     create_audit_log(
         request=request,
         action='repair_update',
@@ -413,6 +427,7 @@ def update_repair(request, pk):
         object_name=f"Repair {repair.barcode}",
         object_reference=repair.barcode,
         barcode=repair.barcode,
+        changes=changes or None,
     )
     serializer = RepairSerializer(repair)
     return Response(serializer.data)
@@ -3007,8 +3022,15 @@ def cart_checkout(request, pk):
                         discount_amount=pd, tax_amount=pt,
                         line_total=line_unit_total
                     )
-                    # Policy: even draft pending invoices mark units as sold.
-                    b_obj.tag = 'sold'
+                    # Shop-specific policy:
+                    # - repair pending draft -> in-cart (reserved)
+                    # - retail/wholesale/etc pending draft -> sold
+                    # - all finalized invoices -> sold
+                    is_repair_shop = bool(cart.store and (cart.store.shop_type or '').lower() == 'repair')
+                    if invoice_type == 'pending' and is_repair_shop:
+                        b_obj.tag = 'in-cart'
+                    else:
+                        b_obj.tag = 'sold'
                     b_obj.save(update_fields=['tag'])
                     invalidate_barcode_cache(b_obj)
                     
@@ -3372,11 +3394,21 @@ def invoice_detail(request, pk):
                 invoice.paid_amount = Decimal('0.00')
                 invoice.due_amount = invoice.total
                 invoice.save()
-                # Policy: pending draft invoices mark units as sold (including repair invoices).
+                # Shop-specific policy for pending draft:
+                # - repair -> in-cart
+                # - non-repair -> sold
+                is_repair_shop = bool(invoice.store and (invoice.store.shop_type or '').lower() == 'repair')
                 for item in invoice.items.select_related('barcode').all():
-                    if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
-                        item.barcode.tag = 'sold'
-                        item.barcode.save(update_fields=['tag'])
+                    if not item.barcode:
+                        continue
+                    if is_repair_shop:
+                        if item.barcode.tag in ['new', 'returned', 'sold']:
+                            item.barcode.tag = 'in-cart'
+                            item.barcode.save(update_fields=['tag'])
+                    else:
+                        if item.barcode.tag in ['new', 'returned', 'in-cart']:
+                            item.barcode.tag = 'sold'
+                            item.barcode.save(update_fields=['tag'])
 
             # If invoice_type changed to cash/upi/mixed, set status to paid (fully paid)
             if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed'):
@@ -4020,11 +4052,21 @@ def invoice_checkout(request, pk):
                     product_barcode.tag = 'sold'
                     product_barcode.save()
     elif new_invoice_type == 'pending':
-        # Policy: draft pending invoices also mark units as sold.
+        # Shop-specific policy for pending draft:
+        # - repair -> in-cart
+        # - non-repair -> sold
+        is_repair_shop = bool(invoice.store and (invoice.store.shop_type or '').lower() == 'repair')
         for item in invoice.items.select_related('barcode').all():
-            if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
-                item.barcode.tag = 'sold'
-                item.barcode.save(update_fields=['tag'])
+            if not item.barcode:
+                continue
+            if is_repair_shop:
+                if item.barcode.tag in ['new', 'returned', 'sold']:
+                    item.barcode.tag = 'in-cart'
+                    item.barcode.save(update_fields=['tag'])
+            else:
+                if item.barcode.tag in ['new', 'returned', 'in-cart']:
+                    item.barcode.tag = 'sold'
+                    item.barcode.save(update_fields=['tag'])
     # Now recalculate invoice totals with actual prices
     update_invoice_totals(invoice)
     invoice.refresh_from_db()
@@ -4209,7 +4251,10 @@ def invoice_checkout(request, pk):
     try:
         repair = invoice.repair
         if repair:
-            if 'delivery_date' in request.data:
+            # Draft + pending invoices must not store a delivery date (prevents UI auto-fill bugs)
+            allow_delivery_date = not (invoice.status == 'draft' and invoice.invoice_type == 'pending')
+            if allow_delivery_date and 'delivery_date' in request.data:
+                old_delivery_date = repair.delivery_date
                 v = request.data.get('delivery_date')
                 if v is None or v == '':
                     repair.delivery_date = None
@@ -4219,6 +4264,17 @@ def invoice_checkout(request, pk):
                         repair.delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
                     except (ValueError, TypeError):
                         pass
+                if old_delivery_date != repair.delivery_date:
+                    create_audit_log(
+                        request=request,
+                        action='repair_delivery_date_update',
+                        model_name='Repair',
+                        object_id=str(repair.id),
+                        object_name=f"Repair {repair.barcode}",
+                        object_reference=repair.barcode,
+                        barcode=repair.barcode,
+                        changes={'delivery_date': {'old': str(old_delivery_date) if old_delivery_date else None, 'new': str(repair.delivery_date) if repair.delivery_date else None}},
+                    )
             if invoice.items.exists() and repair.status == 'received':
                 repair.status = 'work_in_progress'
             repair.save()
@@ -4425,8 +4481,12 @@ def invoice_update(request, pk):
                 # Deduct stock for the new barcode in tracked mode
                 if invoice.store:
                     reduce_stock_for_cart_item(cart_item.product, cart_item.variant_id, invoice.store, Decimal('1.000'))
-                # Policy: even draft pending invoices mark units as sold.
-                barcode_obj.tag = 'sold'
+                # Shop-specific policy: repair pending draft -> in-cart else sold.
+                is_repair_shop = bool(invoice.store and (invoice.store.shop_type or '').lower() == 'repair')
+                if invoice.invoice_type == 'pending' and invoice.status == 'draft' and is_repair_shop:
+                    barcode_obj.tag = 'in-cart'
+                else:
+                    barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 subtotal += line_total
                 discount_total += inv_item.discount_amount
@@ -4961,8 +5021,12 @@ def invoice_items(request, pk):
                 item.barcode = barcode_obj
                 item.save()
                 old_tag = barcode_obj.tag
-                # Policy: even draft pending invoices mark units as sold.
-                barcode_obj.tag = 'sold'
+                # Shop-specific policy: repair pending draft -> in-cart else sold.
+                is_repair_shop = bool(invoice.store and (invoice.store.shop_type or '').lower() == 'repair')
+                if invoice.invoice_type == 'pending' and invoice.status == 'draft' and is_repair_shop:
+                    barcode_obj.tag = 'in-cart'
+                else:
+                    barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
@@ -4983,12 +5047,15 @@ def invoice_items(request, pk):
                     }
                 )
         elif item.quantity == Decimal('1.000') and item.barcode:
-            # Barcode was passed from frontend (exact scan) — mark as sold
+            # Barcode was passed from frontend (exact scan) — shop-specific policy for pending draft
             barcode_obj = item.barcode
             if barcode_obj.tag in ['new', 'returned']:
                 old_tag = barcode_obj.tag
-                # Policy: even draft pending invoices mark units as sold.
-                barcode_obj.tag = 'sold'
+                is_repair_shop = bool(invoice.store and (invoice.store.shop_type or '').lower() == 'repair')
+                if invoice.invoice_type == 'pending' and invoice.status == 'draft' and is_repair_shop:
+                    barcode_obj.tag = 'in-cart'
+                else:
+                    barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
                 create_audit_log(
                     request=request,
