@@ -138,9 +138,7 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   not_repaired: 'bg-orange-600',
   cancelled: 'bg-red-600',
   other: 'bg-gray-400',
-  old_repair: 'bg-violet-600', // static UI section: repairs not from today and not delivered
 };
-const OLD_REPAIR_MAX_ROWS = 100;
 
 /** Sort repair invoices by status for table display, then by most recently updated within each status. */
 function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; updated_at?: string } | null; created_at?: string }>(items: T[]): T[] {
@@ -199,8 +197,6 @@ export default function Repairs() {
   const [lastRegenerateAt, setLastRegenerateAt] = useState<Record<number, number>>({});
   // Not Repaired section collapsed by default
   const [notRepairedCollapsed, setNotRepairedCollapsed] = useState(true);
-  // Old Repair section collapsed by default
-  const [oldRepairCollapsed, setOldRepairCollapsed] = useState(true);
   // Date filter for each status group (independent controls)
   const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>({});
   const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
@@ -463,26 +459,6 @@ export default function Repairs() {
   const canSeeSuperMetrics = (user?.groups || []).includes('Super');
   const canSeeTotalColumn = canSeeSuperMetrics;
 
-  const hasDeliveredDateFilter = !!groupDateFilters.delivered;
-  const deliveredDateValues = filteredRepairs
-    .filter((inv) => inv.repair?.status === 'delivered')
-    .map((inv) => toLocalDateString(getRepairDisplayDate(inv)))
-    .filter(Boolean);
-  const latestDeliveredDate = deliveredDateValues.length > 0
-    ? deliveredDateValues.reduce((latest, d) => (d > latest ? d : latest), deliveredDateValues[0])
-    : '';
-
-  // Old Repair: only delivered AND not from today.
-  // Intentionally capped to keep this historical section lightweight.
-  const oldRepairItems = hasDeliveredDateFilter
-    ? []
-    : filteredRepairs.filter((inv) => {
-      const status = inv.repair?.status;
-      if (status !== 'delivered') return false;
-      const deliveredDate = toLocalDateString(getRepairDisplayDate(inv));
-      if (!latestDeliveredDate) return false;
-      return deliveredDate !== latestDeliveredDate;
-    }).slice(0, OLD_REPAIR_MAX_ROWS);
   // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
   const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
 
@@ -493,14 +469,6 @@ export default function Repairs() {
     label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
     items: filteredRepairs.filter((inv) => {
       if (inv.repair?.status !== status) return false;
-      // For delivered:
-      // - default view: keep only latest delivered date items here
-      // - if delivered date filter is selected: allow all delivered so date can match history
-      if (status === 'delivered') {
-        if (hasDeliveredDateFilter) return true;
-        if (!latestDeliveredDate) return false;
-        return toLocalDateString(getRepairDisplayDate(inv)) === latestDeliveredDate;
-      }
       return true;
     }),
   }));
@@ -515,8 +483,6 @@ export default function Repairs() {
   const groupsWithItems = [
     ...statusGroups,
     ...(otherItems.length > 0 ? [{ status: 'other', label: 'Other', items: otherItems }] : []),
-    // Old Repair: delivered repairs only
-    ...(oldRepairItems.length > 0 ? [{ status: 'old_repair', label: 'Old Repair', items: oldRepairItems }] : []),
     // Not Repaired: one group at the very end, collapsed by default (today + old)
     ...(allNotRepaired.length > 0
       ? [{ status: 'not_repaired', label: 'Not Repaired', items: allNotRepaired }]
@@ -890,10 +856,7 @@ export default function Repairs() {
         <div className="space-y-8">
           {groupsWithItems.map((group) => {
             const isNotRepairedGroup = group.status === 'not_repaired';
-            const isOldRepairGroup = group.status === 'old_repair';
-            const isCollapsed =
-              (isNotRepairedGroup && notRepairedCollapsed) ||
-              (isOldRepairGroup && oldRepairCollapsed);
+            const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
             const hasGroupDateSelector = group.status === 'delivered';
             const selectedGroupDate = hasGroupDateSelector
               ? getGroupSelectedDate(group.status, group.items)
@@ -907,16 +870,14 @@ export default function Repairs() {
             <div key={group.status} className="space-y-4">
               <div className="flex flex-col gap-1 px-2">
                 <div
-                  className={`flex items-center gap-3 ${(isNotRepairedGroup || isOldRepairGroup) ? 'cursor-pointer select-none' : ''}`}
+                  className={`flex items-center gap-3 ${isNotRepairedGroup ? 'cursor-pointer select-none' : ''}`}
                   onClick={
                     isNotRepairedGroup
                       ? () => setNotRepairedCollapsed((c) => !c)
-                      : isOldRepairGroup
-                        ? () => setOldRepairCollapsed((c) => !c)
-                        : undefined
+                      : undefined
                   }
                 >
-                  {(isNotRepairedGroup || isOldRepairGroup) && (
+                  {isNotRepairedGroup && (
                     <span className="text-gray-500">
                       {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
                     </span>
@@ -941,9 +902,6 @@ export default function Repairs() {
                     </div>
                   )}
                 </div>
-                {group.status === 'old_repair' && (
-                  <p className="text-sm text-gray-500 ml-5">Delivered repairs (old) - click to expand</p>
-                )}
                 {isNotRepairedGroup && (
                   <p className="text-sm text-gray-500 ml-5">Click to expand</p>
                 )}
