@@ -12,6 +12,7 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
+from datetime import datetime
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses
 from backend.catalog.barcode_resolution import (
@@ -422,7 +423,6 @@ def update_repair(request, pk):
                 if value is None or value == '':
                     setattr(repair, key, None)
                 else:
-                    from datetime import datetime
                     try:
                         setattr(repair, key, datetime.strptime(value, '%Y-%m-%d').date())
                     except (ValueError, TypeError):
@@ -4318,7 +4318,6 @@ def invoice_checkout(request, pk):
                     repair.delivery_date = None
                 else:
                     try:
-                        from datetime import datetime
                         repair.delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
                     except (ValueError, TypeError):
                         pass
@@ -4730,7 +4729,6 @@ def invoice_mark_credit(request, pk):
                         repair.delivery_date = None
                     else:
                         try:
-                            from datetime import datetime
                             repair.delivery_date = datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
                         except (ValueError, TypeError):
                             pass
