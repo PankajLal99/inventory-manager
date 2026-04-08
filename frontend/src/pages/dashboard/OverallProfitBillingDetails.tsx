@@ -101,7 +101,8 @@ export default function OverallProfitBillingDetails() {
         byDate.set(date, existing);
       });
     });
-    return Array.from(byDate.values()).sort((a, b) => b.date.localeCompare(a.date));
+    // Keep day-wise table in chronological order by date.
+    return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
   }, [data?.stores]);
 
   const dayWiseProfitTotals = useMemo(
