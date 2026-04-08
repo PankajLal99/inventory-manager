@@ -862,8 +862,9 @@ export default function Repairs() {
           {groupsWithItems.map((group) => {
             const isNotRepairedGroup = group.status === 'not_repaired';
             const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
-            // When status filter is active, show all rows for that status (no date slicing).
-            const hasGroupDateSelector = group.status === 'delivered' && !statusFilter;
+            // When status or search filters are active, show all rows (no date slicing).
+            const hasAnySearch = Boolean(search.trim()) || Boolean(barcodeSearch.trim());
+            const hasGroupDateSelector = group.status === 'delivered' && !statusFilter && !hasAnySearch;
             const selectedGroupDate = hasGroupDateSelector
               ? getGroupSelectedDate(group.status, group.items)
               : '';
