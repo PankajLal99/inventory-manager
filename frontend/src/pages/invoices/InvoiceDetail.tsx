@@ -1328,6 +1328,23 @@ export default function InvoiceDetail() {
     // Get fresh invoice data
     const freshInvoice = queryClient.getQueryData(['invoice', invoiceId]) as any;
     const freshInv = freshInvoice?.data;
+    const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
+    const canSavePendingNotRepairedWithoutItems =
+      !!freshInv?.repair && checkoutInvoiceType === 'pending' && submitRepairStatus === 'not_repaired';
+
+    if ((!freshInv?.items || freshInv.items.length === 0) && canSavePendingNotRepairedWithoutItems) {
+      try {
+        await posApi.repair.updateStatus(invoiceId, { repair_status: 'not_repaired' });
+        await posApi.repair.update(invoiceId, { delivery_date: null });
+        await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+        queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+        setShowCheckoutModal(false);
+        return;
+      } catch (error: any) {
+        alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to save repair status');
+        return;
+      }
+    }
 
     if (!freshInv?.items || freshInv.items.length === 0) {
       alert('Invoice has no items');
@@ -1433,12 +1450,12 @@ export default function InvoiceDetail() {
       }
     }
 
-    // Repair checkout: if finalizing invoice (changing type), ensure repair status is not left as WIP or received
+    // Repair checkout: if changing to non-pending, only Delivered is allowed.
     if (freshInv?.repair && checkoutInvoiceType !== freshInv.invoice_type) {
       const newStatus = (checkoutRepairStatus ?? '').trim();
 
-      if (newStatus === 'received' || newStatus === 'work_in_progress') {
-        alert('You changed the invoice type. Please update the repair status to Delivered or Not Repaired before completing checkout.');
+      if (checkoutInvoiceType !== 'pending' && newStatus !== 'delivered') {
+        alert('You changed the invoice type. Please update the repair status to Delivered before completing checkout.');
         return;
       }
     }
@@ -1463,7 +1480,6 @@ export default function InvoiceDetail() {
     }
 
     // Include repair delivery date when invoice is a repair (from repair model, can be set/updated at checkout)
-    const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
     const canSubmitDeliveryDate =
       submitRepairStatus === 'done' ||
       submitRepairStatus === 'delivered' ||
@@ -4715,9 +4731,8 @@ export default function InvoiceDetail() {
                             }
                             return !!opt.disabled && opt.value === inv.repair.status;
                           }
-                          // Keep previous behavior: when invoice type is NOT pending,
-                          // only allow selecting a terminal status during checkout.
-                          return opt.value === 'delivered' || opt.value === 'not_repaired';
+                          // When invoice type is NOT pending, only Delivered can be selected.
+                          return opt.value === 'delivered';
                         })
                         .map((opt) => (
                           <option key={opt.value} value={opt.value} disabled={!!opt.disabled}>
@@ -4877,7 +4892,15 @@ export default function InvoiceDetail() {
               </Button>
               <Button
                 onClick={handleCheckoutSubmit}
-                disabled={checkoutMutation.isPending || markCreditMutation.isPending || checkoutInvoiceType === 'credit' || !inv?.items || inv.items.length === 0}
+                disabled={
+                  checkoutMutation.isPending ||
+                  markCreditMutation.isPending ||
+                  checkoutInvoiceType === 'credit' ||
+                  (
+                    (!inv?.items || inv.items.length === 0) &&
+                    !(inv?.repair && checkoutInvoiceType === 'pending' && (checkoutRepairStatus || inv.repair?.status || '').trim() === 'not_repaired')
+                  )
+                }
                 className="w-full sm:w-auto"
               >
                 {checkoutMutation.isPending ? 'Processing...' : 'Complete Checkout'}
