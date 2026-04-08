@@ -1278,7 +1278,8 @@ export default function InvoiceDetail() {
     setParentGroupPrices(initialParentPrices);
     setCheckoutPurchasePrices(initialPurchasePrices);
     setCheckoutPriceErrors({}); // Clear any previous errors
-    setCheckoutInvoiceType('pending'); // Default to pending (draft saving)
+    // Preserve current invoice type when opening from Repairs or existing invoice context.
+    setCheckoutInvoiceType(inv?.invoice_type || 'pending');
     setShowCheckoutModal(true);
   };
 

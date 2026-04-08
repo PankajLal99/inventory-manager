@@ -371,6 +371,9 @@ def update_repair_status(request, pk):
     
     old_status = repair.status
     repair.status = new_status
+    # Keep delivered repairs consistent: ensure a delivery date exists.
+    if new_status == 'delivered' and not repair.delivery_date:
+        repair.delivery_date = timezone.now().date()
     repair.updated_by = request.user
     repair.save()
     
@@ -4264,6 +4267,8 @@ def invoice_checkout(request, pk):
                 if submitted_repair_status in valid_statuses and submitted_repair_status != repair.status:
                     old_status = repair.status
                     repair.status = submitted_repair_status
+                    if submitted_repair_status == 'delivered' and not repair.delivery_date:
+                        repair.delivery_date = timezone.now().date()
                     create_audit_log(
                         request=request,
                         action='repair_status_update',
@@ -4580,12 +4585,13 @@ def invoice_mark_credit(request, pk):
         pre_mark_invoice_type = invoice.invoice_type
         pre_mark_status = invoice.status
 
-        # Allow: draft pending/credit (convert or save and move), or paid cash/upi/mixed (move to ledger / mark as credit)
-        draft_ok = invoice.status == 'draft' and invoice.invoice_type in ('pending', 'credit')
+        # Allow: draft pending/credit/repair (convert or save and move),
+        # or paid cash/upi/mixed (move to ledger / mark as credit).
+        draft_ok = invoice.status == 'draft' and invoice.invoice_type in ('pending', 'credit', 'repair', 'pos_repair')
         paid_ok = invoice.status == 'paid' and invoice.invoice_type in ('cash', 'upi', 'mixed')
         if not (draft_ok or paid_ok):
             return Response(
-                {'error': 'Only draft pending, draft credit, or paid (cash/upi/mixed) invoices can be marked as credit'},
+                {'error': 'Only draft pending/credit/repair or paid (cash/upi/mixed) invoices can be marked as credit'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
