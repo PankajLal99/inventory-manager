@@ -262,7 +262,9 @@ export default function Repairs() {
       const response = await posApi.repair.invoices.list(params);
       return response.data;
     },
-    enabled: true,
+    // Avoid an initial unscoped fetch before repair store is resolved.
+    // Allow fetch without store only when user is actively searching.
+    enabled: Boolean(repairStore?.id) || Boolean(search.trim()) || Boolean(barcodeSearch.trim()),
     placeholderData: keepPreviousData,
     retry: false,
   });
