@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { useState } from 'react';
 import { ArrowLeft, Calendar, RefreshCw, TrendingUp } from 'lucide-react';
 import { reportsApi } from '../../lib/api';
 import { formatDateDDMMYYYY, formatNumber } from '../../lib/utils';
-import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
-import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 type ClearedInvoiceRow = {
   id: number;
@@ -29,16 +28,29 @@ type ClearedStoreGroup = {
   invoices: ClearedInvoiceRow[];
 };
 
+const toMonthInput = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+function currentBillingMonthLabel(): string {
+  const now = new Date();
+  if (now.getDate() >= 11) return toMonthInput(now);
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return toMonthInput(prev);
+}
+
+function formatBillingMonthLabel(yyyyMm: string): string {
+  const d = new Date(`${yyyyMm}-01T12:00:00`);
+  if (Number.isNaN(d.getTime())) return yyyyMm;
+  return d.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+}
+
 export default function WholesalePendingClearedDetails() {
-  const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
-  const dateRange = { startDate: dateFrom, endDate: dateTo };
+  const [billingMonth, setBillingMonth] = useState(currentBillingMonthLabel);
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['wholesale-pending-cleared-details', dateFrom, dateTo],
+    queryKey: ['wholesale-pending-cleared-details', billingMonth],
     queryFn: async () => {
       const response = await reportsApi.wholesalePendingClearedDetails({
-        date_from: dateFrom,
-        date_to: dateTo,
+        billing_month: billingMonth,
       });
       return response.data as {
         period: { from: string; to: string };
@@ -66,15 +78,20 @@ export default function WholesalePendingClearedDetails() {
             </Link>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mt-2">Wholesale Pending Cleared Details</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Uses billing window containing selected range end date (11th → 10th).
+              Billing window: {formatBillingMonthLabel(billingMonth)} (11th to 10th).
             </p>
           </div>
-          <DateRangeSelector
-            preset={datePreset}
-            value={dateRange}
-            onChange={setListDateRange}
-            className="w-full sm:w-[360px]"
-          />
+          <div className="w-full sm:w-auto min-w-[220px]">
+            <label className="text-xs text-gray-600">
+              Billing month
+              <input
+                type="month"
+                value={billingMonth}
+                onChange={(e) => setBillingMonth(e.target.value)}
+                className="mt-1 block w-full rounded-lg border border-gray-300 px-2.5 py-2 text-sm"
+              />
+            </label>
+          </div>
         </div>
       </div>
 

@@ -1017,16 +1017,25 @@ def wholesale_pending_cleared_details(request):
     """
     Detailed rows for Dashboard KPI: Wholesale pending cleared in period (billing window containing date_to).
     """
+    billing_month = request.query_params.get('billing_month')
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
+    if billing_month:
+        month_start = _billing_period_start_from_yyyy_mm(billing_month)
+        if not month_start:
+            return Response({'detail': 'Invalid billing_month format. Use YYYY-MM.'}, status=400)
+        date_from = month_start
+        date_to = _billing_period_end_for_start(month_start)
     if not date_from:
         date_from = timezone.now().date()
     else:
-        date_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+        if isinstance(date_from, str):
+            date_from = datetime.strptime(date_from, '%Y-%m-%d').date()
     if not date_to:
         date_to = timezone.now().date()
     else:
-        date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+        if isinstance(date_to, str):
+            date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
 
     money = DecimalField(max_digits=18, decimal_places=2)
     pending_line_cost = _invoice_item_pending_line_cost_case(money)
