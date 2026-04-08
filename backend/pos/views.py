@@ -2477,11 +2477,7 @@ def cart_unhold(request, pk):
     return Response({'status': 'active'})
 
 
-def _pos_trade_in_customers_match(source_customer_id, expected_customer_id):
-    return (source_customer_id or None) == (expected_customer_id or None)
-
-
-def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, expected_customer_id, scanned_barcode=None):
+def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, scanned_barcode=None):
     """
     Remove one invoice line from a prior sale, restore stock (unless defective), update source invoice.
     Returns dict: credit (Decimal), detail (for JSON on new invoice).
@@ -2498,12 +2494,6 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, e
     product = invoice_item.product
     variant = invoice_item.variant
     barcode_obj = resolve_invoice_item_barcode(invoice_item, scanned_override=scanned_barcode)
-
-    if not _pos_trade_in_customers_match(invoice.customer_id, expected_customer_id):
-        raise ValueError(
-            'Trade-in item belongs to a different customer than this sale. '
-            'Select the same customer or remove the trade-in line.'
-        )
 
     if invoice.status == 'void':
         raise ValueError('Cannot trade in from a void invoice')
@@ -2801,7 +2791,6 @@ def process_pos_trade_ins_for_checkout(request, trade_ins_raw, customer_id, stor
             invoice_item_id=iid,
             return_tag=str(tag),
             store_id=store_id,
-            expected_customer_id=int(customer_id),
             scanned_barcode=raw.get('scanned_barcode'),
         )
         full_credit = result['credit']
@@ -4247,10 +4236,28 @@ def invoice_checkout(request, pk):
             
         invoice.customer.save()
     
-    # If this invoice is linked to a repair: optionally update delivery_date from request; auto-set status when received
+    # If this invoice is linked to a repair: optionally update status/delivery_date; auto-set status when received
     try:
         repair = invoice.repair
         if repair:
+            submitted_repair_status = request.data.get('repair_status', None)
+            if submitted_repair_status not in (None, ''):
+                valid_statuses = [value for value, _ in Repair.STATUS_CHOICES]
+                if submitted_repair_status in valid_statuses and submitted_repair_status != repair.status:
+                    old_status = repair.status
+                    repair.status = submitted_repair_status
+                    create_audit_log(
+                        request=request,
+                        action='repair_status_update',
+                        model_name='Repair',
+                        object_id=str(repair.id),
+                        object_name=f"Repair {repair.barcode}",
+                        object_reference=repair.barcode,
+                        barcode=repair.barcode,
+                        changes={
+                            'repair_status': {'old': old_status, 'new': submitted_repair_status},
+                        }
+                    )
             # Draft + pending invoices must not store a delivery date (prevents UI auto-fill bugs)
             allow_delivery_date = not (invoice.status == 'draft' and invoice.invoice_type == 'pending')
             if allow_delivery_date and 'delivery_date' in request.data:

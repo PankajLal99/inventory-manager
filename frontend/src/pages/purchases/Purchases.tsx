@@ -19,6 +19,7 @@ import ProductForm from '../products/ProductForm';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
 import DatePicker from '../../components/ui/DatePicker';
 import PurchaseStockModal from './PurchaseStockModal';
+import { toast } from '../../lib/toast';
 
 interface PurchaseItem {
   id?: number;
@@ -1030,7 +1031,7 @@ export default function Purchases() {
         await triggerGenerateAndWait(productId, purchaseId);
         return;
       }
-      alert(error?.response?.data?.error || 'Failed to print labels. Please try again.');
+      toast(error?.response?.data?.error || 'Failed to print labels. Please try again.', 'error');
     }
   };
 
@@ -1086,13 +1087,25 @@ export default function Purchases() {
       }
       const generated = await waitForLabelsToBeGenerated(productId, pollPurchaseId);
       if (generated) {
-        alert('Labels generated successfully. You can print now.');
+        const generatedPurchaseId = pollPurchaseId ?? purchaseId;
+        try {
+          const labelsResponse = await productsApi.getLabels(productId, generatedPurchaseId);
+          if (labelsResponse.data?.labels?.length > 0) {
+            printLabelsFromResponse(labelsResponse.data);
+            toast('Labels generated and opened for printing.', 'success');
+          } else {
+            toast('Labels generated successfully.', 'success');
+          }
+        } catch (printError: any) {
+          const printErrorMsg = printError?.response?.data?.error || printError?.response?.data?.message;
+          toast(printErrorMsg || 'Labels generated successfully, but failed to open print.', 'info');
+        }
       } else {
-        alert('Label generation was triggered and is still processing. Please try Print in a few seconds.');
+        toast('Label generation was triggered and is still processing. Please try again in a few seconds.', 'info');
       }
     } catch (error: any) {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to trigger label generation';
-      alert(errorMsg);
+      toast(errorMsg, 'error');
     } finally {
       setGeneratingLabelsFor(null);
       await queryClient.invalidateQueries({ queryKey: ['label-status', productId, purchaseId] });
@@ -1113,7 +1126,12 @@ export default function Purchases() {
       queryClient.setQueryData(['label-status', productId, effectivePurchaseId], { productId, purchaseId: effectivePurchaseId, data, error: null });
       setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: false } }));
       if (total > 0) {
-        alert(`Status: ${generated} of ${total} label(s) generated.${allGenerated ? ' All ready to print.' : ''}`);
+        if (allGenerated) {
+          toast(`All labels are ready (${generated} of ${total}). Opening print.`, 'success');
+          await handlePrintLabels(productId, purchaseId);
+        } else {
+          toast(`Status: ${generated} of ${total} label(s) generated.`, 'info');
+        }
       } else {
         await triggerGenerateAndWait(productId, purchaseId);
       }
@@ -1122,7 +1140,7 @@ export default function Purchases() {
       if (error?.response?.status === 404) {
         await triggerGenerateAndWait(productId, purchaseId);
       } else {
-        alert(error?.response?.data?.error || 'Failed to check label status.');
+        toast(error?.response?.data?.error || 'Failed to check label status.', 'error');
       }
     } finally {
       setCheckingStatusFor(null);

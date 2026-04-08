@@ -240,7 +240,7 @@ export const posApi = {
     getStatusChoices: () => api.get<{ value: string; label: string }[]>('/pos/repair/status-choices/'),
     getDeviceModels: (search?: string) => api.get<{ models: string[] }>('/pos/repair/device-models/', { params: search ? { search } : {} }),
     updateStatus: (invoiceId: number, data: { repair_status: string }) => api.patch(`/pos/invoices/${invoiceId}/update-repair-status/`, data),
-    update: (invoiceId: number, data: { contact_no?: string; model_name?: string; description?: string; booking_amount?: string | null }) =>
+    update: (invoiceId: number, data: { contact_no?: string; model_name?: string; description?: string; booking_amount?: string | null; delivery_date?: string | null }) =>
       api.patch(`/pos/invoices/${invoiceId}/update-repair/`, data),
     generateLabel: (invoiceId: number) => api.post(`/pos/invoices/${invoiceId}/generate-repair-label/`),
   },
@@ -440,6 +440,8 @@ export const reportsApi = {
   customers: (params?: any) => api.get('/reports/customers/', { params }),
   stockOrdering: (params?: any) => api.get('/reports/stock-ordering/', { params }),
   dashboardKpis: (params?: any) => api.get('/reports/dashboard-kpis/', { params }),
+  overallProfitBillingPeriodDetails: (params?: any) =>
+    api.get('/reports/overall-profit-billing-period-details/', { params }),
 };
 
 // Global Search API

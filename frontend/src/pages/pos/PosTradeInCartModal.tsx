@@ -5,7 +5,7 @@ import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import { posApi } from '../../lib/api';
 import { formatNumber } from '../../lib/utils';
-import { Camera, Trash2, AlertTriangle, Search, Package } from 'lucide-react';
+import { Camera, Trash2, Search, Package } from 'lucide-react';
 
 export type PosTradeInReturnTag = 'returned' | 'defective' | 'unknown';
 
@@ -25,15 +25,6 @@ export interface PosTradeInLine {
   return_tag: PosTradeInReturnTag | null;
 }
 
-function customersAlignForTradeIn(
-  invoiceCustomerId: number | null | undefined,
-  selectedCustomerId: number | null | undefined
-): boolean {
-  const a = invoiceCustomerId ?? null;
-  const b = selectedCustomerId ?? null;
-  return a === b;
-}
-
 function randomId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -41,7 +32,6 @@ function randomId(): string {
 interface Props {
   open: boolean;
   onClose: () => void;
-  selectedCustomerId: number | null;
   lines: PosTradeInLine[];
   onLinesChange: (lines: PosTradeInLine[]) => void;
   onError: (message: string) => void;
@@ -77,7 +67,6 @@ export function isTradeInModalComplete(lines: PosTradeInLine[]): boolean {
 export default function PosTradeInCartModal({
   open,
   onClose,
-  selectedCustomerId,
   lines,
   onLinesChange,
   onError,
@@ -90,20 +79,12 @@ export default function PosTradeInCartModal({
     async (code: string) => {
       const trimmed = code.trim();
       if (!trimmed) return;
-      if (!selectedCustomerId) {
-        onError('Select a customer first — trade-ins must match the same customer as this sale.');
-        return;
-      }
       setLoading(true);
       try {
         const { data } = await posApi.replacement.findInvoiceByBarcode({ barcode: trimmed });
         const inv = data?.invoice;
         if (!inv?.items?.length) {
           onError('No matching sold item found for this barcode.');
-          return;
-        }
-        if (!customersAlignForTradeIn(inv.customer, selectedCustomerId)) {
-          onError('This item was sold to a different customer. Select the correct customer or remove the trade-in.');
           return;
         }
         const item = inv.items[0];
@@ -138,7 +119,7 @@ export default function PosTradeInCartModal({
         setLoading(false);
       }
     },
-    [lines, onError, onLinesChange, selectedCustomerId]
+    [lines, onError, onLinesChange]
   );
 
   const setTag = (id: string, tag: PosTradeInReturnTag) => {
@@ -183,7 +164,7 @@ export default function PosTradeInCartModal({
       <Modal
         isOpen={open}
         onClose={requestClose}
-        title="Trade-in / exchange (same customer)"
+        title="Trade-in / exchange"
         size="xl"
         closeOnBackdropClick={canClose}
       >
@@ -194,12 +175,6 @@ export default function PosTradeInCartModal({
             <span className="font-medium">Defective</span>. Set <span className="font-medium">Credit this sale</span> (cannot
             exceed the original line total).
           </p>
-          {!selectedCustomerId && (
-            <div className="flex items-start gap-2 text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
-              <AlertTriangle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-              <span>Select a customer on the POS before adding trade-ins.</span>
-            </div>
-          )}
           <div className="w-full rounded-xl border border-gray-200 bg-gradient-to-b from-slate-50/90 to-white px-3 py-3 sm:px-4 sm:py-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 mb-2">Find sold item</p>
             <div className="relative w-full min-w-0">
@@ -246,7 +221,7 @@ export default function PosTradeInCartModal({
             <div className="flex flex-col items-center justify-center gap-2 py-8 px-4 text-center rounded-lg border border-dashed border-gray-200 bg-gray-50/50">
               <Package className="h-10 w-10 text-gray-300" />
               <p className="text-sm font-medium text-gray-600">No exchange lines yet</p>
-              <p className="text-xs text-gray-500 max-w-sm">Search above to attach items sold to this customer.</p>
+              <p className="text-xs text-gray-500 max-w-sm">Search above to attach previously sold items.</p>
             </div>
           ) : (
             <ul className="space-y-3">

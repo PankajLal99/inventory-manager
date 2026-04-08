@@ -52,6 +52,17 @@ def _billing_period_11_to_10(today: date) -> tuple[date, date]:
     return start, end
 
 
+def _billing_period_start_from_yyyy_mm(value: str | None) -> date | None:
+    """Parse YYYY-MM and return that month's billing start (11th)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.strptime(value, '%Y-%m').date()
+    except (TypeError, ValueError):
+        return None
+    return date(dt.year, dt.month, 11)
+
+
 def _ledger_entry_cash_upi(entry) -> tuple[Decimal, Decimal]:
     """Split a manual ledger credit into cash and UPI amounts."""
     mode = entry.payment_mode or 'other'
@@ -893,6 +904,191 @@ def optimized_dashboard_kpis(request):
         'repair_profit_by_store': repair_profit_by_store,
         'manual_payments': manual_payments_rows,
         'wholesale_pending_cleared_by_month': wholesale_pending_cleared_by_month,
+    })
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def overall_profit_billing_period_details(request):
+    """
+    Detailed invoices used for "Overall profit (11th → 10th month)" KPI.
+
+    Supports:
+    - billing_month_from=YYYY-MM and billing_month_to=YYYY-MM (preferred)
+      -> range becomes from 11th of from-month to 10th of month after to-month.
+    - date_from/date_to fallback.
+    - no params -> current billing window containing today.
+    """
+    billing_month_from = request.query_params.get('billing_month_from')
+    billing_month_to = request.query_params.get('billing_month_to')
+    date_from_raw = request.query_params.get('date_from')
+    date_to_raw = request.query_params.get('date_to')
+
+    if billing_month_from and billing_month_to:
+        start = _billing_period_start_from_yyyy_mm(billing_month_from)
+        end_start = _billing_period_start_from_yyyy_mm(billing_month_to)
+        if not start or not end_start:
+            return Response({'detail': 'Invalid billing month format. Use YYYY-MM.'}, status=400)
+        date_from = start
+        date_to = _billing_period_end_for_start(end_start)
+    elif date_from_raw and date_to_raw:
+        try:
+            date_from = datetime.strptime(date_from_raw, '%Y-%m-%d').date()
+            date_to = datetime.strptime(date_to_raw, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+    else:
+        date_from, date_to = _billing_period_11_to_10(timezone.now().date())
+
+    if date_from > date_to:
+        return Response({'detail': 'date_from cannot be after date_to.'}, status=400)
+
+    money = DecimalField(max_digits=18, decimal_places=2)
+    repair_stores_all = Store.objects.filter(shop_type='repair', is_active=True)
+
+    counter_inv = Invoice.objects.filter(
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+        repair__isnull=True,
+        store__shop_type='retail',
+        invoice_type__in=['cash', 'upi', 'mixed', 'credit'],
+    ).exclude(status__in=['void', 'draft']).exclude(invoice_type='defective')
+    counter_qs = annotate_invoice_list_profit(counter_inv, profile='invoice_list').select_related(
+        'store', 'customer'
+    )
+
+    repair_inv = Invoice.objects.filter(
+        store__in=repair_stores_all,
+        repair__isnull=False,
+        repair__status__in=['done', 'delivered'],
+    ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
+    repair_inv = filter_repair_invoices_by_list_date(repair_inv, date_from, date_to)
+    repair_qs = annotate_invoice_list_profit(repair_inv, profile='repair_list').select_related(
+        'store', 'customer'
+    )
+
+    invoice_ids = list(counter_qs.values_list('id', flat=True)) + list(repair_qs.values_list('id', flat=True))
+    mixed_ids = list(
+        Invoice.objects.filter(id__in=invoice_ids, invoice_type='mixed').values_list('id', flat=True)
+    )
+    mixed_payment_rows = Payment.objects.filter(
+        invoice_id__in=mixed_ids,
+        payment_method__in=['cash', 'upi'],
+    ).values('invoice_id', 'payment_method').annotate(
+        amount=Coalesce(Sum('amount', output_field=money), Value(Decimal('0.00')), output_field=money)
+    )
+    mixed_split_map: dict[int, dict[str, Decimal]] = {}
+    for row in mixed_payment_rows:
+        iid = row['invoice_id']
+        if iid not in mixed_split_map:
+            mixed_split_map[iid] = {'cash': Decimal('0.00'), 'upi': Decimal('0.00')}
+        mixed_split_map[iid][row['payment_method']] = _decimal_or_zero(row['amount'])
+
+    by_store = {}
+    cash_total = Decimal('0.00')
+    online_total = Decimal('0.00')
+
+    def _push_invoice(inv, bucket_label: str):
+        sid = inv.store_id
+        store_name = inv.store.name if inv.store else ''
+        shop_type = inv.store.shop_type if inv.store else ''
+        if sid not in by_store:
+            by_store[sid] = {
+                'store_id': sid,
+                'store_name': store_name,
+                'shop_type': shop_type,
+                'invoice_count': 0,
+                'profit_total': Decimal('0.00'),
+                'cash_total': Decimal('0.00'),
+                'online_total': Decimal('0.00'),
+                'invoices': [],
+            }
+        rec = by_store[sid]
+        profit = _decimal_or_zero(getattr(inv, '_list_profit', None))
+        total = _decimal_or_zero(inv.total)
+        inv_cash = Decimal('0.00')
+        inv_online = Decimal('0.00')
+        if inv.invoice_type == 'cash':
+            inv_cash = total
+        elif inv.invoice_type == 'upi':
+            inv_online = total
+        elif inv.invoice_type == 'mixed':
+            split = mixed_split_map.get(inv.id, {})
+            inv_cash = _decimal_or_zero(split.get('cash'))
+            inv_online = _decimal_or_zero(split.get('upi'))
+        rec['invoice_count'] += 1
+        rec['profit_total'] += profit
+        rec['cash_total'] += inv_cash
+        rec['online_total'] += inv_online
+        nonlocal cash_total, online_total
+        cash_total += inv_cash
+        online_total += inv_online
+        rec['invoices'].append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'invoice_type': inv.invoice_type,
+            'status': inv.status,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'customer_name': (inv.customer.name if inv.customer else '') or 'Walk-in',
+            'total': float(total),
+            'paid_amount': float(_decimal_or_zero(inv.paid_amount)),
+            'profit': float(profit),
+            'cash_amount': float(inv_cash),
+            'online_amount': float(inv_online),
+            'source': bucket_label,
+        })
+
+    for inv in counter_qs:
+        _push_invoice(inv, 'counter')
+    for inv in repair_qs:
+        _push_invoice(inv, 'repair')
+
+    stores = []
+    counter_profit = Decimal('0.00')
+    repair_profit = Decimal('0.00')
+    for rec in by_store.values():
+        rec['invoices'].sort(
+            key=lambda r: (r['created_at'] or '', r['invoice_number']),
+            reverse=True,
+        )
+        rec['profit_total'] = float(_decimal_or_zero(rec['profit_total']))
+        rec['cash_total'] = float(_decimal_or_zero(rec['cash_total']))
+        rec['online_total'] = float(_decimal_or_zero(rec['online_total']))
+        stores.append(rec)
+    stores.sort(key=lambda r: (-r['profit_total'], r['store_name']))
+
+    counter_profit = _sum_list_profit(counter_qs, money)
+    repair_profit = _sum_list_profit(repair_qs, money)
+    overall_profit = counter_profit + repair_profit
+    expenses_total = _decimal_or_zero(
+        Expenses.objects.filter(
+            expense_date__gte=date_from,
+            expense_date__lte=date_to,
+        ).aggregate(
+            t=Sum('expense_amount', output_field=money)
+        )['t']
+    )
+
+    response = Response({
+        'billing_window': {
+            'from': date_from.isoformat(),
+            'to': date_to.isoformat(),
+        },
+        'summary': {
+            'counter_profit': float(counter_profit),
+            'repair_profit': float(repair_profit),
+            'overall_profit': float(overall_profit),
+            'cash_total': float(cash_total),
+            'online_total': float(online_total),
+            'expenses_total': float(expenses_total),
+            'invoice_count': sum(r['invoice_count'] for r in stores),
+            'store_count': len(stores),
+        },
+        'stores': stores,
     })
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response['Pragma'] = 'no-cache'

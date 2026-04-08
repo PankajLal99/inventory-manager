@@ -396,7 +396,7 @@ class CheckoutTests(APITestCase):
         )
         self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_cart_checkout_pos_trade_in_wrong_customer_rejected(self):
+    def test_cart_checkout_pos_trade_in_different_customer_allowed(self):
         self.product.track_inventory = True
         self.product.save(update_fields=['track_inventory'])
         c1 = Customer.objects.create(name='C1', phone='9000000002')
@@ -451,7 +451,10 @@ class CheckoutTests(APITestCase):
             },
             format='json',
         )
-        self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED, r2.data)
+        new_inv = Invoice.objects.get(id=r2.data['id'])
+        self.assertEqual(new_inv.trade_in_credit, Decimal('50.00'))
+        self.assertEqual(new_inv.total, Decimal('150.00'))
 
 
 class InvoiceEditTests(APITestCase):

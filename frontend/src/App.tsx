@@ -46,6 +46,7 @@ import PaymentReminders from './pages/payment-reminders/PaymentReminders';
 import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
 import StockOverview from './pages/stock/StockOverview';
+import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingDetails';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -97,6 +98,10 @@ function App() {
               >
                 <Route index element={<POS />} />
                 <Route path="dashboard" element={<Dashboard />} />
+                <Route
+                  path="dashboard/overall-profit-billing-details"
+                  element={<OverallProfitBillingDetails />}
+                />
                 <Route path="products" element={<Products />} />
                 <Route path="products/:id" element={<ProductDetail />} />
                 <Route path="pos" element={<POS />} />

@@ -1,6 +1,6 @@
 from django.urls import path
 from . import views
-from .views_optimized import optimized_dashboard_kpis
+from .views_optimized import optimized_dashboard_kpis, overall_profit_billing_period_details
 
 urlpatterns = [
     path('reports/sales-summary/', views.sales_summary, name='sales-summary'),
@@ -10,5 +10,10 @@ urlpatterns = [
     path('reports/customers/', views.customer_summary, name='customer-summary'),
     path('reports/stock-ordering/', views.stock_ordering_report, name='stock-ordering-report'),
     path('reports/dashboard-kpis/', optimized_dashboard_kpis, name='dashboard-kpis'),
+    path(
+        'reports/overall-profit-billing-period-details/',
+        overall_profit_billing_period_details,
+        name='overall-profit-billing-period-details',
+    ),
 ]
 

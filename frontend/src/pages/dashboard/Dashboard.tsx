@@ -1,15 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { reportsApi } from '../../lib/api';
 import { formatDateDDMMYYYY, formatNumber } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { auth } from '../../lib/auth';
-import { BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, TrendingUp, Truck, Wallet, Wrench } from 'lucide-react';
+import { ArrowRight, BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, TrendingUp, Truck, Wallet, Wrench } from 'lucide-react';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 const PIN_LENGTH = 6;
 const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070';
+const DASHBOARD_UNLOCKED_SESSION_KEY = 'dashboard_unlocked_v1';
 
 /** When false, the “Manual / POS payments” KPI block is hidden (code kept for later). */
 const SHOW_MANUAL_POS_PAYMENTS_SECTION = false;
@@ -109,6 +110,7 @@ function DashboardMetricCard({
   gradientClass,
   borderClass,
   iconClass,
+  detailPath,
 }: {
   title: string;
   subtitle?: string;
@@ -118,12 +120,25 @@ function DashboardMetricCard({
   gradientClass: string;
   borderClass: string;
   iconClass: string;
+  detailPath?: string;
 }) {
   return (
     <div className={`rounded-xl border p-5 ${gradientClass} ${borderClass}`}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-sm font-medium text-gray-700">{title}</p>
-        <span className={iconClass}>{icon}</span>
+        <div className="flex items-center gap-1.5">
+          {detailPath ? (
+            <Link
+              to={detailPath}
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-white/70 text-gray-600 hover:text-gray-800"
+              title="View details"
+              aria-label={`View details for ${title}`}
+            >
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          ) : null}
+          <span className={iconClass}>{icon}</span>
+        </div>
       </div>
       {subtitle ? <p className="text-xs text-gray-600 mb-2 leading-snug">{subtitle}</p> : null}
       <p className="text-2xl sm:text-3xl font-bold text-gray-900 tabular-nums">{totalFormatted}</p>
@@ -289,10 +304,25 @@ export default function Dashboard() {
   const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
   const dateRange = { startDate: dateFrom, endDate: dateTo };
 
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return sessionStorage.getItem(DASHBOARD_UNLOCKED_SESSION_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
   const [pinError, setPinError] = useState('');
   const pinInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    try {
+      if (unlocked) sessionStorage.setItem(DASHBOARD_UNLOCKED_SESSION_KEY, 'true');
+      else sessionStorage.removeItem(DASHBOARD_UNLOCKED_SESSION_KEY);
+    } catch {
+      // ignore storage errors (private mode, etc)
+    }
+  }, [unlocked]);
 
   useEffect(() => {
     if (!user) {
@@ -791,6 +821,7 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-sky-50 to-sky-100"
                   borderClass="border-sky-200"
                   iconClass=""
+                  detailPath="/dashboard/overall-profit-billing-details"
                   breakdownRows={[
                     { label: 'Retail (counter)', amount: counterProfitBilling },
                     { label: 'Repair', amount: repairProfitBilling },

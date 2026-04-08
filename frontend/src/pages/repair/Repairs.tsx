@@ -30,13 +30,12 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { DateRangePreset, formatNumber, toLocalDateString } from '../../lib/utils';
+import { formatNumber, toLocalDateString } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
-import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -88,26 +87,26 @@ interface RepairInvoiceItem {
 const STATUS_OPTIONS = [
   { value: 'received', label: 'Received' },
   { value: 'work_in_progress', label: 'Work in Progress' },
-  { value: 'done', label: 'Done' },
   { value: 'delivered', label: 'Delivered' },
   { value: 'not_repaired', label: 'Not Repaired' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
+const STATUS_FILTER_OPTIONS = STATUS_OPTIONS.filter((status) =>
+  ['received', 'not_repaired', 'work_in_progress', 'delivered'].includes(status.value)
+);
 
 const STATUS_ORDER: string[] = [
-  'work_in_progress',
   'received',
-  'done',
+  'work_in_progress',
   'delivered',
   'not_repaired',
   'cancelled',
 ];
 
-// Row order: when sorting table rows by status, WIP first, received second, not_repaired at the end
+// Row order: when sorting table rows by status, received first, WIP second, not_repaired at the end
 const ROW_STATUS_ORDER: string[] = [
-  'work_in_progress',
   'received',
-  'done',
+  'work_in_progress',
   'delivered',
   'cancelled',
   'not_repaired',
@@ -159,9 +158,9 @@ function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; upda
   });
 }
 
-/** Effective date for grouping/sorting: prefer repair.updated_at, fallback to invoice.created_at. */
+/** Effective row date for UI date grouping/highlight: prefer repair.created_at, fallback to invoice.created_at. */
 function getRepairDisplayDate(inv: RepairInvoice): string {
-  return inv.repair?.updated_at || inv.created_at;
+  return inv.repair?.created_at || inv.created_at;
 }
 
 function isToday(date: Date): boolean {
@@ -183,9 +182,6 @@ export default function Repairs() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [user, setUser] = useState<any>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<RepairInvoice | null>(null);
@@ -203,12 +199,11 @@ export default function Repairs() {
   const [lastRegenerateAt, setLastRegenerateAt] = useState<Record<number, number>>({});
   // Not Repaired section collapsed by default
   const [notRepairedCollapsed, setNotRepairedCollapsed] = useState(true);
+  // Old Repair section collapsed by default
+  const [oldRepairCollapsed, setOldRepairCollapsed] = useState(true);
   // Date filter for each status group (independent controls)
   const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>({});
   const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
-  const hasAnyGroupDateOverride = Object.entries(groupDateFilters).some(
-    ([, date]) => !!date
-  );
 
   useEffect(() => {
     const loadUser = async () => {
@@ -246,10 +241,9 @@ export default function Repairs() {
   // Only send store when it's a repair store (so we don't filter to a retail store and get 0 results)
   const repairStores = stores.filter((s: any) => String(s.shop_type || '').toLowerCase() === 'repair');
   const repairStore = repairStores.find((s: any) => s.id === defaultStore?.id) || repairStores[0];
-  const useFilteredMode = !!statusFilter || !!dateFrom || !!dateTo || !!search.trim() || !!barcodeSearch.trim() || hasAnyGroupDateOverride;
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['repair-invoices', statusFilter, dateFrom, dateTo, repairStore?.id, currentPage, barcodeSearch, search],
+    queryKey: ['repair-invoices', statusFilter, repairStore?.id, currentPage, barcodeSearch, search],
     queryFn: async () => {
       const params: any = {};
       // Keep this page fully loaded by default so grouped sections
@@ -257,12 +251,6 @@ export default function Repairs() {
       params.unpaginated = 1;
       if (statusFilter) {
         params.repair_status = statusFilter;
-      }
-      if (dateFrom) {
-        params.date_from = dateFrom;
-      }
-      if (dateTo) {
-        params.date_to = dateTo;
       }
       if (search.trim()) {
         params.search = search.trim();
@@ -274,9 +262,6 @@ export default function Repairs() {
       // Only apply store filter when there is no search input.
       if (!search.trim() && !barcodeSearch.trim() && repairStore?.id) {
         params.store = repairStore.id;
-      }
-      if (dateFrom || dateTo) {
-        params.ordering = 'created_at';
       }
       const response = await posApi.repair.invoices.list(params);
       return response.data;
@@ -314,7 +299,7 @@ export default function Repairs() {
   useEffect(() => {
     setCurrentPage(1);
     setLoadedRepairs([]);
-  }, [statusFilter, dateFrom, dateTo, defaultStore?.id, search, barcodeSearch, useFilteredMode]);
+  }, [statusFilter, defaultStore?.id, search, barcodeSearch]);
 
   useEffect(() => {
     if (!data) return;
@@ -478,41 +463,59 @@ export default function Repairs() {
   const canSeeSuperMetrics = (user?.groups || []).includes('Super');
   const canSeeTotalColumn = canSeeSuperMetrics;
 
-  // Old Repair: only delivered or done AND not from today.
+  const hasDeliveredDateFilter = !!groupDateFilters.delivered;
+  const deliveredDateValues = filteredRepairs
+    .filter((inv) => inv.repair?.status === 'delivered')
+    .map((inv) => toLocalDateString(getRepairDisplayDate(inv)))
+    .filter(Boolean);
+  const latestDeliveredDate = deliveredDateValues.length > 0
+    ? deliveredDateValues.reduce((latest, d) => (d > latest ? d : latest), deliveredDateValues[0])
+    : '';
+
+  // Old Repair: only delivered AND not from today.
   // Intentionally capped to keep this historical section lightweight.
-  const oldRepairItems = filteredRepairs.filter((inv) => {
-    const status = inv.repair?.status;
-    if (status !== 'delivered' && status !== 'done') return false;
-    return !isToday(new Date(getRepairDisplayDate(inv)));
-  }).slice(0, OLD_REPAIR_MAX_ROWS);
+  const oldRepairItems = hasDeliveredDateFilter
+    ? []
+    : filteredRepairs.filter((inv) => {
+      const status = inv.repair?.status;
+      if (status !== 'delivered') return false;
+      const deliveredDate = toLocalDateString(getRepairDisplayDate(inv));
+      if (!latestDeliveredDate) return false;
+      return deliveredDate !== latestDeliveredDate;
+    }).slice(0, OLD_REPAIR_MAX_ROWS);
   // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
   const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
 
-  // Status groups: include done/delivered, but keep old done/delivered only in Old Repair.
+  // Status groups: include delivered, but keep old delivered only in Old Repair.
   const STATUS_ORDER_MAIN = STATUS_ORDER.filter((s) => s !== 'not_repaired');
   const statusGroups = STATUS_ORDER_MAIN.map((status) => ({
     status,
     label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
     items: filteredRepairs.filter((inv) => {
       if (inv.repair?.status !== status) return false;
-      // For done/delivered, only keep today's items here; older ones go to Old Repair.
-      if (status === 'done' || status === 'delivered') {
-        return isToday(new Date(getRepairDisplayDate(inv)));
+      // For delivered:
+      // - default view: keep only latest delivered date items here
+      // - if delivered date filter is selected: allow all delivered so date can match history
+      if (status === 'delivered') {
+        if (hasDeliveredDateFilter) return true;
+        if (!latestDeliveredDate) return false;
+        return toLocalDateString(getRepairDisplayDate(inv)) === latestDeliveredDate;
       }
       return true;
     }),
   }));
-  // Other = status not in main list; exclude not_repaired (and anything already covered above)
+  // Other = status not in main list; exclude not_repaired/done (and anything already covered above)
   const otherItems = filteredRepairs.filter(
     (inv) =>
       inv.repair &&
+      inv.repair.status !== 'done' &&
       inv.repair.status !== 'not_repaired' &&
       !STATUS_ORDER_MAIN.includes(inv.repair?.status ?? '')
   );
   const groupsWithItems = [
     ...statusGroups,
     ...(otherItems.length > 0 ? [{ status: 'other', label: 'Other', items: otherItems }] : []),
-    // Old Repair: completed repairs (done / delivered) only
+    // Old Repair: delivered repairs only
     ...(oldRepairItems.length > 0 ? [{ status: 'old_repair', label: 'Old Repair', items: oldRepairItems }] : []),
     // Not Repaired: one group at the very end, collapsed by default (today + old)
     ...(allNotRepaired.length > 0
@@ -568,7 +571,7 @@ export default function Repairs() {
 
   const totalRepairs = filteredRepairs.length;
   const receivedRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'received').length;
-  const doneRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'done').length;
+  const deliveredRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'delivered').length;
 
   if (isLoading) {
     return <LoadingState message="Loading repairs..." />;
@@ -634,11 +637,11 @@ export default function Repairs() {
         <Card>
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Completed</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{doneRepairs}</p>
+              <p className="text-sm font-medium text-gray-600">Delivered</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{deliveredRepairs}</p>
             </div>
-            <div className="p-3 bg-green-100 rounded-lg">
-              <CheckCircle className="h-6 w-6 text-green-600" />
+            <div className="p-3 bg-slate-100 rounded-lg">
+              <Truck className="h-6 w-6 text-slate-600" />
             </div>
           </div>
         </Card>
@@ -647,8 +650,8 @@ export default function Repairs() {
       {/* Filters */}
       <Card>
         <div className="space-y-4">
-          {/* Barcode Search Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Top Filters (3-up on desktop) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-end">
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">
                 Search by Repair Barcode
@@ -707,6 +710,23 @@ export default function Repairs() {
                   className="pl-10"
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Status
+              </label>
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                icon={<Filter className="h-4 w-4" />}
+              >
+                <option value="">All Statuses</option>
+              {STATUS_FILTER_OPTIONS.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </Select>
             </div>
           </div>
 
@@ -830,39 +850,6 @@ export default function Repairs() {
               )}
             </div>
           )}
-
-          {/* Other Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2 border-t items-end">
-            <Select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              icon={<Filter className="h-4 w-4" />}
-            >
-              <option value="">All Statuses</option>
-              {STATUS_OPTIONS.map((status) => (
-                <option key={status.value} value={status.value}>
-                  {status.label}
-                </option>
-              ))}
-            </Select>
-            <div className="lg:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Date range
-              </label>
-              <p className="text-xs text-gray-500 mb-1">
-                Includes repairs created, updated, or delivered in this range
-              </p>
-              <DateRangeSelector
-                preset={datePreset}
-                value={{ startDate: dateFrom, endDate: dateTo }}
-                onChange={({ preset, range }) => {
-                  setDatePreset(preset);
-                  setDateFrom(range.startDate);
-                  setDateTo(range.endDate);
-                }}
-              />
-            </div>
-          </div>
         </div>
       </Card>
 
@@ -903,9 +890,14 @@ export default function Repairs() {
         <div className="space-y-8">
           {groupsWithItems.map((group) => {
             const isNotRepairedGroup = group.status === 'not_repaired';
-            const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
-            const hasGroupDateSelector = true;
-            const selectedGroupDate = getGroupSelectedDate(group.status, group.items);
+            const isOldRepairGroup = group.status === 'old_repair';
+            const isCollapsed =
+              (isNotRepairedGroup && notRepairedCollapsed) ||
+              (isOldRepairGroup && oldRepairCollapsed);
+            const hasGroupDateSelector = group.status === 'delivered';
+            const selectedGroupDate = hasGroupDateSelector
+              ? getGroupSelectedDate(group.status, group.items)
+              : '';
             const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate));
             // Profit = sum(paid) - sum(total) for Super group summary row
             const groupTotalSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_total), 0);
@@ -915,10 +907,16 @@ export default function Repairs() {
             <div key={group.status} className="space-y-4">
               <div className="flex flex-col gap-1 px-2">
                 <div
-                  className={`flex items-center gap-3 ${isNotRepairedGroup ? 'cursor-pointer select-none' : ''}`}
-                  onClick={isNotRepairedGroup ? () => setNotRepairedCollapsed((c) => !c) : undefined}
+                  className={`flex items-center gap-3 ${(isNotRepairedGroup || isOldRepairGroup) ? 'cursor-pointer select-none' : ''}`}
+                  onClick={
+                    isNotRepairedGroup
+                      ? () => setNotRepairedCollapsed((c) => !c)
+                      : isOldRepairGroup
+                        ? () => setOldRepairCollapsed((c) => !c)
+                        : undefined
+                  }
                 >
-                  {isNotRepairedGroup && (
+                  {(isNotRepairedGroup || isOldRepairGroup) && (
                     <span className="text-gray-500">
                       {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
                     </span>
@@ -944,10 +942,10 @@ export default function Repairs() {
                   )}
                 </div>
                 {group.status === 'old_repair' && (
-                  <p className="text-sm text-gray-500 ml-5">Completed repairs (done / delivered)</p>
+                  <p className="text-sm text-gray-500 ml-5">Delivered repairs (old) - click to expand</p>
                 )}
                 {isNotRepairedGroup && (
-                  <p className="text-sm text-gray-500 ml-5">Filter by repair or delivery date — click to expand</p>
+                  <p className="text-sm text-gray-500 ml-5">Click to expand</p>
                 )}
               </div>
 
@@ -974,9 +972,7 @@ export default function Repairs() {
                   { label: 'Actions', align: 'right' },
                 ]}>
                   {sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
-                    const isOldActiveWork =
-                      !isToday(new Date(getRepairDisplayDate(invoice))) &&
-                      (invoice.repair?.status === 'work_in_progress' || invoice.repair?.status === 'received');
+                    const isOlderThanToday = !isToday(new Date(getRepairDisplayDate(invoice)));
                     const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
@@ -985,7 +981,7 @@ export default function Repairs() {
                     return (
                       <TableRow
                         key={invoice.id}
-                        className={`cursor-pointer transition-colors ${statusColor} ${isOldActiveWork ? 'bg-red-50/70 border-l-4 border-red-300' : ''} hover:opacity-80`}
+                        className={`cursor-pointer transition-colors ${statusColor} ${isOlderThanToday ? 'bg-red-50/70 border-l-4 border-red-300' : ''} hover:opacity-80`}
                       >
                         <TableCell>
                           <span
@@ -1184,9 +1180,7 @@ export default function Repairs() {
                     No repairs found for the selected date.
                   </div>
                 ) : sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
-                  const isOldActiveWork =
-                    !isToday(new Date(getRepairDisplayDate(invoice))) &&
-                    (invoice.repair?.status === 'work_in_progress' || invoice.repair?.status === 'received');
+                  const isOlderThanToday = !isToday(new Date(getRepairDisplayDate(invoice)));
                   const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
@@ -1197,7 +1191,7 @@ export default function Repairs() {
                     <div
                       key={invoice.id}
                       onClick={() => navigate(`/invoices/${invoice.id}`)}
-                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor} ${isOldActiveWork ? 'bg-red-50/70 border-red-300' : ''}`}
+                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor} ${isOlderThanToday ? 'bg-red-50/70 border-red-300' : ''}`}
                     >
                       <div className="p-4">
                         <div className="mb-3">
