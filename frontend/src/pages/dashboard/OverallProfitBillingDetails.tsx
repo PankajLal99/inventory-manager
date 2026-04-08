@@ -47,6 +47,13 @@ function formatBillingMonthLabel(yyyyMm: string): string {
   return d.toLocaleString('en-IN', { month: 'short', year: 'numeric' });
 }
 
+function isDateWithinRange(date: string, from?: string, to?: string): boolean {
+  if (!date) return false;
+  if (from && date < from) return false;
+  if (to && date > to) return false;
+  return true;
+}
+
 export default function OverallProfitBillingDetails() {
   const [billingMonth, setBillingMonth] = useState(currentBillingMonthLabel);
   const [collapsedStoreIds, setCollapsedStoreIds] = useState<Set<number>>(() => new Set());
@@ -87,11 +94,14 @@ export default function OverallProfitBillingDetails() {
 
   const dayWiseProfitRows = useMemo(() => {
     const stores = data?.stores ?? [];
+    const rangeFrom = data?.billing_window?.from;
+    const rangeTo = data?.billing_window?.to;
     const byDate = new Map<string, { date: string; repairProfit: number; retailProfit: number }>();
     stores.forEach((store) => {
       (store.invoices ?? []).forEach((inv) => {
         if (!inv.created_at) return;
         const date = inv.created_at.slice(0, 10);
+        if (!isDateWithinRange(date, rangeFrom, rangeTo)) return;
         const existing = byDate.get(date) ?? { date, repairProfit: 0, retailProfit: 0 };
         if (inv.source === 'repair') {
           existing.repairProfit += Number(inv.profit || 0);
@@ -103,7 +113,7 @@ export default function OverallProfitBillingDetails() {
     });
     // Keep day-wise table in chronological order by date.
     return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
-  }, [data?.stores]);
+  }, [data?.stores, data?.billing_window?.from, data?.billing_window?.to]);
 
   const dayWiseProfitTotals = useMemo(
     () =>

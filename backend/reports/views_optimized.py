@@ -681,7 +681,9 @@ def optimized_dashboard_kpis(request):
 
     overall_profit = counter_profit + repair_profit
 
-    pb_from, pb_to = _billing_period_11_to_10(timezone.now().date())
+    # Anchor billing window to the selected dashboard range end date
+    # so KPI and subtitle stay consistent with the active filter.
+    pb_from, pb_to = _billing_period_11_to_10(date_to)
     inv_base_pb = Invoice.objects.filter(
         created_at__date__gte=pb_from,
         created_at__date__lte=pb_to,
