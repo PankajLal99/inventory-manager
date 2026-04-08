@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, ChevronDown, ChevronRight, Coins, CreditCard, Receipt, RefreshCw, Wallet } from 'lucide-react';
 import { reportsApi } from '../../lib/api';
-import { formatDateDDMMYYYY, formatNumber } from '../../lib/utils';
+import { formatDateDDMMYYYY, formatNumber, toLocalDateString } from '../../lib/utils';
 
 type InvoiceRow = {
   id: number;
@@ -133,18 +133,21 @@ export default function OverallProfitBillingDetails() {
     // Ensure every day in the billing window is shown (including no-activity days).
     if (rangeFrom && rangeTo) {
       const totalDays = dateDiffInDaysInclusive(rangeFrom, rangeTo);
+      const todayIso = addDaysIso(toLocalDateString(new Date()), 0);
       for (let i = 0; i < totalDays; i += 1) {
         const dayIso = addDaysIso(rangeFrom, i);
         if (byDate.has(dayIso)) continue;
         const day = new Date(`${dayIso}T12:00:00`);
         const isSunday = day.getDay() === 0;
+        const isFuture = dayIso > todayIso;
         byDate.set(dayIso, {
           date: dayIso,
           repairProfit: 0,
           retailProfit: 0,
-          // Mark zero-activity days as holiday; Sundays explicitly tagged.
-          isHoliday: true,
-          holidayLabel: isSunday ? 'Sunday' : 'Holiday',
+          // Mark only past/today zero-activity days as holiday.
+          // Future dates in the current billing window are not holidays yet.
+          isHoliday: !isFuture,
+          holidayLabel: !isFuture ? (isSunday ? 'Sunday' : 'Holiday') : null,
         });
       }
     }
