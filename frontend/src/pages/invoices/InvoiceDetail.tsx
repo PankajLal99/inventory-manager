@@ -4480,6 +4480,28 @@ export default function InvoiceDetail() {
                 value={hideCheckoutPaymentOptions && !['pending', 'credit'].includes(checkoutInvoiceType) ? 'pending' : checkoutInvoiceType}
                 onChange={(e) => {
                   const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
+
+                  // Guard invoice type changes: invoice must have products and each line total must be > 0.
+                  const currentItems = Array.isArray(inv?.items) ? inv.items : [];
+                  if (currentItems.length === 0) {
+                    alert('Please add at least one product before changing invoice type.');
+                    return;
+                  }
+                  const invalidLine = currentItems.find((item: any) => {
+                    const quantity = checkoutQuantities[item.id]
+                      ? parseInt(checkoutQuantities[item.id]) || 0
+                      : parseInt(item.quantity) || 0;
+                    const price = checkoutPrices[item.id]
+                      ? parseFloat(checkoutPrices[item.id])
+                      : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+                    const lineTotal = quantity * price;
+                    return !(lineTotal > 0);
+                  });
+                  if (invalidLine) {
+                    alert('Each product line total must be greater than 0 before changing invoice type.');
+                    return;
+                  }
+
                   setCheckoutInvoiceType(newType);
                   // Clear split amounts when switching away from mixed
                   if (newType !== 'mixed') {
