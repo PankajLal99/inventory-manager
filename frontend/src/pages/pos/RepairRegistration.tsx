@@ -180,12 +180,10 @@ export default function RepairRegistration() {
                     duplicateNameError.some((msg: string) => String(msg).toLowerCase().includes('already exists'));
                 if (!hasDuplicateName) throw err;
 
-                const searchResp = await customersApi.list({ search: data.name });
+                const searchResp = await customersApi.list({ exact_name: data.name });
                 const searchData = searchResp?.data;
                 const customers = searchData?.results || searchData?.data || (Array.isArray(searchData) ? searchData : []);
-                const normalized = data.name.trim().toLowerCase();
-                const existingCustomer =
-                    customers.find((c: any) => String(c.name || '').trim().toLowerCase() === normalized) || customers[0];
+                const existingCustomer = customers[0];
 
                 if (!existingCustomer) throw err;
                 return existingCustomer;
@@ -200,7 +198,11 @@ export default function RepairRegistration() {
             queryClient.invalidateQueries({ queryKey: ['customers'] }); // Refresh list so new customer appears on next search
             showToast('Customer registered successfully');
         },
-        onError: (err: any) => showToast(err.response?.data?.error || 'Failed to create customer', 'error'),
+        onError: (err: any) => {
+            const nameErrors = err?.response?.data?.name;
+            const firstNameError = Array.isArray(nameErrors) ? nameErrors[0] : '';
+            showToast(firstNameError || err?.response?.data?.error || 'Failed to create customer', 'error');
+        },
     });
 
     const registerMutation = useMutation({

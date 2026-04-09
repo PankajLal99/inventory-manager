@@ -132,6 +132,7 @@ def customer_list_create(request):
     """List all customers or create a new customer"""
     if request.method == 'GET':
         search = request.query_params.get('search', None)
+        exact_name = request.query_params.get('exact_name', None)
         customer_group = request.query_params.get('customer_group', None)
         exclude_group = request.query_params.get('exclude_group', None)
         exclude_group_name = request.query_params.get('exclude_group_name', None)
@@ -152,6 +153,8 @@ def customer_list_create(request):
         
         # Cache miss - fetch from database
         queryset = Customer.objects.all().order_by('-created_at')
+        if exact_name:
+            queryset = queryset.filter(name__iexact=exact_name.strip())
         if search:
             search_clean = search.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
             queryset = queryset.filter(

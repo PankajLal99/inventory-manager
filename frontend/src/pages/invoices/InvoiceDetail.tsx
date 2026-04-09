@@ -1333,7 +1333,11 @@ export default function InvoiceDetail() {
     const submitRepairStatus =
       checkoutInvoiceType === 'pending'
         ? ((freshInv?.items?.length ?? 0) > 0 ? 'work_in_progress' : 'received')
-        : (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
+        : (
+            checkoutInvoiceType !== freshInv?.invoice_type
+              ? 'delivered'
+              : ((checkoutRepairStatus || '').trim() || (freshInv?.repair?.status || '').trim())
+          );
 
     if (!freshInv?.items || freshInv.items.length === 0) {
       alert('Invoice has no items');
@@ -1439,16 +1443,6 @@ export default function InvoiceDetail() {
       }
     }
 
-    // Repair checkout: if changing to non-pending, only Delivered is allowed.
-    if (freshInv?.repair && checkoutInvoiceType !== freshInv.invoice_type) {
-      const newStatus = (checkoutRepairStatus ?? '').trim();
-
-      if (checkoutInvoiceType !== 'pending' && newStatus !== 'delivered') {
-        alert('You changed the invoice type. Please update the repair status to Delivered before completing checkout.');
-        return;
-      }
-    }
-
     const checkoutData: any = {
       invoice_type: checkoutInvoiceType,
       items: items,
@@ -1456,7 +1450,6 @@ export default function InvoiceDetail() {
 
     // Persist selected repair status during checkout so backend state matches UI selection.
     if (freshInv?.repair) {
-      const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
       if (submitRepairStatus) {
         checkoutData.repair_status = submitRepairStatus;
       }
