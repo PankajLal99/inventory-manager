@@ -4047,7 +4047,13 @@ def invoice_checkout(request, pk):
         repair_for_transition = None
     if repair_for_transition and new_invoice_type != 'pending':
         submitted_repair_status = request.data.get('repair_status', None)
-        target_repair_status = submitted_repair_status if submitted_repair_status not in (None, '') else repair_for_transition.status
+        if submitted_repair_status not in (None, ''):
+            submitted_norm = str(submitted_repair_status).strip().lower()
+            valid_statuses = [value for value, _ in Repair.STATUS_CHOICES]
+            valid_map = {v.lower(): v for v in valid_statuses}
+            target_repair_status = valid_map.get(submitted_norm, str(submitted_repair_status).strip())
+        else:
+            target_repair_status = repair_for_transition.status
         if target_repair_status != 'delivered':
             return Response(
                 {'error': 'For repair invoices, non-pending invoice type requires repair status Delivered.'},

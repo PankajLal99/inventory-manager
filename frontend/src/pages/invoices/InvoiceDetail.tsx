@@ -4511,6 +4511,24 @@ export default function InvoiceDetail() {
                 onChange={(e) => {
                   const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
 
+                  // Allow switching back to pending even when products are removed.
+                  // Product/line-total guards are only for checkout types.
+                  if (newType === 'pending') {
+                    setCheckoutInvoiceType(newType);
+                    setCheckoutCashAmount('');
+                    setCheckoutUpiAmount('');
+                    if (inv?.repair) {
+                      const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
+                      const currentPendingStatus = (checkoutRepairStatus || inv.repair.status || '').trim();
+                      const pendingStatusToSet = hasProducts
+                        ? 'work_in_progress'
+                        : (currentPendingStatus === 'not_repaired' ? 'not_repaired' : 'received');
+                      setCheckoutRepairStatus(pendingStatusToSet);
+                      setCheckoutDeliveryDate('');
+                    }
+                    return;
+                  }
+
                   // Guard invoice type changes: invoice must have products and each line total must be > 0.
                   const currentItems = Array.isArray(inv?.items) ? inv.items : [];
                   if (currentItems.length === 0) {
@@ -4573,20 +4591,15 @@ export default function InvoiceDetail() {
                     setCheckoutUpiAmount('');
                   }
 
-                  // Auto-update repair status to 'delivered' when changing to a checkout type
-                  if (inv?.repair && newType !== 'pending') {
+                  // Auto-update repair status to 'delivered' when changing to a checkout type.
+                  // (pending is handled in the early-return block above)
+                  if (inv?.repair) {
                     const statusToSet = 'delivered';
                     setCheckoutRepairStatus(statusToSet);
                     // Prefill delivery date to today (UI only). Do NOT auto-save because user may switch back to pending.
                     const existingDeliveryDate = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
                     const today = new Date().toISOString().slice(0, 10);
                     setCheckoutDeliveryDate(existingDeliveryDate || today);
-                  } else if (inv?.repair && newType === 'pending') {
-                    const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
-                    const pendingStatusToSet = hasProducts ? 'work_in_progress' : 'received';
-                    setCheckoutRepairStatus(pendingStatusToSet);
-                    // If switching back to pending, clear any prefilled delivery date (it should not be saved in pending flow).
-                    setCheckoutDeliveryDate('');
                   }
                 }}
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
@@ -4877,7 +4890,10 @@ export default function InvoiceDetail() {
                   }
 
                   const payload: { items: any[]; delivery_date?: string | null; repair_status?: string } = { items };
-                  const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
+                  const submitRepairStatus =
+                    checkoutInvoiceType === 'credit'
+                      ? 'delivered'
+                      : (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
                   const canSubmitDeliveryDate =
                     submitRepairStatus === 'done' ||
                     submitRepairStatus === 'delivered';
