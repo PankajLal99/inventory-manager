@@ -166,13 +166,32 @@ export default function RepairRegistration() {
 
     // Mutations
     const createCustomerMutation = useMutation({
-        mutationFn: (data: { name: string; phone?: string }) => {
+        mutationFn: async (data: { name: string; phone?: string }) => {
             const payload: any = { ...data };
             if (repairGroup) payload.customer_group = repairGroup.id;
-            return customersApi.create(payload);
+            try {
+                const resp = await customersApi.create(payload);
+                return resp.data;
+            } catch (err: any) {
+                const duplicateNameError = err?.response?.data?.name;
+                const hasDuplicateName =
+                    Array.isArray(duplicateNameError) &&
+                    duplicateNameError.some((msg: string) => String(msg).toLowerCase().includes('already exists'));
+                if (!hasDuplicateName) throw err;
+
+                const searchResp = await customersApi.list({ search: data.name });
+                const searchData = searchResp?.data;
+                const customers = searchData?.results || searchData?.data || (Array.isArray(searchData) ? searchData : []);
+                const normalized = data.name.trim().toLowerCase();
+                const existingCustomer =
+                    customers.find((c: any) => String(c.name || '').trim().toLowerCase() === normalized) || customers[0];
+
+                if (!existingCustomer) throw err;
+                return existingCustomer;
+            }
         },
-        onSuccess: (resp) => {
-            setSelectedCustomer(resp.data);
+        onSuccess: (customer) => {
+            setSelectedCustomer(customer);
             setCustomerSearch(''); // Clear search to show the selected card
             setShowCreateCustomerModal(false);
             setNewCustomerName('');
