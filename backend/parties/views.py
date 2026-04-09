@@ -131,6 +131,7 @@ def customer_list_create(request):
         customer_group = request.query_params.get('customer_group', None)
         exclude_group = request.query_params.get('exclude_group', None)
         exclude_group_name = request.query_params.get('exclude_group_name', None)
+        exclude_repair_and_ungrouped = (request.query_params.get('exclude_repair_and_ungrouped') or '').strip().lower() in {'1', 'true', 'yes'}
         
         # Try cache first
         from backend.core.model_cache import get_customer_list_cache_key, CUSTOMER_LIST_CACHE_TTL
@@ -161,6 +162,10 @@ def customer_list_create(request):
             queryset = queryset.exclude(customer_group_id=exclude_group)
         if exclude_group_name:
             queryset = queryset.exclude(customer_group__name__iexact=exclude_group_name.strip())
+        if exclude_repair_and_ungrouped:
+            queryset = queryset.exclude(customer_group__name__iexact='REPAIR').exclude(
+                Q(customer_group__isnull=True) | Q(customer_group__name__isnull=True) | Q(customer_group__name__exact='')
+            )
         queryset = queryset[:100]  # Limit results for search performance
         serializer = CustomerSerializer(queryset, many=True)
         response_data = serializer.data

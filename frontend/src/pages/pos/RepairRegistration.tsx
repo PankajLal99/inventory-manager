@@ -138,6 +138,7 @@ export default function RepairRegistration() {
             const params: Record<string, string> = {};
             if (debouncedSearch) params.search = debouncedSearch;
             if (customerGroupFilter) params.customer_group = customerGroupFilter;
+            params.exclude_repair_and_ungrouped = 'true';
             const response = await customersApi.list(params);
             return response.data;
         },
