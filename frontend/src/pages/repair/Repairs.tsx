@@ -995,10 +995,10 @@ export default function Repairs() {
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="max-w-[6.5rem]">
+                        <TableCell className="max-w-[10rem] whitespace-normal">
                           <div className="flex items-center gap-1 min-w-0">
                             <Package className="h-3 w-3 text-gray-400 shrink-0" />
-                            <span className="text-gray-600 text-xs truncate" title={invoice.repair?.model_name || undefined}>
+                            <span className="text-gray-600 text-xs whitespace-normal break-words leading-4">
                               {invoice.repair?.model_name || '—'}
                             </span>
                           </div>
