@@ -96,16 +96,16 @@ const STATUS_FILTER_OPTIONS = STATUS_OPTIONS.filter((status) =>
 );
 
 const STATUS_ORDER: string[] = [
-  'received',
   'work_in_progress',
+  'received',
   'delivered',
   'not_repaired',
 ];
 
-// Row order: when sorting table rows by status, received first, WIP second, not_repaired at the end
+// Row order: when sorting table rows by status, WIP first, received second, not_repaired at the end
 const ROW_STATUS_ORDER: string[] = [
-  'received',
   'work_in_progress',
+  'received',
   'delivered',
   'not_repaired',
 ];
