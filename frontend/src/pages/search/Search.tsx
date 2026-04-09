@@ -434,10 +434,22 @@ export default function Search() {
                         const val = Number(s.selling_price_value ?? 0) || 0;
                         return val > max ? val : max;
                       }, 0);
+                      const parsedSellingPrice = Number(item.selling_price);
+                      const parsedPurchasePrice = Number(item.purchase_price);
+                      const hasSellingPrice =
+                        item.selling_price !== null &&
+                        item.selling_price !== undefined &&
+                        item.selling_price !== '' &&
+                        !Number.isNaN(parsedSellingPrice);
+                      const hasPurchasePrice =
+                        item.purchase_price !== null &&
+                        item.purchase_price !== undefined &&
+                        item.purchase_price !== '' &&
+                        !Number.isNaN(parsedPurchasePrice);
                       // Top-right price should prefer max selling price from all purchase rows.
                       const price = maxSellingPriceFromBreakdown > 0
                         ? maxSellingPriceFromBreakdown
-                        : (item.selling_price && item.selling_price > 0 ? item.selling_price : (item.purchase_price || null));
+                        : (hasSellingPrice ? parsedSellingPrice : (hasPurchasePrice ? parsedPurchasePrice : null));
                       const hasPrice = price !== null && price !== undefined;
                       const priceDisplay = hasPrice ? `₹${formatNumber(price)}` : 'N/A';
 
