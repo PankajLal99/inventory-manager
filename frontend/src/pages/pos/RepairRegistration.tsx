@@ -147,24 +147,17 @@ export default function RepairRegistration() {
             const customers = data.results || data.data || (Array.isArray(data) ? data : []);
 
             // UI level filtering to ensure we don't show non-matching groups if backend filter is loose
-            let filtered = customers;
+            // Also exclude REPAIR group customers from search results.
+            let filtered = customers.filter((c: any) => c.customer_group_name !== 'REPAIR');
             if (customerGroupFilter) {
-                filtered = customers.filter((c: any) =>
+                filtered = filtered.filter((c: any) =>
                     String(c.customer_group) === customerGroupFilter ||
                     String(c.customer_group_id) === String(customerGroupFilter)
                 );
             }
 
-            // UI level sorting to prioritize REPAIR group (matching POSRepair.tsx)
-            const sorted = [...filtered].sort((a: any, b: any) => {
-                const aIsRepair = a.customer_group_name === 'REPAIR';
-                const bIsRepair = b.customer_group_name === 'REPAIR';
-                if (aIsRepair === bIsRepair) return 0;
-                return aIsRepair ? -1 : 1;
-            });
-
-            if (data.results) return { ...data, results: sorted };
-            return sorted;
+            if (data.results) return { ...data, results: filtered };
+            return filtered;
         }
     });
 
