@@ -749,7 +749,7 @@ export default function Repairs() {
                       <span className="text-gray-600 block text-xs">Invoice Number</span>
                       <span className="font-medium">{selectedInvoice.invoice_number}</span>
                     </div>
-                    {selectedInvoice.customer_group_name !== 'REPAIR' && (
+                    {!['REPAIR', 'NO GROUP'].includes((selectedInvoice.customer_group_name || '').toUpperCase()) && (
                       <div>
                         <span className="text-gray-600 block text-xs">Customer</span>
                         <span className="font-medium">{selectedInvoice.customer_name || 'N/A'}</span>
