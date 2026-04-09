@@ -389,7 +389,7 @@ export default function Repairs() {
 
   const regenerateLabelMutation = useMutation({
     mutationFn: async (invoiceId: number) => {
-      return await posApi.repair.generateLabel(invoiceId);
+      return await posApi.repair.generateLabel(invoiceId, true);
     },
     onSuccess: () => {
       showToast('Repair barcode label regenerated', 'success');
@@ -977,6 +977,13 @@ export default function Repairs() {
                               <div className="text-gray-900 text-xs font-medium truncate" title={invoice.customer_name || 'Walk-in Customer'}>
                                 {invoice.customer_name || 'Walk-in'}
                               </div>
+                              {invoice.customer_group_name && (
+                                <div className="mt-0.5">
+                                  <span className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
+                                    {invoice.customer_group_name}
+                                  </span>
+                                </div>
+                              )}
                               <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums">
                                 <Phone className="h-3 w-3 text-gray-400 shrink-0" />
                                 <span className="truncate" title={invoice.repair?.contact_no || undefined}>

@@ -242,7 +242,12 @@ export const posApi = {
     updateStatus: (invoiceId: number, data: { repair_status: string }) => api.patch(`/pos/invoices/${invoiceId}/update-repair-status/`, data),
     update: (invoiceId: number, data: { contact_no?: string; model_name?: string; description?: string; booking_amount?: string | null; delivery_date?: string | null }) =>
       api.patch(`/pos/invoices/${invoiceId}/update-repair/`, data),
-    generateLabel: (invoiceId: number) => api.post(`/pos/invoices/${invoiceId}/generate-repair-label/`),
+    generateLabel: (invoiceId: number, force = false) =>
+      api.post(
+        `/pos/invoices/${invoiceId}/generate-repair-label/`,
+        undefined,
+        force ? { params: { force: 'true' } } : undefined
+      ),
   },
   creditNotes: {
     list: (params?: any) => api.get('/credit-notes/', { params }),

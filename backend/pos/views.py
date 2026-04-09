@@ -464,6 +464,7 @@ def generate_repair_label(request, pk):
     
     repair = get_object_or_404(Repair, invoice_id=pk)
     invoice = repair.invoice
+    force_regenerate = str(request.query_params.get('force', '')).strip().lower() in {'1', 'true', 'yes'}
     
     # Check if label already exists and is valid (same logic as products)
     # Valid image can be: base64 data URL (data:image/...) or blob URL (https://...)
@@ -474,7 +475,7 @@ def generate_repair_label(request, pk):
          repair.label_image.startswith('https://'))
     )
     
-    if has_valid_image:
+    if has_valid_image and not force_regenerate:
         # If it's a blob URL, verify it's accessible (not 404)
         if repair.label_image.startswith('https://'):
             try:
@@ -561,11 +562,15 @@ def generate_repair_label(request, pk):
             repair.label_image = blob_url
             repair.save(update_fields=['label_image', 'updated_at'])
             
+            response_image = blob_url
+            if force_regenerate:
+                # Avoid stale browser/CDN cache after regeneration.
+                response_image = f"{blob_url}?t={int(timezone.now().timestamp())}"
             return Response({
                 'success': True,
                 'label': {
                     'barcode': repair_barcode,
-                    'image': blob_url,  # Return blob URL (same as products)
+                    'image': response_image,  # Return blob URL (same as products)
                     'invoice_number': invoice_number,
                     'repair_id': repair.id
                 }
