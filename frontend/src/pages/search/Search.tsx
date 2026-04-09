@@ -438,7 +438,8 @@ export default function Search() {
                       const price = maxSellingPriceFromBreakdown > 0
                         ? maxSellingPriceFromBreakdown
                         : (item.selling_price && item.selling_price > 0 ? item.selling_price : (item.purchase_price || null));
-                      const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
+                      const hasPrice = price !== null && price !== undefined;
+                      const priceDisplay = hasPrice ? `₹${formatNumber(price)}` : 'N/A';
 
                       // Warehouse + Available = sum of (Whse + Shop Qty) from table so total matches the breakdown
                       const totalFromTable = breakdown.reduce(
@@ -498,13 +499,11 @@ export default function Search() {
                             </div>
                             <div className="flex flex-col items-end gap-1 flex-shrink-0 pt-0.5">
                               <div className="flex items-center gap-3">
-                                {price && (
-                                  <div className="text-right">
-                                    <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
-                                      {priceDisplay}
-                                    </div>
+                                <div className="text-right">
+                                  <div className={`text-xl font-bold leading-none ${hasPrice ? 'text-green-600 group-hover:text-green-700' : 'text-gray-400 group-hover:text-gray-500'}`}>
+                                    {priceDisplay}
                                   </div>
-                                )}
+                                </div>
                                 <div className="text-right">
                                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-none">QTY</div>
                                   <div className="text-xl font-bold text-indigo-600 group-hover:text-indigo-700 leading-none">
