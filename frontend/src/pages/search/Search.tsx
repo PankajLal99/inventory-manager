@@ -18,6 +18,7 @@ import {
   Box,
   Barcode as BarcodeIcon,
   Camera,
+  X,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import Input from '../../components/ui/Input';
@@ -140,6 +141,14 @@ export default function Search() {
       if (type !== 'product') params.type = type;
       setSearchParams(params);
     }
+  };
+
+  const handleClearSearch = () => {
+    setInputValue('');
+    setDebouncedQuery('');
+    const params: any = {};
+    if (searchType !== 'product') params.type = searchType;
+    setSearchParams(params);
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -266,9 +275,20 @@ export default function Search() {
               placeholder="Search products, customers, invoices, SKUs, barcodes..."
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              className="pl-12 pr-4 py-3 text-lg"
+              className="pl-12 pr-12 py-3 text-lg"
               autoFocus
             />
+            {inputValue.trim() && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                aria-label="Clear search"
+                title="Clear"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
           <Button
             type="button"
@@ -438,7 +458,7 @@ export default function Search() {
                         <div
                           key={idx}
                           onClick={() => navigate(`/products/${item.id}`)}
-                          className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
+                          className="p-3 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 min-w-0">
@@ -476,18 +496,20 @@ export default function Search() {
                               </div>
 
                             </div>
-                            <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
-                              {price && (
-                                <div className="text-right">
-                                  <div className="text-2xl font-bold text-green-600 group-hover:text-green-700 leading-none">
-                                    {priceDisplay}
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0 pt-0.5">
+                              <div className="flex items-center gap-3">
+                                {price && (
+                                  <div className="text-right">
+                                    <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
+                                      {priceDisplay}
+                                    </div>
                                   </div>
-                                </div>
-                              )}
-                              <div className="text-right">
-                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Warehouse + Available</div>
-                                <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
-                                  {warehousePlusAvailable}
+                                )}
+                                <div className="text-right">
+                                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-none">QTY</div>
+                                  <div className="text-xl font-bold text-indigo-600 group-hover:text-indigo-700 leading-none">
+                                    {warehousePlusAvailable}
+                                  </div>
                                 </div>
                               </div>
                               <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />

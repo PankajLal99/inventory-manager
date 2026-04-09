@@ -160,6 +160,9 @@ export default function RepairRegistration() {
             return filtered;
         }
     });
+    const customerSearchResults = useMemo(() => {
+        return customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
+    }, [customersResponse]);
 
     // Mutations
     const createCustomerMutation = useMutation({
@@ -236,6 +239,12 @@ export default function RepairRegistration() {
     const getRegisteredInvoiceId = () => {
         const nestedInvoiceId = registeredRepair?.repair?.invoice;
         return Number(nestedInvoiceId || registeredRepair?.id);
+    };
+
+    const handleQuickCustomerCreate = () => {
+        const name = customerSearch.trim();
+        if (!name || createCustomerMutation.isPending) return;
+        createCustomerMutation.mutate({ name, phone: undefined });
     };
 
     const handleRegister = () => {
@@ -380,6 +389,14 @@ export default function RepairRegistration() {
                                 placeholder="Search by name or phone number..."
                                 value={customerSearch}
                                 onChange={(e) => setCustomerSearch(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key !== 'Enter') return;
+                                    const hasNoMatches = Array.isArray(customerSearchResults) && customerSearchResults.length === 0;
+                                    if (customerSearch.trim() && !customersLoading && !customersError && hasNoMatches) {
+                                        e.preventDefault();
+                                        handleQuickCustomerCreate();
+                                    }
+                                }}
                                 onFocus={() => setIsSearchFocused(true)}
                                 onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
                                 className="pl-12 h-14 text-lg font-medium rounded-2xl border-2 border-gray-100 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all bg-gray-50 focus:bg-white"
@@ -438,7 +455,7 @@ export default function RepairRegistration() {
                                                 <p className="text-red-500 font-bold">Failed to load customers. Try again.</p>
                                             </div>
                                         ) : (() => {
-                                            const list = customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
+                                            const list = customerSearchResults;
                                             return list && list.length > 0 ? (
                                             list.map((c: any) => (
                                                 <button
@@ -477,14 +494,12 @@ export default function RepairRegistration() {
 
                                         {customerSearch && (
                                             <button
-                                                onClick={() => {
-                                                    setNewCustomerName(customerSearch);
-                                                    setShowCreateCustomerModal(true);
-                                                }}
+                                                onClick={handleQuickCustomerCreate}
+                                                disabled={createCustomerMutation.isPending}
                                                 className="w-full text-left p-5 text-blue-600 font-black hover:bg-blue-50 rounded-xl flex items-center gap-3 transition-colors border-2 border-dashed border-blue-100 mt-2"
                                             >
                                                 <Plus className="h-6 w-6" />
-                                                Register New: "{customerSearch}"
+                                                {createCustomerMutation.isPending ? 'Registering...' : `Register New: "${customerSearch}"`}
                                             </button>
                                         )}
                                     </div>
