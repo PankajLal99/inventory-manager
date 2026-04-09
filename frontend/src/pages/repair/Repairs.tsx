@@ -98,8 +98,8 @@ const STATUS_OPTIONS = [
 const STATUS_ORDER: string[] = [
   'work_in_progress',
   'received',
-  'done',
   'delivered',
+  'done',
   'not_repaired',
   'cancelled',
 ];
@@ -108,8 +108,8 @@ const STATUS_ORDER: string[] = [
 const ROW_STATUS_ORDER: string[] = [
   'work_in_progress',
   'received',
-  'done',
   'delivered',
+  'done',
   'cancelled',
   'not_repaired',
 ];
