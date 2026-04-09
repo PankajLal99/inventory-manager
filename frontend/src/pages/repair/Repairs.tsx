@@ -977,18 +977,20 @@ export default function Repairs() {
                               <div className="text-gray-900 text-xs font-medium truncate" title={invoice.customer_name || 'Walk-in Customer'}>
                                 {invoice.customer_name || 'Walk-in'}
                               </div>
-                              {invoice.customer_group_name && (
-                                <div className="mt-0.5">
-                                  <span className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700">
+                              <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                                {invoice.repair?.contact_no && (
+                                  <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums min-w-0">
+                                    <Phone className="h-3 w-3 text-gray-400 shrink-0" />
+                                    <span className="truncate" title={invoice.repair.contact_no}>
+                                      {invoice.repair.contact_no}
+                                    </span>
+                                  </div>
+                                )}
+                                {invoice.customer_group_name && (
+                                  <span className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 shrink-0">
                                     {invoice.customer_group_name}
                                   </span>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums">
-                                <Phone className="h-3 w-3 text-gray-400 shrink-0" />
-                                <span className="truncate" title={invoice.repair?.contact_no || undefined}>
-                                  {invoice.repair?.contact_no || '—'}
-                                </span>
+                                )}
                               </div>
                             </div>
                           </div>
