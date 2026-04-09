@@ -343,7 +343,7 @@ export default function InvoiceDetail() {
   });
   const repairStatusOptions: { value: string; label: string }[] = repairStatusChoicesResponse?.data ?? [];
   const limitedRepairStatusOptions: { value: string; label: string; disabled?: boolean }[] = useMemo(() => {
-    const allowed = ['received', 'work_in_progress', 'delivered', 'not_repaired'] as const;
+    const allowed = ['received', 'work_in_progress', 'delivered'] as const;
     const allowedSet = new Set<string>(allowed);
     const byValue = new Map<string, { value: string; label: string }>(repairStatusOptions.map((o) => [o.value, o]));
 
@@ -882,13 +882,12 @@ export default function InvoiceDetail() {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
       const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
-      const initialStatus =
-        inv.repair.status === 'received' && hasProducts
-          ? 'work_in_progress'
-          : inv.repair.status;
+      const initialStatus = checkoutInvoiceType === 'pending'
+        ? (hasProducts ? 'work_in_progress' : 'received')
+        : inv.repair.status;
       setCheckoutRepairStatus(initialStatus);
     }
-  }, [showCheckoutModal, invoice?.data?.repair?.status, invoice?.data?.items?.length]);
+  }, [showCheckoutModal, checkoutInvoiceType, invoice?.data?.repair?.status, invoice?.data?.items?.length]);
 
   // Prefill repair delivery date from existing value (do not auto-set to today)
   useEffect(() => {
@@ -1067,12 +1066,15 @@ export default function InvoiceDetail() {
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
   const isDraftPendingCheckout = inv.status === 'draft' && checkoutInvoiceType === 'pending';
+  const hasProductsInCheckout = Array.isArray(inv.items) && inv.items.length > 0;
+  const forcedPendingRepairStatus = checkoutInvoiceType === 'pending'
+    ? (hasProductsInCheckout ? 'work_in_progress' : 'received')
+    : '';
   const effectiveCheckoutRepairStatus = (checkoutRepairStatus || inv.repair?.status || '').trim();
   const shouldShowCheckoutDeliveryDate =
   checkoutInvoiceType !== 'pending' && (
     effectiveCheckoutRepairStatus === 'done' ||
-    effectiveCheckoutRepairStatus === 'delivered' ||
-    effectiveCheckoutRepairStatus === 'not_repaired'
+    effectiveCheckoutRepairStatus === 'delivered'
   );
 
   // Group items by product only (not by barcode)
@@ -1328,23 +1330,10 @@ export default function InvoiceDetail() {
     // Get fresh invoice data
     const freshInvoice = queryClient.getQueryData(['invoice', invoiceId]) as any;
     const freshInv = freshInvoice?.data;
-    const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
-    const canSavePendingNotRepairedWithoutItems =
-      !!freshInv?.repair && checkoutInvoiceType === 'pending' && submitRepairStatus === 'not_repaired';
-
-    if ((!freshInv?.items || freshInv.items.length === 0) && canSavePendingNotRepairedWithoutItems) {
-      try {
-        await posApi.repair.updateStatus(invoiceId, { repair_status: 'not_repaired' });
-        await posApi.repair.update(invoiceId, { delivery_date: null });
-        await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
-        queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
-        setShowCheckoutModal(false);
-        return;
-      } catch (error: any) {
-        alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to save repair status');
-        return;
-      }
-    }
+    const submitRepairStatus =
+      checkoutInvoiceType === 'pending'
+        ? ((freshInv?.items?.length ?? 0) > 0 ? 'work_in_progress' : 'received')
+        : (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
 
     if (!freshInv?.items || freshInv.items.length === 0) {
       alert('Invoice has no items');
@@ -1482,8 +1471,7 @@ export default function InvoiceDetail() {
     // Include repair delivery date when invoice is a repair (from repair model, can be set/updated at checkout)
     const canSubmitDeliveryDate =
       submitRepairStatus === 'done' ||
-      submitRepairStatus === 'delivered' ||
-      submitRepairStatus === 'not_repaired';
+      submitRepairStatus === 'delivered';
     if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate.trim()) {
       checkoutData.delivery_date = checkoutDeliveryDate.trim();
     } else if (freshInv?.repair && canSubmitDeliveryDate && (checkoutDeliveryDate === '' || checkoutDeliveryDate === null)) {
@@ -4709,34 +4697,25 @@ export default function InvoiceDetail() {
                       )}
                     </label>
                     <Select
-                      value={checkoutRepairStatus || inv.repair.status}
+                      value={checkoutInvoiceType === 'pending' ? forcedPendingRepairStatus : (checkoutRepairStatus || inv.repair.status)}
                       onChange={(e) => {
                         const newStatus = e.target.value;
                         if ((e.target as HTMLSelectElement).selectedOptions?.[0]?.disabled) return;
                         setCheckoutRepairStatus(newStatus);
-                        if (newStatus !== 'done' && newStatus !== 'delivered' && newStatus !== 'not_repaired') {
+                        if (newStatus !== 'done' && newStatus !== 'delivered') {
                           setCheckoutDeliveryDate('');
                         }
                       }}
                       className="w-full"
+                      disabled={checkoutInvoiceType === 'pending'}
                     >
                       {limitedRepairStatusOptions
                         .filter((opt) => {
-                          // For pending invoice type, allow only:
-                          // received, not_repaired.
-                          // If status is auto-set to work_in_progress (after adding products),
-                          // keep it visible as the current selection.
-                          // If current status is outside this set, keep it visible as disabled "(current)".
+                          // For pending invoice type, status is frozen:
+                          // - work_in_progress when products exist
+                          // - received when there are no products
                           if (checkoutInvoiceType === 'pending') {
-                            const currentPendingStatus = (checkoutRepairStatus || inv.repair.status || '').trim();
-                            if (
-                              opt.value === 'received' ||
-                              opt.value === 'not_repaired' ||
-                              (opt.value === 'work_in_progress' && currentPendingStatus === 'work_in_progress')
-                            ) {
-                              return true;
-                            }
-                            return !!opt.disabled && opt.value === inv.repair.status;
+                            return opt.value === forcedPendingRepairStatus;
                           }
                           // When invoice type is NOT pending, only Delivered can be selected.
                           return opt.value === 'delivered';
@@ -4882,8 +4861,7 @@ export default function InvoiceDetail() {
                   const submitRepairStatus = (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
                   const canSubmitDeliveryDate =
                     submitRepairStatus === 'done' ||
-                    submitRepairStatus === 'delivered' ||
-                    submitRepairStatus === 'not_repaired';
+                    submitRepairStatus === 'delivered';
                   if (freshInv?.repair && submitRepairStatus) {
                     payload.repair_status = submitRepairStatus;
                   }
@@ -4903,10 +4881,7 @@ export default function InvoiceDetail() {
                   checkoutMutation.isPending ||
                   markCreditMutation.isPending ||
                   checkoutInvoiceType === 'credit' ||
-                  (
-                    (!inv?.items || inv.items.length === 0) &&
-                    !(inv?.repair && checkoutInvoiceType === 'pending' && (checkoutRepairStatus || inv.repair?.status || '').trim() === 'not_repaired')
-                  )
+                  (!inv?.items || inv.items.length === 0)
                 }
                 className="w-full sm:w-auto"
               >

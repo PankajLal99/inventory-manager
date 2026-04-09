@@ -48,7 +48,7 @@ export default function InternalLedger() {
   });
   const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(() => {
     const value = searchParams.get('credit_only');
-    if (value == null) return true;
+    if (value == null) return false;
     return value !== '0';
   });
   const [showFilters, setShowFilters] = useState(false);
@@ -93,8 +93,7 @@ export default function InternalLedger() {
     }
   }, [filters, datePreset, showCreditInvoicesOnly, searchParams, setSearchParams]);
 
-  // Internal Ledger shows customers whose name contains "MT SHOP"
-  const MTSHOP_NAME_SEARCH = 'MT SHOP';
+  // Internal Ledger is strict to MTSHOP customer group.
   const { data: customerGroupsData } = useQuery({
     queryKey: ['customer-groups'],
     queryFn: async () => {
@@ -109,36 +108,42 @@ export default function InternalLedger() {
     return g ? String(g.id) : null;
   }, [customerGroupsData]);
 
-  // Customer search for entry form: search by term, then filter to name containing MT SHOP
+  // Customer search for entry form: strict MTSHOP group
   const { data: customersResponse } = useQuery({
-    queryKey: ['customers', 'mtshop-name', customerSearch],
+    queryKey: ['customers', 'mtshop-group', customerSearch, mtshopGroupId],
     queryFn: async () => {
       const params: Record<string, string> = { search: customerSearch.trim() };
+      if (mtshopGroupId) params.customer_group = mtshopGroupId;
       const response = await customersApi.list(params);
       return response.data;
     },
-    enabled: customerSearch.trim().length > 0,
+    enabled: customerSearch.trim().length > 0 && !!mtshopGroupId,
     retry: false,
   });
 
-  // All customers with "MT SHOP" in name (for filters and list)
+  // All customers in MTSHOP group (for filters and list)
   const { data: allCustomers } = useQuery({
-    queryKey: ['customers', 'mtshop-name', MTSHOP_NAME_SEARCH],
+    queryKey: ['customers', 'mtshop-group', 'all', mtshopGroupId],
     queryFn: async () => {
-      const response = await customersApi.list({ search: MTSHOP_NAME_SEARCH });
+      const params: Record<string, string> = {};
+      if (mtshopGroupId) params.customer_group = mtshopGroupId;
+      const response = await customersApi.list(params);
       return response.data;
     },
+    enabled: !!mtshopGroupId,
     retry: false,
   });
 
-  // Customer list for "Customers" modal: all with "MT SHOP" in name; filter by customerListSearch client-side
+  // Customer list for "Customers" modal: all in MTSHOP group; filter by customerListSearch client-side
   const { data: customerListResponse } = useQuery({
-    queryKey: ['customers', 'mtshop-name', showCustomerListModal],
+    queryKey: ['customers', 'mtshop-group', 'list-modal', showCustomerListModal, mtshopGroupId],
     queryFn: async () => {
-      const response = await customersApi.list({ search: MTSHOP_NAME_SEARCH });
+      const params: Record<string, string> = {};
+      if (mtshopGroupId) params.customer_group = mtshopGroupId;
+      const response = await customersApi.list(params);
       return response.data;
     },
-    enabled: showCustomerListModal,
+    enabled: showCustomerListModal && !!mtshopGroupId,
     retry: false,
   });
 
@@ -217,7 +222,7 @@ export default function InternalLedger() {
       setCustomerSearch('');
       setNewCustomerData({ name: '', phone: '', email: '', address: '' });
       setShowCreateCustomerModal(false);
-      queryClient.invalidateQueries({ queryKey: ['customers', 'mtshop'] });
+      queryClient.invalidateQueries({ queryKey: ['customers', 'mtshop-group'] });
       toast('Shop boy (customer) created successfully', 'success');
     },
     onError: (error: any) => {
@@ -259,11 +264,7 @@ export default function InternalLedger() {
     return [];
   })();
 
-  // Search results: only customers whose name contains "MT SHOP"
-  const customers = useMemo(() => {
-    const needle = MTSHOP_NAME_SEARCH.toUpperCase();
-    return customersRaw.filter((c: any) => (c.name || '').toUpperCase().includes(needle));
-  }, [customersRaw]);
+  const customers = useMemo(() => customersRaw, [customersRaw]);
 
   const searchResults = useMemo(() => {
     return customers.map((c: any) => ({ ...c, type: 'customer' }));
@@ -272,8 +273,7 @@ export default function InternalLedger() {
   const allCustomersList = useMemo(() => {
     if (!allCustomers) return [];
     const raw = Array.isArray(allCustomers.results) ? allCustomers.results : Array.isArray(allCustomers.data) ? allCustomers.data : Array.isArray(allCustomers) ? allCustomers : [];
-    const needle = MTSHOP_NAME_SEARCH.toUpperCase();
-    return raw.filter((c: any) => (c.name || '').toUpperCase().includes(needle));
+    return raw;
   }, [allCustomers]);
 
   const entries = (() => {
@@ -1155,7 +1155,7 @@ export default function InternalLedger() {
             />
           </div>
 
-          {/* Customer List — name contains "MT SHOP" */}
+          {/* Customer List — MTSHOP group only */}
           <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg">
             {(() => {
               const customerListRaw = (() => {
@@ -1181,7 +1181,7 @@ export default function InternalLedger() {
                 return (
                   <div className="p-8 text-center text-gray-500">
                     <Users className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                    <p>No customers with &quot;MT SHOP&quot; in name found</p>
+                    <p>No customers found in MTSHOP group</p>
                     {customerListSearch && (
                       <p className="text-sm mt-1">Try a different search term</p>
                     )}
