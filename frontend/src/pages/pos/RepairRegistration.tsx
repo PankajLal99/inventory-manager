@@ -462,7 +462,10 @@ export default function RepairRegistration() {
                                                             <User className="h-5 w-5 text-gray-400 group-hover:text-white" />
                                                         </div>
                                                         <div>
-                                                            <p className="font-black text-gray-900">{c.name}</p>
+                                                            <p className="font-black text-gray-900">
+                                                                {c.name}
+                                                                {` (${c.customer_group_name || c.customer_group?.name || 'No Group'})`}
+                                                            </p>
                                                             <p className="text-xs font-black text-gray-400 group-hover:text-blue-600 transition-colors uppercase">{c.phone || 'No Phone'}</p>
                                                         </div>
                                                     </div>
