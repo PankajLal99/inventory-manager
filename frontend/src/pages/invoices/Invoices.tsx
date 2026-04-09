@@ -259,7 +259,7 @@ export default function Invoices() {
       store: defaultStore?.id ?? undefined,
       page: useFilteredMode ? undefined : currentPage,
       search: search.trim() || undefined,
-      ordering: useFilteredMode ? 'created_at' : undefined,
+      ordering: '-created_at',
     }),
     enabled: true,
     placeholderData: keepPreviousData,
@@ -333,7 +333,7 @@ export default function Invoices() {
     if (invoice.invoice_type === 'defective') return false;
     if (isRepairInvoice) return false;
     return true;
-  });
+  }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
