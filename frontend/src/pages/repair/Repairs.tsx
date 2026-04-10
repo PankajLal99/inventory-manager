@@ -669,13 +669,13 @@ export default function Repairs() {
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">
-                Search (invoice #, customer name, contact, model, barcode)
+                Search (invoice #, customer, contact, model, barcode, short code)
               </label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
                   type="text"
-                  placeholder="Invoice number, customer name, contact, model..."
+                  placeholder="Invoice #, customer, contact, model, barcode, short code..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-10"

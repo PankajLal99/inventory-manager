@@ -319,7 +319,7 @@ def repair_invoices_list(request):
     if repair_barcode:
         queryset = queryset.filter(repair__barcode__icontains=repair_barcode)
     
-    # Search by invoice number, customer name, repair contact, model, or barcode
+    # Search by invoice/customer/repair fields and sold item barcode short code.
     search = request.query_params.get('search', None)
     invoice_number = request.query_params.get('invoice_number', None)
     if search:
@@ -329,7 +329,12 @@ def repair_invoices_list(request):
             | Q(repair__contact_no__icontains=search)
             | Q(repair__model_name__icontains=search)
             | Q(repair__barcode__icontains=search)
+            | Q(items__barcode__short_code__icontains=search)
+            | Q(items__barcode__barcode__icontains=search)
+            | Q(items__sold_barcode_value__icontains=search)
         )
+        # Item-level joins can duplicate invoices; keep unique invoices in the list.
+        queryset = queryset.distinct()
     elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
 
