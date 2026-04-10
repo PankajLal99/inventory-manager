@@ -18,8 +18,8 @@ from backend.parties.models import LedgerEntry
 from backend.pos.models import Invoice, Expenses, Payment, InvoiceItem
 from backend.pos.views import (
     annotate_invoice_list_profit,
-    filter_repair_invoices_by_list_date,
     filter_repair_invoices_for_repair_profit,
+    filter_repair_shop_invoices_by_delivered_delivery_date,
 )
 
 
@@ -132,12 +132,12 @@ def optimized_dashboard_kpis(request):
     Dashboard KPIs (date range on invoice.created_at date, expense.expense_date).
 
     - total_cash: pure cash invoices + mixed cash legs + manual LedgerEntry credits (cash / mixed cash leg).
-      Repair invoices (including mixed) are included by repair list date logic
-      (created_at OR repair.updated_at OR delivery_date).
+      Repair-shop amounts count only when repair.status=delivered and repair.delivery_date is in range
+      (fallback: activity dates if delivery_date unset); not-delivered repairs are excluded.
     - total_upi: pure UPI invoices + mixed UPI legs + manual LedgerEntry credits (UPI / mixed UPI leg).
-      Repair invoices (including mixed) are included by repair list date logic
-      (created_at OR repair.updated_at OR delivery_date).
-    - total_credit / credit_by_store: Σ Invoice.total where invoice_type=credit.
+      Same repair-shop delivery-window rule as total_cash.
+    - total_credit / credit_by_store: Σ Invoice.total where invoice_type=credit; non-repair rows use
+      invoice.created_at in range; repair-shop credit uses the same delivered + delivery_date window.
     - Per-store cash/upi rows include from_invoice_* and from_mixed_* bifurcation.
     - total_inhand: total_cash - total_expenses.
     - cash_breakdown / online_breakdown: retail (non-repair) pure invoices, repair pure, mixed legs, manual.
@@ -204,15 +204,15 @@ def optimized_dashboard_kpis(request):
     # Counter invoices remain created_at date scoped.
     cash_counter_qs = inv_base.filter(invoice_type='cash').exclude(store__shop_type='repair')
     upi_counter_qs = inv_base.filter(invoice_type='upi').exclude(store__shop_type='repair')
-    # Repair invoices are included when created/updated/delivery date falls in range.
-    cash_repair_qs = filter_repair_invoices_by_list_date(
+    # Repair-shop cash/UPI: only after handover (delivered + delivery_date window).
+    cash_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
         Invoice.objects.filter(invoice_type='cash', store__shop_type='repair').exclude(
             status__in=['void', 'draft']
         ),
         date_from,
         date_to,
     )
-    upi_repair_qs = filter_repair_invoices_by_list_date(
+    upi_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
         Invoice.objects.filter(invoice_type='upi', store__shop_type='repair').exclude(
             status__in=['void', 'draft']
         ),
@@ -226,7 +226,7 @@ def optimized_dashboard_kpis(request):
         Q(id__in=upi_counter_qs.values('id')) | Q(id__in=upi_repair_qs.values('id'))
     )
     mixed_counter_qs = inv_base.filter(invoice_type='mixed').exclude(store__shop_type='repair')
-    mixed_repair_qs = filter_repair_invoices_by_list_date(
+    mixed_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
         Invoice.objects.filter(invoice_type='mixed', store__shop_type='repair').exclude(
             status__in=['void', 'draft']
         ),
@@ -236,7 +236,14 @@ def optimized_dashboard_kpis(request):
     mixed_inv_qs = Invoice.objects.filter(
         Q(id__in=mixed_counter_qs.values('id')) | Q(id__in=mixed_repair_qs.values('id'))
     )
-    credit_qs = inv_base.filter(invoice_type='credit')
+    credit_counter_qs = inv_base.filter(invoice_type='credit').exclude(store__shop_type='repair')
+    credit_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
+        Invoice.objects.filter(invoice_type='credit', store__shop_type='repair').exclude(
+            status__in=['void', 'draft']
+        ),
+        date_from,
+        date_to,
+    )
 
     pure_cash_total = _decimal_or_zero(
         cash_inv_qs.aggregate(t=Sum('total', output_field=money))['t']
@@ -299,8 +306,8 @@ def optimized_dashboard_kpis(request):
     )
 
     total_credit = _decimal_or_zero(
-        credit_qs.aggregate(t=Sum('total', output_field=money))['t']
-    )
+        credit_counter_qs.aggregate(t=Sum('total', output_field=money))['t']
+    ) + _decimal_or_zero(credit_repair_qs.aggregate(t=Sum('total', output_field=money))['t'])
 
     def _by_store_invoice_totals(qs):
         rows = qs.values('store_id', 'store__name', 'store__shop_type').annotate(
@@ -395,18 +402,22 @@ def optimized_dashboard_kpis(request):
     cash_by_store = _serialize_merged_rows(cash_merged, 'from_invoice_cash', 'from_mixed_cash')
     upi_by_store = _serialize_merged_rows(upi_merged, 'from_invoice_upi', 'from_mixed_upi')
 
-    credit_by_store_rows = credit_qs.values('store_id', 'store__name', 'store__shop_type').annotate(
-        total_sum=Sum('total', output_field=money)
-    ).order_by('-total_sum', 'store__name')
-    credit_by_store = [
-        {
-            'store_id': r['store_id'],
-            'store_name': r['store__name'] or '',
-            'shop_type': r['store__shop_type'] or '',
-            'amount': float(_decimal_or_zero(r['total_sum'])),
-        }
-        for r in credit_by_store_rows
-    ]
+    credit_by_store_merged = _merge_store_totals(
+        _by_store_invoice_totals(credit_counter_qs),
+        _by_store_invoice_totals(credit_repair_qs),
+    )
+    credit_by_store = sorted(
+        (
+            {
+                'store_id': sid,
+                'store_name': v['store_name'],
+                'shop_type': v['shop_type'],
+                'amount': float(_decimal_or_zero(v['amount'])),
+            }
+            for sid, v in credit_by_store_merged.items()
+        ),
+        key=lambda x: (-x['amount'], x['store_name']),
+    )
 
     total_expenses = _decimal_or_zero(
         Expenses.objects.filter(

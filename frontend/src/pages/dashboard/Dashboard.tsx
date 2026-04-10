@@ -686,6 +686,7 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
               <DashboardMetricCard
                 title="Total cash"
+                subtitle="Repair shop amounts: delivered only, by delivery date in range."
                 icon={<DollarSign className="h-5 w-5 text-green-700" />}
                 totalFormatted={`₹${formatNumber(totalCash, 2)}`}
                 gradientClass="bg-gradient-to-br from-green-50 to-green-100"
@@ -693,13 +694,17 @@ export default function Dashboard() {
                 iconClass=""
                 breakdownRows={[
                   { label: 'Retail (counter) — cash invoices', amount: Number(cashBreakdown.retail_counter ?? 0) },
-                  { label: 'Repair — cash invoices', amount: Number(cashBreakdown.repair ?? 0) },
+                  {
+                    label: 'Repair — cash (status delivered, delivery date in range)',
+                    amount: Number(cashBreakdown.repair ?? 0),
+                  },
                   { label: 'Mix cash (mixed-payment cash legs)', amount: Number(cashBreakdown.mix_cash ?? 0) },
                   { label: 'Manual cash (ledger, no invoice)', amount: Number(cashBreakdown.manual_cash ?? 0) },
                 ]}
               />
               <DashboardMetricCard
                 title="Total online"
+                subtitle="Repair shop amounts: delivered only, by delivery date in range."
                 icon={<CreditCard className="h-5 w-5 text-blue-700" />}
                 totalFormatted={`₹${formatNumber(totalUpi, 2)}`}
                 gradientClass="bg-gradient-to-br from-blue-50 to-blue-100"
@@ -707,7 +712,10 @@ export default function Dashboard() {
                 iconClass=""
                 breakdownRows={[
                   { label: 'Retail (counter) — UPI invoices', amount: Number(onlineBreakdown.retail_counter ?? 0) },
-                  { label: 'Repair — UPI invoices', amount: Number(onlineBreakdown.repair ?? 0) },
+                  {
+                    label: 'Repair — UPI (status delivered, delivery date in range)',
+                    amount: Number(onlineBreakdown.repair ?? 0),
+                  },
                   { label: 'Mix UPI (mixed-payment UPI legs)', amount: Number(onlineBreakdown.mix_upi ?? 0) },
                   { label: 'Manual UPI (ledger, no invoice)', amount: Number(onlineBreakdown.manual_upi ?? 0) },
                 ]}
@@ -723,6 +731,7 @@ export default function Dashboard() {
               />
               <DashboardMetricCard
                 title="Total credit"
+                subtitle="Repair shops: only delivered jobs, by delivery date in range. Other shops: invoice date in range."
                 icon={<CreditCard className="h-5 w-5 text-violet-700" />}
                 totalFormatted={`₹${formatNumber(totalCredit, 2)}`}
                 gradientClass="bg-gradient-to-br from-violet-50 to-violet-100"

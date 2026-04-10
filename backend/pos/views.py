@@ -222,6 +222,41 @@ def filter_repair_invoices_for_repair_profit(queryset, date_from, date_to):
     return queryset
 
 
+def filter_repair_shop_invoices_by_delivered_delivery_date(queryset, date_from, date_to):
+    """
+    Dashboard Total Cash / Total Online / credit repair rows: attribute only after handover.
+
+    Includes repair-shop invoices that have a Repair row with status ``delivered`` and
+    ``repair.delivery_date`` in the selected window. If ``delivery_date`` is unset, falls
+    back to invoice ``created_at`` / ``repair.updated_at`` in the window (same idea as
+    profit KPI). Jobs not yet delivered are excluded (no revenue until handover).
+    """
+    qs = queryset.filter(repair__isnull=False, repair__status='delivered')
+    if not date_from and not date_to:
+        return qs
+
+    if date_from and date_to:
+        activity = (
+            Q(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            | Q(repair__updated_at__date__gte=date_from, repair__updated_at__date__lte=date_to)
+        )
+        return qs.filter(
+            Q(repair__delivery_date__gte=date_from, repair__delivery_date__lte=date_to)
+            | (Q(repair__delivery_date__isnull=True) & activity)
+        )
+    if date_from:
+        activity = Q(created_at__date__gte=date_from) | Q(repair__updated_at__date__gte=date_from)
+        return qs.filter(
+            Q(repair__delivery_date__gte=date_from) | (Q(repair__delivery_date__isnull=True) & activity)
+        )
+    if date_to:
+        activity = Q(created_at__date__lte=date_to) | Q(repair__updated_at__date__lte=date_to)
+        return qs.filter(
+            Q(repair__delivery_date__lte=date_to) | (Q(repair__delivery_date__isnull=True) & activity)
+        )
+    return qs
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def repair_invoices_list(request):
