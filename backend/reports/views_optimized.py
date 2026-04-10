@@ -16,7 +16,11 @@ from backend.catalog.models import Barcode, DefectiveProductMoveOut
 from backend.locations.models import Store
 from backend.parties.models import LedgerEntry
 from backend.pos.models import Invoice, Expenses, Payment, InvoiceItem
-from backend.pos.views import annotate_invoice_list_profit, filter_repair_invoices_by_list_date
+from backend.pos.views import (
+    annotate_invoice_list_profit,
+    filter_repair_invoices_by_list_date,
+    filter_repair_invoices_for_repair_profit,
+)
 
 
 def _decimal_or_zero(value):
@@ -163,8 +167,9 @@ def optimized_dashboard_kpis(request):
     - counter_profit_by_store / counter_profit_by_invoice_type: same counter invoice set, grouped by store or
       invoice_type (sums match counter_profit).
     - repair_profit: same profit metric with repair_list profile for repair-shop invoices with Repair status
-      done or delivered; invoice_type=pending excluded; date window matches Repairs list
-      (created_at / repair.updated_at / delivery_date).
+      done or delivered; invoice_type=pending excluded; date window matches Repairs page intent:
+      delivered jobs by delivery_date (fallback: created/updated if delivery_date unset); done jobs by
+      created_at / repair.updated_at only (not delivery_date).
     - stock_value: Σ Coalesce(PurchaseItem.unit_price, 0) per barcode with tag new or returned (available stock);
       excludes barcodes whose purchase_item.purchase is draft.
     - defective_product_count / defective_barcode_count / defective_purchase_value: same basis as Products → Defective tab
@@ -640,7 +645,7 @@ def optimized_dashboard_kpis(request):
         repair__isnull=False,
         repair__status__in=['done', 'delivered'],
     ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
-    repair_inv = filter_repair_invoices_by_list_date(repair_inv, date_from, date_to)
+    repair_inv = filter_repair_invoices_for_repair_profit(repair_inv, date_from, date_to)
     repair_qs = annotate_invoice_list_profit(repair_inv, profile='repair_list')
     repair_profit = _sum_list_profit(repair_qs, money)
 
@@ -701,7 +706,7 @@ def optimized_dashboard_kpis(request):
         repair__isnull=False,
         repair__status__in=['done', 'delivered'],
     ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
-    repair_inv_pb = filter_repair_invoices_by_list_date(repair_inv_pb, pb_from, pb_to)
+    repair_inv_pb = filter_repair_invoices_for_repair_profit(repair_inv_pb, pb_from, pb_to)
     repair_pb_qs = annotate_invoice_list_profit(repair_inv_pb, profile='repair_list')
     repair_profit_billing_period = _sum_list_profit(repair_pb_qs, money)
     overall_profit_billing_period = counter_profit_billing_period + repair_profit_billing_period
@@ -1188,7 +1193,7 @@ def overall_profit_billing_period_details(request):
         repair__isnull=False,
         repair__status__in=['done', 'delivered'],
     ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
-    repair_inv = filter_repair_invoices_by_list_date(repair_inv, date_from, date_to)
+    repair_inv = filter_repair_invoices_for_repair_profit(repair_inv, date_from, date_to)
     repair_qs = annotate_invoice_list_profit(repair_inv, profile='repair_list').select_related(
         'store', 'customer', 'repair'
     )

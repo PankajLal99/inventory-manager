@@ -786,6 +786,7 @@ export default function Dashboard() {
                 />
                 <DashboardMetricCard
                   title="Repair profit"
+                  subtitle="Delivered: delivery date in range. Done: invoice created or repair updated in range."
                   icon={<Wrench className="h-5 w-5 text-purple-700" />}
                   totalFormatted={`₹${formatNumber(repairProfit, 2)}`}
                   gradientClass="bg-gradient-to-br from-purple-50 to-purple-100"

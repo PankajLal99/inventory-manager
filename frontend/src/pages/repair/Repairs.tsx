@@ -898,13 +898,13 @@ export default function Repairs() {
                   </Badge>
                   {hasGroupDateSelector && (
                     <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className="text-xs text-gray-500 whitespace-nowrap">Date (repair or delivery)</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">Delivery date</span>
                       <input
                         type="date"
                         value={selectedGroupDate}
                         onChange={(e) => setGroupDateFilters((prev) => ({ ...prev, [group.status]: e.target.value }))}
                         className="h-8 rounded-md border border-gray-200 px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        aria-label={`Filter ${group.label} by repair or delivery date`}
+                        aria-label={`Filter ${group.label} by delivery date`}
                       />
                     </div>
                   )}
@@ -1134,7 +1134,9 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell colSpan={10}> </TableCell>
+                      <TableCell colSpan={10} className="text-right text-gray-700 text-xs whitespace-nowrap">
+                        Profit (Σ paid − Σ total)
+                      </TableCell>
                       <TableCell align="right" className="text-emerald-700 text-xs tabular-nums">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
@@ -1312,9 +1314,9 @@ export default function Repairs() {
                   );
                 })}
                 {canSeeTotalColumn && displayedGroupItems.length > 0 && (
-                  <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center">
-                    <span className="text-gray-700"> </span>
-                    <span className="text-emerald-700">₹{formatNumber(groupProfit)}</span>
+                  <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center gap-3">
+                    <span className="text-gray-700">Profit (Σ paid − Σ total)</span>
+                    <span className="text-emerald-700 tabular-nums shrink-0">₹{formatNumber(groupProfit)}</span>
                   </div>
                 )}
               </div>

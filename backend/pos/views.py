@@ -179,6 +179,49 @@ def filter_repair_invoices_by_list_date(queryset, date_from, date_to):
     return queryset
 
 
+def filter_repair_invoices_for_repair_profit(queryset, date_from, date_to):
+    """
+    Date window for repair profit KPI (aligns with Repairs page).
+
+    - delivered: repair.delivery_date in range; if delivery_date is unset, fall back to
+      invoice created_at / repair.updated_at in range.
+    - done: invoice created_at or repair.updated_at in range only (delivery_date ignored),
+      so jobs still in “Done” are not attributed to a day by a planned delivery date alone.
+    """
+    if not date_from and not date_to:
+        return queryset
+
+    if date_from and date_to:
+        activity = (
+            Q(created_at__date__gte=date_from, created_at__date__lte=date_to)
+            | Q(repair__updated_at__date__gte=date_from, repair__updated_at__date__lte=date_to)
+        )
+        delivered = Q(repair__status='delivered') & (
+            Q(repair__delivery_date__gte=date_from, repair__delivery_date__lte=date_to)
+            | (Q(repair__delivery_date__isnull=True) & activity)
+        )
+        done = Q(repair__status='done') & activity
+        return queryset.filter(delivered | done)
+
+    if date_from:
+        activity = Q(created_at__date__gte=date_from) | Q(repair__updated_at__date__gte=date_from)
+        delivered = Q(repair__status='delivered') & (
+            Q(repair__delivery_date__gte=date_from) | (Q(repair__delivery_date__isnull=True) & activity)
+        )
+        done = Q(repair__status='done') & activity
+        return queryset.filter(delivered | done)
+
+    if date_to:
+        activity = Q(created_at__date__lte=date_to) | Q(repair__updated_at__date__lte=date_to)
+        delivered = Q(repair__status='delivered') & (
+            Q(repair__delivery_date__lte=date_to) | (Q(repair__delivery_date__isnull=True) & activity)
+        )
+        done = Q(repair__status='done') & activity
+        return queryset.filter(delivered | done)
+
+    return queryset
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def repair_invoices_list(request):
