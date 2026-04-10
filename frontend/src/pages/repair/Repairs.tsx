@@ -1315,7 +1315,7 @@ export default function Repairs() {
                 })}
                 {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center gap-3">
-                    <span className="text-gray-700">Profit (Σ paid − Σ total)</span>
+                    <span className="text-gray-700"> </span>
                     <span className="text-emerald-700 tabular-nums shrink-0">₹{formatNumber(groupProfit)}</span>
                   </div>
                 )}
