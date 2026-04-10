@@ -1134,7 +1134,9 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell>{' '}</TableCell>
+                      <TableCell colSpan={10} className="text-right text-gray-700 text-xs whitespace-nowrap">
+                      {' '}
+                      </TableCell>
                       <TableCell align="right" className="text-emerald-700 text-xs tabular-nums">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
