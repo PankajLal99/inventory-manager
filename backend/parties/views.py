@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q, Sum, Count, F, Case, When, Value, Subquery, OuterRef
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.core.cache import cache
 from datetime import date, datetime
@@ -481,6 +482,39 @@ def payment_reminder_calendar(request):
 
 
 # Supplier views
+def _sync_customer_name_for_supplier_rename(old_name: str, new_name: str) -> None:
+    """
+    Keep customer/ledger naming in sync when a supplier is renamed.
+    Ledger screens read customer.name via FK, so renaming the customer is enough.
+    """
+    old_name = (old_name or '').strip()
+    new_name = (new_name or '').strip()
+    if not old_name or not new_name:
+        return
+    if old_name.lower() == new_name.lower():
+        return
+
+    matching_customers = Customer.objects.filter(name__iexact=old_name).exclude(name__iexact=new_name)
+    if not matching_customers.exists():
+        return
+
+    # Customer.name is unique, so if target name already exists, skip rename safely.
+    if Customer.objects.filter(name__iexact=new_name).exclude(name__iexact=old_name).exists():
+        return
+
+    from backend.core.model_cache import invalidate_customer_cache
+
+    for customer in matching_customers:
+        customer.name = new_name
+        try:
+            with transaction.atomic():
+                customer.save(update_fields=['name'])
+        except IntegrityError:
+            # Keep supplier update successful even if customer rename conflicts.
+            continue
+        invalidate_customer_cache(customer)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def supplier_list_create(request):
@@ -515,15 +549,19 @@ def supplier_detail(request, pk):
         serializer = SupplierSerializer(supplier)
         return Response(serializer.data)
     elif request.method == 'PUT':
+        old_name = supplier.name
         serializer = SupplierSerializer(supplier, data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            updated_supplier = serializer.save()
+            _sync_customer_name_for_supplier_rename(old_name, updated_supplier.name)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     elif request.method == 'PATCH':
+        old_name = supplier.name
         serializer = SupplierSerializer(supplier, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
+            updated_supplier = serializer.save()
+            _sync_customer_name_for_supplier_rename(old_name, updated_supplier.name)
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE

@@ -156,6 +156,12 @@ export default function Vendors() {
     mutationFn: (data: any) => purchasingApi.suppliers.update(editingSupplierId!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
       setShowSupplierForm(false);
       setIsEditing(false);
       setEditingSupplierId(null);
