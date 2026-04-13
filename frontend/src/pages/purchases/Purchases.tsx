@@ -144,7 +144,12 @@ function clearPrintedFlagsInPurchasesInfiniteCache(old: unknown, purchaseId: num
 export default function Purchases() {
   const user = auth.getUser();
   const userGroups = user?.groups || [];
-  const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
+  const isAdminUser = Boolean(
+    user?.is_admin ||
+    user?.is_superuser ||
+    user?.is_staff ||
+    userGroups.some((group: string) => group.includes('Admin'))
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
   const [supplierFilterSearch, setSupplierFilterSearch] = useState(''); // For typable filter dropdown
@@ -713,6 +718,7 @@ export default function Purchases() {
   };
 
   const handleDelete = (id: number) => {
+    if (!isAdminUser) return;
     if (
       confirm(
         'Archive this purchase? It will be hidden from lists; related data is kept. Non-sold barcodes from this purchase are archived; sold units stay linked for invoices.'
@@ -1687,7 +1693,7 @@ export default function Purchases() {
                               <span>Stock</span>
                             </Button>
                           )}
-                          {!isRetailUser && (
+                          {isAdminUser && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -1963,7 +1969,7 @@ export default function Purchases() {
                             <Store className="h-4 w-4" />
                           </Button>
                         )}
-                        {!isRetailUser && (
+                        {isAdminUser && (
                           <Button
                             variant="outline"
                             size="sm"

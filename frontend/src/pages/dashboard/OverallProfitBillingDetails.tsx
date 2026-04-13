@@ -73,6 +73,12 @@ function addDaysIso(dateIso: string, days: number): string {
   return `${y}-${m}-${day}`;
 }
 
+function isSundayIso(dateIso: string): boolean {
+  const d = new Date(`${dateIso}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getDay() === 0;
+}
+
 export default function OverallProfitBillingDetails() {
   const [billingMonth, setBillingMonth] = useState(currentBillingMonthLabel);
   const [collapsedStoreIds, setCollapsedStoreIds] = useState<Set<number>>(() => new Set());
@@ -128,6 +134,11 @@ export default function OverallProfitBillingDetails() {
         } else {
           existing.retailProfit += Number(inv.profit || 0);
         }
+        // Always mark Sundays, even when there is invoice activity.
+        if (isSundayIso(date)) {
+          existing.isHoliday = true;
+          existing.holidayLabel = 'Sunday';
+        }
         byDate.set(date, existing);
       });
     });
@@ -139,8 +150,7 @@ export default function OverallProfitBillingDetails() {
       for (let i = 0; i < totalDays; i += 1) {
         const dayIso = addDaysIso(rangeFrom, i);
         if (byDate.has(dayIso)) continue;
-        const day = new Date(`${dayIso}T12:00:00`);
-        const isSunday = day.getDay() === 0;
+        const isSunday = isSundayIso(dayIso);
         const isFuture = dayIso > todayIso;
         byDate.set(dayIso, {
           date: dayIso,
