@@ -394,6 +394,41 @@ class InvoiceSerializer(serializers.ModelSerializer):
         return float(obj.total or Decimal('0.00'))
 
 
+class RepairInvoiceListSerializer(serializers.ModelSerializer):
+    """
+    Lean serializer for Repairs list endpoint.
+    Avoids nested items/payments payload (major win for unpaginated repair list).
+    """
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
+    store_name = serializers.CharField(source='store.name', read_only=True)
+    repair = RepairSerializer(read_only=True)
+    computed_total = serializers.SerializerMethodField()
+    computed_paid = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Invoice
+        fields = [
+            'id', 'invoice_number', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name',
+            'status', 'invoice_type', 'total', 'paid_amount', 'created_at', 'repair', 'computed_total', 'computed_paid'
+        ]
+
+    def get_computed_total(self, obj):
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_total_agg', Decimal('0.00')) or Decimal('0.00'))
+        return float(obj.total or Decimal('0.00'))
+
+    def get_computed_paid(self, obj):
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_paid_agg', Decimal('0.00')) or Decimal('0.00'))
+        paid_amount = obj.paid_amount or Decimal('0.00')
+        if paid_amount > 0:
+            return float(paid_amount)
+        return float(obj.total or Decimal('0.00'))
+
+
 class ReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
     product_sku = serializers.SerializerMethodField()

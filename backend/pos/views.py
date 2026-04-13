@@ -31,7 +31,7 @@ from backend.parties.internal_ledger_utils import (
 )
 from .serializers import (
     POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
-    InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
+    RepairInvoiceListSerializer, InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
 )
 from backend.catalog.label_generator import generate_label_image
 
@@ -269,7 +269,6 @@ def repair_invoices_list(request):
         store__in=repair_stores,
         repair__isnull=False  # Only invoices with Repair records
     ).select_related('customer', 'store', 'created_by', 'repair')
-    queryset = _with_invoice_list_prefetches(queryset)
 
     ordering_param = request.query_params.get('ordering', '-repair__updated_at')
     if ordering_param == 'created_at':
@@ -354,10 +353,9 @@ def repair_invoices_list(request):
 
     # Default view stays paginated; filtered or explicitly unpaginated view returns full result set.
     if has_active_filters or force_unpaginated:
-        serializer = InvoiceSerializer(
+        serializer = RepairInvoiceListSerializer(
             queryset,
             many=True,
-            context={'amount_profile': 'repair_list'},
         )
         return Response({
             'results': serializer.data,
@@ -377,10 +375,9 @@ def repair_invoices_list(request):
     paginator = Paginator(queryset, limit)
     page_obj = paginator.get_page(page)
     
-    serializer = InvoiceSerializer(
+    serializer = RepairInvoiceListSerializer(
         page_obj,
         many=True,
-        context={'amount_profile': 'repair_list'},
     )
     return Response({
         'results': serializer.data,
