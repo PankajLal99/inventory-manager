@@ -137,6 +137,7 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   cancelled: 'bg-red-600',
   other: 'bg-gray-400',
 };
+const NOT_REPAIRED_DISPLAY_LIMIT = 20;
 
 /** Sort repair invoices by status for table display, then by most recently updated within each status. */
 function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; updated_at?: string } | null; created_at?: string }>(items: T[]): T[] {
@@ -462,8 +463,16 @@ export default function Repairs() {
   const canSeeSuperMetrics = (user?.groups || []).includes('Super');
   const canSeeTotalColumn = canSeeSuperMetrics;
 
-  // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
-  const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
+  // Single "Not Repaired" group: keep latest rows only to avoid an oversized section.
+  const allNotRepairedItems = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
+  const allNotRepaired = allNotRepairedItems
+    .slice()
+    .sort((a, b) => {
+      const dateA = a.repair?.updated_at || a.created_at || '';
+      const dateB = b.repair?.updated_at || b.created_at || '';
+      return dateB.localeCompare(dateA);
+    })
+    .slice(0, NOT_REPAIRED_DISPLAY_LIMIT);
 
   // Status groups: include delivered, but keep old delivered only in Old Repair.
   const STATUS_ORDER_MAIN = STATUS_ORDER.filter((s) => s !== 'not_repaired');
@@ -910,7 +919,12 @@ export default function Repairs() {
                   )}
                 </div>
                 {isNotRepairedGroup && (
-                  <p className="text-sm text-gray-500 ml-5">Click to expand</p>
+                  <p className="text-sm text-gray-500 ml-5">
+                    Click to expand
+                    {allNotRepairedItems.length > NOT_REPAIRED_DISPLAY_LIMIT
+                      ? ` · showing latest ${NOT_REPAIRED_DISPLAY_LIMIT} of ${allNotRepairedItems.length}`
+                      : ''}
+                  </p>
                 )}
               </div>
 

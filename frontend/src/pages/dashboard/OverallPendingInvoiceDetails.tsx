@@ -134,7 +134,7 @@ export default function OverallPendingInvoiceDetails() {
                               </Link>
                             </td>
                             <td className="px-4 py-2.5 text-gray-700">
-                              {inv.created_at ? formatDateDDMMYYYY(inv.created_at.slice(0, 10)) : '—'}
+                              {inv.created_at ? formatDateDDMMYYYY(inv.created_at) : '—'}
                             </td>
                             <td className="px-4 py-2.5 text-gray-700">{inv.customer_name || 'Walk-in'}</td>
                             <td className="px-4 py-2.5">

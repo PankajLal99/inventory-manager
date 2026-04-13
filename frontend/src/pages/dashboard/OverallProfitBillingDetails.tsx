@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, ChevronDown, ChevronRight, Coins, CreditCard, Receipt, RefreshCw, Wallet } from 'lucide-react';
 import { reportsApi } from '../../lib/api';
-import { formatDateDDMMYYYY, formatNumber, toLocalDateString } from '../../lib/utils';
+import { formatDateDDMMYYYY, formatNumber, getWeekdayName, toIsoDateString, toLocalDateString } from '../../lib/utils';
 
 type InvoiceRow = {
   id: number;
@@ -50,21 +50,29 @@ function formatBillingMonthLabel(yyyyMm: string): string {
 }
 
 function isDateWithinRange(date: string, from?: string, to?: string): boolean {
-  if (!date) return false;
-  if (from && date < from) return false;
-  if (to && date > to) return false;
+  const dateIso = toIsoDateString(date);
+  const fromIso = toIsoDateString(from);
+  const toIso = toIsoDateString(to);
+  if (!dateIso) return false;
+  if (fromIso && dateIso < fromIso) return false;
+  if (toIso && dateIso > toIso) return false;
   return true;
 }
 
 function dateDiffInDaysInclusive(from: string, to: string): number {
-  const start = new Date(`${from}T12:00:00`);
-  const end = new Date(`${to}T12:00:00`);
+  const fromIso = toIsoDateString(from);
+  const toIso = toIsoDateString(to);
+  if (!fromIso || !toIso) return 0;
+  const start = new Date(`${fromIso}T12:00:00`);
+  const end = new Date(`${toIso}T12:00:00`);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0;
   return Math.floor((end.getTime() - start.getTime()) / ONE_DAY_MS) + 1;
 }
 
 function addDaysIso(dateIso: string, days: number): string {
-  const d = new Date(`${dateIso}T12:00:00`);
+  const normalized = toIsoDateString(dateIso);
+  if (!normalized) return '';
+  const d = new Date(`${normalized}T12:00:00`);
   if (Number.isNaN(d.getTime())) return dateIso;
   d.setDate(d.getDate() + days);
   const y = d.getFullYear();
@@ -74,9 +82,7 @@ function addDaysIso(dateIso: string, days: number): string {
 }
 
 function isSundayIso(dateIso: string): boolean {
-  const d = new Date(`${dateIso}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return false;
-  return d.getDay() === 0;
+  return getWeekdayName(dateIso) === 'Sunday';
 }
 
 export default function OverallProfitBillingDetails() {
@@ -126,7 +132,8 @@ export default function OverallProfitBillingDetails() {
       (store.invoices ?? []).forEach((inv) => {
         const bucketDate = inv.activity_date || inv.created_at;
         if (!bucketDate) return;
-        const date = bucketDate.slice(0, 10);
+        const date = toIsoDateString(bucketDate);
+        if (!date) return;
         if (!isDateWithinRange(date, rangeFrom, rangeTo)) return;
         const existing = byDate.get(date) ?? { date, repairProfit: 0, retailProfit: 0, isHoliday: false, holidayLabel: null };
         if (inv.source === 'repair') {
@@ -145,10 +152,13 @@ export default function OverallProfitBillingDetails() {
 
     // Ensure every day in the billing window is shown (including no-activity days).
     if (rangeFrom && rangeTo) {
-      const totalDays = dateDiffInDaysInclusive(rangeFrom, rangeTo);
+      const rangeFromIso = toIsoDateString(rangeFrom);
+      const rangeToIso = toIsoDateString(rangeTo);
+      const totalDays = dateDiffInDaysInclusive(rangeFromIso, rangeToIso);
       const todayIso = addDaysIso(toLocalDateString(new Date()), 0);
       for (let i = 0; i < totalDays; i += 1) {
-        const dayIso = addDaysIso(rangeFrom, i);
+        const dayIso = addDaysIso(rangeFromIso, i);
+        if (!dayIso) continue;
         if (byDate.has(dayIso)) continue;
         const isSunday = isSundayIso(dayIso);
         const isFuture = dayIso > todayIso;
@@ -412,7 +422,7 @@ export default function OverallProfitBillingDetails() {
                               </Link>
                             </td>
                             <td className="px-4 py-2.5 text-gray-700">
-                              {inv.created_at ? formatDateDDMMYYYY(inv.created_at.slice(0, 10)) : '—'}
+                              {inv.created_at ? formatDateDDMMYYYY(inv.created_at) : '—'}
                             </td>
                             <td className="px-4 py-2.5 text-gray-700">{inv.customer_name || 'Walk-in'}</td>
                             <td className="px-4 py-2.5 text-gray-700 capitalize">{inv.source}</td>
