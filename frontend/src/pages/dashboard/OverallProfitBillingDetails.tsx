@@ -253,20 +253,24 @@ export default function OverallProfitBillingDetails() {
                       </tr>
                     ) : (
                       dayWiseProfitRows.map((row) => (
+                        (() => {
+                          const weekday = getWeekdayName(row.date);
+                          const showHolidayBadge = row.isHoliday && (row.holidayLabel || 'Holiday') !== weekday;
+                          return (
                         <tr key={row.date} className="hover:bg-gray-50/80">
                           <td className="px-4 py-2.5 text-gray-700">
                             <div className="flex items-center gap-2">
                               <span>{formatDateDDMMYYYY(row.date)}</span>
                               <span
                                 className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${
-                                  getWeekdayName(row.date) === 'Sunday'
+                                  weekday === 'Sunday'
                                     ? 'border-orange-200 bg-orange-50 text-orange-800'
                                     : 'border-gray-200 bg-gray-50 text-gray-700'
                                 }`}
                               >
-                                {getWeekdayName(row.date)}
+                                {weekday}
                               </span>
-                              {row.isHoliday ? (
+                              {showHolidayBadge ? (
                                 <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                                   {row.holidayLabel || 'Holiday'}
                                 </span>
@@ -276,6 +280,8 @@ export default function OverallProfitBillingDetails() {
                           <td className="px-4 py-2.5 text-right tabular-nums">₹{formatNumber(row.repairProfit, 2)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums">₹{formatNumber(row.retailProfit, 2)}</td>
                         </tr>
+                          );
+                        })()
                       ))
                     )}
                   </tbody>
