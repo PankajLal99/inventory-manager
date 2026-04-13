@@ -3464,8 +3464,11 @@ export default function InvoiceDetail() {
                         else if (Array.isArray(products)) productList.push(...products.filter((p: any) => !existingIds.has(p.id)));
                       }
                       return (
-                        <div className="absolute top-full left-0 mt-2 border border-gray-200 rounded-lg bg-white shadow-xl z-20 w-full">
-                          <div className="max-h-64 overflow-y-auto">
+                        <div
+                          className="absolute top-full left-0 z-20 w-full pt-2"
+                          onMouseDown={(e) => e.preventDefault()}
+                        >
+                          <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg bg-white shadow-xl">
                             {showCustomOption && (
                               <button
                                 type="button"
