@@ -186,6 +186,7 @@ export default function Purchases() {
   });
   const queryClient = useQueryClient();
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const productDropdownRef = useRef<HTMLDivElement | null>(null);
   const supplierRef = useRef<HTMLDivElement>(null);
   const supplierFilterRef = useRef<HTMLDivElement>(null);
   const productFilterRef = useRef<HTMLDivElement>(null);
@@ -198,32 +199,70 @@ export default function Purchases() {
   const purchasesInfiniteQueryKey = ['purchases', supplierFilter, productFilter, dateFrom, dateTo] as const;
 
   // Fetch products for search (must be before useEffect hooks that use products)
-  const { data: productsData } = useQuery({
-    queryKey: ['products', productSearch],
-    queryFn: async () => {
-      if (!productSearch.trim()) return { results: [] };
-      // Include tag='new' to get all products including unpurchased ones
-      // Use search_mode='name_only' to search only by product name
+  const {
+    data: productsData,
+    fetchNextPage: fetchNextProductsPage,
+    hasNextPage: hasNextProductsPage,
+    isFetchingNextPage: isFetchingNextProductsPage,
+  } = useInfiniteQuery({
+    queryKey: ['products', 'purchase-search', productSearch],
+    queryFn: async ({ pageParam = 1 }) => {
+      if (!productSearch.trim()) return { results: [], next: null };
       const response = await productsApi.list({
         search: productSearch.trim(),
-        tag: 'new', // This ensures we get all products including unpurchased ones
-        search_mode: 'name_only', // Search only by product name
-        exclude_other_custom: 'true', // Exclude Other/Custom products from purchase add
+        tag: 'new',
+        search_mode: 'name_only',
+        exclude_other_custom: 'true',
+        page: pageParam,
       });
       return response.data;
     },
+    getNextPageParam: (lastPage: any) => {
+      const next = lastPage?.next;
+      if (!next) return undefined;
+      if (typeof next === 'number') return next;
+      const nextMatch = String(next).match(/[?&]page=(\d+)/);
+      if (nextMatch) return Number(nextMatch[1]);
+      return undefined;
+    },
     enabled: productSearch.trim().length > 0,
+    initialPageParam: 1,
     retry: false,
   });
 
   // Compute products array from productsData (needed for keyboard shortcuts)
   const products = (() => {
     if (!productsData) return [];
-    if (Array.isArray(productsData.results)) return productsData.results;
-    if (Array.isArray(productsData.data)) return productsData.data;
-    if (Array.isArray(productsData)) return productsData;
-    return [];
+    const pages = Array.isArray((productsData as any).pages) ? (productsData as any).pages : [];
+    const merged: any[] = [];
+    const seen = new Set<number>();
+    pages.forEach((page: any) => {
+      const chunk = Array.isArray(page?.results)
+        ? page.results
+        : Array.isArray(page?.data)
+          ? page.data
+          : Array.isArray(page)
+            ? page
+            : [];
+      chunk.forEach((product: any) => {
+        if (typeof product?.id === 'number') {
+          if (seen.has(product.id)) return;
+          seen.add(product.id);
+        }
+        merged.push(product);
+      });
+    });
+    return merged;
   })();
+
+  const handleProductDropdownScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (!hasNextProductsPage || isFetchingNextProductsPage) return;
+    const target = e.currentTarget;
+    const isNearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 40;
+    if (isNearBottom) {
+      fetchNextProductsPage();
+    }
+  };
 
   // Auto-focus product search input when form opens
   useEffect(() => {
@@ -2292,10 +2331,14 @@ export default function Purchases() {
 
                 {/* Product Dropdown */}
                 {showProductDropdown && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
+                  <div
+                    ref={productDropdownRef}
+                    onScroll={handleProductDropdownScroll}
+                    className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto"
+                  >
                     {products.length > 0 ? (
                       <>
-                        {products.slice(0, 10).map((product: any) => (
+                        {products.map((product: any) => (
                           <button
                             key={product.id}
                             type="button"
@@ -2309,6 +2352,17 @@ export default function Purchases() {
                             </div>
                           </button>
                         ))}
+                        {isFetchingNextProductsPage && (
+                          <div className="px-4 py-2 text-xs text-gray-500 flex items-center gap-2">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Loading more products...
+                          </div>
+                        )}
+                        {!isFetchingNextProductsPage && !hasNextProductsPage && products.length > 0 && (
+                          <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-100">
+                            You have reached end of search, kindly search with different name.
+                          </div>
+                        )}
                         {productSearch.trim().length > 0 && (
                           <button
                             type="button"
