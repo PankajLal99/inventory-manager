@@ -384,25 +384,11 @@ export default function Search() {
           {data && (
             <div>
               {/* Products section - shown first and prioritized */}
-              {/* Sort products: items with prices first */}
-              {(() => {
-                const sortedProducts = [...(data.products || [])].sort((a, b) => {
-                  // Check if product has price (selling_price > 0 or purchase_price > 0)
-                  const aHasPrice = (a.selling_price && a.selling_price > 0) || (a.purchase_price && a.purchase_price > 0);
-                  const bHasPrice = (b.selling_price && b.selling_price > 0) || (b.purchase_price && b.purchase_price > 0);
-
-                  // Products with prices come first
-                  if (aHasPrice && !bHasPrice) return -1;
-                  if (!aHasPrice && bHasPrice) return 1;
-                  return 0; // Keep original order for items in the same group
-                });
-
-                return (
-                  <>
+              <>
                   <ResultSection
                     title="Products"
                     icon={Package}
-                    items={sortedProducts}
+                    items={data.products || []}
                     onItemClick={(item) => {
                       // Navigate to product detail page (same as barcode scan)
                       navigate(`/products/${item.id}`);
@@ -607,7 +593,7 @@ export default function Search() {
                   {(searchType === 'all' || searchType === 'product') &&
                     productLimit > 0 &&
                     productLimit < 500 &&
-                    sortedProducts.length >= productLimit && (
+                    (data.products || []).length >= productLimit && (
                       <div className="flex flex-wrap items-center gap-2 mt-3">
                         <Button
                           variant="outline"
@@ -643,8 +629,6 @@ export default function Search() {
                       </div>
                     )}
                 </>
-                );
-              })()}
 
               <ResultSection
                 title="Product Variants"

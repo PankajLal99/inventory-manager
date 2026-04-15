@@ -9,6 +9,15 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from collections import Counter
+import heapq
+import re
+from difflib import SequenceMatcher
+
+from backend.catalog.global_search_vocab import (
+    get_global_search_brand_tokens,
+    get_global_search_category_tokens,
+)
 from .models import Setting, AuditLog
 from .serializers import (
     UserSerializer, UserCreateSerializer,
@@ -16,6 +25,9 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+# Global search: product name tokenization (compiled once).
+_PRODUCT_NAME_TOKEN_RE = re.compile(r'[a-z0-9]+')
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -292,6 +304,155 @@ def audit_log_detail(request, pk):
     return Response(serializer.data)
 
 
+def _order_product_ids_by_name_relevance(pairs, query: str, limit: int):
+    """
+    Order product ids for global search by practical relevance.
+
+    ProductFilter(name_only) already enforces token matching; within that set we want:
+    - multiset token coverage (query words treated as a bag) so permutations like
+      "OLED FOLDER IPHONE X ..." still rank highly for "iPhone X OLED FOLDER"
+    - when users type "<MODEL> ... <PART ...>" but SKUs are stored as "<PART ...> <MODEL> ...",
+      gently prefer the SKU-shaped ordering (without breaking normal substring/exact matches).
+      Query shape uses active Brand + Category name tokens (cached): first word vs last word of the query.
+      A part-first SKU boost treats a non-brand leading product token as the "accessory-first" layout.
+    - among remaining candidates, prefer names whose *token order* is closer to the typed query
+      (SequenceMatcher on whitespace tokens), with exact/substring matches as tie-breakers
+    - tighter clustering of matched tokens (smaller span) before length / lexical tie-breakers
+
+    `pairs` is a list of dicts: {'id': int, 'name': str}
+    """
+    if not pairs or not query:
+        return []
+
+    q = (query or '').strip()
+    if not q:
+        return [p['id'] for p in pairs][:limit]
+
+    q_lower = q.lower()
+    tokens = [t for t in q_lower.split() if t]
+    if not tokens:
+        return [p['id'] for p in pairs][:limit]
+
+    brand_tokens = get_global_search_brand_tokens()
+    category_tokens = get_global_search_category_tokens()
+    qcnt = Counter(tokens)
+    q_keys = frozenset(qcnt)
+    tokens_len = len(tokens)
+    query_part_first_eligible = (
+        tokens_len >= 2
+        and tokens[0] in brand_tokens
+        and tokens[-1] in category_tokens
+    )
+
+    def _multiset_hits(name_tokens: list[str]) -> int:
+        if not name_tokens:
+            return 0
+        nc: dict[str, int] = {}
+        for t in name_tokens:
+            if t in q_keys:
+                nc[t] = nc.get(t, 0) + 1
+        return sum(min(c, nc.get(t, 0)) for t, c in qcnt.items())
+
+    def score_row(name: str) -> tuple:
+        if not name:
+            return (-0, 1, 0.0, 999, 10**9, 10**9, 10**9, 999, '')
+
+        n = name.lower()
+
+        # Tier 0: exact / phrase containment (strong signal)
+        if n == q_lower:
+            tier = 0
+        elif n.startswith(q_lower):
+            tier = 1
+        elif q_lower in n:
+            tier = 2
+        else:
+            tier = 3
+
+        name_tokens = _PRODUCT_NAME_TOKEN_RE.findall(n)
+        token_hits = _multiset_hits(name_tokens)
+
+        # Map each token -> occurrences in order (for multiset assignment in query order)
+        occ: dict[str, list[int]] = {}
+        for idx, t in enumerate(name_tokens):
+            occ.setdefault(t, []).append(idx)
+
+        ptr: dict[str, int] = {t: 0 for t in occ}
+        positions: list[int] = []
+        missing = 0
+        for tok in tokens:
+            lst = occ.get(tok)
+            if not lst:
+                missing += 1
+                continue
+            p = ptr.get(tok, 0)
+            if p >= len(lst):
+                missing += 1
+                continue
+            positions.append(lst[p])
+            ptr[tok] = p + 1
+
+        if missing > 0:
+            # Partial coverage: prioritize multiset hits, then phrase tiers / missing count.
+            order_sim = SequenceMatcher(
+                a=tokens,
+                b=name_tokens,
+                autojunk=False,
+            ).ratio()
+            return (-token_hits, 1, -order_sim, 40 + tier, missing, 10**9, len(n), tier, name)
+
+        span = max(positions) - min(positions) if positions else 0
+        inversions = 0
+        lp = len(positions)
+        for i in range(lp):
+            pi = positions[i]
+            for j in range(i + 1, lp):
+                if pi > positions[j]:
+                    inversions += 1
+
+        # Prefer shorter names among equally-good matches (often closer to the exact SKU/name)
+        name_len = len(n)
+
+        order_sim = SequenceMatcher(
+            a=tokens,
+            b=name_tokens,
+            autojunk=False,
+        ).ratio()
+
+        full_token_coverage = token_hits >= tokens_len
+        # Once all query tokens are present, prefer token-order similarity over raw substring tiers,
+        # otherwise "IPHONE X OLED FOLDER ..." always beats permutations even when users type a reorder.
+        effective_tier = 3 if full_token_coverage else tier
+
+        part_first_boost = False
+        if full_token_coverage and query_part_first_eligible and name_tokens:
+            nf = name_tokens[0]
+            # Prefer "<part> ... <brand/model> ..." when the user typed "<brand> ... <category> ...".
+            # Name leading token should not be a brand dictionary token (category names need not list every part keyword).
+            part_first_boost = nf != tokens[0] and nf not in brand_tokens
+
+        # Sort key: maximize multiset token hits, then (optional) prefer common "<PART> ... <MODEL>" SKUs
+        # when the user typed "<MODEL> ... <PART>", then maximize token-order similarity, then phrase tiers /
+        # inversions / span / shorter names.
+        return (
+            -token_hits,
+            0 if part_first_boost else 1,
+            -order_sim,
+            effective_tier,
+            inversions,
+            span,
+            name_len,
+            tier,
+            name,
+        )
+
+    if limit >= len(pairs):
+        scored = sorted(pairs, key=lambda p: score_row(p.get('name') or ''))
+    else:
+        scored = heapq.nsmallest(limit, pairs, key=lambda p: score_row(p.get('name') or ''))
+    return [p['id'] for p in scored[:limit]]
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def global_search(request):
@@ -368,35 +529,37 @@ def global_search(request):
         from backend.pos.models import CartItem
         from django.db.models import Case, When, Value, IntegerField
 
-        products_queryset = Product.objects.filter(is_active=True).exclude(
+        # Lean queryset for search + ranking (id/name only); prefetches only on the final page.
+        products_base = Product.objects.filter(is_active=True).exclude(
             name__istartswith='Other -'
-        ).prefetch_related(
-            'barcodes',
-            'barcodes__purchase__supplier',
-            'stock_entries',
-            'stock_entries__store',
-            'stock_entries__warehouse'
         )
         products_filter = ProductFilter(
             {'search': query, 'search_mode': 'name_only'},
-            queryset=products_queryset
+            queryset=products_base,
         )
-        search_tokens = [tok.strip() for tok in query.split() if tok.strip()]
-        all_tokens_q = Q()
-        for token in search_tokens:
-            all_tokens_q &= Q(name__icontains=token)
 
-        products = products_filter.qs.annotate(
-            # 0 is best rank (exact phrase), then startswith, then all tokens, then contains.
-            _search_rank=Case(
-                When(name__iexact=query, then=Value(0)),
-                When(name__istartswith=query, then=Value(1)),
-                When(all_tokens_q, then=Value(2)),
-                When(name__icontains=query, then=Value(3)),
-                default=Value(4),
-                output_field=IntegerField(),
-            ),
-        ).order_by('_search_rank', 'name')[:product_limit]
+        # Pull a larger candidate window, rank in Python for better relevance than SQL `order_by('name')`,
+        # then materialize the final page with prefetches intact.
+        candidate_cap = min(500, max(product_limit * 10, 200))
+        candidate_pairs = list(products_filter.qs.values('id', 'name')[:candidate_cap])
+        ordered_ids = _order_product_ids_by_name_relevance(candidate_pairs, query, product_limit)
+
+        preserved_order = Case(
+            *[When(pk=pk, then=Value(idx)) for idx, pk in enumerate(ordered_ids)],
+            output_field=IntegerField(),
+        )
+        products = (
+            products_base.filter(pk__in=ordered_ids)
+            .prefetch_related(
+                'barcodes',
+                'barcodes__purchase__supplier',
+                'stock_entries',
+                'stock_entries__store',
+                'stock_entries__warehouse',
+            )
+            .annotate(_search_order=preserved_order)
+            .order_by('_search_order')
+        )
 
         # Pass active_cart_barcodes so available_quantity matches Products page (barcode count is source of truth)
         active_cart_barcodes = set()
