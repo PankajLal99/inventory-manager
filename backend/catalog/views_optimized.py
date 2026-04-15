@@ -17,7 +17,8 @@ from rest_framework.permissions import IsAuthenticated
 from backend.core.cache_utils import (
     get_cached_products_list,
     cache_products_list,
-    PRODUCTS_LIST_CACHE_TTL
+    make_cache_key,
+    PRODUCTS_LIST_CACHE_TTL,
 )
 from backend.catalog.models import Product, Barcode
 from backend.catalog.serializers import ProductListSerializer
@@ -52,6 +53,7 @@ def _optimized_product_list_internal(request):
     # Build cache key from query parameters
     filters_dict = {
         'search': request.query_params.get('search', ''),
+        'search_mode': request.query_params.get('search_mode', ''),
         'category': request.query_params.get('category', ''),
         'brand': request.query_params.get('brand', ''),
         'supplier': request.query_params.get('supplier', ''),
@@ -78,7 +80,8 @@ def _optimized_product_list_internal(request):
         logger.info(f"Products list cache MISS (user: {request.user.username})")
     except Exception as e:
         logger.warning(f"Cache unavailable, proceeding without cache: {e}")
-    
+        cache_key = make_cache_key("products_list", **filters_dict)
+
     # OPTIMIZATION 1: Base queryset without barcodes (faster for simple lists)
     queryset = Product.objects.select_related(
         'brand',
@@ -249,13 +252,14 @@ def _optimized_product_list_internal(request):
                     product_ids_with_stock.append(product_id)
             
             queryset = queryset.filter(id__in=product_ids_with_stock)
-    
-    # OPTIMIZATION 5: Order and paginate
-    queryset = queryset.order_by('-updated_at', '-created_at')
-    
+
     page = int(request.query_params.get('page', 1))
     limit = int(request.query_params.get('limit', 50))
-    
+    offset = (page - 1) * limit
+    search_mode = (request.query_params.get('search_mode') or '').strip().lower()
+    search_q = (search or '').strip() if search else ''
+    use_name_relevance = bool(search_q and search_mode == 'name_only')
+
     # OPTIMIZATION 6: Only prepare cart context when barcodes were fetched
     if needs_barcode_prefetch:
         # Reuse active cart data if already calculated
@@ -293,31 +297,59 @@ def _optimized_product_list_internal(request):
         'active_cart_barcodes': active_cart_barcodes,
         'active_cart_product_quantities': active_cart_product_quantities
     }
-    
-    # OPTIMIZATION: Manual pagination (faster than Paginator for large datasets)
-    offset = (page - 1) * limit
-    
-    # Slice queryset for current page only
-    page_queryset = queryset[offset:offset + limit + 1]  # +1 to check if there's a next page
-    page_results = list(page_queryset)
-    
-    has_next = len(page_results) > limit
-    if has_next:
-        page_results = page_results[:limit]  # Remove the extra item
-    
-    has_previous = page > 1
-    
+
+    # OPTIMIZATION 5: Order and paginate (name_only search shares global-search relevance ranking)
+    if use_name_relevance:
+        from django.db.models import Case, IntegerField, Value, When
+
+        from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
+
+        candidate_cap = min(2000, max(limit * 10, 200, offset + limit + 1))
+        pairs = list(queryset.values('id', 'name')[:candidate_cap])
+        ordered_ids = order_product_ids_by_name_relevance(pairs, search_q, len(pairs))
+        page_slice = ordered_ids[offset : offset + limit + 1]
+        has_next = len(page_slice) > limit
+        if has_next:
+            page_slice = page_slice[:limit]
+
+        if page_slice:
+            order_case = Case(
+                *[When(pk=pid, then=Value(idx)) for idx, pid in enumerate(page_slice)],
+                output_field=IntegerField(),
+            )
+            page_results = list(
+                queryset.filter(pk__in=page_slice)
+                .annotate(_name_relevance_rank=order_case)
+                .order_by('_name_relevance_rank')
+            )
+        else:
+            page_results = []
+
+        has_previous = page > 1
+        if len(pairs) < candidate_cap:
+            estimated_count = len(ordered_ids)
+        else:
+            try:
+                estimated_count = queryset.count()
+            except Exception:
+                estimated_count = offset + len(page_results) + (1 if has_next else 0)
+    else:
+        queryset = queryset.order_by('-updated_at', '-created_at')
+        page_queryset = queryset[offset : offset + limit + 1]
+        page_results = list(page_queryset)
+
+        has_next = len(page_results) > limit
+        if has_next:
+            page_results = page_results[:limit]
+
+        has_previous = page > 1
+        if has_next:
+            estimated_count = page * limit + 1
+        else:
+            estimated_count = offset + len(page_results)
+
     # Serialize only the current page
     serializer = ProductListSerializer(page_results, many=True, context=context)
-    
-    # OPTIMIZATION: Avoid expensive COUNT(*) query
-    # Estimate total count based on pagination (faster for UI)
-    if has_next:
-        # There are more pages, so count is at least (current page * limit + 1)
-        estimated_count = page * limit + 1
-    else:
-        # Last page, exact count
-        estimated_count = offset + len(page_results)
     
     # Build response
     response_data = {
