@@ -366,6 +366,7 @@ def global_search(request):
     if search_type in ['all', 'product']:
         from backend.catalog.filters import ProductFilter
         from backend.pos.models import CartItem
+        from django.db.models import Case, When, Value, IntegerField
 
         products_queryset = Product.objects.filter(is_active=True).exclude(
             name__istartswith='Other -'
@@ -380,7 +381,22 @@ def global_search(request):
             {'search': query, 'search_mode': 'name_only'},
             queryset=products_queryset
         )
-        products = products_filter.qs.order_by('name')[:product_limit]
+        search_tokens = [tok.strip() for tok in query.split() if tok.strip()]
+        all_tokens_q = Q()
+        for token in search_tokens:
+            all_tokens_q &= Q(name__icontains=token)
+
+        products = products_filter.qs.annotate(
+            # 0 is best rank (exact phrase), then startswith, then all tokens, then contains.
+            _search_rank=Case(
+                When(name__iexact=query, then=Value(0)),
+                When(name__istartswith=query, then=Value(1)),
+                When(all_tokens_q, then=Value(2)),
+                When(name__icontains=query, then=Value(3)),
+                default=Value(4),
+                output_field=IntegerField(),
+            ),
+        ).order_by('_search_rank', 'name')[:product_limit]
 
         # Pass active_cart_barcodes so available_quantity matches Products page (barcode count is source of truth)
         active_cart_barcodes = set()
