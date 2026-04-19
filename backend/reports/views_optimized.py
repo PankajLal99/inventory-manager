@@ -16,7 +16,11 @@ from backend.catalog.models import Barcode, DefectiveProductMoveOut
 from backend.locations.models import Store
 from backend.parties.models import LedgerEntry
 from backend.pos.models import Invoice, Expenses, Payment, InvoiceItem
-from backend.pos.views import annotate_invoice_list_profit, filter_repair_invoices_by_list_date
+from backend.pos.views import (
+    annotate_invoice_list_profit,
+    filter_repair_invoices_for_repair_profit,
+    filter_repair_shop_invoices_by_delivered_delivery_date,
+)
 
 
 def _decimal_or_zero(value):
@@ -50,6 +54,17 @@ def _billing_period_11_to_10(today: date) -> tuple[date, date]:
     start = _billing_period_start_for_date(today)
     end = _billing_period_end_for_start(start)
     return start, end
+
+
+def _billing_period_start_from_yyyy_mm(value: str | None) -> date | None:
+    """Parse YYYY-MM and return that month's billing start (11th)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.strptime(value, '%Y-%m').date()
+    except (TypeError, ValueError):
+        return None
+    return date(dt.year, dt.month, 11)
 
 
 def _ledger_entry_cash_upi(entry) -> tuple[Decimal, Decimal]:
@@ -117,12 +132,12 @@ def optimized_dashboard_kpis(request):
     Dashboard KPIs (date range on invoice.created_at date, expense.expense_date).
 
     - total_cash: pure cash invoices + mixed cash legs + manual LedgerEntry credits (cash / mixed cash leg).
-      Repair invoices (including mixed) are included by repair list date logic
-      (created_at OR repair.updated_at OR delivery_date).
+      Repair-shop amounts count only when repair.status=delivered and repair.delivery_date is in range
+      (fallback: activity dates if delivery_date unset); not-delivered repairs are excluded.
     - total_upi: pure UPI invoices + mixed UPI legs + manual LedgerEntry credits (UPI / mixed UPI leg).
-      Repair invoices (including mixed) are included by repair list date logic
-      (created_at OR repair.updated_at OR delivery_date).
-    - total_credit / credit_by_store: Σ Invoice.total where invoice_type=credit.
+      Same repair-shop delivery-window rule as total_cash.
+    - total_credit / credit_by_store: Σ Invoice.total where invoice_type=credit; non-repair rows use
+      invoice.created_at in range; repair-shop credit uses the same delivered + delivery_date window.
     - Per-store cash/upi rows include from_invoice_* and from_mixed_* bifurcation.
     - total_inhand: total_cash - total_expenses.
     - cash_breakdown / online_breakdown: retail (non-repair) pure invoices, repair pure, mixed legs, manual.
@@ -152,8 +167,9 @@ def optimized_dashboard_kpis(request):
     - counter_profit_by_store / counter_profit_by_invoice_type: same counter invoice set, grouped by store or
       invoice_type (sums match counter_profit).
     - repair_profit: same profit metric with repair_list profile for repair-shop invoices with Repair status
-      done or delivered; invoice_type=pending excluded; date window matches Repairs list
-      (created_at / repair.updated_at / delivery_date).
+      done or delivered; invoice_type=pending excluded; date window matches Repairs page intent:
+      delivered jobs by delivery_date (fallback: created/updated if delivery_date unset); done jobs by
+      created_at / repair.updated_at only (not delivery_date).
     - stock_value: Σ Coalesce(PurchaseItem.unit_price, 0) per barcode with tag new or returned (available stock);
       excludes barcodes whose purchase_item.purchase is draft.
     - defective_product_count / defective_barcode_count / defective_purchase_value: same basis as Products → Defective tab
@@ -188,15 +204,15 @@ def optimized_dashboard_kpis(request):
     # Counter invoices remain created_at date scoped.
     cash_counter_qs = inv_base.filter(invoice_type='cash').exclude(store__shop_type='repair')
     upi_counter_qs = inv_base.filter(invoice_type='upi').exclude(store__shop_type='repair')
-    # Repair invoices are included when created/updated/delivery date falls in range.
-    cash_repair_qs = filter_repair_invoices_by_list_date(
+    # Repair-shop cash/UPI: only after handover (delivered + delivery_date window).
+    cash_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
         Invoice.objects.filter(invoice_type='cash', store__shop_type='repair').exclude(
             status__in=['void', 'draft']
         ),
         date_from,
         date_to,
     )
-    upi_repair_qs = filter_repair_invoices_by_list_date(
+    upi_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
         Invoice.objects.filter(invoice_type='upi', store__shop_type='repair').exclude(
             status__in=['void', 'draft']
         ),
@@ -210,7 +226,7 @@ def optimized_dashboard_kpis(request):
         Q(id__in=upi_counter_qs.values('id')) | Q(id__in=upi_repair_qs.values('id'))
     )
     mixed_counter_qs = inv_base.filter(invoice_type='mixed').exclude(store__shop_type='repair')
-    mixed_repair_qs = filter_repair_invoices_by_list_date(
+    mixed_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
         Invoice.objects.filter(invoice_type='mixed', store__shop_type='repair').exclude(
             status__in=['void', 'draft']
         ),
@@ -220,7 +236,14 @@ def optimized_dashboard_kpis(request):
     mixed_inv_qs = Invoice.objects.filter(
         Q(id__in=mixed_counter_qs.values('id')) | Q(id__in=mixed_repair_qs.values('id'))
     )
-    credit_qs = inv_base.filter(invoice_type='credit')
+    credit_counter_qs = inv_base.filter(invoice_type='credit').exclude(store__shop_type='repair')
+    credit_repair_qs = filter_repair_shop_invoices_by_delivered_delivery_date(
+        Invoice.objects.filter(invoice_type='credit', store__shop_type='repair').exclude(
+            status__in=['void', 'draft']
+        ),
+        date_from,
+        date_to,
+    )
 
     pure_cash_total = _decimal_or_zero(
         cash_inv_qs.aggregate(t=Sum('total', output_field=money))['t']
@@ -283,8 +306,8 @@ def optimized_dashboard_kpis(request):
     )
 
     total_credit = _decimal_or_zero(
-        credit_qs.aggregate(t=Sum('total', output_field=money))['t']
-    )
+        credit_counter_qs.aggregate(t=Sum('total', output_field=money))['t']
+    ) + _decimal_or_zero(credit_repair_qs.aggregate(t=Sum('total', output_field=money))['t'])
 
     def _by_store_invoice_totals(qs):
         rows = qs.values('store_id', 'store__name', 'store__shop_type').annotate(
@@ -379,18 +402,22 @@ def optimized_dashboard_kpis(request):
     cash_by_store = _serialize_merged_rows(cash_merged, 'from_invoice_cash', 'from_mixed_cash')
     upi_by_store = _serialize_merged_rows(upi_merged, 'from_invoice_upi', 'from_mixed_upi')
 
-    credit_by_store_rows = credit_qs.values('store_id', 'store__name', 'store__shop_type').annotate(
-        total_sum=Sum('total', output_field=money)
-    ).order_by('-total_sum', 'store__name')
-    credit_by_store = [
-        {
-            'store_id': r['store_id'],
-            'store_name': r['store__name'] or '',
-            'shop_type': r['store__shop_type'] or '',
-            'amount': float(_decimal_or_zero(r['total_sum'])),
-        }
-        for r in credit_by_store_rows
-    ]
+    credit_by_store_merged = _merge_store_totals(
+        _by_store_invoice_totals(credit_counter_qs),
+        _by_store_invoice_totals(credit_repair_qs),
+    )
+    credit_by_store = sorted(
+        (
+            {
+                'store_id': sid,
+                'store_name': v['store_name'],
+                'shop_type': v['shop_type'],
+                'amount': float(_decimal_or_zero(v['amount'])),
+            }
+            for sid, v in credit_by_store_merged.items()
+        ),
+        key=lambda x: (-x['amount'], x['store_name']),
+    )
 
     total_expenses = _decimal_or_zero(
         Expenses.objects.filter(
@@ -425,31 +452,33 @@ def optimized_dashboard_kpis(request):
 
     pending_line_cost = _invoice_item_pending_line_cost_case(money)
 
-    # All-time pending purchase-cost KPI (not date scoped): include every pending/pending-type non-draft invoice.
+    # All-time pending KPI aligned with Invoices page pending filter:
+    # invoice_type='pending' and non-repair invoices, summed by invoice total.
     pending_invoices = Invoice.objects.filter(
-        Q(status='pending') | Q(invoice_type='pending')
-    ).exclude(status__in=['void'])
+        invoice_type='pending',
+        repair__isnull=True,
+    )
 
     pending_items_qs = InvoiceItem.objects.filter(invoice__in=pending_invoices)
 
     pending_invoice_purchase_total = _decimal_or_zero(
-        pending_items_qs.aggregate(t=Sum(pending_line_cost, output_field=money))['t']
+        pending_invoices.aggregate(t=Sum('total', output_field=money))['t']
     )
 
     pending_purchase_store_rows = (
-        pending_items_qs.values(
-            'invoice__store_id',
-            'invoice__store__name',
-            'invoice__store__shop_type',
+        pending_invoices.values(
+            'store_id',
+            'store__name',
+            'store__shop_type',
         )
-        .annotate(total_sum=Sum(pending_line_cost, output_field=money))
-        .order_by('-total_sum', 'invoice__store__name')
+        .annotate(total_sum=Sum('total', output_field=money))
+        .order_by('-total_sum', 'store__name')
     )
     pending_purchase_by_store = [
         {
-            'store_id': r['invoice__store_id'],
-            'store_name': r['invoice__store__name'] or '',
-            'shop_type': r['invoice__store__shop_type'] or '',
+            'store_id': r['store_id'],
+            'store_name': r['store__name'] or '',
+            'shop_type': r['store__shop_type'] or '',
             'amount': float(_decimal_or_zero(r['total_sum'])),
         }
         for r in pending_purchase_store_rows
@@ -480,13 +509,13 @@ def optimized_dashboard_kpis(request):
     ]
 
     pending_invoice_purchase_retail = _decimal_or_zero(
-        pending_items_qs.filter(invoice__store__shop_type='retail').aggregate(
-            t=Sum(pending_line_cost, output_field=money)
+        pending_invoices.filter(store__shop_type='retail').aggregate(
+            t=Sum('total', output_field=money)
         )['t']
     )
     pending_invoice_purchase_wholesale = _decimal_or_zero(
-        pending_items_qs.filter(invoice__store__shop_type='wholesale').aggregate(
-            t=Sum(pending_line_cost, output_field=money)
+        pending_invoices.filter(store__shop_type='wholesale').aggregate(
+            t=Sum('total', output_field=money)
         )['t']
     )
 
@@ -579,7 +608,7 @@ def optimized_dashboard_kpis(request):
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
         repair__isnull=True,
-        store__shop_type__in=['retail', 'wholesale'],
+        store__shop_type='retail',
         invoice_type__in=['cash', 'upi', 'mixed', 'credit'],
     ).exclude(invoice_type='defective').exclude(status__in=['void', 'draft'])
     counter_qs = annotate_invoice_list_profit(counter_inv, profile='invoice_list')
@@ -627,7 +656,7 @@ def optimized_dashboard_kpis(request):
         repair__isnull=False,
         repair__status__in=['done', 'delivered'],
     ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
-    repair_inv = filter_repair_invoices_by_list_date(repair_inv, date_from, date_to)
+    repair_inv = filter_repair_invoices_for_repair_profit(repair_inv, date_from, date_to)
     repair_qs = annotate_invoice_list_profit(repair_inv, profile='repair_list')
     repair_profit = _sum_list_profit(repair_qs, money)
 
@@ -668,14 +697,16 @@ def optimized_dashboard_kpis(request):
 
     overall_profit = counter_profit + repair_profit
 
-    pb_from, pb_to = _billing_period_11_to_10(timezone.now().date())
+    # Anchor billing window to the selected dashboard range end date
+    # so KPI and subtitle stay consistent with the active filter.
+    pb_from, pb_to = _billing_period_11_to_10(date_to)
     inv_base_pb = Invoice.objects.filter(
         created_at__date__gte=pb_from,
         created_at__date__lte=pb_to,
     ).exclude(status__in=['void', 'draft'])
     counter_inv_pb = inv_base_pb.filter(
         repair__isnull=True,
-        store__shop_type__in=['retail', 'wholesale'],
+        store__shop_type='retail',
         invoice_type__in=['cash', 'upi', 'mixed', 'credit'],
     ).exclude(invoice_type='defective')
     counter_pb_qs = annotate_invoice_list_profit(counter_inv_pb, profile='invoice_list')
@@ -686,7 +717,7 @@ def optimized_dashboard_kpis(request):
         repair__isnull=False,
         repair__status__in=['done', 'delivered'],
     ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
-    repair_inv_pb = filter_repair_invoices_by_list_date(repair_inv_pb, pb_from, pb_to)
+    repair_inv_pb = filter_repair_invoices_for_repair_profit(repair_inv_pb, pb_from, pb_to)
     repair_pb_qs = annotate_invoice_list_profit(repair_inv_pb, profile='repair_list')
     repair_profit_billing_period = _sum_list_profit(repair_pb_qs, money)
     overall_profit_billing_period = counter_profit_billing_period + repair_profit_billing_period
@@ -891,6 +922,421 @@ def optimized_dashboard_kpis(request):
         'repair_profit_by_store': repair_profit_by_store,
         'manual_payments': manual_payments_rows,
         'wholesale_pending_cleared_by_month': wholesale_pending_cleared_by_month,
+    })
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def overall_pending_invoice_details(request):
+    """
+    Detailed rows for Dashboard KPI: Overall pending invoice amount (all-time, non-repair, invoice_type=pending).
+    """
+    money = DecimalField(max_digits=18, decimal_places=2)
+    pending_line_cost = _invoice_item_pending_line_cost_case(money)
+
+    pending_invoices = (
+        Invoice.objects.filter(
+            invoice_type='pending',
+            repair__isnull=True,
+        )
+        .select_related('store', 'customer')
+        .order_by('-created_at', '-id')
+    )
+
+    purchase_rows = (
+        InvoiceItem.objects.filter(invoice__in=pending_invoices)
+        .values('invoice_id')
+        .annotate(total_sum=Sum(pending_line_cost, output_field=money))
+    )
+    purchase_by_invoice_id = {
+        int(r['invoice_id']): _decimal_or_zero(r['total_sum'])
+        for r in purchase_rows
+    }
+
+    store_map = {}
+    total_amount = Decimal('0.00')
+    total_paid = Decimal('0.00')
+    total_purchase_cost = Decimal('0.00')
+    invoice_count = 0
+
+    for inv in pending_invoices:
+        sid = int(inv.store_id or 0)
+        if sid not in store_map:
+            store_map[sid] = {
+                'store_id': sid,
+                'store_name': inv.store.name if inv.store else '',
+                'shop_type': inv.store.shop_type if inv.store else '',
+                'invoice_count': 0,
+                'total_amount': Decimal('0.00'),
+                'paid_amount': Decimal('0.00'),
+                'purchase_cost_total': Decimal('0.00'),
+                'invoices': [],
+            }
+        row_purchase_cost = _decimal_or_zero(purchase_by_invoice_id.get(inv.id))
+        row_total = _decimal_or_zero(inv.total)
+        row_paid = _decimal_or_zero(inv.paid_amount)
+
+        store_map[sid]['invoice_count'] += 1
+        store_map[sid]['total_amount'] += row_total
+        store_map[sid]['paid_amount'] += row_paid
+        store_map[sid]['purchase_cost_total'] += row_purchase_cost
+        store_map[sid]['invoices'].append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'status': inv.status,
+            'invoice_type': inv.invoice_type,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'customer_name': inv.customer.name if inv.customer else 'Walk-in',
+            'total': float(row_total),
+            'paid_amount': float(row_paid),
+            'purchase_cost': float(row_purchase_cost),
+        })
+
+        invoice_count += 1
+        total_amount += row_total
+        total_paid += row_paid
+        total_purchase_cost += row_purchase_cost
+
+    stores = []
+    for s in store_map.values():
+        stores.append({
+            'store_id': s['store_id'],
+            'store_name': s['store_name'],
+            'shop_type': s['shop_type'],
+            'invoice_count': s['invoice_count'],
+            'total_amount': float(s['total_amount']),
+            'paid_amount': float(s['paid_amount']),
+            'purchase_cost_total': float(s['purchase_cost_total']),
+            'invoices': s['invoices'],
+        })
+    stores.sort(key=lambda x: (-x['total_amount'], x['store_name']))
+
+    return Response({
+        'summary': {
+            'invoice_count': invoice_count,
+            'store_count': len(stores),
+            'total_amount': float(total_amount),
+            'paid_amount': float(total_paid),
+            'purchase_cost_total': float(total_purchase_cost),
+        },
+        'stores': stores,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def wholesale_pending_cleared_details(request):
+    """
+    Detailed rows for Dashboard KPI: Wholesale pending cleared in period (billing window containing date_to).
+    """
+    billing_month = request.query_params.get('billing_month')
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    if billing_month:
+        month_start = _billing_period_start_from_yyyy_mm(billing_month)
+        if not month_start:
+            return Response({'detail': 'Invalid billing_month format. Use YYYY-MM.'}, status=400)
+        date_from = month_start
+        date_to = _billing_period_end_for_start(month_start)
+    if not date_from:
+        date_from = timezone.now().date()
+    else:
+        if isinstance(date_from, str):
+            date_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+    if not date_to:
+        date_to = timezone.now().date()
+    else:
+        if isinstance(date_to, str):
+            date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+    money = DecimalField(max_digits=18, decimal_places=2)
+    pending_line_cost = _invoice_item_pending_line_cost_case(money)
+    wc_from, wc_to = _billing_period_11_to_10(date_to)
+
+    invoices = (
+        Invoice.objects.filter(
+            pending_cleared_at__isnull=False,
+            store__shop_type='wholesale',
+            pending_cleared_at__date__gte=wc_from,
+            pending_cleared_at__date__lte=wc_to,
+        )
+        .exclude(status='void')
+        .select_related('store', 'customer')
+        .order_by('-pending_cleared_at', '-id')
+    )
+    purchase_rows = (
+        InvoiceItem.objects.filter(invoice__in=invoices)
+        .values('invoice_id')
+        .annotate(total_sum=Sum(pending_line_cost, output_field=money))
+    )
+    purchase_by_invoice_id = {
+        int(r['invoice_id']): _decimal_or_zero(r['total_sum'])
+        for r in purchase_rows
+    }
+
+    store_map = {}
+    invoice_count = 0
+    selling_total = Decimal('0.00')
+    purchase_cost_total = Decimal('0.00')
+    for inv in invoices:
+        sid = int(inv.store_id or 0)
+        if sid not in store_map:
+            store_map[sid] = {
+                'store_id': sid,
+                'store_name': inv.store.name if inv.store else '',
+                'shop_type': inv.store.shop_type if inv.store else '',
+                'invoice_count': 0,
+                'selling_total': Decimal('0.00'),
+                'purchase_cost_total': Decimal('0.00'),
+                'invoices': [],
+            }
+        row_sell = _decimal_or_zero(inv.total)
+        row_purchase = _decimal_or_zero(purchase_by_invoice_id.get(inv.id))
+        row_profit = row_sell - row_purchase
+        store_map[sid]['invoice_count'] += 1
+        store_map[sid]['selling_total'] += row_sell
+        store_map[sid]['purchase_cost_total'] += row_purchase
+        store_map[sid]['invoices'].append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'pending_cleared_at': inv.pending_cleared_at.isoformat() if inv.pending_cleared_at else None,
+            'customer_name': inv.customer.name if inv.customer else 'Walk-in',
+            'status': inv.status,
+            'selling_total': float(row_sell),
+            'purchase_cost': float(row_purchase),
+            'profit': float(row_profit),
+        })
+        invoice_count += 1
+        selling_total += row_sell
+        purchase_cost_total += row_purchase
+
+    stores = []
+    for s in store_map.values():
+        stores.append({
+            'store_id': s['store_id'],
+            'store_name': s['store_name'],
+            'shop_type': s['shop_type'],
+            'invoice_count': s['invoice_count'],
+            'selling_total': float(s['selling_total']),
+            'purchase_cost_total': float(s['purchase_cost_total']),
+            'profit_total': float(s['selling_total'] - s['purchase_cost_total']),
+            'invoices': s['invoices'],
+        })
+    stores.sort(key=lambda x: (-x['selling_total'], x['store_name']))
+
+    return Response({
+        'period': {
+            'from': date_from.isoformat(),
+            'to': date_to.isoformat(),
+        },
+        'billing_window': {
+            'from': wc_from.isoformat(),
+            'to': wc_to.isoformat(),
+        },
+        'summary': {
+            'invoice_count': invoice_count,
+            'store_count': len(stores),
+            'selling_total': float(selling_total),
+            'purchase_cost_total': float(purchase_cost_total),
+            'profit_total': float(selling_total - purchase_cost_total),
+        },
+        'stores': stores,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def overall_profit_billing_period_details(request):
+    """
+    Detailed invoices used for "Overall profit (11th → 10th month)" KPI.
+
+    Supports:
+    - billing_month_from=YYYY-MM and billing_month_to=YYYY-MM (preferred)
+      -> range becomes from 11th of from-month to 10th of month after to-month.
+    - date_from/date_to fallback.
+    - no params -> current billing window containing today.
+    """
+    billing_month_from = request.query_params.get('billing_month_from')
+    billing_month_to = request.query_params.get('billing_month_to')
+    date_from_raw = request.query_params.get('date_from')
+    date_to_raw = request.query_params.get('date_to')
+
+    if billing_month_from and billing_month_to:
+        start = _billing_period_start_from_yyyy_mm(billing_month_from)
+        end_start = _billing_period_start_from_yyyy_mm(billing_month_to)
+        if not start or not end_start:
+            return Response({'detail': 'Invalid billing month format. Use YYYY-MM.'}, status=400)
+        date_from = start
+        date_to = _billing_period_end_for_start(end_start)
+    elif date_from_raw and date_to_raw:
+        try:
+            date_from = datetime.strptime(date_from_raw, '%Y-%m-%d').date()
+            date_to = datetime.strptime(date_to_raw, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'detail': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+    else:
+        date_from, date_to = _billing_period_11_to_10(timezone.now().date())
+
+    if date_from > date_to:
+        return Response({'detail': 'date_from cannot be after date_to.'}, status=400)
+
+    money = DecimalField(max_digits=18, decimal_places=2)
+    repair_stores_all = Store.objects.filter(shop_type='repair', is_active=True)
+
+    counter_inv = Invoice.objects.filter(
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+        repair__isnull=True,
+        store__shop_type='retail',
+        invoice_type__in=['cash', 'upi', 'mixed', 'credit'],
+    ).exclude(status__in=['void', 'draft']).exclude(invoice_type='defective')
+    counter_qs = annotate_invoice_list_profit(counter_inv, profile='invoice_list').select_related(
+        'store', 'customer'
+    )
+
+    repair_inv = Invoice.objects.filter(
+        store__in=repair_stores_all,
+        repair__isnull=False,
+        repair__status__in=['done', 'delivered'],
+    ).exclude(status__in=['void', 'draft']).exclude(invoice_type='pending')
+    repair_inv = filter_repair_invoices_for_repair_profit(repair_inv, date_from, date_to)
+    repair_qs = annotate_invoice_list_profit(repair_inv, profile='repair_list').select_related(
+        'store', 'customer', 'repair'
+    )
+
+    invoice_ids = list(counter_qs.values_list('id', flat=True)) + list(repair_qs.values_list('id', flat=True))
+    mixed_ids = list(
+        Invoice.objects.filter(id__in=invoice_ids, invoice_type='mixed').values_list('id', flat=True)
+    )
+    mixed_payment_rows = Payment.objects.filter(
+        invoice_id__in=mixed_ids,
+        payment_method__in=['cash', 'upi'],
+    ).values('invoice_id', 'payment_method').annotate(
+        amount=Coalesce(Sum('amount', output_field=money), Value(Decimal('0.00')), output_field=money)
+    )
+    mixed_split_map: dict[int, dict[str, Decimal]] = {}
+    for row in mixed_payment_rows:
+        iid = row['invoice_id']
+        if iid not in mixed_split_map:
+            mixed_split_map[iid] = {'cash': Decimal('0.00'), 'upi': Decimal('0.00')}
+        mixed_split_map[iid][row['payment_method']] = _decimal_or_zero(row['amount'])
+
+    by_store = {}
+    cash_total = Decimal('0.00')
+    online_total = Decimal('0.00')
+
+    def _push_invoice(inv, bucket_label: str):
+        sid = inv.store_id
+        store_name = inv.store.name if inv.store else ''
+        shop_type = inv.store.shop_type if inv.store else ''
+        if sid not in by_store:
+            by_store[sid] = {
+                'store_id': sid,
+                'store_name': store_name,
+                'shop_type': shop_type,
+                'invoice_count': 0,
+                'profit_total': Decimal('0.00'),
+                'cash_total': Decimal('0.00'),
+                'online_total': Decimal('0.00'),
+                'invoices': [],
+            }
+        rec = by_store[sid]
+        profit = _decimal_or_zero(getattr(inv, '_list_profit', None))
+        total = _decimal_or_zero(inv.total)
+        inv_cash = Decimal('0.00')
+        inv_online = Decimal('0.00')
+        if inv.invoice_type == 'cash':
+            inv_cash = total
+        elif inv.invoice_type == 'upi':
+            inv_online = total
+        elif inv.invoice_type == 'mixed':
+            split = mixed_split_map.get(inv.id, {})
+            inv_cash = _decimal_or_zero(split.get('cash'))
+            inv_online = _decimal_or_zero(split.get('upi'))
+        rec['invoice_count'] += 1
+        rec['profit_total'] += profit
+        rec['cash_total'] += inv_cash
+        rec['online_total'] += inv_online
+        nonlocal cash_total, online_total
+        cash_total += inv_cash
+        online_total += inv_online
+        activity_date = inv.created_at.date() if inv.created_at else None
+        if bucket_label == 'repair':
+            repair_obj = getattr(inv, 'repair', None)
+            if repair_obj and repair_obj.delivery_date and date_from <= repair_obj.delivery_date <= date_to:
+                activity_date = repair_obj.delivery_date
+            elif repair_obj and repair_obj.updated_at:
+                updated_date = repair_obj.updated_at.date()
+                if date_from <= updated_date <= date_to:
+                    activity_date = updated_date
+        rec['invoices'].append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'invoice_type': inv.invoice_type,
+            'status': inv.status,
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'activity_date': activity_date.isoformat() if activity_date else None,
+            'customer_name': (inv.customer.name if inv.customer else '') or 'Walk-in',
+            'total': float(total),
+            'paid_amount': float(_decimal_or_zero(inv.paid_amount)),
+            'profit': float(profit),
+            'cash_amount': float(inv_cash),
+            'online_amount': float(inv_online),
+            'source': bucket_label,
+        })
+
+    for inv in counter_qs:
+        _push_invoice(inv, 'counter')
+    for inv in repair_qs:
+        _push_invoice(inv, 'repair')
+
+    stores = []
+    counter_profit = Decimal('0.00')
+    repair_profit = Decimal('0.00')
+    for rec in by_store.values():
+        rec['invoices'].sort(
+            key=lambda r: (r['created_at'] or '', r['invoice_number']),
+            reverse=True,
+        )
+        rec['profit_total'] = float(_decimal_or_zero(rec['profit_total']))
+        rec['cash_total'] = float(_decimal_or_zero(rec['cash_total']))
+        rec['online_total'] = float(_decimal_or_zero(rec['online_total']))
+        stores.append(rec)
+    stores.sort(key=lambda r: (-r['profit_total'], r['store_name']))
+
+    counter_profit = _sum_list_profit(counter_qs, money)
+    repair_profit = _sum_list_profit(repair_qs, money)
+    overall_profit = counter_profit + repair_profit
+    expenses_total = _decimal_or_zero(
+        Expenses.objects.filter(
+            expense_date__gte=date_from,
+            expense_date__lte=date_to,
+        ).aggregate(
+            t=Sum('expense_amount', output_field=money)
+        )['t']
+    )
+
+    response = Response({
+        'billing_window': {
+            'from': date_from.isoformat(),
+            'to': date_to.isoformat(),
+        },
+        'summary': {
+            'counter_profit': float(counter_profit),
+            'repair_profit': float(repair_profit),
+            'overall_profit': float(overall_profit),
+            'cash_total': float(cash_total),
+            'online_total': float(online_total),
+            'expenses_total': float(expenses_total),
+            'invoice_count': sum(r['invoice_count'] for r in stores),
+            'store_count': len(stores),
+        },
+        'stores': stores,
     })
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response['Pragma'] = 'no-cache'

@@ -309,7 +309,7 @@ class ReportsTests(TestCase):
         self.assertEqual(response.data['credit_by_store'][0]['amount'], 250.0)
 
     def test_dashboard_kpis_online_repair_uses_delivery_date_for_older_invoice(self):
-        """Repair UPI totals include old invoices when repair delivery_date falls in selected range."""
+        """Repair UPI totals include old invoices when delivered and delivery_date falls in selected range."""
         repair_store = TestDataFactory.create_store()
         repair_store.shop_type = 'repair'
         repair_store.save(update_fields=['shop_type'])
@@ -330,7 +330,7 @@ class ReportsTests(TestCase):
             description='Screen change',
             barcode=f'REP-{timezone.now().strftime("%H%M%S%f")}',
             delivery_date=timezone.now().date(),
-            status='done',
+            status='delivered',
         )
 
         today = timezone.now().date().isoformat()
@@ -339,7 +339,7 @@ class ReportsTests(TestCase):
         self.assertEqual(response.data['kpis']['online_breakdown']['repair'], 1100.0)
 
     def test_dashboard_kpis_mixed_repair_uses_delivery_date_for_older_invoice(self):
-        """Mixed repair payments include old invoices when repair delivery_date falls in selected range."""
+        """Mixed repair payments include old invoices when delivered and delivery_date falls in selected range."""
         repair_store = TestDataFactory.create_store()
         repair_store.shop_type = 'repair'
         repair_store.save(update_fields=['shop_type'])
@@ -360,7 +360,7 @@ class ReportsTests(TestCase):
             description='Battery + speaker',
             barcode=f'REP-MIX-{timezone.now().strftime("%H%M%S%f")}',
             delivery_date=timezone.now().date(),
-            status='done',
+            status='delivered',
         )
         Payment.objects.create(
             invoice=inv,
@@ -380,6 +380,36 @@ class ReportsTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['kpis']['cash_breakdown']['mix_cash'], 300.0)
         self.assertEqual(response.data['kpis']['online_breakdown']['mix_upi'], 600.0)
+
+    def test_dashboard_kpis_repair_cash_upi_excludes_until_delivered(self):
+        """Repair cash/UPI dashboard totals exclude jobs still in Done (not yet delivered)."""
+        repair_store = TestDataFactory.create_store()
+        repair_store.shop_type = 'repair'
+        repair_store.save(update_fields=['shop_type'])
+
+        inv = TestDataFactory.create_invoice(
+            user=self.user,
+            customer=self.customer,
+            store=repair_store,
+            invoice_type='upi',
+            status='paid',
+        )
+        inv.total = Decimal('500.00')
+        inv.created_at = timezone.now() - timedelta(days=5)
+        inv.save(update_fields=['total', 'created_at'])
+        Repair.objects.create(
+            invoice=inv,
+            model_name='Phone Z',
+            description='WIP',
+            barcode=f'REP-WIP-{timezone.now().strftime("%H%M%S%f")}',
+            delivery_date=timezone.now().date(),
+            status='done',
+        )
+
+        today = timezone.now().date().isoformat()
+        response = self.client.get(f'/api/v1/reports/dashboard-kpis/?date_from={today}&date_to={today}')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['kpis']['online_breakdown']['repair'], 0.0)
 
     def test_dashboard_kpis_pending_invoice_purchase_cost_by_store(self):
         """Pending invoices: Σ purchase cost on lines (purchase_item unit_price × qty or purchase_price × qty)."""

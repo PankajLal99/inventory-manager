@@ -18,6 +18,7 @@ import {
   Box,
   Barcode as BarcodeIcon,
   Camera,
+  X,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import Input from '../../components/ui/Input';
@@ -140,6 +141,14 @@ export default function Search() {
       if (type !== 'product') params.type = type;
       setSearchParams(params);
     }
+  };
+
+  const handleClearSearch = () => {
+    setInputValue('');
+    setDebouncedQuery('');
+    const params: any = {};
+    if (searchType !== 'product') params.type = searchType;
+    setSearchParams(params);
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -266,9 +275,20 @@ export default function Search() {
               placeholder="Search products, customers, invoices, SKUs, barcodes..."
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              className="pl-12 pr-4 py-3 text-lg"
+              className="pl-12 pr-12 py-3 text-lg"
               autoFocus
             />
+            {inputValue.trim() && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                aria-label="Clear search"
+                title="Clear"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
           <Button
             type="button"
@@ -364,25 +384,11 @@ export default function Search() {
           {data && (
             <div>
               {/* Products section - shown first and prioritized */}
-              {/* Sort products: items with prices first */}
-              {(() => {
-                const sortedProducts = [...(data.products || [])].sort((a, b) => {
-                  // Check if product has price (selling_price > 0 or purchase_price > 0)
-                  const aHasPrice = (a.selling_price && a.selling_price > 0) || (a.purchase_price && a.purchase_price > 0);
-                  const bHasPrice = (b.selling_price && b.selling_price > 0) || (b.purchase_price && b.purchase_price > 0);
-
-                  // Products with prices come first
-                  if (aHasPrice && !bHasPrice) return -1;
-                  if (!aHasPrice && bHasPrice) return 1;
-                  return 0; // Keep original order for items in the same group
-                });
-
-                return (
-                  <>
+              <>
                   <ResultSection
                     title="Products"
                     icon={Package}
-                    items={sortedProducts}
+                    items={data.products || []}
                     onItemClick={(item) => {
                       // Navigate to product detail page (same as barcode scan)
                       navigate(`/products/${item.id}`);
@@ -409,14 +415,42 @@ export default function Search() {
                     }}
                     getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
                     customRender={(item, idx) => {
-                      // Get price (selling_price if available, otherwise purchase_price)
-                      const price = item.selling_price && item.selling_price > 0
-                        ? item.selling_price
-                        : (item.purchase_price || null);
-                      const priceDisplay = price ? `₹${formatNumber(price)}` : 'N/A';
+                      const breakdown = item.supplier_breakdown || [];
+                      const maxSellingPriceFromBreakdown = breakdown.reduce((max: number, s: any) => {
+                        const val = Number(s.selling_price_value ?? 0) || 0;
+                        return val > max ? val : max;
+                      }, 0);
+                      const maxPurchasePriceFromBreakdown = breakdown.reduce((max: number, s: any) => {
+                        const raw = s.purchase_price_value ?? s.purchase_price ?? s.price;
+                        const cleaned = typeof raw === 'string' ? raw.replace(/[^0-9.-]/g, '') : raw;
+                        const val = Number(cleaned);
+                        if (Number.isNaN(val)) return max;
+                        return val > max ? val : max;
+                      }, 0);
+                      const parsedSellingPrice = Number(item.selling_price);
+                      const parsedPurchasePrice = Number(item.purchase_price);
+                      const hasSellingPrice =
+                        item.selling_price !== null &&
+                        item.selling_price !== undefined &&
+                        item.selling_price !== '' &&
+                        !Number.isNaN(parsedSellingPrice);
+                      const hasPurchasePrice =
+                        item.purchase_price !== null &&
+                        item.purchase_price !== undefined &&
+                        item.purchase_price !== '' &&
+                        !Number.isNaN(parsedPurchasePrice);
+                      // Top-right price should prefer max selling price from all purchase rows.
+                      const price = maxSellingPriceFromBreakdown > 0
+                        ? maxSellingPriceFromBreakdown
+                        : (
+                            hasSellingPrice
+                              ? parsedSellingPrice
+                              : (hasPurchasePrice ? parsedPurchasePrice : (maxPurchasePriceFromBreakdown > 0 ? maxPurchasePriceFromBreakdown : null))
+                          );
+                      const hasPrice = price !== null && price !== undefined;
+                      const priceDisplay = hasPrice ? `₹${formatNumber(price)}` : 'N/A';
 
                       // Warehouse + Available = sum of (Whse + Shop Qty) from table so total matches the breakdown
-                      const breakdown = item.supplier_breakdown || [];
                       const totalFromTable = breakdown.reduce(
                         (sum: number, s: any) =>
                           sum + (Number(s.warehouse_available ?? s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
@@ -434,7 +468,7 @@ export default function Search() {
                         <div
                           key={idx}
                           onClick={() => navigate(`/products/${item.id}`)}
-                          className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
+                          className="p-3 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 min-w-0">
@@ -472,18 +506,18 @@ export default function Search() {
                               </div>
 
                             </div>
-                            <div className="flex flex-col items-end gap-2 flex-shrink-0 pt-0.5">
-                              {price && (
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0 pt-0.5">
+                              <div className="flex items-center gap-3">
                                 <div className="text-right">
-                                  <div className="text-2xl font-bold text-green-600 group-hover:text-green-700 leading-none">
+                                  <div className={`text-xl font-bold leading-none ${hasPrice ? 'text-green-600 group-hover:text-green-700' : 'text-gray-400 group-hover:text-gray-500'}`}>
                                     {priceDisplay}
                                   </div>
                                 </div>
-                              )}
-                              <div className="text-right">
-                                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Warehouse + Available</div>
-                                <div className="text-xl font-bold text-green-600 group-hover:text-green-700 leading-none">
-                                  {warehousePlusAvailable}
+                                <div className="text-right">
+                                  <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-none">QTY</div>
+                                  <div className="text-xl font-bold text-indigo-600 group-hover:text-indigo-700 leading-none">
+                                    {warehousePlusAvailable}
+                                  </div>
                                 </div>
                               </div>
                               <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
@@ -517,7 +551,8 @@ export default function Search() {
                                     <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Purchase date</th>
                                     <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Whse</th>
                                     <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Available</th>
-                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Price</th>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Purchase Price</th>
+                                    <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Selling Price</th>
                                   </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-50">
@@ -527,7 +562,8 @@ export default function Search() {
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600 align-middle">{s.purchase_date ?? '—'}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-gray-600 font-semibold align-middle">{formatNumber(s.warehouse_available ?? s.warehouse_stock, 2)}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-right text-blue-600 font-semibold align-middle">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</td>
-                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.price}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-700 font-medium align-middle">{s.price}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-xs text-green-600 font-medium align-middle">{s.selling_price ?? '—'}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -557,7 +593,7 @@ export default function Search() {
                   {(searchType === 'all' || searchType === 'product') &&
                     productLimit > 0 &&
                     productLimit < 500 &&
-                    sortedProducts.length >= productLimit && (
+                    (data.products || []).length >= productLimit && (
                       <div className="flex flex-wrap items-center gap-2 mt-3">
                         <Button
                           variant="outline"
@@ -593,8 +629,6 @@ export default function Search() {
                       </div>
                     )}
                 </>
-                );
-              })()}
 
               <ResultSection
                 title="Product Variants"

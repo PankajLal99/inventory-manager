@@ -9,6 +9,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+
+from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
 from .models import Setting, AuditLog
 from .serializers import (
     UserSerializer, UserCreateSerializer,
@@ -374,21 +376,39 @@ def global_search(request):
     if search_type in ['all', 'product']:
         from backend.catalog.filters import ProductFilter
         from backend.pos.models import CartItem
+        from django.db.models import Case, When, Value, IntegerField
 
-        products_queryset = Product.objects.filter(is_active=True).exclude(
+        # Lean queryset for search + ranking (id/name only); prefetches only on the final page.
+        products_base = Product.objects.filter(is_active=True).exclude(
             name__istartswith='Other -'
-        ).prefetch_related(
-            'barcodes',
-            'barcodes__purchase__supplier',
-            'stock_entries',
-            'stock_entries__store',
-            'stock_entries__warehouse'
         )
         products_filter = ProductFilter(
             {'search': query, 'search_mode': 'name_only'},
-            queryset=products_queryset
+            queryset=products_base,
         )
-        products = products_filter.qs.order_by('name')[:product_limit]
+
+        # Pull a larger candidate window, rank in Python for better relevance than SQL `order_by('name')`,
+        # then materialize the final page with prefetches intact.
+        candidate_cap = min(500, max(product_limit * 10, 200))
+        candidate_pairs = list(products_filter.qs.values('id', 'name')[:candidate_cap])
+        ordered_ids = order_product_ids_by_name_relevance(candidate_pairs, query, product_limit)
+
+        preserved_order = Case(
+            *[When(pk=pk, then=Value(idx)) for idx, pk in enumerate(ordered_ids)],
+            output_field=IntegerField(),
+        )
+        products = (
+            products_base.filter(pk__in=ordered_ids)
+            .prefetch_related(
+                'barcodes',
+                'barcodes__purchase__supplier',
+                'stock_entries',
+                'stock_entries__store',
+                'stock_entries__warehouse',
+            )
+            .annotate(_search_order=preserved_order)
+            .order_by('_search_order')
+        )
 
         # Pass active_cart_barcodes so available_quantity matches Products page (barcode count is source of truth)
         active_cart_barcodes = set()

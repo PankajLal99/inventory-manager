@@ -131,25 +131,22 @@ def purchase_detail(request, pk):
                 purchase=purchase
             ).exclude(tag='sold').select_related('product', 'variant')
             
-            barcode_details = list(barcodes_to_delete.values(
-                'id', 'barcode', 'product_id', 'product__name', 'product__sku', 'variant_id'
-            ))
-            
-            for barcode_detail in barcode_details:
+            for bc in barcodes_to_delete.select_related('product', 'variant'):
+                label = bc.audit_display_label()
                 create_audit_log(
                     request=request,
                     action='delete',
                     model_name='Barcode',
-                    object_id=str(barcode_detail['id']),
-                    object_name=barcode_detail['product__name'] or 'Unknown Product',
-                    object_reference=barcode_detail['product__sku'] or None,
-                    barcode=barcode_detail['barcode'],
+                    object_id=str(bc.id),
+                    object_name=bc.product.name if bc.product else 'Unknown Product',
+                    object_reference=bc.product.sku if bc.product else None,
+                    barcode=label,
                     changes={
-                        'barcode': barcode_detail['barcode'],
-                        'product_id': barcode_detail['product_id'],
-                        'product_name': barcode_detail['product__name'],
-                        'product_sku': barcode_detail['product__sku'],
-                        'variant_id': barcode_detail['variant_id'],
+                        'barcode': label,
+                        'product_id': bc.product_id,
+                        'product_name': bc.product.name if bc.product else None,
+                        'product_sku': bc.product.sku if bc.product else None,
+                        'variant_id': bc.variant_id,
                         'purchase_id': purchase_id,
                         'purchase_number': purchase_number,
                         'reason': 'Purchase deleted - non-sold barcodes soft-deleted (rows retained)',

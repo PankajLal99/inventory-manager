@@ -1,15 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { reportsApi } from '../../lib/api';
 import { formatDateDDMMYYYY, formatNumber } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { auth } from '../../lib/auth';
-import { BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, TrendingUp, Truck, Wallet, Wrench } from 'lucide-react';
+import { ArrowRight, BarChart3, Calendar, ClipboardList, Clock, Coins, CreditCard, DollarSign, Lock, Package, RefreshCw, Store, TrendingDown, TrendingUp, Truck, Wallet, Wrench } from 'lucide-react';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 const PIN_LENGTH = 6;
 const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070';
+const DASHBOARD_UNLOCKED_SESSION_KEY = 'dashboard_unlocked_v1';
 
 /** When false, the “Manual / POS payments” KPI block is hidden (code kept for later). */
 const SHOW_MANUAL_POS_PAYMENTS_SECTION = false;
@@ -109,6 +110,7 @@ function DashboardMetricCard({
   gradientClass,
   borderClass,
   iconClass,
+  detailPath,
 }: {
   title: string;
   subtitle?: string;
@@ -118,12 +120,25 @@ function DashboardMetricCard({
   gradientClass: string;
   borderClass: string;
   iconClass: string;
+  detailPath?: string;
 }) {
   return (
     <div className={`rounded-xl border p-5 ${gradientClass} ${borderClass}`}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-sm font-medium text-gray-700">{title}</p>
-        <span className={iconClass}>{icon}</span>
+        <div className="flex items-center gap-1.5">
+          {detailPath ? (
+            <Link
+              to={detailPath}
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-white/70 text-gray-600 hover:text-gray-800"
+              title="View details"
+              aria-label={`View details for ${title}`}
+            >
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          ) : null}
+          <span className={iconClass}>{icon}</span>
+        </div>
       </div>
       {subtitle ? <p className="text-xs text-gray-600 mb-2 leading-snug">{subtitle}</p> : null}
       <p className="text-2xl sm:text-3xl font-bold text-gray-900 tabular-nums">{totalFormatted}</p>
@@ -289,10 +304,25 @@ export default function Dashboard() {
   const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
   const dateRange = { startDate: dateFrom, endDate: dateTo };
 
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return sessionStorage.getItem(DASHBOARD_UNLOCKED_SESSION_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
   const [pinError, setPinError] = useState('');
   const pinInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    try {
+      if (unlocked) sessionStorage.setItem(DASHBOARD_UNLOCKED_SESSION_KEY, 'true');
+      else sessionStorage.removeItem(DASHBOARD_UNLOCKED_SESSION_KEY);
+    } catch {
+      // ignore storage errors (private mode, etc)
+    }
+  }, [unlocked]);
 
   useEffect(() => {
     if (!user) {
@@ -656,6 +686,7 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
               <DashboardMetricCard
                 title="Total cash"
+                subtitle="Repair shop amounts: delivered only, by delivery date in range."
                 icon={<DollarSign className="h-5 w-5 text-green-700" />}
                 totalFormatted={`₹${formatNumber(totalCash, 2)}`}
                 gradientClass="bg-gradient-to-br from-green-50 to-green-100"
@@ -663,13 +694,17 @@ export default function Dashboard() {
                 iconClass=""
                 breakdownRows={[
                   { label: 'Retail (counter) — cash invoices', amount: Number(cashBreakdown.retail_counter ?? 0) },
-                  { label: 'Repair — cash invoices', amount: Number(cashBreakdown.repair ?? 0) },
+                  {
+                    label: 'Repair — cash (status delivered, delivery date in range)',
+                    amount: Number(cashBreakdown.repair ?? 0),
+                  },
                   { label: 'Mix cash (mixed-payment cash legs)', amount: Number(cashBreakdown.mix_cash ?? 0) },
                   { label: 'Manual cash (ledger, no invoice)', amount: Number(cashBreakdown.manual_cash ?? 0) },
                 ]}
               />
               <DashboardMetricCard
                 title="Total online"
+                subtitle="Repair shop amounts: delivered only, by delivery date in range."
                 icon={<CreditCard className="h-5 w-5 text-blue-700" />}
                 totalFormatted={`₹${formatNumber(totalUpi, 2)}`}
                 gradientClass="bg-gradient-to-br from-blue-50 to-blue-100"
@@ -677,7 +712,10 @@ export default function Dashboard() {
                 iconClass=""
                 breakdownRows={[
                   { label: 'Retail (counter) — UPI invoices', amount: Number(onlineBreakdown.retail_counter ?? 0) },
-                  { label: 'Repair — UPI invoices', amount: Number(onlineBreakdown.repair ?? 0) },
+                  {
+                    label: 'Repair — UPI (status delivered, delivery date in range)',
+                    amount: Number(onlineBreakdown.repair ?? 0),
+                  },
                   { label: 'Mix UPI (mixed-payment UPI legs)', amount: Number(onlineBreakdown.mix_upi ?? 0) },
                   { label: 'Manual UPI (ledger, no invoice)', amount: Number(onlineBreakdown.manual_upi ?? 0) },
                 ]}
@@ -693,6 +731,7 @@ export default function Dashboard() {
               />
               <DashboardMetricCard
                 title="Total credit"
+                subtitle="Repair shops: only delivered jobs, by delivery date in range. Other shops: invoice date in range."
                 icon={<CreditCard className="h-5 w-5 text-violet-700" />}
                 totalFormatted={`₹${formatNumber(totalCredit, 2)}`}
                 gradientClass="bg-gradient-to-br from-violet-50 to-violet-100"
@@ -756,6 +795,7 @@ export default function Dashboard() {
                 />
                 <DashboardMetricCard
                   title="Repair profit"
+                  subtitle="Delivered: delivery date in range. Done: invoice created or repair updated in range."
                   icon={<Wrench className="h-5 w-5 text-purple-700" />}
                   totalFormatted={`₹${formatNumber(repairProfit, 2)}`}
                   gradientClass="bg-gradient-to-br from-purple-50 to-purple-100"
@@ -791,6 +831,7 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-sky-50 to-sky-100"
                   borderClass="border-sky-200"
                   iconClass=""
+                  detailPath="/dashboard/overall-profit-billing-details"
                   breakdownRows={[
                     { label: 'Retail (counter)', amount: counterProfitBilling },
                     { label: 'Repair', amount: repairProfitBilling },
@@ -913,17 +954,18 @@ export default function Dashboard() {
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <ClipboardList className="h-5 w-5 text-gray-600" />
-                Overall pending bill value (purchase cost)
+                Overall pending invoice amount
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
                 <DashboardMetricCard
-                  title="Overall pending (at purchase cost)"
-                  subtitle="Non-draft invoices with status or type pending. Uses purchase unit × qty per line. The headline includes lines even when the invoice already has a partial payment (paid_amount > 0); the list on the right labelled fully unpaid is only paid_amount = 0."
+                  title="Overall pending (matches Invoices page)"
+                  subtitle="All-time non-repair invoices with type pending. Uses invoice total (same basis as Invoices page pending amount)."
                   icon={<ClipboardList className="h-5 w-5 text-orange-800" />}
                   totalFormatted={`₹${formatNumber(pendingPurchaseTotal, 2)}`}
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
+                detailPath="/dashboard/overall-pending-invoice-details"
                   breakdownRows={(() => {
                     const rows: BreakdownRow[] = [
                       { label: 'Retail', amount: pendingRetail },
@@ -938,7 +980,7 @@ export default function Dashboard() {
                 />
                 <div className="min-h-0 space-y-4">
                   <StoreAmountList
-                    title="By store (all pending)"
+                    title="By store (all pending, invoice total)"
                     rows={pendingPurchaseByStore}
                     emptyMessage="No pending invoice lines."
                   />
@@ -981,6 +1023,7 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
                   borderClass="border-emerald-200"
                   iconClass=""
+                  detailPath="/dashboard/wholesale-pending-cleared-details"
                   breakdownRows={[
                     {
                       label: 'Wholesale stores (billing window above)',

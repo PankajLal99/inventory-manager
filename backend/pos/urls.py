@@ -12,7 +12,8 @@ from .views import (
     replacement_check, replacement_create, replacement_update_tag,
     replacement_replace, replacement_return, replacement_defective, replacement_reserve_barcode,
     find_invoice_by_barcode, bulk_barcodes_check, process_replacement, search_invoices_by_number,
-    replacement_credit_note, replacement_pos_lookup, replacement_pos_create,
+    replacement_credit_note,
+    replacement_pos_lookup, replacement_pos_create,
     repair_invoices_list, repair_status_choices, repair_device_models, find_repair_invoice_by_barcode, update_repair_status, update_repair, generate_repair_label
 )
 

@@ -148,7 +148,9 @@ def stock_adjustment_list_create(request):
                         barcode_value = f"{base_name}-{timestamp}-{unique_id}"
                         
                         # Ensure barcode uniqueness
-                        while Barcode.objects.filter(barcode=barcode_value).exists():
+                        # Use all_objects to include soft-deleted rows because DB unique
+                        # constraints still apply to them.
+                        while Barcode.all_objects.filter(barcode=barcode_value).exists():
                             unique_id = str(uuid.uuid4())[:8].upper()
                             barcode_value = f"{base_name}-{timestamp}-{unique_id}"
                         

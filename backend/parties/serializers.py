@@ -22,6 +22,18 @@ class CustomerSerializer(serializers.ModelSerializer):
 
 
 class SupplierSerializer(serializers.ModelSerializer):
+    def validate_code(self, value):
+        code = (value or '').strip()
+        if not code:
+            return code
+
+        queryset = Supplier.objects.filter(code__iexact=code)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('Vendor code already exists. Please use a different code.')
+        return code
+
     class Meta:
         model = Supplier
         fields = ['id', 'name', 'code', 'phone', 'email', 'address', 'contact_person', 'is_active', 'created_at', 'updated_at']

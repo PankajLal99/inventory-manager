@@ -12,20 +12,21 @@ export default function Replacement() {
         <p className="text-gray-600">Choose a replacement type to proceed</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Replacement POS */}
         <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/pos')}>
           <div className="p-6 space-y-4">
             <div className="flex items-center gap-3">
-              <div className="p-3 bg-amber-100 rounded-lg">
-                <ScanLine className="h-6 w-6 text-amber-600" />
+              <div className="p-3 bg-indigo-100 rounded-lg">
+                <ScanLine className="h-6 w-6 text-indigo-600" />
               </div>
               <h2 className="text-xl font-semibold text-gray-900">Replacement POS</h2>
             </div>
             <p className="text-gray-600 text-sm">
-              Scan already sold barcodes, capture row-level return tags and accepted prices, then create an instant or pending replacement-return invoice.
+              Scan sold barcodes to build a return invoice with return tags and accepted credit (capped at original sold price). Instant or pending checkout.
             </p>
-            <div className="flex items-center gap-2 text-amber-600 font-medium">
-              <span>Get Started</span>
+            <div className="flex items-center gap-2 text-indigo-600 font-medium">
+              <span>Open</span>
               <ArrowRight className="h-4 w-4" />
             </div>
           </div>
@@ -100,6 +101,9 @@ export default function Replacement() {
           </div>
           <div>
             <strong className="text-purple-600">Credit Note:</strong> Use this when you need to issue a formal credit note for returned items. A credit note document is generated and customer account is credited.
+          </div>
+          <div>
+            <strong className="text-indigo-600">Replacement POS:</strong> Build a dedicated return invoice by scanning sold barcodes, set return tags and accepted credit (never above the original sold price), then finalize instantly or save as a draft and check out from the invoice page.
           </div>
         </div>
       </div>

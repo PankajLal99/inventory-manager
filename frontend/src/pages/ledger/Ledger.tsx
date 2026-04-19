@@ -187,7 +187,7 @@ export default function Ledger() {
   const { data: customersResponse } = useQuery({
     queryKey: ['customers', customerSearch],
     queryFn: async () => {
-      const response = await customersApi.list({ search: customerSearch, exclude_group_name: 'Repair' });
+      const response = await customersApi.list({ search: customerSearch });
       return response.data;
     },
     enabled: customerSearch.trim().length > 0,
@@ -197,7 +197,7 @@ export default function Ledger() {
   const { data: allCustomers } = useQuery({
     queryKey: ['all-customers'],
     queryFn: async () => {
-      const response = await customersApi.list({ exclude_group_name: 'Repair' });
+      const response = await customersApi.list();
       return response.data;
     },
     retry: false,
@@ -356,19 +356,33 @@ export default function Ledger() {
 
   const customers = (() => {
     if (!customersResponse) return [];
-    if (Array.isArray(customersResponse.results)) return customersResponse.results;
-    if (Array.isArray(customersResponse.data)) return customersResponse.data;
-    if (Array.isArray(customersResponse)) return customersResponse;
-    return [];
+    const raw = Array.isArray(customersResponse.results)
+      ? customersResponse.results
+      : Array.isArray(customersResponse.data)
+        ? customersResponse.data
+        : Array.isArray(customersResponse)
+          ? customersResponse
+          : [];
+    return raw.filter((c: any) => (c.customer_group_name || '').toUpperCase() !== 'MTSHOP');
   })();
 
   const allCustomersList = (() => {
     if (!allCustomers) return [];
-    if (Array.isArray(allCustomers.results)) return allCustomers.results;
-    if (Array.isArray(allCustomers.data)) return allCustomers.data;
-    if (Array.isArray(allCustomers)) return allCustomers;
-    return [];
+    const raw = Array.isArray(allCustomers.results)
+      ? allCustomers.results
+      : Array.isArray(allCustomers.data)
+        ? allCustomers.data
+        : Array.isArray(allCustomers)
+          ? allCustomers
+          : [];
+    return raw.filter((c: any) => (c.customer_group_name || '').toUpperCase() !== 'MTSHOP');
   })();
+
+  const formatCustomerWithGroup = (name: string, groupName?: string) => {
+    const safeName = name || 'Anonymous';
+    const safeGroup = (groupName || '').trim();
+    return safeGroup ? `${safeName} (${safeGroup})` : safeName;
+  };
 
   const entries = (() => {
     if (!ledgerEntries) return [];
@@ -443,7 +457,7 @@ export default function Ledger() {
         const totalDebit = parseFloat(row.total_debit || 0);
         const entryCount = Number(row.entry_count) || 0;
         grouped[customerId] = {
-          customer: { id: row.customer_id ?? null, name: row.customer_name || 'Anonymous' },
+          customer: { id: row.customer_id ?? null, name: row.customer_name || 'Anonymous', groupName: row.customer_group_name || '' },
           entries: [],
           entryCount,
           totalCredit,
@@ -460,7 +474,7 @@ export default function Ledger() {
       const customerName = entry.customer_name || 'Anonymous';
       if (!grouped[customerId]) {
         grouped[customerId] = {
-          customer: { id: entry.customer || null, name: customerName },
+          customer: { id: entry.customer || null, name: customerName, groupName: entry.customer_group_name || '' },
           entries: [],
           totalCredit: 0,
           totalDebit: 0,
@@ -1244,10 +1258,10 @@ export default function Ledger() {
                                       onClick={() => navigate(buildLedgerDetailPath(group.customer.id))}
                                       className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                                     >
-                                      {group.customer.name}
+                                      {formatCustomerWithGroup(group.customer.name, group.customer.groupName)}
                                     </button>
                                   ) : (
-                                    <span className="text-sm font-semibold text-gray-700">{group.customer.name}</span>
+                                    <span className="text-sm font-semibold text-gray-700">{formatCustomerWithGroup(group.customer.name, group.customer.groupName)}</span>
                                   )}
                                 </div>
                               </td>
@@ -1359,10 +1373,10 @@ export default function Ledger() {
                                 onClick={() => navigate(buildLedgerDetailPath(group.customer.id))}
                                 className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                               >
-                                {group.customer.name}
+                                {formatCustomerWithGroup(group.customer.name, group.customer.groupName)}
                               </button>
                             ) : (
-                              <span className="text-base font-semibold text-gray-700">{group.customer.name}</span>
+                              <span className="text-base font-semibold text-gray-700">{formatCustomerWithGroup(group.customer.name, group.customer.groupName)}</span>
                             )}
                             <p className="text-xs text-gray-600 mt-0.5">
                               {(group.entryCount ?? group.entries.length)} {(group.entryCount ?? group.entries.length) === 1 ? 'entry' : 'entries'}

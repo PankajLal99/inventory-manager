@@ -139,6 +139,7 @@ export default function RepairRegistration() {
             const params: Record<string, string> = {};
             if (debouncedSearch) params.search = debouncedSearch;
             if (customerGroupFilter) params.customer_group = customerGroupFilter;
+            params.exclude_repair_and_ungrouped = 'true';
             const response = await customersApi.list(params);
             return response.data;
         },
@@ -148,36 +149,49 @@ export default function RepairRegistration() {
             const customers = data.results || data.data || (Array.isArray(data) ? data : []);
 
             // UI level filtering to ensure we don't show non-matching groups if backend filter is loose
-            let filtered = customers;
+            // Also exclude REPAIR group customers from search results.
+            let filtered = customers.filter((c: any) => c.customer_group_name !== 'REPAIR');
             if (customerGroupFilter) {
-                filtered = customers.filter((c: any) =>
+                filtered = filtered.filter((c: any) =>
                     String(c.customer_group) === customerGroupFilter ||
                     String(c.customer_group_id) === String(customerGroupFilter)
                 );
             }
 
-            // UI level sorting to prioritize REPAIR group (matching POSRepair.tsx)
-            const sorted = [...filtered].sort((a: any, b: any) => {
-                const aIsRepair = a.customer_group_name === 'REPAIR';
-                const bIsRepair = b.customer_group_name === 'REPAIR';
-                if (aIsRepair === bIsRepair) return 0;
-                return aIsRepair ? -1 : 1;
-            });
-
-            if (data.results) return { ...data, results: sorted };
-            return sorted;
+            if (data.results) return { ...data, results: filtered };
+            return filtered;
         }
     });
+    const customerSearchResults = useMemo(() => {
+        return customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
+    }, [customersResponse]);
 
     // Mutations
     const createCustomerMutation = useMutation({
-        mutationFn: (data: { name: string; phone?: string }) => {
+        mutationFn: async (data: { name: string; phone?: string }) => {
             const payload: any = { ...data };
             if (repairGroup) payload.customer_group = repairGroup.id;
-            return customersApi.create(payload);
+            try {
+                const resp = await customersApi.create(payload);
+                return resp.data;
+            } catch (err: any) {
+                const duplicateNameError = err?.response?.data?.name;
+                const hasDuplicateName =
+                    Array.isArray(duplicateNameError) &&
+                    duplicateNameError.some((msg: string) => String(msg).toLowerCase().includes('already exists'));
+                if (!hasDuplicateName) throw err;
+
+                const searchResp = await customersApi.list({ exact_name: data.name });
+                const searchData = searchResp?.data;
+                const customers = searchData?.results || searchData?.data || (Array.isArray(searchData) ? searchData : []);
+                const existingCustomer = customers[0];
+
+                if (!existingCustomer) throw err;
+                return existingCustomer;
+            }
         },
-        onSuccess: (resp) => {
-            setSelectedCustomer(resp.data);
+        onSuccess: (customer) => {
+            setSelectedCustomer(customer);
             setCustomerSearch(''); // Clear search to show the selected card
             setShowCreateCustomerModal(false);
             setNewCustomerName('');
@@ -185,7 +199,11 @@ export default function RepairRegistration() {
             queryClient.invalidateQueries({ queryKey: ['customers'] }); // Refresh list so new customer appears on next search
             showToast('Customer registered successfully');
         },
-        onError: (err: any) => showToast(err.response?.data?.error || 'Failed to create customer', 'error'),
+        onError: (err: any) => {
+            const nameErrors = err?.response?.data?.name;
+            const firstNameError = Array.isArray(nameErrors) ? nameErrors[0] : '';
+            showToast(firstNameError || err?.response?.data?.error || 'Failed to create customer', 'error');
+        },
     });
 
     const registerMutation = useMutation({
@@ -244,6 +262,12 @@ export default function RepairRegistration() {
     const getRegisteredInvoiceId = () => {
         const nestedInvoiceId = registeredRepair?.repair?.invoice;
         return Number(nestedInvoiceId || registeredRepair?.id);
+    };
+
+    const handleQuickCustomerCreate = () => {
+        const name = customerSearch.trim();
+        if (!name || createCustomerMutation.isPending) return;
+        createCustomerMutation.mutate({ name, phone: undefined });
     };
 
     const handleRegister = () => {
@@ -388,6 +412,14 @@ export default function RepairRegistration() {
                                 placeholder="Search by name or phone number..."
                                 value={customerSearch}
                                 onChange={(e) => setCustomerSearch(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key !== 'Enter') return;
+                                    const hasNoMatches = Array.isArray(customerSearchResults) && customerSearchResults.length === 0;
+                                    if (customerSearch.trim() && !customersLoading && !customersError && hasNoMatches) {
+                                        e.preventDefault();
+                                        handleQuickCustomerCreate();
+                                    }
+                                }}
                                 onFocus={() => setIsSearchFocused(true)}
                                 onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
                                 className="pl-12 h-14 text-lg font-medium rounded-2xl border-2 border-gray-100 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all bg-gray-50 focus:bg-white"
@@ -446,7 +478,7 @@ export default function RepairRegistration() {
                                                 <p className="text-red-500 font-bold">Failed to load customers. Try again.</p>
                                             </div>
                                         ) : (() => {
-                                            const list = customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
+                                            const list = customerSearchResults;
                                             return list && list.length > 0 ? (
                                             list.map((c: any) => (
                                                 <button
@@ -463,7 +495,10 @@ export default function RepairRegistration() {
                                                             <User className="h-5 w-5 text-gray-400 group-hover:text-white" />
                                                         </div>
                                                         <div>
-                                                            <p className="font-black text-gray-900">{c.name}</p>
+                                                            <p className="font-black text-gray-900">
+                                                                {c.name}
+                                                                {` (${c.customer_group_name || c.customer_group?.name || 'No Group'})`}
+                                                            </p>
                                                             <p className="text-xs font-black text-gray-400 group-hover:text-blue-600 transition-colors uppercase">{c.phone || 'No Phone'}</p>
                                                         </div>
                                                     </div>
@@ -482,14 +517,12 @@ export default function RepairRegistration() {
 
                                         {customerSearch && (
                                             <button
-                                                onClick={() => {
-                                                    setNewCustomerName(customerSearch);
-                                                    setShowCreateCustomerModal(true);
-                                                }}
+                                                onClick={handleQuickCustomerCreate}
+                                                disabled={createCustomerMutation.isPending}
                                                 className="w-full text-left p-5 text-blue-600 font-black hover:bg-blue-50 rounded-xl flex items-center gap-3 transition-colors border-2 border-dashed border-blue-100 mt-2"
                                             >
                                                 <Plus className="h-6 w-6" />
-                                                Register New: "{customerSearch}"
+                                                {createCustomerMutation.isPending ? 'Registering...' : `Register New: "${customerSearch}"`}
                                             </button>
                                         )}
                                     </div>

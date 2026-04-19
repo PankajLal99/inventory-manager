@@ -48,6 +48,8 @@ export interface User {
 }
 
 let currentUser: User | null = null;
+/** Coalesce concurrent / StrictMode duplicate `loadUser` calls into one `/auth/me/` request. */
+let loadUserInFlight: Promise<User | null> | null = null;
 
 export const auth = {
   register: async (data: any) => {
@@ -55,7 +57,7 @@ export const auth = {
     const { access, refresh } = response.data;
     localStorage.setItem('access_token', access);
     localStorage.setItem('refresh_token', refresh);
-    await auth.loadUser();
+    await auth.loadUser({ force: true });
     return response.data;
   },
 
@@ -64,7 +66,7 @@ export const auth = {
     const { access, refresh } = response.data;
     localStorage.setItem('access_token', access);
     localStorage.setItem('refresh_token', refresh);
-    await auth.loadUser();
+    await auth.loadUser({ force: true });
     return response.data;
   },
 
@@ -73,23 +75,44 @@ export const auth = {
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('retailer_code');
     currentUser = null;
+    loadUserInFlight = null;
   },
 
-  loadUser: async () => {
-    try {
-      const response = await authApi.me();
-      currentUser = response.data;
-      const rc = currentUser?.retailer?.code;
-      if (rc) {
-        localStorage.setItem('retailer_code', rc);
-      } else {
-        localStorage.removeItem('retailer_code');
-      }
-      return currentUser;
-    } catch (error) {
+  /**
+   * Fetch current user from `/auth/me/`.
+   * - Concurrent callers share one HTTP request.
+   * - If we already have `currentUser` and `force` is false, returns cached user (avoids StrictMode double-fetch).
+   * - Pass `{ force: true }` after profile changes when you need a fresh server read.
+   */
+  loadUser: async (options?: { force?: boolean }) => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
       currentUser = null;
-      throw error;
+      return null;
     }
+    if (!options?.force && currentUser) {
+      return currentUser;
+    }
+    if (loadUserInFlight) {
+      return loadUserInFlight;
+    }
+    loadUserInFlight = (async () => {
+      try {
+        const response = await authApi.me();
+        if (!localStorage.getItem('access_token')) {
+          currentUser = null;
+          return null;
+        }
+        currentUser = response.data;
+        return currentUser;
+      } catch (error) {
+        currentUser = null;
+        throw error;
+      } finally {
+        loadUserInFlight = null;
+      }
+    })();
+    return loadUserInFlight;
   },
 
   getUser: () => currentUser,

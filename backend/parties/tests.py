@@ -35,6 +35,14 @@ def create_regular_user():
     return User.objects.create_user(username='regular_user', password='testpass123')
 
 
+def create_retail_user(username='retail_ledger_user'):
+    """Retail group — allowed read-only manual payments list (Payments page)."""
+    user = User.objects.create_user(username=username, password='testpass123')
+    g, _ = Group.objects.get_or_create(name='Retail')
+    user.groups.add(g)
+    return user
+
+
 class LedgerAPITestCase(APITestCase):
     """Tests for main Ledger (Vyapaar): list, create, summary, customer detail, get/update/delete entry, totals."""
 
@@ -230,6 +238,40 @@ class LedgerAPITestCase(APITestCase):
         self.assertEqual(self.client.get(detail_url).status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(self.client.patch(detail_url, {'amount': '20'}, format='json').status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(self.client.delete(detail_url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_manual_payments_ledger_list_retail_only(self):
+        """GET .../ledger/entries/?manual_only=true is limited to Retail/RetailAdmin (not all authenticated users)."""
+        list_url = reverse('ledger-entry-list-create')
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('10.00'),
+            description='Manual payment row',
+            created_by=self.admin,
+            is_sent=False,
+        )
+        retail = create_retail_user('retail_manual_payments')
+        self.client.force_authenticate(user=retail)
+        r = self.client.get(list_url, {'manual_only': 'true', 'entry_type': 'credit'})
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(r.data), 1)
+
+        self.assertEqual(self.client.get(list_url).status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=create_regular_user())
+        self.assertEqual(
+            self.client.get(list_url, {'manual_only': 'true', 'entry_type': 'credit'}).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        wholesale = User.objects.create_user(username='wholesale_manual_payments', password='testpass123')
+        wg, _ = Group.objects.get_or_create(name='Wholesale')
+        wholesale.groups.add(wg)
+        self.client.force_authenticate(user=wholesale)
+        self.assertEqual(
+            self.client.get(list_url, {'manual_only': 'true', 'entry_type': 'credit'}).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
 
     def test_ledger_by_customer_returns_aggregated_rows(self):
         """GET ledger/by-customer/ returns one row per customer with totals and entry_count."""

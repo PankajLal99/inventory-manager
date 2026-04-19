@@ -23,6 +23,7 @@ import InvoiceDetail from './pages/invoices/InvoiceDetail';
 import InvoiceEdit from './pages/invoices/InvoiceEdit';
 import Reports from './pages/reports/Reports';
 import Replacement from './pages/replacement/Replacement';
+import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
@@ -47,6 +48,9 @@ import PaymentReminders from './pages/payment-reminders/PaymentReminders';
 import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
 import StockOverview from './pages/stock/StockOverview';
+import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingDetails';
+import OverallPendingInvoiceDetails from './pages/dashboard/OverallPendingInvoiceDetails';
+import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingClearedDetails';
 import StockTransfers from './pages/stock/StockTransfers';
 
 const queryClient = new QueryClient({
@@ -99,6 +103,18 @@ function App() {
               >
                 <Route index element={<POS />} />
                 <Route path="dashboard" element={<Dashboard />} />
+                <Route
+                  path="dashboard/overall-profit-billing-details"
+                  element={<OverallProfitBillingDetails />}
+                />
+                <Route
+                  path="dashboard/overall-pending-invoice-details"
+                  element={<OverallPendingInvoiceDetails />}
+                />
+                <Route
+                  path="dashboard/wholesale-pending-cleared-details"
+                  element={<WholesalePendingClearedDetails />}
+                />
                 <Route path="products" element={<Products />} />
                 <Route path="products/:id" element={<ProductDetail />} />
                 <Route path="pos" element={<POS />} />

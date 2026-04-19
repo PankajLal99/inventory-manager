@@ -177,20 +177,11 @@ class Invoice(models.Model):
     pos_trade_ins = models.JSONField(null=True, blank=True)
     # Replace Product: list of {invoice_item_id, old_product_name, charge_unit_price, ...} for invoice / print UI
     exchange_snapshots = models.JSONField(null=True, blank=True)
-    # Replacement POS: return-side invoice created from already sold barcodes.
+    # Replacement POS: return-invoice for already-sold barcodes (separate from Replace Product exchange flow)
     is_replacement_return = models.BooleanField(default=False, db_index=True)
-    replacement_mode = models.CharField(
-        max_length=20,
-        blank=True,
-        default='',
-        choices=[
-            ('', 'None'),
-            ('instant', 'Instant'),
-            ('pending', 'Pending'),
-        ],
-    )
+    replacement_mode = models.CharField(max_length=20, blank=True, null=True)
     replacement_customer_warning = models.BooleanField(default=False)
-    replacement_source_customers = models.JSONField(null=True, blank=True)
+    replacement_source_customers = models.JSONField(default=list, blank=True)
 
     def __str__(self):
         return self.invoice_number
@@ -235,6 +226,13 @@ class Repair(models.Model):
 
     def __str__(self):
         return f"Repair {self.barcode} - {self.invoice.invoice_number}"
+
+    @property
+    def customer_name(self):
+        """Convenience accessor for admin/UI usage."""
+        if self.invoice and self.invoice.customer:
+            return self.invoice.customer.name
+        return ''
 
     class Meta:
         db_table = 'repairs'
@@ -297,6 +295,19 @@ class InvoiceItem(models.Model):
     replaced_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     replaced_at = models.DateTimeField(null=True, blank=True)
     replaced_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='replaced_items')
+    # Replacement POS line: link to original sale + accepted return terms
+    original_invoice = models.ForeignKey(
+        'Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    original_invoice_item = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
+    replacement_return_tag = models.CharField(max_length=20, blank=True, null=True)
+    accepted_return_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    original_sold_unit_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    original_sold_line_total = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    original_invoice_number = models.CharField(max_length=100, blank=True, null=True)
+    original_customer_name = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         db_table = 'invoice_items'

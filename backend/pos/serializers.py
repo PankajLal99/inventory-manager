@@ -254,7 +254,15 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'original_invoice', 'original_invoice_item', 'replacement_return_tag', 'accepted_return_price', 'original_sold_unit_price', 'original_sold_line_total', 'original_invoice_number', 'original_customer_name', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
+        fields = [
+            'id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price',
+            'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant',
+            'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price',
+            'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity',
+            'replaced_at', 'replaced_by', 'available_quantity',
+            'original_invoice', 'original_invoice_item', 'replacement_return_tag', 'accepted_return_price',
+            'original_sold_unit_price', 'original_sold_line_total', 'original_invoice_number', 'original_customer_name',
+        ]
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -312,6 +320,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     display_total = serializers.SerializerMethodField()
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
+    replacement_ledger_entries = serializers.SerializerMethodField()
 
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Invoice._meta.get_field('customer').related_model.objects.all(),
@@ -326,10 +335,29 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
             'trade_in_credit', 'pos_trade_ins', 'exchange_snapshots',
             'is_replacement_return', 'replacement_mode', 'replacement_customer_warning', 'replacement_source_customers',
+            'replacement_ledger_entries',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
             'is_edited', 'edited_on', 'items', 'payments'
         ]
         read_only_fields = ['pending_cleared_at']
+
+    def get_replacement_ledger_entries(self, obj):
+        """Ledger rows linked to this invoice (instant replacement returns use these instead of Payment)."""
+        if not getattr(obj, 'is_replacement_return', False):
+            return []
+        from backend.parties.models import LedgerEntry
+
+        return [
+            {
+                'id': e.id,
+                'entry_type': e.entry_type,
+                'amount': str(e.amount),
+                'description': e.description or '',
+                'payment_mode': e.payment_mode or '',
+                'created_at': e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in LedgerEntry.objects.filter(invoice=obj).order_by('id')
+        ]
 
     def get_display_total(self, obj):
         """
@@ -392,6 +420,41 @@ class InvoiceSerializer(serializers.ModelSerializer):
             paid_amount = obj.paid_amount or Decimal('0.00')
             if paid_amount > 0:
                 return float(paid_amount)
+        return float(obj.total or Decimal('0.00'))
+
+
+class RepairInvoiceListSerializer(serializers.ModelSerializer):
+    """
+    Lean serializer for Repairs list endpoint.
+    Avoids nested items/payments payload (major win for unpaginated repair list).
+    """
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
+    store_name = serializers.CharField(source='store.name', read_only=True)
+    repair = RepairSerializer(read_only=True)
+    computed_total = serializers.SerializerMethodField()
+    computed_paid = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Invoice
+        fields = [
+            'id', 'invoice_number', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name',
+            'status', 'invoice_type', 'total', 'paid_amount', 'created_at', 'repair', 'computed_total', 'computed_paid'
+        ]
+
+    def get_computed_total(self, obj):
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_total_agg', Decimal('0.00')) or Decimal('0.00'))
+        return float(obj.total or Decimal('0.00'))
+
+    def get_computed_paid(self, obj):
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_paid_agg', Decimal('0.00')) or Decimal('0.00'))
+        paid_amount = obj.paid_amount or Decimal('0.00')
+        if paid_amount > 0:
+            return float(paid_amount)
         return float(obj.total or Decimal('0.00'))
 
 

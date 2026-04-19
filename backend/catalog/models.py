@@ -241,6 +241,15 @@ class Barcode(SoftDeleteModel):
         # If format doesn't match, return None (will be handled by backfill)
         return None
 
+    def audit_display_label(self):
+        """Short code for audit/history; fall back to derived short form or full barcode."""
+        if self.short_code:
+            return self.short_code
+        derived = self.generate_short_code()
+        if derived:
+            return derived
+        return self.barcode
+
     def get_purchase_price(self):
         """Get the purchase price for this specific barcode from its purchase_item"""
         if self.purchase_item:

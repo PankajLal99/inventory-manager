@@ -20,6 +20,7 @@ import ProductForm from '../products/ProductForm';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
 import DatePicker from '../../components/ui/DatePicker';
 import PurchaseStockModal from './PurchaseStockModal';
+import { toast } from '../../lib/toast';
 
 interface PurchaseItem {
   id?: number;
@@ -143,7 +144,13 @@ function clearPrintedFlagsInPurchasesInfiniteCache(old: unknown, purchaseId: num
 
 export default function Purchases() {
   const user = auth.getUser();
-  const isRetailUser = isRetailCatalogRestricted(user);
+  const userGroups = user?.groups || [];
+  const isAdminUser = Boolean(
+    user?.is_admin ||
+    user?.is_superuser ||
+    user?.is_staff ||
+    userGroups.some((group: string) => group.includes('Admin'))
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
   const [supplierFilterSearch, setSupplierFilterSearch] = useState(''); // For typable filter dropdown
@@ -180,43 +187,83 @@ export default function Purchases() {
   });
   const queryClient = useQueryClient();
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const productDropdownRef = useRef<HTMLDivElement | null>(null);
   const supplierRef = useRef<HTMLDivElement>(null);
   const supplierFilterRef = useRef<HTMLDivElement>(null);
   const productFilterRef = useRef<HTMLDivElement>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
+  const [labelScopeFallback, setLabelScopeFallback] = useState<Record<string, boolean>>({});
   const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
 
   const purchasesInfiniteQueryKey = ['purchases', supplierFilter, productFilter, dateFrom, dateTo] as const;
 
   // Fetch products for search (must be before useEffect hooks that use products)
-  const { data: productsData } = useQuery({
-    queryKey: ['products', productSearch],
-    queryFn: async () => {
-      if (!productSearch.trim()) return { results: [] };
-      // Include tag='new' to get all products including unpurchased ones
-      // Use search_mode='name_only' to search only by product name
+  const {
+    data: productsData,
+    fetchNextPage: fetchNextProductsPage,
+    hasNextPage: hasNextProductsPage,
+    isFetchingNextPage: isFetchingNextProductsPage,
+  } = useInfiniteQuery({
+    queryKey: ['products', 'purchase-search', productSearch],
+    queryFn: async ({ pageParam = 1 }) => {
+      if (!productSearch.trim()) return { results: [], next: null };
       const response = await productsApi.list({
         search: productSearch.trim(),
-        tag: 'new', // This ensures we get all products including unpurchased ones
-        search_mode: 'name_only', // Search only by product name
-        exclude_other_custom: 'true', // Exclude Other/Custom products from purchase add
+        tag: 'new',
+        search_mode: 'name_only',
+        exclude_other_custom: 'true',
+        page: pageParam,
       });
       return response.data;
     },
+    getNextPageParam: (lastPage: any) => {
+      const next = lastPage?.next;
+      if (!next) return undefined;
+      if (typeof next === 'number') return next;
+      const nextMatch = String(next).match(/[?&]page=(\d+)/);
+      if (nextMatch) return Number(nextMatch[1]);
+      return undefined;
+    },
     enabled: productSearch.trim().length > 0,
+    initialPageParam: 1,
     retry: false,
   });
 
   // Compute products array from productsData (needed for keyboard shortcuts)
   const products = (() => {
     if (!productsData) return [];
-    if (Array.isArray(productsData.results)) return productsData.results;
-    if (Array.isArray(productsData.data)) return productsData.data;
-    if (Array.isArray(productsData)) return productsData;
-    return [];
+    const pages = Array.isArray((productsData as any).pages) ? (productsData as any).pages : [];
+    const merged: any[] = [];
+    const seen = new Set<number>();
+    pages.forEach((page: any) => {
+      const chunk = Array.isArray(page?.results)
+        ? page.results
+        : Array.isArray(page?.data)
+          ? page.data
+          : Array.isArray(page)
+            ? page
+            : [];
+      chunk.forEach((product: any) => {
+        if (typeof product?.id === 'number') {
+          if (seen.has(product.id)) return;
+          seen.add(product.id);
+        }
+        merged.push(product);
+      });
+    });
+    return merged;
   })();
+
+  const handleProductDropdownScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (!hasNextProductsPage || isFetchingNextProductsPage) return;
+    const target = e.currentTarget;
+    const isNearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 40;
+    if (isNearBottom) {
+      fetchNextProductsPage();
+    }
+  };
 
   // Auto-focus product search input when form opens
   useEffect(() => {
@@ -711,6 +758,7 @@ export default function Purchases() {
   };
 
   const handleDelete = (id: number) => {
+    if (!isAdminUser) return;
     if (
       confirm(
         'Archive this purchase? It will be hidden from lists; related data is kept. Non-sold barcodes from this purchase are archived; sold units stay linked for invoices.'
@@ -1014,40 +1062,131 @@ export default function Purchases() {
 
 
   const handlePrintLabels = async (productId: number, purchaseId: number) => {
+    const labelKey = getLabelKey(productId, purchaseId);
+    const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
     try {
-      const response = await productsApi.getLabels(productId, purchaseId);
+      const response = await productsApi.getLabels(productId, effectivePurchaseId);
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
       } else {
-        alert('No labels found for this purchase. Generate labels from the purchase detail page or backend.');
+        await triggerGenerateAndWait(productId, purchaseId);
       }
     } catch (error: any) {
-      alert(error?.response?.data?.error || 'Failed to print labels. Please try again.');
+      const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString();
+      if (backendMessage.toLowerCase().includes('no barcodes found')) {
+        await triggerGenerateAndWait(productId, purchaseId);
+        return;
+      }
+      toast(error?.response?.data?.error || 'Failed to print labels. Please try again.', 'error');
+    }
+  };
+
+  const getLabelKey = (productId: number, purchaseId?: number) => `${productId}:${purchaseId ?? 'na'}`;
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const waitForLabelsToBeGenerated = async (
+    productId: number,
+    purchaseId?: number,
+    maxAttempts = 12,
+    intervalMs = 3000
+  ) => {
+    const labelKey = getLabelKey(productId, purchaseId);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await productsApi.labelsStatus(productId, purchaseId);
+        const data = response.data || {};
+        const allGenerated = data.all_generated || false;
+
+        queryClient.setQueryData(['label-status', productId, purchaseId], { productId, purchaseId, data, error: null });
+        setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: !allGenerated } }));
+
+        if (allGenerated) return true;
+      } catch {
+        // Keep polling; generation can be eventually consistent.
+      }
+      await sleep(intervalMs);
+    }
+    return false;
+  };
+
+  const triggerGenerateAndWait = async (productId: number, purchaseId: number) => {
+    const labelKey = getLabelKey(productId, purchaseId);
+    setGeneratingLabelsFor(productId);
+    setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: true } }));
+    setLabelScopeFallback(prev => ({ ...prev, [labelKey]: false }));
+    try {
+      // Prefer generate-labels for missing labels; regenerate-labels is for rebuilding existing ones.
+      // Fallback to product-level generation if purchase linkage is missing in older data.
+      let pollPurchaseId: number | undefined = purchaseId;
+      try {
+        await productsApi.generateLabels(productId, purchaseId);
+      } catch (error: any) {
+        const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString().toLowerCase();
+        if (backendMessage.includes('no barcodes found')) {
+          await productsApi.generateLabels(productId);
+          pollPurchaseId = undefined;
+          setLabelScopeFallback(prev => ({ ...prev, [labelKey]: true }));
+        } else {
+          throw error;
+        }
+      }
+      const generated = await waitForLabelsToBeGenerated(productId, pollPurchaseId);
+      if (generated) {
+        const generatedPurchaseId = pollPurchaseId ?? purchaseId;
+        try {
+          const labelsResponse = await productsApi.getLabels(productId, generatedPurchaseId);
+          if (labelsResponse.data?.labels?.length > 0) {
+            printLabelsFromResponse(labelsResponse.data);
+            toast('Labels generated and opened for printing.', 'success');
+          } else {
+            toast('Labels generated successfully.', 'success');
+          }
+        } catch (printError: any) {
+          const printErrorMsg = printError?.response?.data?.error || printError?.response?.data?.message;
+          toast(printErrorMsg || 'Labels generated successfully, but failed to open print.', 'info');
+        }
+      } else {
+        toast('Label generation was triggered and is still processing. Please try again in a few seconds.', 'info');
+      }
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to trigger label generation';
+      toast(errorMsg, 'error');
+    } finally {
+      setGeneratingLabelsFor(null);
+      await queryClient.invalidateQueries({ queryKey: ['label-status', productId, purchaseId] });
+      await queryClient.invalidateQueries({ queryKey: ['label-status', productId] });
     }
   };
 
   const handleCheckLabelStatus = async (productId: number, purchaseId: number) => {
     setCheckingStatusFor(productId);
-    const labelKey = `${productId} `;
+    const labelKey = getLabelKey(productId, purchaseId);
+    const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
     try {
-      const response = await productsApi.labelsStatus(productId, purchaseId);
+      const response = await productsApi.labelsStatus(productId, effectivePurchaseId);
       const data = response.data || {};
       const allGenerated = data.all_generated || false;
       const total = data.total_barcodes ?? 0;
       const generated = data.generated_labels ?? 0;
-      queryClient.setQueryData(['label-status', productId, purchaseId], { productId, purchaseId, data, error: null });
+      queryClient.setQueryData(['label-status', productId, effectivePurchaseId], { productId, purchaseId: effectivePurchaseId, data, error: null });
       setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: false } }));
       if (total > 0) {
-        alert(`Status: ${generated} of ${total} label(s) generated.${allGenerated ? ' All ready to print.' : ''}`);
+        if (allGenerated) {
+          toast(`All labels are ready (${generated} of ${total}). Opening print.`, 'success');
+          await handlePrintLabels(productId, purchaseId);
+        } else {
+          toast(`Status: ${generated} of ${total} label(s) generated.`, 'info');
+        }
       } else {
-        alert('No labels generated yet. Generate labels from the purchase detail page or backend.');
+        await triggerGenerateAndWait(productId, purchaseId);
       }
     } catch (error: any) {
       setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: false } }));
       if (error?.response?.status === 404) {
-        alert('No labels for this product yet. Generate labels from the purchase detail page or backend.');
+        await triggerGenerateAndWait(productId, purchaseId);
       } else {
-        alert(error?.response?.data?.error || 'Failed to check label status.');
+        toast(error?.response?.data?.error || 'Failed to check label status.', 'error');
       }
     } finally {
       setCheckingStatusFor(null);
@@ -1219,15 +1358,14 @@ export default function Purchases() {
   })();
 
   // Max label-status queries to avoid tab crash when many purchases/items are on the page
-  const MAX_LABEL_STATUS_QUERIES = 25;
+  const MAX_LABEL_STATUS_QUERIES = 15;
 
-  // Load all items; prioritize unprinted (they get status first), then printed, cap at MAX
+  // Load only unprinted items and cap at MAX to keep this page light.
   const labelStatusQueriesData = useMemo(() => {
     if (!purchases || purchases.length === 0) return [];
 
     const seenKeys = new Set<string>();
     const unprinted: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
-    const printed: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
 
     purchases.forEach((purchase: any) => {
       if (purchase.items && purchase.items.length > 0) {
@@ -1235,17 +1373,16 @@ export default function Purchases() {
           const productId = item.product;
           if (!productId || !item.product_track_inventory) return;
           const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
-          const labelKey = `${productId} `;
+          const labelKey = getLabelKey(productId, purchaseId);
           if (seenKeys.has(labelKey)) return;
           seenKeys.add(labelKey);
           const entry = { productId, purchaseId, labelKey };
-          if (item.printed) printed.push(entry);
-          else unprinted.push(entry);
+          if (!item.printed) unprinted.push(entry);
         });
       }
     });
 
-    return [...unprinted, ...printed].slice(0, MAX_LABEL_STATUS_QUERIES);
+    return unprinted.slice(0, MAX_LABEL_STATUS_QUERIES);
   }, [purchases]);
 
   // Use React Query to cache label status checks for all products in purchases
@@ -1596,7 +1733,7 @@ export default function Purchases() {
                               <span>Stock</span>
                             </Button>
                           )}
-                          {!isRetailUser && (
+                          {isAdminUser && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -1633,7 +1770,7 @@ export default function Purchases() {
                                   {purchase.items.map((item: any, idx: number) => {
                                     const productId = item.product;
                                     const trackInventory = item.product_track_inventory;
-                                    const labelKey = `${productId} `;
+                                    const labelKey = getLabelKey(productId, purchase.id);
                                     const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
 
                                     return (
@@ -1717,7 +1854,7 @@ export default function Purchases() {
                                                       variant="outline"
                                                       size="sm"
                                                       onClick={() => handleCheckLabelStatus(productId, purchase.id)}
-                                                      disabled={isChecking}
+                                                      disabled={isChecking || isGenerating}
                                                       className="flex items-center gap-1.5 text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
                                                       title="Check label status via API"
                                                     >
@@ -1732,6 +1869,7 @@ export default function Purchases() {
                                                       variant="outline"
                                                       size="sm"
                                                       onClick={() => handlePrintLabels(productId, purchase.id)}
+                                                      disabled={isGenerating}
                                                       className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                                       title="Get barcodes and open print dialog"
                                                     >
@@ -1871,7 +2009,7 @@ export default function Purchases() {
                             <Store className="h-4 w-4" />
                           </Button>
                         )}
-                        {!isRetailUser && (
+                        {isAdminUser && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -1905,7 +2043,7 @@ export default function Purchases() {
                         {purchase.items.map((item: any, idx: number) => {
                           const productId = item.product;
                           const trackInventory = item.product_track_inventory;
-                          const labelKey = `${productId} `;
+                          const labelKey = getLabelKey(productId, purchase.id);
                           const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
 
                           return (
@@ -1995,7 +2133,7 @@ export default function Purchases() {
                                             variant="outline"
                                             size="sm"
                                             onClick={() => handleCheckLabelStatus(productId, purchase.id)}
-                                            disabled={isChecking}
+                                            disabled={isChecking || isGenerating}
                                             className="flex items-center gap-1.5 w-full text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
                                             title="Check label status via API"
                                           >
@@ -2010,6 +2148,7 @@ export default function Purchases() {
                                             variant="outline"
                                             size="sm"
                                             onClick={() => handlePrintLabels(productId, purchase.id)}
+                                            disabled={isGenerating}
                                             className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                             title="Get barcodes and open print dialog"
                                           >
@@ -2193,10 +2332,14 @@ export default function Purchases() {
 
                 {/* Product Dropdown */}
                 {showProductDropdown && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
+                  <div
+                    ref={productDropdownRef}
+                    onScroll={handleProductDropdownScroll}
+                    className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto"
+                  >
                     {products.length > 0 ? (
                       <>
-                        {products.slice(0, 10).map((product: any) => (
+                        {products.map((product: any) => (
                           <button
                             key={product.id}
                             type="button"
@@ -2210,6 +2353,17 @@ export default function Purchases() {
                             </div>
                           </button>
                         ))}
+                        {isFetchingNextProductsPage && (
+                          <div className="px-4 py-2 text-xs text-gray-500 flex items-center gap-2">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Loading more products...
+                          </div>
+                        )}
+                        {!isFetchingNextProductsPage && !hasNextProductsPage && products.length > 0 && (
+                          <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-t border-amber-100">
+                            You have reached end of search, kindly search with different name.
+                          </div>
+                        )}
                         {productSearch.trim().length > 0 && (
                           <button
                             type="button"

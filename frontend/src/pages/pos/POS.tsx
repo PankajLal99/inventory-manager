@@ -3518,9 +3518,9 @@ export default function POS() {
                           <div>
                             <span className="text-gray-600">Total: </span>
                             <span className={`font-semibold ${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount)) === formatNumber(calculateTotal()) ? 'text-green-600' : 'text-red-600'}`}>
-                              ₹{formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount))}
+                              {showPurchasePrice ? `₹${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount))}` : '•••'}
                             </span>
-                            <span className="text-gray-600"> / Invoice Total: ₹{formatNumber(calculateTotal())}</span>
+                            <span className="text-gray-600"> / Invoice Total: {showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
                           </div>
                         )}
                       </div>
@@ -3898,7 +3898,7 @@ export default function POS() {
                     variant="outline"
                     size="sm"
                     className="whitespace-nowrap"
-                    title="Trade-in / exchange (same customer)"
+                    title="Trade-in / exchange"
                     disabled={!cartId || isCartLocked}
                   >
                     <RefreshCw className="h-4 w-4" />
@@ -4346,7 +4346,7 @@ export default function POS() {
                 <button
                   type="button"
                   onClick={() => setShowPurchasePrice((p) => !p)}
-                  title={showPurchasePrice ? 'Hide reference prices (selling/purchase)' : 'Show reference prices'}
+                  title={showPurchasePrice ? 'Hide prices' : 'Show prices'}
                   className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
                     ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
                     : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
@@ -4514,6 +4514,13 @@ export default function POS() {
                                   </div>
                                 );
                               }
+                              if (!showPurchasePrice) {
+                                return (
+                                  <div className="px-2 py-1 bg-gray-100 rounded-md border border-gray-300" title="Price hidden">
+                                    <span className="text-xs font-medium text-gray-400">•••</span>
+                                  </div>
+                                );
+                              }
                               // No price set or user is editing: show inline input so user can enter/edit cost (purchase price)
                               const purchaseInputValue = editingPurchasePrice[item.id] ?? (rawPurchaseFromApi > 0 ? String(rawPurchaseFromApi) : '');
                               return (
@@ -4565,6 +4572,11 @@ export default function POS() {
                         <div className="flex items-center gap-2 sm:gap-3 flex-1 sm:flex-initial sm:order-3">
                           {/* Price Input */}
                           <div className="flex-shrink-0 flex-1 sm:flex-initial sm:w-28">
+                            {!showPurchasePrice ? (
+                              <div className="px-2 py-1.5 bg-gray-100 border border-gray-300 rounded-md text-center" title="Price hidden">
+                                <span className="text-xs font-medium text-gray-400">•••</span>
+                              </div>
+                            ) : (
                             <div className="relative">
                               <div className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs font-medium">₹</div>
                               <Input
@@ -4728,7 +4740,8 @@ export default function POS() {
                                   }`}
                               />
                             </div>
-                            {priceErrors[item.id] && (
+                            )}
+                            {showPurchasePrice && priceErrors[item.id] && (
                               <div className="mt-1 text-xs text-red-600 font-medium break-words whitespace-normal" title={priceErrors[item.id]}>
                                 {priceErrors[item.id]}
                               </div>
@@ -4737,7 +4750,11 @@ export default function POS() {
 
                           {/* Line Total */}
                           <div className="flex-shrink-0 text-right sm:w-24">
-                            {invoiceType !== 'pending' || effectivePrice > 0 ? (
+                            {!showPurchasePrice ? (
+                              <div className="px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-md">
+                                <span className="text-xs font-medium text-gray-400">•••</span>
+                              </div>
+                            ) : invoiceType !== 'pending' || effectivePrice > 0 ? (
                               <div className="px-2 py-1.5 bg-blue-50 border border-blue-200 rounded-md">
                                 <span className="text-xs font-bold text-blue-700">
                                   ₹{formatNumber(lineTotal)}
@@ -4878,17 +4895,17 @@ export default function POS() {
                   )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
+                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartGrossSubtotal)}` : '•••'}</span>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
-                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
+                      <span className="text-sm font-semibold">{showPurchasePrice ? `−₹${formatNumber(tradeInCredit)}` : '•••'}</span>
                     </div>
                   )}
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
+                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
                   </div>
                 </>
               ) : (
@@ -4896,21 +4913,21 @@ export default function POS() {
                 <>
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
+                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartGrossSubtotal)}` : '•••'}</span>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
-                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
+                      <span className="text-sm font-semibold">{showPurchasePrice ? `−₹${formatNumber(tradeInCredit)}` : '•••'}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Tax</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(0)}</span>
+                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(0)}` : '•••'}</span>
                   </div>
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
+                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
                   </div>
                 </>
               )}
@@ -4984,7 +5001,6 @@ export default function POS() {
       <PosTradeInCartModal
         open={showTradeInModal}
         onClose={() => setShowTradeInModal(false)}
-        selectedCustomerId={selectedCustomer?.id ?? null}
         lines={tradeInLines}
         onLinesChange={setTradeInLines}
         onError={(m) => showToast(m, 'error')}

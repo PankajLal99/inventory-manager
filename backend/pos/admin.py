@@ -279,9 +279,9 @@ class ExchangeAdmin(admin.ModelAdmin):
 
 @admin.register(Repair)
 class RepairAdmin(admin.ModelAdmin):
-    list_display = ['barcode', 'invoice', 'contact_no', 'model_name', 'status', 'booking_amount', 'has_label_image', 'created_at', 'updated_at']
+    list_display = ['barcode', 'customer_name', 'invoice', 'contact_no', 'model_name', 'status', 'booking_amount', 'has_label_image', 'delivery_date','created_at', 'updated_at']
     list_filter = ['status', 'created_at', 'updated_at']
-    search_fields = ['barcode', 'invoice__invoice_number', 'contact_no', 'model_name']
+    search_fields = ['barcode', 'invoice__invoice_number', 'invoice__customer__name', 'contact_no', 'model_name']
     readonly_fields = ['barcode', 'label_image_url', 'label_image_preview', 'created_at', 'updated_at']
     
     fieldsets = (
@@ -306,6 +306,12 @@ class RepairAdmin(admin.ModelAdmin):
             return 'Blob URL'
         return 'Unknown Format'
     has_label_image.short_description = 'Image Status'
+
+    def customer_name(self, obj):
+        if obj.invoice and obj.invoice.customer:
+            return obj.invoice.customer.name
+        return '-'
+    customer_name.short_description = 'Customer'
     
     def label_image_url(self, obj):
         """Display label image URL"""

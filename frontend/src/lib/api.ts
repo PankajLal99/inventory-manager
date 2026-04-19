@@ -240,6 +240,24 @@ export const posApi = {
     searchInvoices: (search: string) => api.get('/pos/replacement/search-invoices/', { params: { search } }),
     processReplacement: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/process/`, data),
     creditNote: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/credit-note/`, data),
+    replacementPos: {
+      lookup: (data: { barcode: string }) => api.post('/pos/replacement-pos/lookup/', data),
+      create: (data: {
+        /** Ignored for create; store is taken from the original sale lines. */
+        store?: number;
+        customer?: number | null;
+        mode: 'instant' | 'pending';
+        settlement_invoice_type?: 'cash' | 'upi' | 'mixed' | 'credit';
+        cash_amount?: string | number;
+        upi_amount?: string | number;
+        lines: Array<{
+          original_invoice_item_id: number;
+          /** Required; server rejects missing/blank (no default). */
+          return_tag: 'returned' | 'unknown' | 'defective';
+          accepted_return_price: string | number;
+        }>;
+      }) => api.post('/pos/replacement-pos/create/', data),
+    },
   },
   replacementPos: {
     lookup: (barcode: string) => api.post('/pos/replacement-pos/lookup/', { barcode }),
@@ -253,9 +271,14 @@ export const posApi = {
     getStatusChoices: () => api.get<{ value: string; label: string }[]>('/pos/repair/status-choices/'),
     getDeviceModels: (search?: string) => api.get<{ models: string[] }>('/pos/repair/device-models/', { params: search ? { search } : {} }),
     updateStatus: (invoiceId: number, data: { repair_status: string }) => api.patch(`/pos/invoices/${invoiceId}/update-repair-status/`, data),
-    update: (invoiceId: number, data: { contact_no?: string; model_name?: string; description?: string; booking_amount?: string | null }) =>
+    update: (invoiceId: number, data: { contact_no?: string; model_name?: string; description?: string; booking_amount?: string | null; delivery_date?: string | null }) =>
       api.patch(`/pos/invoices/${invoiceId}/update-repair/`, data),
-    generateLabel: (invoiceId: number) => api.post(`/pos/invoices/${invoiceId}/generate-repair-label/`),
+    generateLabel: (invoiceId: number, force = false) =>
+      api.post(
+        `/pos/invoices/${invoiceId}/generate-repair-label/`,
+        undefined,
+        force ? { params: { force: 'true' } } : undefined
+      ),
   },
   creditNotes: {
     list: (params?: any) => api.get('/credit-notes/', { params }),
@@ -453,6 +476,12 @@ export const reportsApi = {
   customers: (params?: any) => api.get('/reports/customers/', { params }),
   stockOrdering: (params?: any) => api.get('/reports/stock-ordering/', { params }),
   dashboardKpis: (params?: any) => api.get('/reports/dashboard-kpis/', { params }),
+  overallProfitBillingPeriodDetails: (params?: any) =>
+    api.get('/reports/overall-profit-billing-period-details/', { params }),
+  overallPendingInvoiceDetails: () =>
+    api.get('/reports/overall-pending-invoice-details/'),
+  wholesalePendingClearedDetails: (params?: any) =>
+    api.get('/reports/wholesale-pending-cleared-details/', { params }),
 };
 
 // Global Search API

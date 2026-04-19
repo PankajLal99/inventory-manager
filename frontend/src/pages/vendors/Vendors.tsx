@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { purchasingApi } from '../../lib/api';
@@ -25,6 +25,7 @@ import {
   CheckCircle,
   Plus,
   Pencil,
+  Search,
 } from 'lucide-react';
 
 export default function Vendors() {
@@ -34,6 +35,8 @@ export default function Vendors() {
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingSupplierId, setEditingSupplierId] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [supplierFormData, setSupplierFormData] = useState({
     name: '',
     code: '',
@@ -77,6 +80,34 @@ export default function Vendors() {
     if (Array.isArray(purchasesData)) return purchasesData;
     return [];
   })();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  const filteredSuppliers = useMemo(() => {
+    const query = debouncedSearchQuery.trim().toLowerCase();
+    if (!query) return suppliers;
+    const normalizedQuery = query.replace(/\s+/g, '');
+    return suppliers.filter((supplier: any) => {
+      const searchable = [
+        supplier.name,
+        supplier.code,
+        supplier.phone,
+        supplier.email,
+        supplier.contact_person,
+        supplier.address,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const normalizedSearchable = searchable.replace(/\s+/g, '');
+      return searchable.includes(query) || normalizedSearchable.includes(normalizedQuery);
+    });
+  }, [suppliers, debouncedSearchQuery]);
 
   // Calculate purchase counts per supplier
   const purchaseCounts = purchases.reduce((acc: Record<number, number>, purchase: any) => {
@@ -125,6 +156,12 @@ export default function Vendors() {
     mutationFn: (data: any) => purchasingApi.suppliers.update(editingSupplierId!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-by-customer'] });
+      queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['internal-ledger-summary'] });
       setShowSupplierForm(false);
       setIsEditing(false);
       setEditingSupplierId(null);
@@ -206,12 +243,34 @@ export default function Vendors() {
         }
       />
 
+      <Card>
+        <div className="p-4">
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search vendors by name, code, phone, email, contact person, or address..."
+          />
+          <div className="mt-2 text-xs text-gray-500 flex items-center gap-1.5">
+            <Search className="h-3.5 w-3.5" />
+            Showing {filteredSuppliers.length} of {suppliers.length} vendors
+          </div>
+        </div>
+      </Card>
+
       {suppliers.length === 0 ? (
         <Card>
           <EmptyState
             icon={Users}
             title="No vendors found"
             message="No vendors have been added yet"
+          />
+        </Card>
+      ) : filteredSuppliers.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={Search}
+            title="No matching vendors"
+            message="Try a different search term"
           />
         </Card>
       ) : (
@@ -226,7 +285,7 @@ export default function Vendors() {
               { label: 'Status', align: 'center' },
               { label: 'Actions', align: 'right' },
             ]}>
-              {suppliers.map((supplier: any) => {
+              {filteredSuppliers.map((supplier: any) => {
                 const purchaseCount = purchaseCounts[supplier.id] || 0;
                 const isActive = supplier.is_active !== false;
 
@@ -339,7 +398,7 @@ export default function Vendors() {
 
           {/* Mobile Card View */}
           <div className="md:hidden space-y-3">
-            {suppliers.map((supplier: any) => {
+            {filteredSuppliers.map((supplier: any) => {
               const purchaseCount = purchaseCounts[supplier.id] || 0;
               const isActive = supplier.is_active !== false;
               const vendorLink = getVendorLink(supplier.id);
@@ -502,9 +561,8 @@ export default function Vendors() {
               label="Vendor Code"
               value={supplierFormData.code}
               onChange={(e) => setSupplierFormData({ ...supplierFormData, code: e.target.value })}
-              placeholder={isEditing ? "Cannot change code" : "Enter vendor code"}
+              placeholder="Enter vendor code"
               required={!isEditing}
-              disabled={isEditing}
             />
             <Input
               label="Mobile / Phone"

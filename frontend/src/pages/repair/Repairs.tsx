@@ -31,13 +31,12 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { DateRangePreset, formatNumber, toLocalDateString } from '../../lib/utils';
+import { formatNumber, toLocalDateString } from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
-import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -87,13 +86,15 @@ interface RepairInvoiceItem {
 
 // Matches backend pos.models.Repair.STATUS_CHOICES
 const STATUS_OPTIONS = [
-  { value: 'received', label: 'Received' },
   { value: 'work_in_progress', label: 'Work in Progress' },
-  { value: 'done', label: 'Done' },
+  { value: 'received', label: 'Received' },
   { value: 'delivered', label: 'Delivered' },
   { value: 'not_repaired', label: 'Not Repaired' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
+const STATUS_FILTER_OPTIONS = STATUS_OPTIONS.filter((status) =>
+  ['received', 'not_repaired', 'work_in_progress', 'delivered'].includes(status.value)
+);
 
 const STATUS_ORDER: string[] = [
   'work_in_progress',
@@ -101,7 +102,6 @@ const STATUS_ORDER: string[] = [
   'delivered',
   'done',
   'not_repaired',
-  'cancelled',
 ];
 
 // Row order: when sorting table rows by status, WIP first, received second, not_repaired at the end
@@ -109,8 +109,6 @@ const ROW_STATUS_ORDER: string[] = [
   'work_in_progress',
   'received',
   'delivered',
-  'done',
-  'cancelled',
   'not_repaired',
 ];
 
@@ -140,8 +138,8 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   not_repaired: 'bg-orange-600',
   cancelled: 'bg-red-600',
   other: 'bg-gray-400',
-  old_repair: 'bg-violet-600', // static UI section: repairs not from today and not delivered
 };
+const NOT_REPAIRED_DISPLAY_LIMIT = 20;
 
 /** Sort repair invoices by status for table display, then by most recently updated within each status. */
 function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; updated_at?: string } | null; created_at?: string }>(items: T[]): T[] {
@@ -159,9 +157,9 @@ function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; upda
   });
 }
 
-/** Effective date for grouping/sorting: prefer repair.updated_at, fallback to invoice.created_at. */
+/** Effective row date for UI date grouping/highlight: prefer repair.created_at, fallback to invoice.created_at. */
 function getRepairDisplayDate(inv: RepairInvoice): string {
-  return inv.repair?.updated_at || inv.created_at;
+  return inv.repair?.created_at || inv.created_at;
 }
 
 function isToday(date: Date): boolean {
@@ -183,9 +181,6 @@ export default function Repairs() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [user, setUser] = useState<any>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<RepairInvoice | null>(null);
@@ -203,12 +198,12 @@ export default function Repairs() {
   const [lastRegenerateAt, setLastRegenerateAt] = useState<Record<number, number>>({});
   // Not Repaired section collapsed by default
   const [notRepairedCollapsed, setNotRepairedCollapsed] = useState(true);
-  // Date filter for each status group (independent controls)
-  const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>({});
+  // Date filter for each status group (independent controls).
+  // Delivered defaults to today and should use delivery_date matching.
+  const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>(() => ({
+    delivered: toLocalDateString(new Date()),
+  }));
   const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
-  const hasAnyGroupDateOverride = Object.entries(groupDateFilters).some(
-    ([, date]) => !!date
-  );
 
   useEffect(() => {
     const loadUser = async () => {
@@ -246,22 +241,16 @@ export default function Repairs() {
   // Only send store when it's a repair store (so we don't filter to a retail store and get 0 results)
   const repairStores = stores.filter((s: any) => String(s.shop_type || '').toLowerCase() === 'repair');
   const repairStore = repairStores.find((s: any) => s.id === defaultStore?.id) || repairStores[0];
-  const useFilteredMode = !!statusFilter || !!dateFrom || !!dateTo || !!search.trim() || !!barcodeSearch.trim() || hasAnyGroupDateOverride;
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['repair-invoices', statusFilter, dateFrom, dateTo, repairStore?.id, currentPage, barcodeSearch, search],
+    queryKey: ['repair-invoices', statusFilter, repairStore?.id, currentPage, barcodeSearch, search],
     queryFn: async () => {
       const params: any = {};
-      params.page = currentPage;
-      params.limit = 50;
+      // Keep this page fully loaded by default so grouped sections
+      // (received/WIP/done/etc.) are not capped by pagination.
+      params.unpaginated = 1;
       if (statusFilter) {
         params.repair_status = statusFilter;
-      }
-      if (!hasAnyGroupDateOverride && dateFrom) {
-        params.date_from = dateFrom;
-      }
-      if (!hasAnyGroupDateOverride && dateTo) {
-        params.date_to = dateTo;
       }
       if (search.trim()) {
         params.search = search.trim();
@@ -274,16 +263,12 @@ export default function Repairs() {
       if (!search.trim() && !barcodeSearch.trim() && repairStore?.id) {
         params.store = repairStore.id;
       }
-      if (dateFrom || dateTo) {
-        params.ordering = 'created_at';
-      }
-      if (hasAnyGroupDateOverride) {
-        params.unpaginated = 1;
-      }
       const response = await posApi.repair.invoices.list(params);
       return response.data;
     },
-    enabled: true,
+    // Avoid an initial unscoped fetch before repair store is resolved.
+    // Allow fetch without store only when user is actively searching.
+    enabled: Boolean(repairStore?.id) || Boolean(search.trim()) || Boolean(barcodeSearch.trim()),
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -316,7 +301,7 @@ export default function Repairs() {
   useEffect(() => {
     setCurrentPage(1);
     setLoadedRepairs([]);
-  }, [statusFilter, dateFrom, dateTo, defaultStore?.id, search, barcodeSearch, useFilteredMode]);
+  }, [statusFilter, defaultStore?.id, search, barcodeSearch]);
 
   useEffect(() => {
     if (!data) return;
@@ -407,7 +392,7 @@ export default function Repairs() {
 
   const regenerateLabelMutation = useMutation({
     mutationFn: async (invoiceId: number) => {
-      return await posApi.repair.generateLabel(invoiceId);
+      return await posApi.repair.generateLabel(invoiceId, true);
     },
     onSuccess: () => {
       showToast('Repair barcode label regenerated', 'success');
@@ -480,57 +465,56 @@ export default function Repairs() {
   const repairsUser = user ?? auth.getUser();
   const canSeeTotalColumn = canSeeSuperMetrics(repairsUser);
 
-  // Old Repair: only delivered or done AND not from today.
-  const oldRepairItems = filteredRepairs.filter((inv) => {
-    const status = inv.repair?.status;
-    if (status !== 'delivered' && status !== 'done') return false;
-    return !isToday(new Date(getRepairDisplayDate(inv)));
-  });
-  // Single "Not Repaired" group: all not_repaired (any date), shown last and collapsed
-  const allNotRepaired = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
+  // Single "Not Repaired" group: keep latest rows only to avoid an oversized section.
+  const allNotRepairedItems = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');
+  const allNotRepaired = allNotRepairedItems
+    .slice()
+    .sort((a, b) => {
+      const dateA = a.repair?.updated_at || a.created_at || '';
+      const dateB = b.repair?.updated_at || b.created_at || '';
+      return dateB.localeCompare(dateA);
+    })
+    .slice(0, NOT_REPAIRED_DISPLAY_LIMIT);
 
-  // Status groups: include done/delivered, but keep old done/delivered only in Old Repair.
+  // Status groups: include delivered, but keep old delivered only in Old Repair.
   const STATUS_ORDER_MAIN = STATUS_ORDER.filter((s) => s !== 'not_repaired');
   const statusGroups = STATUS_ORDER_MAIN.map((status) => ({
     status,
     label: STATUS_OPTIONS.find((s) => s.value === status)?.label ?? status,
     items: filteredRepairs.filter((inv) => {
       if (inv.repair?.status !== status) return false;
-      // For done/delivered, only keep today's items here; older ones go to Old Repair.
-      if (status === 'done' || status === 'delivered') {
-        return isToday(new Date(getRepairDisplayDate(inv)));
-      }
       return true;
     }),
   }));
-  // Other = status not in main list; exclude not_repaired (and anything already covered above)
+  // Other = status not in main list; exclude not_repaired/done (and anything already covered above)
   const otherItems = filteredRepairs.filter(
     (inv) =>
       inv.repair &&
+      inv.repair.status !== 'done' &&
       inv.repair.status !== 'not_repaired' &&
       !STATUS_ORDER_MAIN.includes(inv.repair?.status ?? '')
   );
   const groupsWithItems = [
     ...statusGroups,
     ...(otherItems.length > 0 ? [{ status: 'other', label: 'Other', items: otherItems }] : []),
-    // Old Repair: completed repairs (done / delivered) only
-    ...(oldRepairItems.length > 0 ? [{ status: 'old_repair', label: 'Old Repair', items: oldRepairItems }] : []),
     // Not Repaired: one group at the very end, collapsed by default (today + old)
     ...(allNotRepaired.length > 0
       ? [{ status: 'not_repaired', label: 'Not Repaired', items: allNotRepaired }]
       : []),
   ];
-  // No default date filter: show all items in each group. User can optionally filter by date.
   const getGroupSelectedDate = (status: string, _items: RepairInvoice[]) => {
+    // No default date filter: sections should show all dates unless user picks one.
     return groupDateFilters[status] ?? '';
   };
-  /** Match if selected date equals repair date (created/updated) OR delivery date. */
-  const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string) => {
+  /** Match group date. Delivered uses delivery_date only. */
+  const matchesGroupDate = (invoice: RepairInvoice, selectedDate: string, status: string) => {
     if (!selectedDate) return true;
+    if (status === 'delivered') {
+      const deliveryDate = invoice.repair?.delivery_date ? toLocalDateString(invoice.repair.delivery_date) : '';
+      return deliveryDate === selectedDate;
+    }
     const repairDate = toLocalDateString(getRepairDisplayDate(invoice));
-    if (repairDate === selectedDate) return true;
-    const deliveryDate = invoice.repair?.delivery_date ? toLocalDateString(invoice.repair.delivery_date) : '';
-    return deliveryDate === selectedDate;
+    return repairDate === selectedDate;
   };
 
   const formatDate = (dateString: string) => {
@@ -569,7 +553,7 @@ export default function Repairs() {
 
   const totalRepairs = filteredRepairs.length;
   const receivedRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'received').length;
-  const doneRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'done').length;
+  const deliveredRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'delivered').length;
 
   if (isLoading) {
     return <LoadingState message="Loading repairs..." />;
@@ -635,11 +619,11 @@ export default function Repairs() {
         <Card>
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Completed</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{doneRepairs}</p>
+              <p className="text-sm font-medium text-gray-600">Delivered</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{deliveredRepairs}</p>
             </div>
-            <div className="p-3 bg-green-100 rounded-lg">
-              <CheckCircle className="h-6 w-6 text-green-600" />
+            <div className="p-3 bg-slate-100 rounded-lg">
+              <Truck className="h-6 w-6 text-slate-600" />
             </div>
           </div>
         </Card>
@@ -648,8 +632,8 @@ export default function Repairs() {
       {/* Filters */}
       <Card>
         <div className="space-y-4">
-          {/* Barcode Search Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Top Filters (3-up on desktop) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-end">
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">
                 Search by Repair Barcode
@@ -696,18 +680,35 @@ export default function Repairs() {
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">
-                Search (invoice #, customer name, contact, model, barcode)
+                Search (invoice #, customer, contact, model, barcode, short code)
               </label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
                   type="text"
-                  placeholder="Invoice number, customer name, contact, model..."
+                  placeholder="Invoice #, customer, contact, model, barcode, short code..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-10"
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Status
+              </label>
+              <Select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                icon={<Filter className="h-4 w-4" />}
+              >
+                <option value="">All Statuses</option>
+              {STATUS_FILTER_OPTIONS.map((status) => (
+                  <option key={status.value} value={status.value}>
+                    {status.label}
+                  </option>
+                ))}
+              </Select>
             </div>
           </div>
 
@@ -759,7 +760,7 @@ export default function Repairs() {
                       <span className="text-gray-600 block text-xs">Invoice Number</span>
                       <span className="font-medium">{selectedInvoice.invoice_number}</span>
                     </div>
-                    {selectedInvoice.customer_group_name !== 'REPAIR' && (
+                    {!['REPAIR', 'NO GROUP'].includes((selectedInvoice.customer_group_name || '').toUpperCase()) && (
                       <div>
                         <span className="text-gray-600 block text-xs">Customer</span>
                         <span className="font-medium">{selectedInvoice.customer_name || 'N/A'}</span>
@@ -831,39 +832,6 @@ export default function Repairs() {
               )}
             </div>
           )}
-
-          {/* Other Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2 border-t items-end">
-            <Select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              icon={<Filter className="h-4 w-4" />}
-            >
-              <option value="">All Statuses</option>
-              {STATUS_OPTIONS.map((status) => (
-                <option key={status.value} value={status.value}>
-                  {status.label}
-                </option>
-              ))}
-            </Select>
-            <div className="lg:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Date range
-              </label>
-              <p className="text-xs text-gray-500 mb-1">
-                Includes repairs created, updated, or delivered in this range
-              </p>
-              <DateRangeSelector
-                preset={datePreset}
-                value={{ startDate: dateFrom, endDate: dateTo }}
-                onChange={({ preset, range }) => {
-                  setDatePreset(preset);
-                  setDateFrom(range.startDate);
-                  setDateTo(range.endDate);
-                }}
-              />
-            </div>
-          </div>
         </div>
       </Card>
 
@@ -905,9 +873,13 @@ export default function Repairs() {
           {groupsWithItems.map((group) => {
             const isNotRepairedGroup = group.status === 'not_repaired';
             const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
-            const hasGroupDateSelector = true;
-            const selectedGroupDate = getGroupSelectedDate(group.status, group.items);
-            const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate));
+            // When status or search filters are active, show all rows (no date slicing).
+            const hasAnySearch = Boolean(search.trim()) || Boolean(barcodeSearch.trim());
+            const hasGroupDateSelector = group.status === 'delivered' && !statusFilter && !hasAnySearch;
+            const selectedGroupDate = hasGroupDateSelector
+              ? getGroupSelectedDate(group.status, group.items)
+              : '';
+            const displayedGroupItems = group.items.filter((invoice) => matchesGroupDate(invoice, selectedGroupDate, group.status));
             // Profit = sum(paid) - sum(total) for Super group summary row
             const groupTotalSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_total), 0);
             const groupPaidSum = displayedGroupItems.reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
@@ -917,7 +889,11 @@ export default function Repairs() {
               <div className="flex flex-col gap-1 px-2">
                 <div
                   className={`flex items-center gap-3 ${isNotRepairedGroup ? 'cursor-pointer select-none' : ''}`}
-                  onClick={isNotRepairedGroup ? () => setNotRepairedCollapsed((c) => !c) : undefined}
+                  onClick={
+                    isNotRepairedGroup
+                      ? () => setNotRepairedCollapsed((c) => !c)
+                      : undefined
+                  }
                 >
                   {isNotRepairedGroup && (
                     <span className="text-gray-500">
@@ -933,22 +909,24 @@ export default function Repairs() {
                   </Badge>
                   {hasGroupDateSelector && (
                     <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className="text-xs text-gray-500 whitespace-nowrap">Date (repair or delivery)</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">Delivery date</span>
                       <input
                         type="date"
                         value={selectedGroupDate}
                         onChange={(e) => setGroupDateFilters((prev) => ({ ...prev, [group.status]: e.target.value }))}
                         className="h-8 rounded-md border border-gray-200 px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        aria-label={`Filter ${group.label} by repair or delivery date`}
+                        aria-label={`Filter ${group.label} by delivery date`}
                       />
                     </div>
                   )}
                 </div>
-                {group.status === 'old_repair' && (
-                  <p className="text-sm text-gray-500 ml-5">Completed repairs (done / delivered)</p>
-                )}
                 {isNotRepairedGroup && (
-                  <p className="text-sm text-gray-500 ml-5">Filter by repair or delivery date — click to expand</p>
+                  <p className="text-sm text-gray-500 ml-5">
+                    Click to expand
+                    {allNotRepairedItems.length > NOT_REPAIRED_DISPLAY_LIMIT
+                      ? ` · showing latest ${NOT_REPAIRED_DISPLAY_LIMIT} of ${allNotRepairedItems.length}`
+                      : ''}
+                  </p>
                 )}
               </div>
 
@@ -975,9 +953,7 @@ export default function Repairs() {
                   { label: 'Actions', align: 'right' },
                 ]}>
                   {sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
-                    const isOldActiveWork =
-                      !isToday(new Date(getRepairDisplayDate(invoice))) &&
-                      (invoice.repair?.status === 'work_in_progress' || invoice.repair?.status === 'received');
+                    const isOlderThanToday = !isToday(new Date(getRepairDisplayDate(invoice)));
                     const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
@@ -986,7 +962,7 @@ export default function Repairs() {
                     return (
                       <TableRow
                         key={invoice.id}
-                        className={`cursor-pointer transition-colors ${statusColor} ${isOldActiveWork ? 'bg-red-50/70 border-l-4 border-red-300' : ''} hover:opacity-80`}
+                        className={`cursor-pointer transition-colors ${statusColor} ${isOlderThanToday ? 'bg-red-50/70 border-l-4 border-red-300' : ''} hover:opacity-80`}
                       >
                         <TableCell>
                           <span
@@ -1017,19 +993,28 @@ export default function Repairs() {
                               <div className="text-gray-900 text-xs font-medium truncate" title={invoice.customer_name || 'Walk-in Customer'}>
                                 {invoice.customer_name || 'Walk-in'}
                               </div>
-                              <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums">
-                                <Phone className="h-3 w-3 text-gray-400 shrink-0" />
-                                <span className="truncate" title={invoice.repair?.contact_no || undefined}>
-                                  {invoice.repair?.contact_no || '—'}
-                                </span>
+                              <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                                {invoice.repair?.contact_no && (
+                                  <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums min-w-0">
+                                    <Phone className="h-3 w-3 text-gray-400 shrink-0" />
+                                    <span className="truncate" title={invoice.repair.contact_no}>
+                                      {invoice.repair.contact_no}
+                                    </span>
+                                  </div>
+                                )}
+                                {invoice.customer_group_name && (
+                                  <span className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 shrink-0">
+                                    {invoice.customer_group_name}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="max-w-[6.5rem]">
+                        <TableCell className="max-w-[10rem] whitespace-normal">
                           <div className="flex items-center gap-1 min-w-0">
                             <Package className="h-3 w-3 text-gray-400 shrink-0" />
-                            <span className="text-gray-600 text-xs truncate" title={invoice.repair?.model_name || undefined}>
+                            <span className="text-gray-600 text-xs whitespace-normal break-words leading-4">
                               {invoice.repair?.model_name || '—'}
                             </span>
                           </div>
@@ -1165,7 +1150,9 @@ export default function Repairs() {
                   })}
                   {canSeeTotalColumn && displayedGroupItems.length > 0 && (
                     <TableRow className="bg-gray-100 border-t-2 border-gray-300 font-semibold">
-                      <TableCell colSpan={10}> </TableCell>
+                      <TableCell colSpan={10} className="text-right text-gray-700 text-xs whitespace-nowrap">
+                      {' '}
+                      </TableCell>
                       <TableCell align="right" className="text-emerald-700 text-xs tabular-nums">
                         ₹{formatNumber(groupProfit)}
                       </TableCell>
@@ -1185,9 +1172,7 @@ export default function Repairs() {
                     No repairs found for the selected date.
                   </div>
                 ) : sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
-                  const isOldActiveWork =
-                    !isToday(new Date(getRepairDisplayDate(invoice))) &&
-                    (invoice.repair?.status === 'work_in_progress' || invoice.repair?.status === 'received');
+                  const isOlderThanToday = !isToday(new Date(getRepairDisplayDate(invoice)));
                   const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
@@ -1198,7 +1183,7 @@ export default function Repairs() {
                     <div
                       key={invoice.id}
                       onClick={() => navigate(`/invoices/${invoice.id}`)}
-                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor} ${isOldActiveWork ? 'bg-red-50/70 border-red-300' : ''}`}
+                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor} ${isOlderThanToday ? 'bg-red-50/70 border-red-300' : ''}`}
                     >
                       <div className="p-4">
                         <div className="mb-3">
@@ -1345,9 +1330,9 @@ export default function Repairs() {
                   );
                 })}
                 {canSeeTotalColumn && displayedGroupItems.length > 0 && (
-                  <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center">
+                  <div className="rounded-lg border border-gray-200 bg-gray-100 px-4 py-3 text-sm font-semibold flex justify-between items-center gap-3">
                     <span className="text-gray-700"> </span>
-                    <span className="text-emerald-700">₹{formatNumber(groupProfit)}</span>
+                    <span className="text-emerald-700 tabular-nums shrink-0">₹{formatNumber(groupProfit)}</span>
                   </div>
                 )}
               </div>
@@ -1420,7 +1405,11 @@ export default function Repairs() {
                 onChange={(e) => setEditForm((f) => ({ ...f, delivery_date: e.target.value }))}
                 placeholder="YYYY-MM-DD"
                 className="h-11"
+                disabled={editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending'}
               />
+              {editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending' && (
+                <p className="text-xs text-gray-500">Delivery date is disabled for draft pending repairs.</p>
+              )}
             </div>
             <div className="flex gap-2 pt-2">
               <Button
@@ -1431,6 +1420,9 @@ export default function Repairs() {
                     showToast('Device model is required', 'error');
                     return;
                   }
+                  if (editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending') {
+                    showToast('Delivery date cannot be set for draft pending repairs', 'error');
+                  }
                   updateRepairMutation.mutate({
                     invoiceId: editingInvoice.id,
                     data: {
@@ -1438,7 +1430,10 @@ export default function Repairs() {
                       model_name: editForm.model_name.trim(),
                       description: editForm.description.trim() || undefined,
                       booking_amount: editForm.booking_amount.trim() ? editForm.booking_amount.trim() : null,
-                      delivery_date: editForm.delivery_date.trim() ? editForm.delivery_date.trim() : null,
+                      delivery_date:
+                        editingInvoice.status === 'draft' && editingInvoice.invoice_type === 'pending'
+                          ? null
+                          : (editForm.delivery_date.trim() ? editForm.delivery_date.trim() : null),
                     },
                   });
                 }}

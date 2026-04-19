@@ -1,4 +1,4 @@
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
@@ -338,6 +338,22 @@ export default function InvoiceDetail() {
     enabled: !!inv?.repair,
   });
   const repairStatusOptions: { value: string; label: string }[] = repairStatusChoicesResponse?.data ?? [];
+  const limitedRepairStatusOptions: { value: string; label: string; disabled?: boolean }[] = useMemo(() => {
+    const allowed = ['received', 'work_in_progress', 'delivered', 'not_repaired'] as const;
+    const allowedSet = new Set<string>(allowed);
+    const byValue = new Map<string, { value: string; label: string }>(repairStatusOptions.map((o) => [o.value, o]));
+
+    const orderedAllowed = allowed
+      .map((value) => byValue.get(value) ?? { value, label: value.replace(/_/g, ' ') })
+      .filter(Boolean) as { value: string; label: string }[];
+
+    const currentValue = inv?.repair?.status;
+    if (currentValue && !allowedSet.has(currentValue)) {
+      const currentOpt = byValue.get(currentValue) ?? { value: currentValue, label: currentValue.replace(/_/g, ' ') };
+      return [{ ...currentOpt, label: `${currentOpt.label} (current)`, disabled: true }, ...orderedAllowed];
+    }
+    return orderedAllowed;
+  }, [repairStatusOptions, inv?.repair?.status]);
 
   // Old balance = total of customer's ledger (invoices moved to ledger / mark credit, minus payments).
   // Pending invoices do not affect the ledger until "Move to Ledger" (mark credit). totalOutstanding = -credit_balance.
@@ -498,8 +514,14 @@ export default function InvoiceDetail() {
   });
 
   const markCreditMutation = useMutation({
-    mutationFn: (payload: { items: any[]; delivery_date?: string | null }) =>
-      posApi.invoices.markCredit(invoiceId, { items: payload.items, ...(payload.delivery_date !== undefined && payload.delivery_date !== null && payload.delivery_date !== '' ? { delivery_date: payload.delivery_date } : {}) }),
+    mutationFn: (payload: { items: any[]; delivery_date?: string | null; repair_status?: string }) =>
+      posApi.invoices.markCredit(invoiceId, {
+        items: payload.items,
+        ...(payload.delivery_date !== undefined && payload.delivery_date !== null && payload.delivery_date !== ''
+          ? { delivery_date: payload.delivery_date }
+          : {}),
+        ...(payload.repair_status ? { repair_status: payload.repair_status } : {}),
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
@@ -876,15 +898,22 @@ export default function InvoiceDetail() {
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
-      setCheckoutRepairStatus(inv.repair.status);
+      const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
+      const pendingAllowed = new Set(['received', 'not_repaired']);
+      const currentPending = (checkoutRepairStatus || inv.repair.status || '').trim();
+      const initialStatus = checkoutInvoiceType === 'pending'
+        ? (hasProducts ? 'work_in_progress' : (pendingAllowed.has(currentPending) ? currentPending : 'received'))
+        : inv.repair.status;
+      setCheckoutRepairStatus(initialStatus);
     }
-  }, [showCheckoutModal, invoice?.data?.repair?.status]);
+  }, [showCheckoutModal, checkoutInvoiceType, checkoutRepairStatus, invoice?.data?.repair?.status, invoice?.data?.items?.length]);
 
-  // Always prefill repair delivery date to today when checkout opens
+  // Prefill repair delivery date from existing value (do not auto-set to today)
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
-      setCheckoutDeliveryDate(getTodayDateString());
+      const existing = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
+      setCheckoutDeliveryDate(existing);
     }
   }, [showCheckoutModal, invoice?.data?.repair?.id]);
 
@@ -929,6 +958,28 @@ export default function InvoiceDetail() {
 
   const StatusIcon = statusConfig[inv.status]?.icon || FileText;
   const statusInfo = statusConfig[inv.status] || statusConfig.draft;
+  const invoiceTypeLabel =
+    inv.invoice_type === 'mixed'
+      ? 'Cash + UPI'
+      : inv.invoice_type
+        ? inv.invoice_type.charAt(0).toUpperCase() + inv.invoice_type.slice(1)
+        : 'Sale';
+  const repairStatusLabel = inv?.repair
+    ? (repairStatusOptions.find((o) => o.value === inv.repair?.status)?.label ?? inv.repair?.status ?? '—')
+    : '—';
+  const repairStatusBadgeClass = inv?.repair?.status === 'received'
+    ? 'bg-blue-100 text-blue-800 border-blue-200'
+    : inv?.repair?.status === 'work_in_progress'
+      ? 'bg-yellow-100 text-yellow-800 border-yellow-200'
+      : inv?.repair?.status === 'done'
+        ? 'bg-green-100 text-green-800 border-green-200'
+        : inv?.repair?.status === 'delivered'
+          ? 'bg-gray-100 text-gray-800 border-gray-200'
+          : inv?.repair?.status === 'not_repaired'
+            ? 'bg-orange-100 text-orange-800 border-orange-200'
+            : inv?.repair?.status === 'cancelled'
+              ? 'bg-red-100 text-red-800 border-red-200'
+              : 'bg-gray-100 text-gray-800 border-gray-200';
 
   const formatBalance = (val: number) => {
     const absVal = Math.abs(val);
@@ -1033,7 +1084,20 @@ export default function InvoiceDetail() {
   const canEditItems = inv.status !== 'void';
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
-  const isReplacementReturn = inv?.is_replacement_return === true;
+  const isDraftPendingCheckout = inv.status === 'draft' && checkoutInvoiceType === 'pending';
+  const hasProductsInCheckout = Array.isArray(inv.items) && inv.items.length > 0;
+  const pendingAllowedStatus = new Set(['received', 'not_repaired']);
+  const forcedPendingRepairStatus = checkoutInvoiceType === 'pending'
+    ? (hasProductsInCheckout
+      ? 'work_in_progress'
+      : (pendingAllowedStatus.has((checkoutRepairStatus || '').trim()) ? (checkoutRepairStatus || '').trim() : 'received'))
+    : '';
+  const effectiveCheckoutRepairStatus = (checkoutRepairStatus || inv.repair?.status || '').trim();
+  const shouldShowCheckoutDeliveryDate =
+  checkoutInvoiceType !== 'pending' && (
+    effectiveCheckoutRepairStatus === 'done' ||
+    effectiveCheckoutRepairStatus === 'delivered'
+  );
 
   // Group items by product only (not by barcode)
   const groupItemsByProduct = (items: any[]) => {
@@ -1179,6 +1243,13 @@ export default function InvoiceDetail() {
       return `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`;
     }
 
+    if (inv?.is_replacement_return && item.original_sold_unit_price != null && item.original_sold_unit_price !== '') {
+      const maxReturn = parseFloat(String(item.original_sold_unit_price));
+      if (!Number.isNaN(maxReturn) && maxReturn > 0 && salePrice > maxReturn) {
+        return `Return credit cannot exceed original sold price (₹${formatNumber(maxReturn)})`;
+      }
+    }
+
     return null;
   };
 
@@ -1221,6 +1292,14 @@ export default function InvoiceDetail() {
         : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
 
       if (salePrice > 0) {
+        if (inv?.is_replacement_return && item.original_sold_unit_price != null && item.original_sold_unit_price !== '') {
+          const maxReturn = parseFloat(String(item.original_sold_unit_price));
+          if (!Number.isNaN(maxReturn) && maxReturn > 0 && salePrice > maxReturn) {
+            priceValidationErrors.push(
+              `${item.product_name || 'Product'}: Return credit (₹${formatNumber(salePrice)}) cannot exceed original sold price (₹${formatNumber(maxReturn)})`
+            );
+          }
+        }
         const minPrice = getItemPurchasePriceForValidation(item);
         const isCustomOtherProduct = item.product_name?.startsWith('Other -');
         const canGoBelow = item.product_can_go_below_purchase_price || false;
@@ -1311,6 +1390,35 @@ export default function InvoiceDetail() {
     // Get fresh invoice data
     const freshInvoice = queryClient.getQueryData(['invoice', invoiceId]) as any;
     const freshInv = freshInvoice?.data;
+    const submitRepairStatus =
+      checkoutInvoiceType === 'pending'
+        ? (
+            (freshInv?.items?.length ?? 0) > 0
+              ? 'work_in_progress'
+              : (pendingAllowedStatus.has((checkoutRepairStatus || '').trim()) ? (checkoutRepairStatus || '').trim() : 'received')
+          )
+        : (
+            checkoutInvoiceType !== freshInv?.invoice_type
+              ? 'delivered'
+              : ((checkoutRepairStatus || '').trim() || (freshInv?.repair?.status || '').trim())
+          );
+
+    const canSavePendingNotRepairedWithoutItems =
+      !!freshInv?.repair && checkoutInvoiceType === 'pending' && submitRepairStatus === 'not_repaired';
+
+    if ((!freshInv?.items || freshInv.items.length === 0) && canSavePendingNotRepairedWithoutItems) {
+      try {
+        await posApi.repair.updateStatus(invoiceId, { repair_status: 'not_repaired' });
+        await posApi.repair.update(invoiceId, { delivery_date: null });
+        await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+        queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+        setShowCheckoutModal(false);
+        return;
+      } catch (error: any) {
+        alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to save repair status');
+        return;
+      }
+    }
 
     if (!freshInv?.items || freshInv.items.length === 0) {
       alert('Invoice has no items');
@@ -1418,16 +1526,6 @@ export default function InvoiceDetail() {
       }
     }
 
-    // Repair checkout: if finalizing invoice (changing type), ensure repair status is not left as WIP or received
-    if (freshInv?.repair && checkoutInvoiceType !== freshInv.invoice_type) {
-      const newStatus = (checkoutRepairStatus ?? '').trim();
-
-      if (newStatus === 'received' || newStatus === 'work_in_progress') {
-        alert('You changed the invoice type. Please update the repair status to a terminal state (Done/Delivered) before completing checkout.');
-        return;
-      }
-    }
-
     const checkoutData: any = {
       invoice_type: isReplacementReturn ? (checkoutInvoiceType === 'credit' ? 'instant' : 'pending') : checkoutInvoiceType,
       replacement_mode: isReplacementReturn ? (checkoutInvoiceType === 'credit' ? 'instant' : 'pending') : undefined,
@@ -1440,6 +1538,13 @@ export default function InvoiceDetail() {
       })),
     };
 
+    // Persist selected repair status during checkout so backend state matches UI selection.
+    if (freshInv?.repair) {
+      if (submitRepairStatus) {
+        checkoutData.repair_status = submitRepairStatus;
+      }
+    }
+
     // Add split payment amounts for mixed type
     if (!isReplacementReturn && checkoutInvoiceType === 'mixed') {
       checkoutData.cash_amount = parseFloat(checkoutCashAmount);
@@ -1447,10 +1552,23 @@ export default function InvoiceDetail() {
     }
 
     // Include repair delivery date when invoice is a repair (from repair model, can be set/updated at checkout)
-    if (freshInv?.repair && checkoutDeliveryDate.trim()) {
+    const canSubmitDeliveryDate =
+      submitRepairStatus === 'done' ||
+      submitRepairStatus === 'delivered';
+    if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate.trim()) {
       checkoutData.delivery_date = checkoutDeliveryDate.trim();
-    } else if (freshInv?.repair && (checkoutDeliveryDate === '' || checkoutDeliveryDate === null)) {
+    } else if (freshInv?.repair && canSubmitDeliveryDate && (checkoutDeliveryDate === '' || checkoutDeliveryDate === null)) {
       checkoutData.delivery_date = null;
+    }
+
+    // Only persist "clear delivery date" when user confirms submit (not while toggling controls).
+    if (freshInv?.repair && checkoutInvoiceType === 'pending') {
+      try {
+        await posApi.repair.update(invoiceId, { delivery_date: null });
+      } catch (error: any) {
+        alert(error?.response?.data?.error || error?.response?.data?.message || 'Failed to clear repair delivery date');
+        return;
+      }
     }
 
     checkoutMutation.mutate(checkoutData);
@@ -2249,6 +2367,18 @@ export default function InvoiceDetail() {
           Back
         </Button>
 
+        {inv?.is_replacement_return && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+            <span className="font-semibold">Replacement return</span>
+            {inv.replacement_mode === 'pending'
+              ? ' — Draft: use Checkout to finalize ledger and inventory when ready.'
+              : ' — Processed via Replacement POS (instant).'}
+            {inv.replacement_customer_warning
+              ? ' This return combined lines from different original customers.'
+              : ''}
+          </div>
+        )}
+
         {/* Main Header Card */}
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
           {/* Top Section: Invoice Info */}
@@ -2269,12 +2399,25 @@ export default function InvoiceDetail() {
                 </div>
               </div>
 
-              {/* Status Badge */}
-              <div className="flex-shrink-0">
-                <Badge variant={statusInfo.color} className="w-full sm:w-auto justify-center sm:justify-start">
-                  <StatusIcon className="h-3.5 w-3.5 mr-1.5" />
-                  {statusInfo.label}
-                </Badge>
+              {/* Top-right status block */}
+              <div className="flex-shrink-0 w-full sm:w-auto">
+                {inv?.repair ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-[320px]">
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+                      <p className="text-[11px] uppercase tracking-wide text-indigo-700 font-semibold">Invoice Type</p>
+                      <p className="text-base sm:text-lg font-bold text-indigo-900 mt-0.5">{invoiceTypeLabel}</p>
+                    </div>
+                    <div className={`rounded-lg border px-3 py-2.5 ${repairStatusBadgeClass}`}>
+                      <p className="text-[11px] uppercase tracking-wide font-semibold">Repair Status</p>
+                      <p className="text-base sm:text-lg font-bold mt-0.5">{repairStatusLabel}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <Badge variant={statusInfo.color} className="w-full sm:w-auto justify-center sm:justify-start text-sm px-3 py-2">
+                    <StatusIcon className="h-4 w-4 mr-1.5" />
+                    {statusInfo.label}
+                  </Badge>
+                )}
               </div>
             </div>
           </div>
@@ -3159,6 +3302,91 @@ export default function InvoiceDetail() {
         </Card>
       )}
 
+      {/* Instant replacement returns: settlement is LedgerEntry (Payment rows are cleared at finalize). */}
+      {inv?.is_replacement_return &&
+        Array.isArray((inv as { replacement_ledger_entries?: unknown }).replacement_ledger_entries) &&
+        (inv as { replacement_ledger_entries: { id: number; entry_type: string; amount: string; description?: string; payment_mode?: string; created_at?: string | null }[] }).replacement_ledger_entries.length > 0 && (
+          <Card className="print-area">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-gray-400" />
+              Customer ledger (settlement)
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              This return was finalized on the customer ledger (not in the Payments section above). The settlement is
+              posted as a <strong className="font-semibold text-gray-800">credit</strong> entry: it reduces udhar (same
+              direction as a payment against a credit bill) using the balance rules for this app.
+            </p>
+            <div className="hidden md:block overflow-x-auto">
+              <Table headers={['Type', 'Amount', 'Mode', 'Description', 'Date']}>
+                {(
+                  inv as {
+                    replacement_ledger_entries: {
+                      id: number;
+                      entry_type: string;
+                      amount: string;
+                      description?: string;
+                      payment_mode?: string;
+                      created_at?: string | null;
+                    }[];
+                  }
+                ).replacement_ledger_entries.map((le) => (
+                  <TableRow key={le.id}>
+                    <TableCell>
+                      <span className="capitalize font-medium text-gray-900">{le.entry_type || '—'}</span>
+                    </TableCell>
+                    <TableCell align="right">
+                      <span className="font-semibold text-gray-900">₹{formatNumber(le.amount || '0')}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-gray-700 capitalize">{le.payment_mode || '—'}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-gray-600 break-words">{le.description || '—'}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-gray-600">{le.created_at ? formatDate(le.created_at) : '—'}</span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </Table>
+            </div>
+            <div className="md:hidden space-y-3">
+              {(
+                inv as {
+                  replacement_ledger_entries: {
+                    id: number;
+                    entry_type: string;
+                    amount: string;
+                    description?: string;
+                    payment_mode?: string;
+                    created_at?: string | null;
+                  }[];
+                }
+              ).replacement_ledger_entries.map((le) => (
+                <div key={le.id} className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
+                  <div className="flex justify-between font-semibold">
+                    <span className="capitalize">{le.entry_type}</span>
+                    <span>₹{formatNumber(le.amount || '0')}</span>
+                  </div>
+                  {le.payment_mode ? <div className="text-gray-600 capitalize mt-1">{le.payment_mode}</div> : null}
+                  {le.description ? <div className="text-gray-600 mt-2 break-words">{le.description}</div> : null}
+                  <div className="text-gray-500 text-xs mt-2">{le.created_at ? formatDate(le.created_at) : ''}</div>
+                </div>
+              ))}
+            </div>
+            {inv.customer ? (
+              <div className="mt-4">
+                <Link
+                  to={`/ledger/${inv.customer}?credit_only=0`}
+                  className="text-sm font-medium text-blue-700 hover:text-blue-900 underline"
+                >
+                  Open full customer ledger (all entries)
+                </Link>
+              </div>
+            ) : null}
+          </Card>
+        )}
+
       {/* A4 Print Preview - Embedded */}
       <Card className="no-print">
         <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -3403,8 +3631,11 @@ export default function InvoiceDetail() {
                         else if (Array.isArray(products)) productList.push(...products.filter((p: any) => !existingIds.has(p.id)));
                       }
                       return (
-                        <div className="absolute top-full left-0 mt-2 border border-gray-200 rounded-lg bg-white shadow-xl z-20 w-full">
-                          <div className="max-h-64 overflow-y-auto">
+                        <div
+                          className="absolute top-full left-0 z-20 w-full pt-2"
+                          onMouseDown={(e) => e.preventDefault()}
+                        >
+                          <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg bg-white shadow-xl">
                             {showCustomOption && (
                               <button
                                 type="button"
@@ -4449,6 +4680,80 @@ export default function InvoiceDetail() {
                 value={isReplacementReturn ? (checkoutInvoiceType === 'credit' ? 'credit' : 'pending') : (hideCheckoutPaymentOptions && !['pending', 'credit'].includes(checkoutInvoiceType) ? 'pending' : checkoutInvoiceType)}
                 onChange={(e) => {
                   const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
+
+                  // Allow switching back to pending even when products are removed.
+                  // Product/line-total guards are only for checkout types.
+                  if (newType === 'pending') {
+                    setCheckoutInvoiceType(newType);
+                    setCheckoutCashAmount('');
+                    setCheckoutUpiAmount('');
+                    if (inv?.repair) {
+                      const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
+                      const currentPendingStatus = (checkoutRepairStatus || inv.repair.status || '').trim();
+                      const pendingStatusToSet = hasProducts
+                        ? 'work_in_progress'
+                        : (currentPendingStatus === 'not_repaired' ? 'not_repaired' : 'received');
+                      setCheckoutRepairStatus(pendingStatusToSet);
+                      setCheckoutDeliveryDate('');
+                    }
+                    return;
+                  }
+
+                  // Guard invoice type changes: invoice must have products and each line total must be > 0.
+                  const currentItems = Array.isArray(inv?.items) ? inv.items : [];
+                  if (currentItems.length === 0) {
+                    alert('Please add at least one product before changing invoice type.');
+                    return;
+                  }
+                  const nextCheckoutPrices = { ...checkoutPrices };
+                  const nextCheckoutPurchasePrices = { ...checkoutPurchasePrices };
+                  const invalidCustomPurchaseItems: string[] = [];
+                  const invalidLine = currentItems.find((item: any) => {
+                    const quantity = checkoutQuantities[item.id]
+                      ? parseInt(checkoutQuantities[item.id]) || 0
+                      : parseInt(item.quantity) || 0;
+                    const existingSell = checkoutPrices[item.id];
+                    const fallbackSell = (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+                    const price = existingSell ? parseFloat(existingSell) : fallbackSell;
+                    if (!existingSell && fallbackSell > 0) {
+                      nextCheckoutPrices[item.id] = String(fallbackSell);
+                    }
+
+                    const isCustomProduct = item.product_name?.startsWith('Other -');
+                    if (isCustomProduct) {
+                      const existingPurchase = checkoutPurchasePrices[item.id];
+                      const fallbackPurchase =
+                        item.product_purchase_price != null
+                          ? parseFloat(item.product_purchase_price)
+                          : item.purchase_price != null
+                            ? parseFloat(item.purchase_price)
+                            : 0;
+                      if (!existingPurchase && fallbackPurchase > 0) {
+                        nextCheckoutPurchasePrices[item.id] = String(fallbackPurchase);
+                      }
+                      const effectivePurchase = existingPurchase ? parseFloat(existingPurchase) : fallbackPurchase;
+                      if (!(effectivePurchase > 0)) {
+                        invalidCustomPurchaseItems.push(item.product_name || 'Custom Product');
+                        return true;
+                      }
+                    }
+
+                    const lineTotal = quantity * price;
+                    return !(lineTotal > 0);
+                  });
+
+                  setCheckoutPrices(nextCheckoutPrices);
+                  setCheckoutPurchasePrices(nextCheckoutPurchasePrices);
+
+                  if (invalidCustomPurchaseItems.length > 0) {
+                    alert(`Please enter purchase price (> 0) for custom product(s): ${invalidCustomPurchaseItems.join(', ')}`);
+                    return;
+                  }
+                  if (invalidLine) {
+                    alert('Each product line total must be greater than 0 before changing invoice type.');
+                    return;
+                  }
+
                   setCheckoutInvoiceType(newType);
                   // Clear split amounts when switching away from mixed
                   if (newType !== 'mixed') {
@@ -4456,13 +4761,15 @@ export default function InvoiceDetail() {
                     setCheckoutUpiAmount('');
                   }
 
-                  // Auto-update repair status to 'delivered' when changing to a checkout type
-                  if (inv?.repair && newType !== 'pending') {
+                  // Auto-update repair status to 'delivered' when changing to a checkout type.
+                  // (pending is handled in the early-return block above)
+                  if (inv?.repair) {
                     const statusToSet = 'delivered';
                     setCheckoutRepairStatus(statusToSet);
-                    if (inv.repair.status !== statusToSet) {
-                      updateRepairStatusMutation.mutate({ repair_status: statusToSet });
-                    }
+                    // Prefill delivery date to today (UI only). Do NOT auto-save because user may switch back to pending.
+                    const existingDeliveryDate = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
+                    const today = new Date().toISOString().slice(0, 10);
+                    setCheckoutDeliveryDate(existingDeliveryDate || today);
                   }
                 }}
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
@@ -4584,6 +4891,9 @@ export default function InvoiceDetail() {
                     }>
                       {repairStatusOptions.find((o) => o.value === inv.repair.status)?.label ?? inv.repair.status}
                     </Badge>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Delivery: {inv.repair.delivery_date ? formatDate(inv.repair.delivery_date) : '—'}
+                    </p>
                   </div>
                   <div className="flex-1 min-w-[160px]">
                     <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -4593,38 +4903,54 @@ export default function InvoiceDetail() {
                       )}
                     </label>
                     <Select
-                      value={checkoutRepairStatus || inv.repair.status}
+                      value={checkoutInvoiceType === 'pending' ? forcedPendingRepairStatus : (checkoutRepairStatus || inv.repair.status)}
                       onChange={(e) => {
                         const newStatus = e.target.value;
+                        if ((e.target as HTMLSelectElement).selectedOptions?.[0]?.disabled) return;
                         setCheckoutRepairStatus(newStatus);
-                        if (newStatus && newStatus !== inv.repair.status) {
-                          updateRepairStatusMutation.mutate({ repair_status: newStatus });
+                        if (newStatus !== 'done' && newStatus !== 'delivered') {
+                          setCheckoutDeliveryDate('');
                         }
                       }}
                       className="w-full"
-                      disabled={updateRepairStatusMutation.isPending}
                     >
-                      {repairStatusOptions
-                        .filter((opt) =>
-                          checkoutInvoiceType === 'pending' || ['delivered', 'done'].includes(opt.value)
-                        )
+                      {limitedRepairStatusOptions
+                        .filter((opt) => {
+                          // For pending invoice type:
+                          // - with products: only work_in_progress
+                          // - without products: received / not_repaired
+                          if (checkoutInvoiceType === 'pending') {
+                            if (hasProductsInCheckout) return opt.value === 'work_in_progress';
+                            return opt.value === 'received' || opt.value === 'not_repaired';
+                          }
+                          // When invoice type is NOT pending, only Delivered can be selected.
+                          return opt.value === 'delivered';
+                        })
                         .map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          <option key={opt.value} value={opt.value} disabled={!!opt.disabled}>
+                            {opt.label}
+                          </option>
                         ))}
                     </Select>
                   </div>
-                  <div className="flex-1 min-w-[160px]">
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Delivery date</label>
-                    <Input
-                      type="date"
-                      value={checkoutDeliveryDate}
-                      onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
-                      className="w-full"
-                    />
-                    {inv.repair.delivery_date && !checkoutDeliveryDate && (
-                      <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
-                    )}
-                  </div>
+                  {shouldShowCheckoutDeliveryDate && (
+                    <div className="flex-1 min-w-[160px]">
+                      <label className="block text-xs font-medium text-gray-700 mb-1">Delivery date</label>
+                      <Input
+                        type="date"
+                        value={checkoutDeliveryDate}
+                        onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
+                        className="w-full"
+                        disabled={isDraftPendingCheckout}
+                      />
+                      {isDraftPendingCheckout && (
+                        <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
+                      )}
+                      {inv.repair.delivery_date && (
+                        <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -4738,8 +5064,18 @@ export default function InvoiceDetail() {
                     return;
                   }
 
-                  const payload: { items: any[]; delivery_date?: string | null } = { items };
-                  if (freshInv?.repair && checkoutDeliveryDate?.trim()) {
+                  const payload: { items: any[]; delivery_date?: string | null; repair_status?: string } = { items };
+                  const submitRepairStatus =
+                    checkoutInvoiceType === 'credit'
+                      ? 'delivered'
+                      : (checkoutRepairStatus || freshInv?.repair?.status || '').trim();
+                  const canSubmitDeliveryDate =
+                    submitRepairStatus === 'done' ||
+                    submitRepairStatus === 'delivered';
+                  if (freshInv?.repair && submitRepairStatus) {
+                    payload.repair_status = submitRepairStatus;
+                  }
+                  if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate?.trim()) {
                     payload.delivery_date = checkoutDeliveryDate.trim();
                   }
                   markCreditMutation.mutate(payload);
@@ -4752,7 +5088,15 @@ export default function InvoiceDetail() {
               )}
               <Button
                 onClick={handleCheckoutSubmit}
-                disabled={checkoutMutation.isPending || markCreditMutation.isPending || (!isReplacementReturn && checkoutInvoiceType === 'credit') || !inv?.items || inv.items.length === 0}
+                disabled={
+                  checkoutMutation.isPending ||
+                  markCreditMutation.isPending ||
+                  checkoutInvoiceType === 'credit' ||
+                  (
+                    (!inv?.items || inv.items.length === 0) &&
+                    !(inv?.repair && checkoutInvoiceType === 'pending' && (checkoutRepairStatus || inv.repair?.status || '').trim() === 'not_repaired')
+                  )
+                }
                 className="w-full sm:w-auto"
               >
                 {checkoutMutation.isPending
@@ -4839,7 +5183,7 @@ export default function InvoiceDetail() {
           isLoading={updateRepairStatusMutation.isPending}
           customerName={invoice.data.customer_name}
           bookingAmount={invoice.data.repair.booking_amount}
-          statusOptions={repairStatusOptions}
+          statusOptions={limitedRepairStatusOptions}
         />
       )}
 

@@ -79,31 +79,61 @@ export function amountForInput(value: number | string | undefined | null): strin
  */
 export const canEditLedgerEntry = (entry: { invoice?: number | null }): boolean => !entry.invoice;
 
+function parseLocalDate(date: Date | string | null | undefined): Date | null {
+    if (date == null) return null;
+    if (date instanceof Date) return isNaN(date.getTime()) ? null : date;
+
+    const value = String(date).trim();
+    if (!value) return null;
+
+    // YYYY-MM-DD or ISO datetime beginning with YYYY-MM-DD
+    const isoLike = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
+    if (isoLike) {
+        const y = Number(isoLike[1]);
+        const m = Number(isoLike[2]);
+        const d = Number(isoLike[3]);
+        const parsed = new Date(y, m - 1, d);
+        if (parsed.getFullYear() === y && parsed.getMonth() === m - 1 && parsed.getDate() === d) return parsed;
+        return null;
+    }
+
+    // DD/MM/YYYY
+    const ddmmyyyy = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (ddmmyyyy) {
+        const d = Number(ddmmyyyy[1]);
+        const m = Number(ddmmyyyy[2]);
+        const y = Number(ddmmyyyy[3]);
+        const parsed = new Date(y, m - 1, d);
+        if (parsed.getFullYear() === y && parsed.getMonth() === m - 1 && parsed.getDate() === d) return parsed;
+        return null;
+    }
+
+    const parsed = new Date(value);
+    return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function toIsoDateString(date: Date | string | null | undefined): string {
+    const d = parseLocalDate(date);
+    if (!d) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+export function getWeekdayName(date: Date | string | null | undefined): string {
+    const d = parseLocalDate(date);
+    if (!d) return '';
+    return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()];
+}
+
 /**
  * Returns the calendar date (YYYY-MM-DD) in the user's local timezone.
  * Use this when displaying a datetime from the API in a date input, so the selected day
  * doesn't shift by one (UTC vs local).
  */
 export function toLocalDateString(date: Date | string | null | undefined): string {
-    if (date == null) return '';
-    let d: Date;
-    if (typeof date === 'string') {
-        // Parse YYYY-MM-DD as local date to avoid UTC-midnight shifting the day
-        const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
-        if (match) {
-            const [, y, m, day] = match.map(Number);
-            d = new Date(y, m - 1, day);
-        } else {
-            d = new Date(date);
-        }
-    } else {
-        d = date;
-    }
-    if (isNaN(d.getTime())) return '';
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
+    return toIsoDateString(date);
 }
 
 /**
@@ -111,19 +141,8 @@ export function toLocalDateString(date: Date | string | null | undefined): strin
  * Accepts Date or YYYY-MM-DD string. Parses as local date.
  */
 export function formatDateMMDDYYYY(date: Date | string | null | undefined): string {
-  if (date == null) return '';
-  let d: Date;
-  if (typeof date === 'string') {
-    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (match) {
-      const [, y, m, day] = match.map(Number);
-      d = new Date(y, m - 1, day);
-    } else {
-      d = new Date(date);
-    }
-  } else {
-    d = date;
-  }
+  const d = parseLocalDate(date);
+  if (!d) return '';
   if (isNaN(d.getTime())) return '';
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
@@ -136,19 +155,8 @@ export function formatDateMMDDYYYY(date: Date | string | null | undefined): stri
  * Accepts Date or YYYY-MM-DD string. Parses as local date.
  */
 export function formatDateDDMMYYYY(date: Date | string | null | undefined): string {
-  if (date == null) return '';
-  let d: Date;
-  if (typeof date === 'string') {
-    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (match) {
-      const [, y, m, day] = match.map(Number);
-      d = new Date(y, m - 1, day);
-    } else {
-      d = new Date(date);
-    }
-  } else {
-    d = date;
-  }
+  const d = parseLocalDate(date);
+  if (!d) return '';
   if (isNaN(d.getTime())) return '';
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
