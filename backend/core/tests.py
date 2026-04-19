@@ -8,7 +8,6 @@ from django.contrib.auth import get_user_model
 from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
 from backend.pos.models import Invoice, InvoiceItem
-
 User = get_user_model()
 
 
@@ -187,3 +186,43 @@ class GlobalSearchBarcodeTests(APITestCase):
         barcodes = response.data.get('barcodes', [])
         self.assertEqual(len(barcodes), 1, 'Backend normalizes query to upper; lowercase search should find EXACT-BARCODE-001')
         self.assertEqual(barcodes[0]['barcode'], 'EXACT-BARCODE-001')
+
+
+class BarcodeAuditDisplayLabelTests(TestCase):
+    """Barcode.audit_display_label() prefers short_code, then derived form, then full barcode."""
+
+    def setUp(self):
+        self.category = Category.objects.create(name='Audit Cat')
+        self.product = Product.objects.create(
+            name='Audit Product',
+            category=self.category,
+            product_type='simple',
+            sku='SKU-AUDIT-1',
+        )
+
+    def test_prefers_short_code_when_set(self):
+        bc = Barcode.objects.create(
+            product=self.product,
+            barcode='OLED-20260311-0002',
+            short_code='OLED-0002',
+            tag='new',
+        )
+        self.assertEqual(bc.audit_display_label(), 'OLED-0002')
+
+    def test_falls_back_to_generated_short_form(self):
+        bc = Barcode.objects.create(
+            product=self.product,
+            barcode='BASE-20260101-XYZ',
+            short_code=None,
+            tag='new',
+        )
+        self.assertEqual(bc.audit_display_label(), 'BASE-XYZ')
+
+    def test_falls_back_to_raw_barcode(self):
+        bc = Barcode.objects.create(
+            product=self.product,
+            barcode='SIMPLE',
+            short_code=None,
+            tag='new',
+        )
+        self.assertEqual(bc.audit_display_label(), 'SIMPLE')

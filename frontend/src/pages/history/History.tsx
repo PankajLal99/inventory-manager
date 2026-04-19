@@ -65,6 +65,8 @@ const actionIcons: Record<string, any> = {
   replacement_replace: Package,
   replacement_return: Package,
   replacement_defective: Package,
+  replacement_pos_create: Package,
+  replacement_pos_checkout: FileText,
 };
 
 const actionColors: Record<string, string> = {
@@ -94,6 +96,8 @@ const actionColors: Record<string, string> = {
   replacement_replace: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200',
   replacement_return: 'bg-indigo-100 text-indigo-700 border-indigo-200',
   replacement_defective: 'bg-rose-100 text-rose-700 border-rose-200',
+  replacement_pos_create: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+  replacement_pos_checkout: 'bg-emerald-100 text-emerald-800 border-emerald-200',
 };
 
 export default function History() {

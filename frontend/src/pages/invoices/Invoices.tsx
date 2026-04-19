@@ -15,7 +15,7 @@ import {
   ChevronDown,
   Loader2,
 } from 'lucide-react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { DateRangePreset, formatNumber } from '../../lib/utils';
 import { readPersistedListDateRange, writePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import PageHeader from '../../components/ui/PageHeader';
@@ -55,6 +55,8 @@ interface Invoice {
   edited_on?: string | null;
   repair?: { id: number; [key: string]: unknown } | null;
   items?: InvoiceItem[];
+  is_replacement_return?: boolean;
+  replacement_mode?: string | null;
 }
 
 interface InvoiceItem {
@@ -203,6 +205,9 @@ export default function Invoices() {
     const pageParam = parseInt(searchParams.get('page') ?? String(persistedListStateRef.current?.currentPage ?? 1), 10);
     return Number.isNaN(pageParam) || pageParam < 1 ? 1 : pageParam;
   });
+  const [replacementPendingOnly, setReplacementPendingOnly] = useState(
+    () => searchParams.get('replacement_pending') === '1'
+  );
 
   // Load user on mount
   useEffect(() => {
@@ -249,18 +254,50 @@ export default function Invoices() {
 
   const { startDate: dateFrom, endDate: dateTo } = dateRange;
   // Default view uses date-based pagination; any active filter returns full filtered data.
-  const useFilteredMode = !!invoiceTypeFilter || !!dateFrom || !!dateTo || !!search.trim() || !!defaultStore?.id;
+  const useFilteredMode =
+    !!invoiceTypeFilter ||
+    !!dateFrom ||
+    !!dateTo ||
+    !!search.trim() ||
+    !!defaultStore?.id ||
+    replacementPendingOnly;
+
+  const { data: replacementPendingCountRes } = useQuery({
+    queryKey: ['invoices', 'replacement-pending-count', selectedStoreId],
+    queryFn: async () => {
+      const res = await posApi.invoices.list({
+        counts: 'replacement_pending',
+        ...(selectedStoreId != null ? { store: selectedStoreId } : {}),
+      });
+      return res.data as { replacement_pending_count?: number };
+    },
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const replacementPendingCount = replacementPendingCountRes?.replacement_pending_count ?? 0;
+
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', useFilteredMode ? 1 : currentPage, search],
-    queryFn: () => posApi.invoices.list({
-      invoice_type: invoiceTypeFilter || undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-      store: defaultStore?.id ?? undefined,
-      page: useFilteredMode ? undefined : currentPage,
-      search: search.trim() || undefined,
-      ordering: invoiceTypeFilter ? 'created_at' : '-created_at',
-    }),
+    queryKey: [
+      'invoices',
+      invoiceTypeFilter,
+      dateFrom,
+      dateTo,
+      defaultStore?.id ?? 'all',
+      useFilteredMode ? 1 : currentPage,
+      search,
+      replacementPendingOnly,
+    ],
+    queryFn: () =>
+      posApi.invoices.list({
+        invoice_type: invoiceTypeFilter || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        store: defaultStore?.id ?? undefined,
+        page: useFilteredMode ? undefined : currentPage,
+        search: search.trim() || undefined,
+        ordering: invoiceTypeFilter ? 'created_at' : '-created_at',
+        replacement_return_pending: replacementPendingOnly ? true : undefined,
+      }),
     enabled: true,
     placeholderData: keepPreviousData,
   });
@@ -275,6 +312,8 @@ export default function Invoices() {
     if (dateTo) nextParams.set('date_to', dateTo);
     if (selectedStoreId !== null) nextParams.set('store', String(selectedStoreId));
     if (!useFilteredMode && currentPage > 1) nextParams.set('page', String(currentPage));
+    if (replacementPendingOnly) nextParams.set('replacement_pending', '1');
+    else nextParams.delete('replacement_pending');
 
     if (nextParams.toString() !== searchParams.toString()) {
       setSearchParams(nextParams, { replace: true });
@@ -288,6 +327,7 @@ export default function Invoices() {
     selectedStoreId,
     currentPage,
     useFilteredMode,
+    replacementPendingOnly,
     searchParams,
     setSearchParams,
   ]);
@@ -396,6 +436,7 @@ export default function Invoices() {
     if (dateTo) params.set('date_to', dateTo);
     if (selectedStoreId !== null) params.set('store', String(selectedStoreId));
     if (!useFilteredMode && currentPage > 1) params.set('page', String(currentPage));
+    if (replacementPendingOnly) params.set('replacement_pending', '1');
     const query = params.toString();
     return query ? `/invoices/${invoiceId}?${query}` : `/invoices/${invoiceId}`;
   };
@@ -428,11 +469,35 @@ export default function Invoices() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <PageHeader
-          title="Invoices"
-          subtitle={groupContainsAdmin ? 'View and manage all invoices (all stores)' : 'View and manage all invoices'}
-          icon={FileText}
-        />
+        <div className="flex flex-col gap-2 min-w-0">
+          <PageHeader
+            title="Invoices"
+            subtitle={groupContainsAdmin ? 'View and manage all invoices (all stores)' : 'View and manage all invoices'}
+            icon={FileText}
+          />
+          <p className="text-xs text-gray-500 pl-0 sm:pl-1">
+            Replacement returns pending (draft, not on ledger yet):{' '}
+            <span className="tabular-nums text-gray-600 font-medium">{replacementPendingCount}</span>
+            <span className="text-gray-400"> · </span>
+            <button
+              type="button"
+              className={`text-xs underline-offset-2 hover:underline ${replacementPendingOnly ? 'text-indigo-700 font-medium' : 'text-gray-500'}`}
+              onClick={() => {
+                setCurrentPage(1);
+                setReplacementPendingOnly((v) => {
+                  if (!v) setInvoiceTypeFilter('');
+                  return !v;
+                });
+              }}
+            >
+              {replacementPendingOnly ? 'Show all invoices' : 'Show only these'}
+            </button>
+            <span className="text-gray-400"> · </span>
+            <Link to="/replacement/pos" className="text-xs text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline">
+              Replacement POS
+            </Link>
+          </p>
+        </div>
         {/* Store selector: Admin gets "All" + stores; non-Admin gets stores only */}
         {stores.length > 0 && (
           <div className="w-full sm:w-auto">
@@ -628,7 +693,11 @@ export default function Invoices() {
           <EmptyState
             icon={FileText}
             title="No invoices found"
-            message="No invoices match your search criteria"
+            message={
+              replacementPendingOnly
+                ? 'No pending replacement return invoices. Create one from Replacement POS or clear the filter.'
+                : 'No invoices match your search criteria'
+            }
           />
         </Card>
       ) : (
@@ -667,6 +736,14 @@ export default function Invoices() {
                         <span className="font-mono font-semibold text-gray-900">
                           {invoice.invoice_number}
                         </span>
+                        {invoice.is_replacement_return && (
+                          <span
+                            className="text-[10px] font-medium uppercase tracking-wide text-indigo-600/80 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5"
+                            title="Replacement return (Replacement POS)"
+                          >
+                            Repl.
+                          </span>
+                        )}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -793,6 +870,11 @@ export default function Invoices() {
                         <span className="font-mono font-semibold text-gray-900 text-base">
                           {invoice.invoice_number}
                         </span>
+                        {invoice.is_replacement_return && (
+                          <span className="text-[10px] font-medium uppercase text-indigo-600/90 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5 shrink-0">
+                            Repl.
+                          </span>
+                        )}
                       </div>
                       <div className="text-sm text-gray-600 mb-1">
                         {formatDate(invoice.created_at)}

@@ -231,6 +231,24 @@ export const posApi = {
     searchInvoices: (search: string) => api.get('/pos/replacement/search-invoices/', { params: { search } }),
     processReplacement: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/process/`, data),
     creditNote: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/credit-note/`, data),
+    replacementPos: {
+      lookup: (data: { barcode: string }) => api.post('/pos/replacement-pos/lookup/', data),
+      create: (data: {
+        /** Ignored for create; store is taken from the original sale lines. */
+        store?: number;
+        customer?: number | null;
+        mode: 'instant' | 'pending';
+        settlement_invoice_type?: 'cash' | 'upi' | 'mixed' | 'credit';
+        cash_amount?: string | number;
+        upi_amount?: string | number;
+        lines: Array<{
+          original_invoice_item_id: number;
+          /** Required; server rejects missing/blank (no default). */
+          return_tag: 'returned' | 'unknown' | 'defective';
+          accepted_return_price: string | number;
+        }>;
+      }) => api.post('/pos/replacement-pos/create/', data),
+    },
   },
   repair: {
     invoices: {

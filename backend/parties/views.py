@@ -16,9 +16,19 @@ INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
 
 
 def _credit_invoice_plus_manual_payment_filter():
-    """Credit-ledger view = invoices moved to ledger (status=credit) + manual received payments.
+    """Credit-ledger view = invoices moved to ledger (status=credit) + manual received payments +
+    replacement-return POS instant settlements (debit on paid replacement invoice reduces store credit).
+
     Pending invoices do not affect ledger until user does 'Move to Ledger' (mark credit)."""
-    return Q(invoice__status='credit') | Q(invoice__isnull=True, entry_type='credit')
+    return (
+        Q(invoice__status='credit')
+        | Q(invoice__isnull=True, entry_type='credit')
+        | Q(
+            invoice__is_replacement_return=True,
+            invoice__status='paid',
+            entry_type='credit',
+        )
+    )
 
 
 def _exclude_standard_ledger_group_entries(queryset):

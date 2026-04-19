@@ -17,12 +17,12 @@ def get_client_ip(request):
     return ip or None
 
 
-def create_audit_log(request=None, action=None, model_name=None, object_id=None, 
-                     changes=None, user=None, object_name=None, object_reference=None, 
+def create_audit_log(request=None, action=None, model_name=None, object_id=None,
+                     changes=None, user=None, object_name=None, object_reference=None,
                      barcode=None):
     """
     Create an audit log entry
-    
+
     Args:
         request: Django request object (for user and IP) - optional if user is provided
         action: Action type (create, update, delete, cart_add, etc.)
@@ -32,26 +32,25 @@ def create_audit_log(request=None, action=None, model_name=None, object_id=None,
         user: Optional user override (defaults to request.user if request provided)
         object_name: Human-readable name of the object (e.g., product name, invoice number)
         object_reference: Reference identifier (e.g., invoice number, cart number)
-        barcode: Barcode/SKU if applicable
+        barcode: Optional label (callers should pass Barcode.audit_display_label() for catalog units)
     """
     try:
-        # Determine user
         audit_user = None
         if user:
             audit_user = user
         elif request and hasattr(request, 'user'):
             audit_user = request.user
-        
-        # Get IP address
+
         ip_address = get_client_ip(request) if request else None
-        
-        # Validate required fields
+
         if not action or not model_name or not object_id:
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning(f"Audit log creation skipped: missing required fields (action={action}, model_name={model_name}, object_id={object_id})")
+            logger.warning(
+                f"Audit log creation skipped: missing required fields (action={action}, model_name={model_name}, object_id={object_id})"
+            )
             return None
-        
+
         AuditLog.objects.create(
             user=audit_user if audit_user and audit_user.is_authenticated else None,
             action=action,
@@ -64,9 +63,7 @@ def create_audit_log(request=None, action=None, model_name=None, object_id=None,
             ip_address=ip_address
         )
     except Exception as e:
-        # Don't fail the main operation if audit logging fails
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Failed to create audit log: {str(e)}")
         return None
-

@@ -2003,10 +2003,10 @@ def update_barcode_tag(request, barcode_id):
         object_id=str(barcode_obj.id),
         object_name=barcode_obj.product.name if barcode_obj.product else 'Unknown Product',
         object_reference=barcode_obj.product.sku if barcode_obj.product else None,
-        barcode=barcode_obj.barcode,
+        barcode=barcode_obj.audit_display_label(),
         changes={
             'tag': {'old': old_tag, 'new': new_tag},
-            'barcode': barcode_obj.barcode,
+            'barcode': barcode_obj.audit_display_label(),
             'product_id': barcode_obj.product.id if barcode_obj.product else None,
             'product_name': barcode_obj.product.name if barcode_obj.product else None,
         }
@@ -2139,10 +2139,10 @@ def bulk_update_barcode_tags(request):
                     object_id=str(barcode_obj.id),
                     object_name=barcode_obj.product.name if barcode_obj.product else 'Unknown Product',
                     object_reference=barcode_obj.product.sku if barcode_obj.product else None,
-                    barcode=barcode_obj.barcode,
+                    barcode=barcode_obj.audit_display_label(),
                     changes={
                         'tag': {'old': old_tag, 'new': new_tag},
-                        'barcode': barcode_obj.barcode,
+                        'barcode': barcode_obj.audit_display_label(),
                         'product_id': barcode_obj.product.id if barcode_obj.product else None,
                         'product_name': barcode_obj.product.name if barcode_obj.product else None,
                     }

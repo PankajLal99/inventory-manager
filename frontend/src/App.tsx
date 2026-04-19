@@ -23,6 +23,7 @@ import InvoiceDetail from './pages/invoices/InvoiceDetail';
 import InvoiceEdit from './pages/invoices/InvoiceEdit';
 import Reports from './pages/reports/Reports';
 import Replacement from './pages/replacement/Replacement';
+import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
@@ -131,6 +132,7 @@ function App() {
                 <Route path="history" element={<History />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="replacement" element={<Replacement />} />
+                <Route path="replacement/pos" element={<ReplacementPOS />} />
                 <Route path="replacement/replace-product" element={<ReplaceProduct />} />
                 <Route path="replacement/return-to-stock" element={<ReturnToStock />} />
                 <Route path="replacement/credit-note" element={<CreditNoteReplacement />} />

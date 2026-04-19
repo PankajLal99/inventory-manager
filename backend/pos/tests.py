@@ -1317,6 +1317,49 @@ class CartBarcodeConsistencyTests(APITestCase):
         self.assertGreater(len(items), 0)
         self.assertEqual(items[0]['barcode_value'], 'SC-INV')
 
+    def test_cart_delete_restores_returned_when_original_sale_line_exists(self):
+        """Returned unit (still on paid invoice line) goes in-cart in POS; deleting cart row must return to returned, not stay in-cart."""
+        customer = Customer.objects.create(name='Cart Return Cust', phone='9888888888')
+        inv = Invoice.objects.create(
+            invoice_number=f'INV-RTN-{uuid.uuid4().hex[:6]}',
+            store=self.store,
+            customer=customer,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=inv,
+            product=self.product,
+            barcode=self.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            line_total=Decimal('100.00'),
+        )
+        self.barcode.tag = 'returned'
+        self.barcode.save(update_fields=['tag'])
+
+        add_url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        r1 = self.client.post(
+            add_url,
+            {'product': self.product.id, 'quantity': 1, 'unit_price': '100.00', 'barcode': self.full_barcode},
+            format='json',
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'in-cart')
+
+        item_id = r1.data['id']
+        del_url = reverse('cart-item-update', kwargs={'pk': self.cart.id, 'item_id': item_id})
+        r2 = self.client.delete(del_url)
+        self.assertEqual(r2.status_code, status.HTTP_204_NO_CONTENT)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'returned')
+
 
 class BulkBarcodesCheckTests(APITestCase):
     """Tests for bulk barcodes check (replacement credit note): all barcode types and skip cases."""
@@ -2086,3 +2129,623 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('void', response.data.get('error', '').lower())
+
+
+class ReplacementPOSTests(APITestCase):
+    """Replacement POS: sold-barcode lookup, draft vs instant create, checkout, validation."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'rpos_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='RPos Store', shop_type='retail')
+        self.category = Category.objects.create(name='RPos Cat')
+        self.customer = Customer.objects.create(name='RPos Customer', phone='9999999999')
+        self.customer2 = Customer.objects.create(name='RPos Customer2', phone='9999999998')
+        self.product = Product.objects.create(
+            name='RPos Product',
+            category=self.category,
+            track_inventory=True,
+        )
+        self.bc = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-{uuid.uuid4().hex[:10]}'.upper(),
+            tag='sold',
+        )
+
+    def _paid_invoice_with_item(self, customer, unit_price):
+        self.bc.tag = 'sold'
+        self.bc.save(update_fields=['tag'])
+        inv = Invoice.objects.create(
+            invoice_number=f'INV-S-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=customer,
+            status='paid',
+            invoice_type='cash',
+            total=unit_price,
+            paid_amount=unit_price,
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        item = InvoiceItem.objects.create(
+            invoice=inv,
+            product=self.product,
+            barcode=self.bc,
+            sold_barcode_value=self.bc.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=unit_price,
+            manual_unit_price=None,
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=unit_price,
+        )
+        return inv, item
+
+    def _credit_credit_invoice_with_item(self, customer, unit_price, barcode_obj):
+        """Mimic customer 726 style bills: status=credit, invoice_type=credit, barcode still sold on line."""
+        barcode_obj.tag = 'sold'
+        barcode_obj.save(update_fields=['tag'])
+        inv = Invoice.objects.create(
+            invoice_number=f'INV-CC-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=customer,
+            status='credit',
+            invoice_type='credit',
+            subtotal=unit_price,
+            total=unit_price,
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            paid_amount=Decimal('0.00'),
+            due_amount=unit_price,
+            created_by=self.user,
+        )
+        item = InvoiceItem.objects.create(
+            invoice=inv,
+            product=self.product,
+            barcode=barcode_obj,
+            sold_barcode_value=barcode_obj.barcode or '',
+            quantity=Decimal('1.000'),
+            unit_price=unit_price,
+            manual_unit_price=None,
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=unit_price,
+        )
+        return inv, item
+
+    def test_lookup_returns_404_when_no_sold_line(self):
+        url = reverse('replacement-pos-lookup')
+        r = self.client.post(url, {'barcode': 'NO-SUCH-BARCODE-999'}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_lookup_rejects_when_barcode_not_sold(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        self.bc.tag = 'new'
+        self.bc.save(update_fields=['tag'])
+        url = reverse('replacement-pos-lookup')
+        r = self.client.post(url, {'barcode': self.bc.barcode}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_lookup_returns_line(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('150.00'))
+        url = reverse('replacement-pos-lookup')
+        r = self.client.post(url, {'barcode': self.bc.barcode}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertFalse(r.data.get('ambiguous'))
+        self.assertEqual(r.data['line']['original_invoice_item_id'], item.id)
+        self.assertEqual(r.data['line']['sold_unit_price'], '150.00')
+        self.assertEqual(r.data['line']['store_id'], self.store.id)
+        self.assertEqual(r.data['line']['store_name'], self.store.name)
+        self.assertEqual(r.data['line'].get('sold_barcode_value'), self.bc.barcode)
+        self.assertEqual(r.data['line'].get('barcode_full'), self.bc.barcode)
+
+    def test_create_pending_keeps_barcode_sold_no_ledger(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        from backend.parties.models import LedgerEntry
+
+        before = LedgerEntry.objects.count()
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'store': self.store.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '80'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertTrue(ret.is_replacement_return)
+        self.assertEqual(ret.replacement_mode, 'pending')
+        self.assertEqual(ret.status, 'draft')
+        self.bc.refresh_from_db()
+        self.assertEqual(self.bc.tag, 'sold')
+        self.assertEqual(LedgerEntry.objects.count(), before)
+
+    def test_create_pending_without_store_in_body_uses_invoice_store(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '80'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertEqual(ret.store_id, self.store.id)
+
+    def test_create_rejects_mismatched_store_in_body(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        other_store = Store.objects.create(
+            name='Other RPos',
+            code=f'OR-{uuid.uuid4().hex[:10]}',
+            shop_type='retail',
+        )
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'store': other_store.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '80'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_rejects_lines_from_two_stores(self):
+        inv1, item1 = self._paid_invoice_with_item(self.customer, Decimal('10.00'))
+        store_b = Store.objects.create(
+            name='RPos Store B',
+            code=f'RB-{uuid.uuid4().hex[:10]}',
+            shop_type='retail',
+        )
+        bc_b = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-B-{uuid.uuid4().hex[:8]}'.upper(),
+            tag='sold',
+        )
+        inv_b = Invoice.objects.create(
+            invoice_number=f'INV-SB-{uuid.uuid4().hex[:8]}',
+            store=store_b,
+            customer=self.customer,
+            status='paid',
+            invoice_type='cash',
+            total=Decimal('10.00'),
+            paid_amount=Decimal('10.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        item_b = InvoiceItem.objects.create(
+            invoice=inv_b,
+            product=self.product,
+            barcode=bc_b,
+            sold_barcode_value=bc_b.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('10.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('10.00'),
+        )
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'pending',
+                'lines': [
+                    {'original_invoice_item_id': item1.id, 'return_tag': 'returned', 'accepted_return_price': '5'},
+                    {'original_invoice_item_id': item_b.id, 'return_tag': 'returned', 'accepted_return_price': '5'},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_rejects_missing_return_tag(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'accepted_return_price': '80'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('return_tag', (r.data.get('error') or '').lower())
+
+    def test_create_rejects_blank_return_tag(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': '   ', 'accepted_return_price': '80'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_instant_credits_and_retags(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('200.00'))
+        self.customer.refresh_from_db()
+        bal_before = self.customer.credit_balance
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'store': self.store.id,
+                'customer': self.customer.id,
+                'mode': 'instant',
+                'settlement_invoice_type': 'cash',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '200.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertEqual(ret.status, 'paid')
+        self.bc.refresh_from_db()
+        self.assertEqual(self.bc.tag, 'returned')
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, bal_before + Decimal('200.00'))
+        from backend.parties.models import LedgerEntry
+
+        self.assertEqual(ret.payments.count(), 0)
+        le = LedgerEntry.objects.filter(invoice_id=ret.id).first()
+        self.assertIsNotNone(le)
+        self.assertEqual(le.entry_type, 'credit')
+        self.assertEqual(le.amount, Decimal('200.00'))
+        self.assertIn('CASH', le.description.upper())
+        self.assertEqual(le.payment_mode, 'cash')
+
+    def test_create_instant_credit_settlement_ledger_debit(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('50.00'))
+        self.customer.refresh_from_db()
+        bal_before = self.customer.credit_balance
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'instant',
+                'settlement_invoice_type': 'credit',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '50.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, bal_before + Decimal('50.00'))
+        from backend.parties.models import LedgerEntry
+
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertEqual(ret.payments.count(), 0)
+        le = LedgerEntry.objects.filter(invoice_id=r.data['id']).first()
+        self.assertIsNotNone(le)
+        self.assertEqual(le.entry_type, 'credit')
+        self.assertEqual(le.amount, Decimal('50.00'))
+        self.assertIn('CREDIT', le.description.upper())
+
+    def test_create_instant_mixed_ledger_split_no_payments(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        self.customer.refresh_from_db()
+        bal_before = self.customer.credit_balance
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'instant',
+                'settlement_invoice_type': 'mixed',
+                'cash_amount': '40',
+                'upi_amount': '60',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '100.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertEqual(ret.payments.count(), 0)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, bal_before + Decimal('100.00'))
+        from backend.parties.models import LedgerEntry
+
+        le = LedgerEntry.objects.filter(invoice=ret).first()
+        self.assertIsNotNone(le)
+        self.assertEqual(le.entry_type, 'credit')
+        self.assertEqual(le.amount, Decimal('100.00'))
+        self.assertEqual(le.amount, ret.total)
+        self.assertEqual(le.payment_mode, 'mixed')
+        self.assertEqual(le.cash_amount, Decimal('40.00'))
+        self.assertEqual(le.upi_amount, Decimal('60.00'))
+        self.assertIn('MIXED', le.description.upper())
+
+    def test_create_instant_two_lines_ledger_matches_invoice_total(self):
+        _, item1 = self._paid_invoice_with_item(self.customer, Decimal('40.00'))
+        bc2 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS2L-{uuid.uuid4().hex[:8]}'.upper(),
+            tag='sold',
+        )
+        inv2 = Invoice.objects.create(
+            invoice_number=f'INV-S2L-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            status='paid',
+            invoice_type='cash',
+            total=Decimal('60.00'),
+            paid_amount=Decimal('60.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        item2 = InvoiceItem.objects.create(
+            invoice=inv2,
+            product=self.product,
+            barcode=bc2,
+            sold_barcode_value=bc2.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('60.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('60.00'),
+        )
+        self.customer.refresh_from_db()
+        bal_before = self.customer.credit_balance
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'mode': 'instant',
+                'settlement_invoice_type': 'upi',
+                'lines': [
+                    {'original_invoice_item_id': item1.id, 'return_tag': 'returned', 'accepted_return_price': '40.00'},
+                    {'original_invoice_item_id': item2.id, 'return_tag': 'returned', 'accepted_return_price': '60.00'},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertEqual(ret.total, Decimal('100.00'))
+        from backend.parties.models import LedgerEntry
+
+        self.assertEqual(ret.payments.count(), 0)
+        self.assertEqual(LedgerEntry.objects.filter(invoice=ret).count(), 1)
+        le = LedgerEntry.objects.get(invoice=ret)
+        self.assertEqual(le.entry_type, 'credit')
+        self.assertEqual(le.amount, ret.total)
+        self.assertEqual(le.amount, Decimal('100.00'))
+        self.assertIn('UPI', le.description.upper())
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, bal_before + Decimal('100.00'))
+        self.bc.refresh_from_db()
+        bc2.refresh_from_db()
+        self.assertEqual(self.bc.tag, 'returned')
+        self.assertEqual(bc2.tag, 'returned')
+
+    def test_create_rejects_price_above_sold(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('50.00'))
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'store': self.store.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '60'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_mixed_customers_sets_warning(self):
+        inv1, item1 = self._paid_invoice_with_item(self.customer, Decimal('10.00'))
+        bc2 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS2-{uuid.uuid4().hex[:8]}'.upper(),
+            tag='sold',
+        )
+        inv2 = Invoice.objects.create(
+            invoice_number=f'INV-S2-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer2,
+            status='paid',
+            invoice_type='cash',
+            total=Decimal('10.00'),
+            paid_amount=Decimal('10.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        item2 = InvoiceItem.objects.create(
+            invoice=inv2,
+            product=self.product,
+            barcode=bc2,
+            sold_barcode_value=bc2.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('10.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('10.00'),
+        )
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'store': self.store.id,
+                'mode': 'pending',
+                'lines': [
+                    {'original_invoice_item_id': item1.id, 'return_tag': 'returned', 'accepted_return_price': '5'},
+                    {'original_invoice_item_id': item2.id, 'return_tag': 'unknown', 'accepted_return_price': '5'},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(r.data.get('replacement_customer_warning'))
+
+    def test_invoice_checkout_finalizes_pending_replacement(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        url_c = reverse('replacement-pos-create')
+        r = self.client.post(
+            url_c,
+            {
+                'store': self.store.id,
+                'customer': self.customer.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '90'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+        ret_id = r.data['id']
+        self.bc.refresh_from_db()
+        self.assertEqual(self.bc.tag, 'sold')
+        ch = reverse('invoice-checkout', args=[ret_id])
+        r2 = self.client.post(ch, {'invoice_type': 'cash'}, format='json')
+        self.assertEqual(r2.status_code, status.HTTP_200_OK, r2.data)
+        self.bc.refresh_from_db()
+        self.assertEqual(self.bc.tag, 'returned')
+
+    def test_invoice_checkout_replacement_clears_draft_payments_and_ledger(self):
+        """Pending return with a partial invoice payment: finalize drops Payment rows and payment ledger, then one replacement credit."""
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
+        r = self.client.post(
+            reverse('replacement-pos-create'),
+            {
+                'store': self.store.id,
+                'customer': self.customer.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '90'}],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret_id = r.data['id']
+        ret = Invoice.objects.get(pk=ret_id)
+        pay_desc = f'Payment for Invoice {ret.invoice_number}'
+        self.customer.refresh_from_db()
+        bal_before_deposit = self.customer.credit_balance
+        pay_url = reverse('invoice-payments', args=[ret_id])
+        pr = self.client.post(
+            pay_url,
+            {'payment_method': 'cash', 'amount': '25.00', 'invoice': ret_id},
+            format='json',
+        )
+        self.assertEqual(pr.status_code, status.HTTP_201_CREATED, pr.data)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, bal_before_deposit + Decimal('25.00'))
+        from backend.parties.models import LedgerEntry
+
+        self.assertTrue(LedgerEntry.objects.filter(invoice_id=ret_id, description=pay_desc).exists())
+
+        ch = reverse('invoice-checkout', args=[ret_id])
+        r2 = self.client.post(ch, {'invoice_type': 'cash'}, format='json')
+        self.assertEqual(r2.status_code, status.HTTP_200_OK, r2.data)
+        ret = Invoice.objects.get(pk=ret_id)
+        self.assertEqual(ret.payments.count(), 0)
+        self.assertFalse(LedgerEntry.objects.filter(invoice_id=ret_id, description=pay_desc).exists())
+        settlement = LedgerEntry.objects.filter(invoice_id=ret_id, description__icontains='Replacement return').first()
+        self.assertIsNotNone(settlement)
+        self.assertEqual(settlement.entry_type, 'credit')
+        self.assertEqual(settlement.amount, Decimal('90.00'))
+        self.customer.refresh_from_db()
+        # Deposit ledger is reversed at finalize, then one replacement credit for the return total.
+        self.assertEqual(self.customer.credit_balance, bal_before_deposit + Decimal('90.00'))
+
+    def test_instant_return_barcodes_from_two_credit_credit_invoices_ledger_and_tags(self):
+        """Credit/credit bills (like ledger slice) hold sold lines; instant replacement posts one CREDIT + balance."""
+        from backend.parties.models import LedgerEntry
+
+        bc1 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-CC1-{uuid.uuid4().hex[:8]}'.upper(),
+            tag='new',
+        )
+        bc2 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-CC2-{uuid.uuid4().hex[:8]}'.upper(),
+            tag='new',
+        )
+        _inv1, item1 = self._credit_credit_invoice_with_item(self.customer, Decimal('100.00'), bc1)
+        _inv2, item2 = self._credit_credit_invoice_with_item(self.customer, Decimal('250.00'), bc2)
+
+        self.customer.refresh_from_db()
+        bal_before = self.customer.credit_balance
+
+        url = reverse('replacement-pos-create')
+        r = self.client.post(
+            url,
+            {
+                'store': self.store.id,
+                'customer': self.customer.id,
+                'mode': 'instant',
+                'settlement_invoice_type': 'cash',
+                'lines': [
+                    {'original_invoice_item_id': item1.id, 'return_tag': 'returned', 'accepted_return_price': '100.00'},
+                    {'original_invoice_item_id': item2.id, 'return_tag': 'returned', 'accepted_return_price': '250.00'},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        ret = Invoice.objects.get(id=r.data['id'])
+        self.assertTrue(ret.is_replacement_return)
+        self.assertEqual(ret.status, 'paid')
+        self.assertEqual(ret.total, Decimal('350.00'))
+
+        rows = list(LedgerEntry.objects.filter(invoice_id=ret.id))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].entry_type, 'credit')
+        self.assertEqual(rows[0].amount, Decimal('350.00'))
+        self.assertIn('Replacement return POS settlement', rows[0].description)
+        self.assertIn('CASH', rows[0].description.upper())
+
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, bal_before + Decimal('350.00'))
+
+        bc1.refresh_from_db()
+        bc2.refresh_from_db()
+        self.assertEqual(bc1.tag, 'returned')
+        self.assertEqual(bc2.tag, 'returned')
+
+    def test_invoice_list_replacement_pending_count(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('50.00'))
+        list_url = reverse('invoice-list-create')
+        r0 = self.client.get(list_url, {'counts': 'replacement_pending'})
+        self.assertEqual(r0.status_code, status.HTTP_200_OK)
+        self.assertEqual(r0.data.get('replacement_pending_count'), 0)
+
+        self.client.post(
+            reverse('replacement-pos-create'),
+            {
+                'store': self.store.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'returned', 'accepted_return_price': '40'}],
+            },
+            format='json',
+        )
+        r1 = self.client.get(list_url, {'counts': 'replacement_pending'})
+        self.assertEqual(r1.data.get('replacement_pending_count'), 1)
+        r_store = self.client.get(list_url, {'counts': 'replacement_pending', 'store': self.store.id})
+        self.assertEqual(r_store.data.get('replacement_pending_count'), 1)
+
+    def test_invoice_list_filter_replacement_return_pending(self):
+        inv, item = self._paid_invoice_with_item(self.customer, Decimal('30.00'))
+        self.client.post(
+            reverse('replacement-pos-create'),
+            {
+                'store': self.store.id,
+                'mode': 'pending',
+                'lines': [{'original_invoice_item_id': item.id, 'return_tag': 'defective', 'accepted_return_price': '25'}],
+            },
+            format='json',
+        )
+        list_url = reverse('invoice-list-create')
+        r = self.client.get(list_url, {'replacement_return_pending': 'true'})
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        results = r.data.get('results') or []
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].get('is_replacement_return'))

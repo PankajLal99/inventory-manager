@@ -444,7 +444,7 @@ def revert_credit_invoice_to_draft_pending(
                     object_id=str(b.id),
                     object_name=it.product.name if it.product else '',
                     object_reference=inv.invoice_number,
-                    barcode=b.barcode,
+                    barcode=b.audit_display_label(),
                     user=user,
                     changes={
                         'tag': {'old': old_tag, 'new': 'new'},
@@ -466,7 +466,7 @@ def revert_credit_invoice_to_draft_pending(
                         object_id=str(pb.id),
                         object_name=it.product.name,
                         object_reference=inv.invoice_number,
-                        barcode=pb.barcode,
+                        barcode=pb.audit_display_label(),
                         user=user,
                         changes={
                             'tag': {'old': old_tag, 'new': 'new'},

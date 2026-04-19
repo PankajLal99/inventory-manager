@@ -1,4 +1,4 @@
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
@@ -1219,6 +1219,13 @@ export default function InvoiceDetail() {
       return `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`;
     }
 
+    if (inv?.is_replacement_return && item.original_sold_unit_price != null && item.original_sold_unit_price !== '') {
+      const maxReturn = parseFloat(String(item.original_sold_unit_price));
+      if (!Number.isNaN(maxReturn) && maxReturn > 0 && salePrice > maxReturn) {
+        return `Return credit cannot exceed original sold price (₹${formatNumber(maxReturn)})`;
+      }
+    }
+
     return null;
   };
 
@@ -1244,6 +1251,14 @@ export default function InvoiceDetail() {
         : (parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
 
       if (salePrice > 0) {
+        if (inv?.is_replacement_return && item.original_sold_unit_price != null && item.original_sold_unit_price !== '') {
+          const maxReturn = parseFloat(String(item.original_sold_unit_price));
+          if (!Number.isNaN(maxReturn) && maxReturn > 0 && salePrice > maxReturn) {
+            priceValidationErrors.push(
+              `${item.product_name || 'Product'}: Return credit (₹${formatNumber(salePrice)}) cannot exceed original sold price (₹${formatNumber(maxReturn)})`
+            );
+          }
+        }
         const minPrice = getItemPurchasePriceForValidation(item);
         const isCustomOtherProduct = item.product_name?.startsWith('Other -');
         const canGoBelow = item.product_can_go_below_purchase_price || false;
@@ -2303,6 +2318,18 @@ export default function InvoiceDetail() {
           Back
         </Button>
 
+        {inv?.is_replacement_return && (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+            <span className="font-semibold">Replacement return</span>
+            {inv.replacement_mode === 'pending'
+              ? ' — Draft: use Checkout to finalize ledger and inventory when ready.'
+              : ' — Processed via Replacement POS (instant).'}
+            {inv.replacement_customer_warning
+              ? ' This return combined lines from different original customers.'
+              : ''}
+          </div>
+        )}
+
         {/* Main Header Card */}
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
           {/* Top Section: Invoice Info */}
@@ -3219,6 +3246,91 @@ export default function InvoiceDetail() {
           </div>
         </Card>
       )}
+
+      {/* Instant replacement returns: settlement is LedgerEntry (Payment rows are cleared at finalize). */}
+      {inv?.is_replacement_return &&
+        Array.isArray((inv as { replacement_ledger_entries?: unknown }).replacement_ledger_entries) &&
+        (inv as { replacement_ledger_entries: { id: number; entry_type: string; amount: string; description?: string; payment_mode?: string; created_at?: string | null }[] }).replacement_ledger_entries.length > 0 && (
+          <Card className="print-area">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-gray-400" />
+              Customer ledger (settlement)
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              This return was finalized on the customer ledger (not in the Payments section above). The settlement is
+              posted as a <strong className="font-semibold text-gray-800">credit</strong> entry: it reduces udhar (same
+              direction as a payment against a credit bill) using the balance rules for this app.
+            </p>
+            <div className="hidden md:block overflow-x-auto">
+              <Table headers={['Type', 'Amount', 'Mode', 'Description', 'Date']}>
+                {(
+                  inv as {
+                    replacement_ledger_entries: {
+                      id: number;
+                      entry_type: string;
+                      amount: string;
+                      description?: string;
+                      payment_mode?: string;
+                      created_at?: string | null;
+                    }[];
+                  }
+                ).replacement_ledger_entries.map((le) => (
+                  <TableRow key={le.id}>
+                    <TableCell>
+                      <span className="capitalize font-medium text-gray-900">{le.entry_type || '—'}</span>
+                    </TableCell>
+                    <TableCell align="right">
+                      <span className="font-semibold text-gray-900">₹{formatNumber(le.amount || '0')}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-gray-700 capitalize">{le.payment_mode || '—'}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-gray-600 break-words">{le.description || '—'}</span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-gray-600">{le.created_at ? formatDate(le.created_at) : '—'}</span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </Table>
+            </div>
+            <div className="md:hidden space-y-3">
+              {(
+                inv as {
+                  replacement_ledger_entries: {
+                    id: number;
+                    entry_type: string;
+                    amount: string;
+                    description?: string;
+                    payment_mode?: string;
+                    created_at?: string | null;
+                  }[];
+                }
+              ).replacement_ledger_entries.map((le) => (
+                <div key={le.id} className="rounded-lg border border-gray-200 bg-white p-3 text-sm">
+                  <div className="flex justify-between font-semibold">
+                    <span className="capitalize">{le.entry_type}</span>
+                    <span>₹{formatNumber(le.amount || '0')}</span>
+                  </div>
+                  {le.payment_mode ? <div className="text-gray-600 capitalize mt-1">{le.payment_mode}</div> : null}
+                  {le.description ? <div className="text-gray-600 mt-2 break-words">{le.description}</div> : null}
+                  <div className="text-gray-500 text-xs mt-2">{le.created_at ? formatDate(le.created_at) : ''}</div>
+                </div>
+              ))}
+            </div>
+            {inv.customer ? (
+              <div className="mt-4">
+                <Link
+                  to={`/ledger/${inv.customer}?credit_only=0`}
+                  className="text-sm font-medium text-blue-700 hover:text-blue-900 underline"
+                >
+                  Open full customer ledger (all entries)
+                </Link>
+              </div>
+            ) : null}
+          </Card>
+        )}
 
       {/* A4 Print Preview - Embedded */}
       <Card className="no-print">

@@ -37,7 +37,11 @@ export default function LedgerDetail() {
     entryType: '',
     search: '',
   });
-  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(true); // Default: show only entries from invoices with status 'credit'
+  const [showCreditInvoicesOnly, setShowCreditInvoicesOnly] = useState(() => {
+    const v = (searchParams.get('credit_only') ?? '').trim().toLowerCase();
+    if (v === '0' || v === 'false') return false;
+    return true;
+  });
   const [showFilters, setShowFilters] = useState(false);
   const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
   const [showEntryForm, setShowEntryForm] = useState(false);

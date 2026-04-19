@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import Card from '../../components/ui/Card';
-import { ArrowRight, RefreshCw, Package, Receipt } from 'lucide-react';
+import { ArrowRight, RefreshCw, Package, Receipt, ScanLine } from 'lucide-react';
 
 export default function Replacement() {
   const navigate = useNavigate();
@@ -12,7 +12,26 @@ export default function Replacement() {
         <p className="text-gray-600">Choose a replacement type to proceed</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Replacement POS */}
+        <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/pos')}>
+          <div className="p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-indigo-100 rounded-lg">
+                <ScanLine className="h-6 w-6 text-indigo-600" />
+              </div>
+              <h2 className="text-xl font-semibold text-gray-900">Replacement POS</h2>
+            </div>
+            <p className="text-gray-600 text-sm">
+              Scan sold barcodes to build a return invoice with return tags and accepted credit (capped at original sold price). Instant or pending checkout.
+            </p>
+            <div className="flex items-center gap-2 text-indigo-600 font-medium">
+              <span>Open</span>
+              <ArrowRight className="h-4 w-4" />
+            </div>
+          </div>
+        </Card>
+
         {/* Replace Product */}
         <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/replace-product')}>
           <div className="p-6 space-y-4">
@@ -82,6 +101,9 @@ export default function Replacement() {
           </div>
           <div>
             <strong className="text-purple-600">Credit Note:</strong> Use this when you need to issue a formal credit note for returned items. A credit note document is generated and customer account is credited.
+          </div>
+          <div>
+            <strong className="text-indigo-600">Replacement POS:</strong> Build a dedicated return invoice by scanning sold barcodes, set return tags and accepted credit (never above the original sold price), then finalize instantly or save as a draft and check out from the invoice page.
           </div>
         </div>
       </div>
