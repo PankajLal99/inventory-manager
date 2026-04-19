@@ -177,6 +177,20 @@ class Invoice(models.Model):
     pos_trade_ins = models.JSONField(null=True, blank=True)
     # Replace Product: list of {invoice_item_id, old_product_name, charge_unit_price, ...} for invoice / print UI
     exchange_snapshots = models.JSONField(null=True, blank=True)
+    # Replacement POS: return-side invoice created from already sold barcodes.
+    is_replacement_return = models.BooleanField(default=False, db_index=True)
+    replacement_mode = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        choices=[
+            ('', 'None'),
+            ('instant', 'Instant'),
+            ('pending', 'Pending'),
+        ],
+    )
+    replacement_customer_warning = models.BooleanField(default=False)
+    replacement_source_customers = models.JSONField(null=True, blank=True)
 
     def __str__(self):
         return self.invoice_number
@@ -258,6 +272,27 @@ class InvoiceItem(models.Model):
     line_total = models.DecimalField(max_digits=10, decimal_places=2)
     # For custom/other products: cost at time of sale (no barcode/purchase); copied from CartItem at checkout
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    # Replacement POS linkage/snapshots so return invoices remain immutable and auditable.
+    original_invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='replacement_child_items',
+    )
+    original_invoice_item = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='replacement_return_items',
+    )
+    replacement_return_tag = models.CharField(max_length=20, blank=True, default='')
+    accepted_return_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    original_sold_unit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    original_sold_line_total = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    original_invoice_number = models.CharField(max_length=100, blank=True, default='')
+    original_customer_name = models.CharField(max_length=255, blank=True, default='')
     # Replacement tracking fields
     replaced_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     replaced_at = models.DateTimeField(null=True, blank=True)

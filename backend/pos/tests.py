@@ -2083,3 +2083,208 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('void', response.data.get('error', '').lower())
+
+
+class ReplacementPOSTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'replpos_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Replacement POS Store', shop_type='retail')
+        self.category = Category.objects.create(name='Replacement POS Category')
+        self.product = Product.objects.create(
+            name='Replacement POS Product',
+            category=self.category,
+            product_type='simple',
+            track_inventory=True,
+        )
+        self.customer1 = Customer.objects.create(name='Cust One', phone='9000000101')
+        self.customer2 = Customer.objects.create(name='Cust Two', phone='9000000102')
+
+        self.sold_barcode1 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-SOLD-{uuid.uuid4().hex[:8].upper()}',
+            tag='sold',
+        )
+        self.sold_barcode2 = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-SOLD-{uuid.uuid4().hex[:8].upper()}',
+            tag='sold',
+        )
+        self.unsold_barcode = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPOS-NEW-{uuid.uuid4().hex[:8].upper()}',
+            tag='new',
+        )
+
+        self.source_invoice1 = Invoice.objects.create(
+            invoice_number=f'INV-SRC-{uuid.uuid4().hex[:8].upper()}',
+            store=self.store,
+            customer=self.customer1,
+            invoice_type='cash',
+            status='paid',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        self.source_invoice_item1 = InvoiceItem.objects.create(
+            invoice=self.source_invoice1,
+            product=self.product,
+            barcode=self.sold_barcode1,
+            sold_barcode_value=self.sold_barcode1.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            manual_unit_price=Decimal('100.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('100.00'),
+        )
+
+        self.source_invoice2 = Invoice.objects.create(
+            invoice_number=f'INV-SRC-{uuid.uuid4().hex[:8].upper()}',
+            store=self.store,
+            customer=self.customer2,
+            invoice_type='cash',
+            status='paid',
+            subtotal=Decimal('120.00'),
+            total=Decimal('120.00'),
+            paid_amount=Decimal('120.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        self.source_invoice_item2 = InvoiceItem.objects.create(
+            invoice=self.source_invoice2,
+            product=self.product,
+            barcode=self.sold_barcode2,
+            sold_barcode_value=self.sold_barcode2.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('120.00'),
+            manual_unit_price=Decimal('120.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('120.00'),
+        )
+
+    def test_lookup_requires_sold_barcode(self):
+        url = reverse('replacement-pos-lookup')
+        ok = self.client.post(url, {'barcode': self.sold_barcode1.barcode}, format='json')
+        self.assertEqual(ok.status_code, status.HTTP_200_OK, ok.data)
+        self.assertEqual(ok.data['item']['invoice_item_id'], self.source_invoice_item1.id)
+
+        blocked = self.client.post(url, {'barcode': self.unsold_barcode.barcode}, format='json')
+        self.assertIn(blocked.status_code, [status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND])
+
+    def test_create_pending_replacement_invoice_keeps_sold_state_and_no_ledger(self):
+        from backend.parties.models import LedgerEntry
+
+        url = reverse('replacement-pos-create')
+        payload = {
+            'store': self.store.id,
+            'customer': self.customer1.id,
+            'replacement_mode': 'pending',
+            'items': [
+                {
+                    'invoice_item_id': self.source_invoice_item1.id,
+                    'barcode': self.sold_barcode1.barcode,
+                    'return_tag': 'returned',
+                    'accepted_return_price': '90.00',
+                }
+            ],
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        invoice_id = response.data['invoice']['id']
+        invoice = Invoice.objects.get(pk=invoice_id)
+
+        self.assertTrue(invoice.is_replacement_return)
+        self.assertEqual(invoice.replacement_mode, 'pending')
+        self.assertEqual(invoice.invoice_type, 'pending')
+        self.assertEqual(invoice.status, 'draft')
+        self.assertEqual(invoice.total, Decimal('90.00'))
+        self.assertFalse(LedgerEntry.objects.filter(invoice=invoice).exists())
+
+        self.sold_barcode1.refresh_from_db()
+        self.assertEqual(self.sold_barcode1.tag, 'sold')
+
+    def test_create_instant_replacement_invoice_updates_ledger_and_tag(self):
+        from backend.parties.models import LedgerEntry
+
+        url = reverse('replacement-pos-create')
+        payload = {
+            'store': self.store.id,
+            'customer': self.customer1.id,
+            'replacement_mode': 'instant',
+            'items': [
+                {
+                    'invoice_item_id': self.source_invoice_item1.id,
+                    'barcode': self.sold_barcode1.barcode,
+                    'return_tag': 'defective',
+                    'accepted_return_price': '80.00',
+                }
+            ],
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        invoice_id = response.data['invoice']['id']
+        invoice = Invoice.objects.get(pk=invoice_id)
+
+        self.assertTrue(invoice.is_replacement_return)
+        self.assertEqual(invoice.replacement_mode, 'instant')
+        self.assertEqual(invoice.invoice_type, 'credit')
+        self.assertEqual(invoice.status, 'paid')
+        self.assertEqual(invoice.total, Decimal('80.00'))
+
+        ledger_entry = LedgerEntry.objects.filter(invoice=invoice).first()
+        self.assertIsNotNone(ledger_entry)
+        self.assertEqual(ledger_entry.entry_type, 'credit')
+        self.assertEqual(ledger_entry.amount, Decimal('80.00'))
+
+        self.sold_barcode1.refresh_from_db()
+        self.assertEqual(self.sold_barcode1.tag, 'defective')
+
+    def test_create_replacement_rejects_price_above_sold(self):
+        url = reverse('replacement-pos-create')
+        payload = {
+            'store': self.store.id,
+            'customer': self.customer1.id,
+            'replacement_mode': 'instant',
+            'items': [
+                {
+                    'invoice_item_id': self.source_invoice_item1.id,
+                    'barcode': self.sold_barcode1.barcode,
+                    'return_tag': 'returned',
+                    'accepted_return_price': '150.00',
+                }
+            ],
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_create_pending_mixed_customers_sets_warning_flag(self):
+        url = reverse('replacement-pos-create')
+        payload = {
+            'store': self.store.id,
+            'customer': self.customer1.id,
+            'replacement_mode': 'pending',
+            'items': [
+                {
+                    'invoice_item_id': self.source_invoice_item1.id,
+                    'barcode': self.sold_barcode1.barcode,
+                    'return_tag': 'returned',
+                    'accepted_return_price': '90.00',
+                },
+                {
+                    'invoice_item_id': self.source_invoice_item2.id,
+                    'barcode': self.sold_barcode2.barcode,
+                    'return_tag': 'unknown',
+                    'accepted_return_price': '100.00',
+                },
+            ],
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        invoice = Invoice.objects.get(pk=response.data['invoice']['id'])
+        self.assertTrue(invoice.replacement_customer_warning)
+        self.assertIsInstance(invoice.replacement_source_customers, list)
+        self.assertEqual(len(invoice.replacement_source_customers), 2)

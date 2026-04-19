@@ -26,6 +26,7 @@ import Replacement from './pages/replacement/Replacement';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
+import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import CreditNotes from './pages/credit-notes/CreditNotes';
 import CreditNoteShowcase from './pages/credit-notes/CreditNoteShowcase';
 import Repairs from './pages/repair/Repairs';
@@ -117,6 +118,7 @@ function App() {
                 <Route path="history" element={<History />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="replacement" element={<Replacement />} />
+                <Route path="replacement/pos" element={<ReplacementPOS />} />
                 <Route path="replacement/replace-product" element={<ReplaceProduct />} />
                 <Route path="replacement/return-to-stock" element={<ReturnToStock />} />
                 <Route path="replacement/credit-note" element={<CreditNoteReplacement />} />

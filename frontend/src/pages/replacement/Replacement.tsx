@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import Card from '../../components/ui/Card';
-import { ArrowRight, RefreshCw, Package, Receipt } from 'lucide-react';
+import { ArrowRight, RefreshCw, Package, Receipt, ScanLine } from 'lucide-react';
 
 export default function Replacement() {
   const navigate = useNavigate();
@@ -12,7 +12,25 @@ export default function Replacement() {
         <p className="text-gray-600">Choose a replacement type to proceed</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/pos')}>
+          <div className="p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-amber-100 rounded-lg">
+                <ScanLine className="h-6 w-6 text-amber-600" />
+              </div>
+              <h2 className="text-xl font-semibold text-gray-900">Replacement POS</h2>
+            </div>
+            <p className="text-gray-600 text-sm">
+              Scan already sold barcodes, capture row-level return tags and accepted prices, then create an instant or pending replacement-return invoice.
+            </p>
+            <div className="flex items-center gap-2 text-amber-600 font-medium">
+              <span>Get Started</span>
+              <ArrowRight className="h-4 w-4" />
+            </div>
+          </div>
+        </Card>
+
         {/* Replace Product */}
         <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/replace-product')}>
           <div className="p-6 space-y-4">

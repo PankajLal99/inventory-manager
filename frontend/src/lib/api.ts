@@ -241,6 +241,10 @@ export const posApi = {
     processReplacement: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/process/`, data),
     creditNote: (invoiceId: number, data: any) => api.post(`/pos/replacement/${invoiceId}/credit-note/`, data),
   },
+  replacementPos: {
+    lookup: (barcode: string) => api.post('/pos/replacement-pos/lookup/', { barcode }),
+    create: (data: any) => api.post('/pos/replacement-pos/create/', data),
+  },
   repair: {
     invoices: {
       list: (params?: any) => api.get('/pos/repair/invoices/', { params }),

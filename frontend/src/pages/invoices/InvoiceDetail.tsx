@@ -437,6 +437,27 @@ export default function InvoiceDetail() {
     );
   }, [posTradeInsRows]);
 
+  const replacementReturnDetailEl = useMemo(() => {
+    if (!isReplacementReturn || !Array.isArray(inv?.items) || inv.items.length === 0) return null;
+    return (
+      <div className="overflow-x-auto rounded-lg border border-amber-200/70 bg-white shadow-sm">
+        <Table headers={['Product', 'Sold barcode', 'Original invoice', 'Original customer', 'Tag', 'Sold price', 'Accepted price']}>
+          {inv.items.map((item: any) => (
+            <TableRow key={item.id}>
+              <TableCell>{item.product_name || '—'}</TableCell>
+              <TableCell><span className="font-mono text-xs text-gray-700">{item.sold_barcode_value || item.barcode_full || item.barcode_value || '—'}</span></TableCell>
+              <TableCell>{item.original_invoice_number || '—'}</TableCell>
+              <TableCell>{item.original_customer_name || '—'}</TableCell>
+              <TableCell>{formatTradeInReturnTag(item.replacement_return_tag)}</TableCell>
+              <TableCell align="right">₹{formatNumber(item.original_sold_unit_price || item.unit_price || 0)}</TableCell>
+              <TableCell align="right">₹{formatNumber(item.accepted_return_price || item.manual_unit_price || item.unit_price || 0)}</TableCell>
+            </TableRow>
+          ))}
+        </Table>
+      </div>
+    );
+  }, [inv, isReplacementReturn]);
+
   // Fetch stores list
   const { data: storesData } = useQuery({
     queryKey: ['stores'],
@@ -1012,6 +1033,7 @@ export default function InvoiceDetail() {
   const canEditItems = inv.status !== 'void';
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
+  const isReplacementReturn = inv?.is_replacement_return === true;
 
   // Group items by product only (not by barcode)
   const groupItemsByProduct = (items: any[]) => {
@@ -1055,6 +1077,13 @@ export default function InvoiceDetail() {
     });
 
     if (activeItems.length === 0) return false;
+
+    if (isReplacementReturn) {
+      return activeItems.every((item: any) => {
+        const price = checkoutPrices[item.id] ?? (item.accepted_return_price || item.manual_unit_price || item.unit_price || '0').toString();
+        return !!price && parseFloat(price.toString()) > 0;
+      });
+    }
 
     // Group items to get parent prices (same logic as calculateCheckoutTotal)
     const groupedItems = groupItemsByProduct(activeItems);
@@ -1169,6 +1198,23 @@ export default function InvoiceDetail() {
   const getCheckoutPriceValidationErrors = (sourceItems: any[]): string[] => {
     const priceValidationErrors: string[] = [];
 
+    if (isReplacementReturn) {
+      sourceItems.forEach((item: any) => {
+        const enteredPrice = checkoutPrices[item.id]
+          ? parseFloat(checkoutPrices[item.id])
+          : (parseFloat(item.accepted_return_price) || parseFloat(item.manual_unit_price) || parseFloat(item.unit_price) || 0);
+        const soldCap = parseFloat(item.original_sold_unit_price ?? item.unit_price ?? '0');
+        if (!(enteredPrice > 0)) {
+          priceValidationErrors.push(`${item.product_name || 'Product'}: Return price must be greater than 0`);
+        } else if (soldCap > 0 && enteredPrice > soldCap) {
+          priceValidationErrors.push(
+            `${item.product_name || 'Product'}: Return price(₹${formatNumber(enteredPrice)}) cannot exceed sold price (₹${formatNumber(soldCap)})`
+          );
+        }
+      });
+      return priceValidationErrors;
+    }
+
     sourceItems.forEach((item: any) => {
       const salePrice = checkoutPrices[item.id]
         ? parseFloat(checkoutPrices[item.id])
@@ -1222,7 +1268,7 @@ export default function InvoiceDetail() {
     setParentGroupPrices(initialParentPrices);
     setCheckoutPurchasePrices(initialPurchasePrices);
     setCheckoutPriceErrors({}); // Clear any previous errors
-    setCheckoutInvoiceType('pending'); // Default to pending (draft saving)
+    setCheckoutInvoiceType(isReplacementReturn ? ((inv?.replacement_mode === 'instant' ? 'credit' : 'pending') as any) : 'pending'); // Default to pending (draft saving)
     setShowCheckoutModal(true);
   };
 
@@ -1317,20 +1363,22 @@ export default function InvoiceDetail() {
       return;
     }
 
-    // Validate purchase price for custom products (must be > 0)
-    const customItemsMissingPurchasePrice = freshInv.items.filter((item: any) => {
-      if (!item.product_name?.startsWith('Other -')) return false;
-      const qty = checkoutQuantities[item.id] ?? item.quantity?.toString();
-      if (parseFloat(qty) <= 0) return false;
-      const purchaseVal = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
-        ? parseFloat(checkoutPurchasePrices[item.id])
-        : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
-      return Number.isNaN(purchaseVal) || purchaseVal <= 0;
-    });
-    if (customItemsMissingPurchasePrice.length > 0) {
-      const names = customItemsMissingPurchasePrice.map((i: any) => i.product_name || 'Custom Product').join(', ');
-      alert(`Purchase price is required and must be greater than 0 for: ${names}`);
-      return;
+    if (!isReplacementReturn) {
+      // Validate purchase price for custom products (must be > 0)
+      const customItemsMissingPurchasePrice = freshInv.items.filter((item: any) => {
+        if (!item.product_name?.startsWith('Other -')) return false;
+        const qty = checkoutQuantities[item.id] ?? item.quantity?.toString();
+        if (parseFloat(qty) <= 0) return false;
+        const purchaseVal = checkoutPurchasePrices[item.id] != null && checkoutPurchasePrices[item.id] !== ''
+          ? parseFloat(checkoutPurchasePrices[item.id])
+          : (item.product_purchase_price != null ? parseFloat(item.product_purchase_price) : item.purchase_price != null ? parseFloat(item.purchase_price) : NaN);
+        return Number.isNaN(purchaseVal) || purchaseVal <= 0;
+      });
+      if (customItemsMissingPurchasePrice.length > 0) {
+        const names = customItemsMissingPurchasePrice.map((i: any) => i.product_name || 'Custom Product').join(', ');
+        alert(`Purchase price is required and must be greater than 0 for: ${names}`);
+        return;
+      }
     }
 
     // Validate that all items have prices for cash/upi/mixed invoices (not required for pending)
@@ -1381,12 +1429,19 @@ export default function InvoiceDetail() {
     }
 
     const checkoutData: any = {
-      invoice_type: checkoutInvoiceType,
-      items: items,
+      invoice_type: isReplacementReturn ? (checkoutInvoiceType === 'credit' ? 'instant' : 'pending') : checkoutInvoiceType,
+      replacement_mode: isReplacementReturn ? (checkoutInvoiceType === 'credit' ? 'instant' : 'pending') : undefined,
+      items: items.map((item: any) => ({
+        ...item,
+        ...(isReplacementReturn ? {
+          accepted_return_price: item.manual_unit_price,
+          return_tag: freshInv.items.find((row: any) => row.id === item.id)?.replacement_return_tag || 'returned',
+        } : {}),
+      })),
     };
 
     // Add split payment amounts for mixed type
-    if (checkoutInvoiceType === 'mixed') {
+    if (!isReplacementReturn && checkoutInvoiceType === 'mixed') {
       checkoutData.cash_amount = parseFloat(checkoutCashAmount);
       checkoutData.upi_amount = parseFloat(checkoutUpiAmount);
     }
@@ -2240,7 +2295,7 @@ export default function InvoiceDetail() {
                 </Button>
               )}
               {/* Move to Ledger: show when bill is paid (to move paid bill to ledger or mark as credit) */}
-              {inv.status === 'paid' && (
+              {inv.status === 'paid' && !isReplacementReturn && (
                 <Button
                   variant="primary"
                   onClick={handleMoveToLedger}
@@ -2618,8 +2673,14 @@ export default function InvoiceDetail() {
             ) : (
               // For other invoices, show actual totals
               <>
+                {isReplacementReturn && replacementReturnDetailEl && (
+                  <div className="space-y-2 pb-2">
+                    <p className="text-xs font-semibold text-amber-900/90">Replacement return detail</p>
+                    {replacementReturnDetailEl}
+                  </div>
+                )}
                 <div className="flex justify-between items-center py-2">
-                  <span className="text-sm text-gray-600">Subtotal (new sale lines)</span>
+                  <span className="text-sm text-gray-600">{isReplacementReturn ? 'Accepted return total' : 'Subtotal (new sale lines)'}</span>
                   <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.subtotal || '0')}</span>
                 </div>
                 {tradeInCreditAmount > 0 && (
@@ -4382,10 +4443,10 @@ export default function InvoiceDetail() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <label className="block text-sm font-semibold text-gray-900 mb-3">
                 <FileText className="h-4 w-4 inline mr-2" />
-                Invoice Type
+                {isReplacementReturn ? 'Replacement Type' : 'Invoice Type'}
               </label>
               <Select
-                value={hideCheckoutPaymentOptions && !['pending', 'credit'].includes(checkoutInvoiceType) ? 'pending' : checkoutInvoiceType}
+                value={isReplacementReturn ? (checkoutInvoiceType === 'credit' ? 'credit' : 'pending') : (hideCheckoutPaymentOptions && !['pending', 'credit'].includes(checkoutInvoiceType) ? 'pending' : checkoutInvoiceType)}
                 onChange={(e) => {
                   const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
                   setCheckoutInvoiceType(newType);
@@ -4406,25 +4467,29 @@ export default function InvoiceDetail() {
                 }}
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
               >
-                <option value="pending">PENDING (Save Prices Only)</option>
-                {!hideCheckoutPaymentOptions && (
+                <option value="pending">{isReplacementReturn ? 'PENDING (Save Only)' : 'PENDING (Save Prices Only)'}</option>
+                {!isReplacementReturn && !hideCheckoutPaymentOptions && (
                   <>
                     <option value="cash">CASH (Checkout)</option>
                     <option value="upi">UPI (Checkout)</option>
                     <option value="mixed">CASH + UPI (Checkout)</option>
                   </>
                 )}
-                <option value="credit">CREDIT (Move to Ledger)</option>
+                <option value="credit">{isReplacementReturn ? 'INSTANT (Apply Ledger Now)' : 'CREDIT (Move to Ledger)'}</option>
               </Select>
               <p className="text-xs text-blue-700 mt-2 font-medium">
-                {checkoutInvoiceType === 'pending' && '✓ Prices will be saved. Invoice remains as draft. No checkout performed.'}
+                {checkoutInvoiceType === 'pending' && (isReplacementReturn
+                  ? '✓ Replacement invoice remains draft. No ledger change or barcode retagging happens yet.'
+                  : '✓ Prices will be saved. Invoice remains as draft. No checkout performed.')}
                 {checkoutInvoiceType === 'cash' && '✓ Invoice will be checked out and marked as paid (cash). Inventory will be updated.'}
                 {checkoutInvoiceType === 'upi' && '✓ Invoice will be checked out and marked as paid (UPI). Inventory will be updated.'}
                 {checkoutInvoiceType === 'mixed' && '✓ Invoice will be checked out with split payment (cash + UPI). Inventory will be updated.'}
-                {checkoutInvoiceType === 'credit' && '✓ Invoice will be marked as credit and moved to ledger.'}
+                {checkoutInvoiceType === 'credit' && (isReplacementReturn
+                  ? '✓ Replacement invoice will be completed instantly, ledger will be credited, and sold barcodes will be retagged.'
+                  : '✓ Invoice will be marked as credit and moved to ledger.')}
               </p>
               {/* Split Payment Inputs for Mixed Type */}
-              {checkoutInvoiceType === 'mixed' && (
+              {!isReplacementReturn && checkoutInvoiceType === 'mixed' && (
                 <div className="mt-3 space-y-2 bg-blue-50 border border-blue-200 rounded-lg p-3">
                   <div className="flex items-center gap-2 text-xs font-semibold text-blue-900 mb-2">
                     <FileText className="h-3.5 w-3.5" />
@@ -4579,6 +4644,7 @@ export default function InvoiceDetail() {
               >
                 Cancel
               </Button>
+              {!isReplacementReturn && (
               <Button
                 onClick={async () => {
                   if (checkoutInvoiceType !== 'credit') {
@@ -4683,12 +4749,17 @@ export default function InvoiceDetail() {
               >
                 {markCreditMutation.isPending ? 'Moving to Ledger...' : 'Move to Ledger'}
               </Button>
+              )}
               <Button
                 onClick={handleCheckoutSubmit}
-                disabled={checkoutMutation.isPending || markCreditMutation.isPending || checkoutInvoiceType === 'credit' || !inv?.items || inv.items.length === 0}
+                disabled={checkoutMutation.isPending || markCreditMutation.isPending || (!isReplacementReturn && checkoutInvoiceType === 'credit') || !inv?.items || inv.items.length === 0}
                 className="w-full sm:w-auto"
               >
-                {checkoutMutation.isPending ? 'Processing...' : 'Complete Checkout'}
+                {checkoutMutation.isPending
+                  ? 'Processing...'
+                  : isReplacementReturn
+                    ? (checkoutInvoiceType === 'credit' ? 'Complete Instant Replacement' : 'Save Pending Replacement')
+                    : 'Complete Checkout'}
               </Button>
             </div>
           </div>

@@ -207,6 +207,8 @@ class AuditLog(models.Model):
         ('replacement_replace', 'Item Replaced'),
         ('replacement_return', 'Item Returned'),
         ('replacement_defective', 'Item Marked Defective'),
+        ('replacement_pos_create', 'Replacement POS Invoice Created'),
+        ('replacement_pos_checkout', 'Replacement POS Invoice Checked Out'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='audit_logs')

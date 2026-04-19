@@ -12,7 +12,7 @@ from .views import (
     replacement_check, replacement_create, replacement_update_tag,
     replacement_replace, replacement_return, replacement_defective, replacement_reserve_barcode,
     find_invoice_by_barcode, bulk_barcodes_check, process_replacement, search_invoices_by_number,
-    replacement_credit_note,
+    replacement_credit_note, replacement_pos_lookup, replacement_pos_create,
     repair_invoices_list, repair_status_choices, repair_device_models, find_repair_invoice_by_barcode, update_repair_status, update_repair, generate_repair_label
 )
 
@@ -79,6 +79,8 @@ urlpatterns = [
     path('pos/replacement/search-invoices/', search_invoices_by_number, name='search-invoices-by-number'),
     path('pos/replacement/<int:invoice_id>/process/', process_replacement, name='process-replacement'),
     path('pos/replacement/<int:invoice_id>/credit-note/', replacement_credit_note, name='replacement-credit-note'),
+    path('pos/replacement-pos/lookup/', replacement_pos_lookup, name='replacement-pos-lookup'),
+    path('pos/replacement-pos/create/', replacement_pos_create, name='replacement-pos-create'),
     
     # Repair endpoints
     path('pos/repair/invoices/', repair_invoices_list, name='repair-invoices-list'),
