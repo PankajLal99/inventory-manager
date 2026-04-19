@@ -7,6 +7,7 @@ import { formatAmountINR, toLocalDateString } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { toast } from '../../lib/toast';
 import { auth } from '../../lib/auth';
+import { canSeeSuperMetrics, hasPaymentsExtendedColumns } from '../../lib/access';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';

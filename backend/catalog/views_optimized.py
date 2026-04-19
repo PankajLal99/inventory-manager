@@ -24,6 +24,7 @@ from backend.catalog.models import Product, Barcode
 from backend.catalog.serializers import ProductListSerializer
 from backend.catalog.filters import ProductFilter
 from backend.pos.models import CartItem, InvoiceItem
+from backend.core.tenant_api import require_active_retailer
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,12 @@ def _optimized_product_list_internal(request):
     3. Batch queries for stock calculations
     4. Early filtering to reduce dataset
     """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     # Build cache key from query parameters
     filters_dict = {
+        'retailer_id': retailer.id,
         'search': request.query_params.get('search', ''),
         'search_mode': request.query_params.get('search_mode', ''),
         'category': request.query_params.get('category', ''),
@@ -83,7 +88,7 @@ def _optimized_product_list_internal(request):
         cache_key = make_cache_key("products_list", **filters_dict)
 
     # OPTIMIZATION 1: Base queryset without barcodes (faster for simple lists)
-    queryset = Product.objects.select_related(
+    queryset = Product.objects.filter(retailer_id=retailer.id).select_related(
         'brand',
         'category',
         'tax_rate',
@@ -134,7 +139,8 @@ def _optimized_product_list_internal(request):
             Prefetch(
                 'barcodes',
                 queryset=Barcode.objects.filter(
-                    tag__in=barcode_tags
+                    tag__in=barcode_tags,
+                    retailer_id=retailer.id,
                 ).exclude(
                     purchase__status='draft'
                 ).filter(
@@ -159,6 +165,7 @@ def _optimized_product_list_internal(request):
         from backend.purchasing.models import PurchaseItem
         product_ids_with_wh = set(
             PurchaseItem.objects.filter(
+                purchase__retailer_id=retailer.id,
                 purchase__status='finalized',
                 purchase__deleted_at__isnull=True,
                 warehouse_quantity__gt=0
@@ -174,7 +181,8 @@ def _optimized_product_list_internal(request):
         # Get active cart barcodes ONCE
         active_cart_barcodes = set()
         cart_items = CartItem.objects.filter(
-            cart__status='active'
+            cart__status='active',
+            cart__retailer_id=retailer.id,
         ).exclude(
             scanned_barcodes__isnull=True
         ).exclude(
@@ -194,7 +202,8 @@ def _optimized_product_list_internal(request):
             # Get sold barcode IDs for these specific products
             all_barcode_ids = Barcode.objects.filter(
                 product_id__in=all_product_ids,
-                tag__in=['new', 'returned']
+                tag__in=['new', 'returned'],
+                retailer_id=retailer.id,
             ).exclude(
                 purchase__status='draft'
             ).filter(
@@ -203,7 +212,8 @@ def _optimized_product_list_internal(request):
             
             sold_barcode_ids = set(
                 InvoiceItem.objects.filter(
-                    barcode_id__in=all_barcode_ids
+                    barcode_id__in=all_barcode_ids,
+                    invoice__retailer_id=retailer.id,
                 ).exclude(
                     invoice__status='void'
                 ).values_list('barcode_id', flat=True)
@@ -212,7 +222,8 @@ def _optimized_product_list_internal(request):
             # BULK query: Get available barcode counts per product in ONE query
             available_barcodes = Barcode.objects.filter(
                 product_id__in=all_product_ids,
-                tag__in=['new', 'returned']
+                tag__in=['new', 'returned'],
+                retailer_id=retailer.id,
             ).exclude(
                 purchase__status='draft'
             ).filter(
@@ -235,7 +246,9 @@ def _optimized_product_list_internal(request):
             barcode_count_map = {item['product_id']: item['count'] for item in product_barcode_counts}
             
             # Get products with low_stock_threshold in bulk (ONE query)
-            products = Product.objects.filter(id__in=all_product_ids).only('id', 'low_stock_threshold')
+            products = Product.objects.filter(
+                id__in=all_product_ids, retailer_id=retailer.id
+            ).only('id', 'low_stock_threshold')
             product_threshold_map = {p.id: (p.low_stock_threshold or 0) for p in products}
             
             # Filter products based on stock criteria (in memory, fast)
@@ -266,7 +279,8 @@ def _optimized_product_list_internal(request):
         if 'active_cart_barcodes' not in locals():
             active_cart_barcodes = set()
             cart_items = CartItem.objects.filter(
-                cart__status='active'
+                cart__status='active',
+                cart__retailer_id=retailer.id,
             ).exclude(
                 scanned_barcodes__isnull=True
             ).exclude(
@@ -279,7 +293,9 @@ def _optimized_product_list_internal(request):
         
         # Get product quantities in active carts (for non-tracked items)
         active_cart_product_quantities = {}
-        for item in CartItem.objects.filter(cart__status='active').select_related('product'):
+        for item in CartItem.objects.filter(
+            cart__status='active', cart__retailer_id=retailer.id
+        ).select_related('product'):
             if item.product_id:
                 current_qty = active_cart_product_quantities.get(item.product_id, 0)
                 try:

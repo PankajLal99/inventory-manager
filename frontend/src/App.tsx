@@ -27,6 +27,7 @@ import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
+import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import CreditNotes from './pages/credit-notes/CreditNotes';
 import CreditNoteShowcase from './pages/credit-notes/CreditNoteShowcase';
 import Repairs from './pages/repair/Repairs';
@@ -50,6 +51,7 @@ import StockOverview from './pages/stock/StockOverview';
 import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingDetails';
 import OverallPendingInvoiceDetails from './pages/dashboard/OverallPendingInvoiceDetails';
 import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingClearedDetails';
+import StockTransfers from './pages/stock/StockTransfers';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -147,6 +149,7 @@ function App() {
                 <Route path="expenses" element={<Expenses />} />
                 <Route path="payments" element={<Payments />} />
                 <Route path="stock" element={<StockOverview />} />
+                <Route path="stock-transfers" element={<StockTransfers />} />
                 <Route path="stores" element={<Stores />} />
                 <Route path="search" element={<Search />} />
                 <Route path="vendors" element={<Vendors />} />

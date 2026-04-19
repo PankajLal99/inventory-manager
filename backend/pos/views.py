@@ -807,14 +807,15 @@ def _lookup_barcode_for_invoice_line(raw, product, variant):
     """Find a catalog Barcode row by printed value for this invoice line's product/variant.
 
     Uses all_objects so soft-deleted barcodes still resolve for historical invoices / returns.
-    Barcode.barcode and short_code are globally unique — resolve with get(), not first().
+    Barcode values are unique per retailer — resolve with get(), not first().
     """
     if not raw:
         return None
     raw = str(raw).strip().upper()
     if not raw:
         return None
-    b = get_catalog_barcode_by_printed_value(raw)
+    rid = getattr(product, 'retailer_id', None) if product else None
+    b = get_catalog_barcode_by_printed_value(raw, retailer_id=rid)
     if not b:
         return None
     if product and b.product_id != product.id:
@@ -3823,6 +3824,190 @@ def cart_checkout(request, pk):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+# Replacement POS views
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def replacement_pos_lookup(request):
+    barcode = (request.data.get('barcode') or '').strip()
+    if not barcode:
+        return Response({'error': 'barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
+    search_value = barcode.strip().upper()
+
+    candidates = InvoiceItem.objects.filter(
+        Q(barcode__barcode=search_value)
+        | Q(barcode__short_code=search_value)
+        | Q(sold_barcode_value=search_value)
+    ).exclude(
+        invoice__status='void'
+    ).select_related('invoice', 'invoice__customer', 'product', 'variant', 'barcode').order_by('-invoice__created_at', '-id')
+
+    if not candidates.exists():
+        return Response({'error': 'Sold invoice item not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    lead_ids = list(candidates.values_list('id', flat=True)[:2])
+    if len(lead_ids) > 1:
+        return Response(
+            {'error': f'Multiple sold lines found for barcode {search_value}. Please verify source invoice.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    invoice_item = candidates.get(id=lead_ids[0])
+
+    barcode_obj = resolve_invoice_item_barcode(invoice_item, scanned_override=barcode, relink=False)
+    is_valid, error_message = validate_barcode_for_replacement(barcode_obj)
+    if not is_valid:
+        return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({
+        'item': _serialize_replacement_pos_line(invoice_item, scanned_barcode=barcode),
+        'source_customer': _replacement_pos_source_customer_summary(invoice_item),
+        'invoice': {
+            'id': invoice_item.invoice_id,
+            'invoice_number': invoice_item.invoice.invoice_number,
+        },
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def replacement_pos_create(request):
+    store_id = request.data.get('store')
+    items_data = request.data.get('items') or []
+    replacement_mode = (request.data.get('replacement_mode') or 'pending').strip().lower()
+    customer_id = request.data.get('customer')
+    notes = request.data.get('notes', '')
+    created_at_raw = request.data.get('created_at')
+
+    if replacement_mode not in ['instant', 'pending']:
+        return Response({'error': 'replacement_mode must be instant or pending'}, status=status.HTTP_400_BAD_REQUEST)
+    if not store_id:
+        return Response({'error': 'store is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not items_data:
+        return Response({'error': 'At least one scanned item is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    store = get_object_or_404(Store, pk=store_id)
+    customer = None
+    if customer_id not in (None, ''):
+        customer = get_object_or_404(Customer, pk=customer_id)
+
+    created_at_override = parse_datetime(created_at_raw) if created_at_raw else None
+    if created_at_raw and created_at_override is None:
+        return Response({'error': 'Invalid created_at datetime'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        with transaction.atomic():
+            invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+            while Invoice.objects.filter(invoice_number=invoice_number).exists():
+                invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+            invoice = Invoice.objects.create(
+                invoice_number=invoice_number,
+                store=store,
+                customer=customer,
+                status='draft',
+                invoice_type='pending',
+                created_by=request.user,
+                created_at=created_at_override if created_at_override is not None else timezone.now(),
+                is_replacement_return=True,
+                replacement_mode='pending',
+                notes=notes or '',
+            )
+
+            source_customers = []
+            seen_customer_keys = set()
+            mixed_customer_warning = False
+
+            for raw_item in items_data:
+                invoice_item_id = raw_item.get('invoice_item_id')
+                accepted_return_price_raw = raw_item.get('accepted_return_price')
+                return_tag = (raw_item.get('return_tag') or 'returned').strip().lower()
+                scanned_barcode = (raw_item.get('barcode') or raw_item.get('sold_barcode_value') or '').strip()
+
+                if not invoice_item_id:
+                    raise ValueError('invoice_item_id is required for every line')
+                if return_tag not in ['returned', 'unknown', 'defective']:
+                    raise ValueError('return_tag must be returned, unknown, or defective')
+                if accepted_return_price_raw in (None, ''):
+                    raise ValueError('accepted_return_price is required for every line')
+
+                original_item = InvoiceItem.objects.select_related(
+                    'invoice', 'invoice__customer', 'product', 'variant', 'barcode'
+                ).get(pk=invoice_item_id)
+                barcode_obj = resolve_invoice_item_barcode(original_item, scanned_override=scanned_barcode, relink=False)
+                is_valid, error_message = validate_barcode_for_replacement(barcode_obj)
+                if not is_valid:
+                    raise ValueError(error_message)
+
+                effective_sold_price = _replacement_pos_effective_unit_price(original_item)
+                accepted_return_price = _money(accepted_return_price_raw)
+                if accepted_return_price <= 0:
+                    raise ValueError('accepted_return_price must be greater than zero')
+                if accepted_return_price > effective_sold_price:
+                    raise ValueError(
+                        f'Return price for {original_item.product.name if original_item.product else "item"} cannot exceed sold price'
+                    )
+
+                source_customer = _replacement_pos_source_customer_summary(original_item)
+                customer_key = f"{source_customer['id']}:{source_customer['name']}"
+                if customer_key not in seen_customer_keys:
+                    seen_customer_keys.add(customer_key)
+                    source_customers.append(source_customer)
+                if len(source_customers) > 1:
+                    mixed_customer_warning = True
+
+                InvoiceItem.objects.create(
+                    invoice=invoice,
+                    product=original_item.product,
+                    variant=original_item.variant,
+                    barcode=barcode_obj,
+                    sold_barcode_value=(original_item.sold_barcode_value or scanned_barcode or (barcode_obj.barcode if barcode_obj else '')),
+                    quantity=Decimal('1.000'),
+                    unit_price=effective_sold_price,
+                    manual_unit_price=accepted_return_price,
+                    discount_amount=Decimal('0.00'),
+                    tax_amount=Decimal('0.00'),
+                    line_total=accepted_return_price,
+                    original_invoice=original_item.invoice,
+                    original_invoice_item=original_item,
+                    replacement_return_tag=return_tag,
+                    accepted_return_price=accepted_return_price,
+                    original_sold_unit_price=effective_sold_price,
+                    original_sold_line_total=_money(original_item.line_total or Decimal('0.00')),
+                    original_invoice_number=original_item.invoice.invoice_number,
+                    original_customer_name=original_item.invoice.customer.name if original_item.invoice.customer else '',
+                )
+
+            invoice.replacement_source_customers = source_customers
+            invoice.replacement_customer_warning = mixed_customer_warning
+            invoice.save(update_fields=['replacement_source_customers', 'replacement_customer_warning', 'updated_at'])
+
+            ok, error_message = _apply_replacement_pos_checkout(request, invoice, replacement_mode)
+            if not ok:
+                raise ValueError(error_message)
+
+            create_audit_log(
+                request=request,
+                action='replacement_pos_create',
+                model_name='Invoice',
+                object_id=str(invoice.id),
+                object_name=f'Invoice {invoice.invoice_number}',
+                object_reference=invoice.invoice_number,
+                barcode=', '.join(filter(None, [
+                    str(item.get('barcode') or item.get('sold_barcode_value') or '') for item in items_data
+                ])),
+                changes={
+                    'replacement_mode': replacement_mode,
+                    'customer': invoice.customer.name if invoice.customer else None,
+                    'items_count': len(items_data),
+                    'warning_mixed_customers': mixed_customer_warning,
+                }
+            )
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    invoice.refresh_from_db()
+    return Response({'invoice': InvoiceSerializer(invoice).data}, status=status.HTTP_201_CREATED)
+
+
 # Invoice views
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
@@ -4607,6 +4792,46 @@ def _apply_invoice_checkout_items_payload(invoice, items_data):
 def invoice_checkout(request, pk):
     """Checkout a pending invoice - convert to sale/credit/pending invoice and update stock"""
     invoice = get_object_or_404(Invoice, pk=pk)
+
+    if invoice.is_replacement_return:
+        replacement_mode = (request.data.get('replacement_mode') or request.data.get('invoice_type') or 'pending').strip().lower()
+        if replacement_mode == 'credit':
+            replacement_mode = 'instant'
+        if replacement_mode not in ['instant', 'pending']:
+            return Response(
+                {'error': 'Replacement POS invoice_type must be instant or pending'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        items_data = request.data.get('items', [])
+        if items_data:
+            for item_data in items_data:
+                item_id = item_data.get('id')
+                if not item_id:
+                    continue
+                try:
+                    item = invoice.items.get(id=item_id)
+                except InvoiceItem.DoesNotExist:
+                    continue
+                if 'manual_unit_price' in item_data and item_data['manual_unit_price'] not in (None, ''):
+                    item.manual_unit_price = _money(item_data['manual_unit_price'])
+                    item.accepted_return_price = item.manual_unit_price
+                if 'accepted_return_price' in item_data and item_data['accepted_return_price'] not in (None, ''):
+                    item.accepted_return_price = _money(item_data['accepted_return_price'])
+                    item.manual_unit_price = item.accepted_return_price
+                if 'replacement_return_tag' in item_data and item_data['replacement_return_tag']:
+                    item.replacement_return_tag = str(item_data['replacement_return_tag']).strip().lower()
+                if 'return_tag' in item_data and item_data['return_tag']:
+                    item.replacement_return_tag = str(item_data['return_tag']).strip().lower()
+                line_price = item.accepted_return_price or item.manual_unit_price or Decimal('0.00')
+                item.line_total = _money(line_price)
+                item.save(update_fields=['manual_unit_price', 'accepted_return_price', 'replacement_return_tag', 'line_total'])
+
+        ok, error_message = _apply_replacement_pos_checkout(request, invoice, replacement_mode)
+        if not ok:
+            return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
+        invoice.refresh_from_db()
+        return Response(InvoiceSerializer(invoice).data)
 
     # If invoice is already paid, return success with message (idempotent)
     if invoice.status == 'paid' or (invoice.status == 'partial' and invoice.due_amount <= Decimal('0.00')):
@@ -5936,7 +6161,7 @@ def invoice_item_detail(request, pk, item_id):
     if request.method == 'DELETE':
         # Mark barcode as 'new' when item is removed from invoice
         # This allows the barcode to be available for sale again
-        if item.barcode:
+        if item.barcode and not invoice.is_replacement_return:
             old_tag = item.barcode.tag
             item.barcode.tag = 'new'
             item.barcode.save(update_fields=['tag'])

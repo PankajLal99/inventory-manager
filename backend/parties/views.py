@@ -11,6 +11,7 @@ from calendar import monthrange
 from decimal import Decimal
 from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry, PaymentReminder
 from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer, PaymentReminderSerializer
+from backend.core.tenant_api import require_active_retailer
 
 INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
 
@@ -91,14 +92,17 @@ def can_create_manual_payments(user):
 @permission_classes([IsAuthenticated])
 def customer_group_list_create(request):
     """List all customer groups or create a new group"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        groups = CustomerGroup.objects.all()
+        groups = CustomerGroup.objects.filter(retailer_id=retailer.id)
         serializer = CustomerGroupSerializer(groups, many=True)
         return Response(serializer.data)
     else:
         serializer = CustomerGroupSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -107,7 +111,10 @@ def customer_group_list_create(request):
 @permission_classes([IsAuthenticated])
 def customer_group_detail(request, pk):
     """Retrieve, update or delete a customer group"""
-    group = get_object_or_404(CustomerGroup, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    group = get_object_or_404(CustomerGroup, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = CustomerGroupSerializer(group)
@@ -141,6 +148,9 @@ def _set_no_cache_headers(response):
 @permission_classes([IsAuthenticated])
 def customer_list_create(request):
     """List all customers or create a new customer"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
         search = request.query_params.get('search', None)
         exact_name = request.query_params.get('exact_name', None)
@@ -153,7 +163,7 @@ def customer_list_create(request):
         from backend.core.model_cache import get_customer_list_cache_key, CUSTOMER_LIST_CACHE_TTL
         # Incorporate exclude_group into cache key
         cache_key = (
-            f"{get_customer_list_cache_key(search or '', customer_group or '')}"
+            f"{get_customer_list_cache_key(search or '', customer_group or '', retailer_id=retailer.id)}"
             f"_excl_{exclude_group or ''}_excl_name_{(exclude_group_name or '').strip().lower()}"
         )
         cached_data = cache.get(cache_key)
@@ -197,7 +207,7 @@ def customer_list_create(request):
     else:
         serializer = CustomerSerializer(data=request.data)
         if serializer.is_valid():
-            customer = serializer.save()
+            customer = serializer.save(retailer_id=retailer.id)
             from backend.core.model_cache import invalidate_customer_cache
             invalidate_customer_cache(customer)  # clears list cache so new customer appears
             # Ledger account is auto-created implicitly through the model relationship
@@ -209,7 +219,10 @@ def customer_list_create(request):
 @permission_classes([IsAuthenticated])
 def customer_detail(request, pk):
     """Retrieve, update or delete a customer"""
-    customer = get_object_or_404(Customer, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    customer = get_object_or_404(Customer, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         # Try cache first

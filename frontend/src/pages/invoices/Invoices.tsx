@@ -2,6 +2,7 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { canSeeSuperMetrics, isInvoiceAdminStores } from '../../lib/access';
 import {
   FileText,
   Search,
@@ -241,11 +242,11 @@ export default function Invoices() {
   })();
 
   // Only if group name contains "Admin" (Admin, RetailAdmin, WholesaleAdmin) → show all stores. Else → store selector like POS.
-  const groupContainsAdmin = (user?.groups || []).some((g: string) => String(g).includes('Admin'));
+  const invoicingUser = user ?? auth.getUser();
+  const groupContainsAdmin = isInvoiceAdminStores(invoicingUser);
 
-  const canSeeSuperMetrics = (user?.groups || []).includes('Super');
-  const canSeeKPIStats = canSeeSuperMetrics;
-  const canSeeTotalColumn = canSeeSuperMetrics;
+  const canSeeKPIStats = canSeeSuperMetrics(invoicingUser);
+  const canSeeTotalColumn = canSeeSuperMetrics(invoicingUser);
 
   // Use selected store or null (ALL) — all users default to "All".
   const defaultStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId) ?? null;

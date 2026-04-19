@@ -1,5 +1,8 @@
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import m2m_changed
+from django.dispatch import receiver
 from django.utils import timezone
 
 
@@ -41,14 +44,124 @@ class SoftDeleteModel(models.Model):
 class User(AbstractUser):
     """Extended user model with additional fields"""
     phone = models.CharField(max_length=20, blank=True, null=True)
-    # Temporarily commented out until migrations are run - uncomment after running migrations
-    # store = models.ForeignKey('locations.Store', on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='users',
+    )
+    default_store = models.ForeignKey(
+        'locations.Store',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='users_default_store',
+        help_text='Preferred shop for POS and stock context when not overridden.',
+    )
+    assigned_stores = models.ManyToManyField(
+        'locations.Store',
+        blank=True,
+        related_name='assigned_users',
+        help_text='If empty, user can access all stores allowed by their groups for this retailer. If set, only these stores (still filtered by group shop types).',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def clean(self):
+        super().clean()
+        rid = self.retailer_id
+        if self.default_store_id and rid:
+            sid = self.default_store_id
+            from backend.locations.models import Store
+
+            store = Store.objects.filter(pk=sid).only('retailer_id').first()
+            if store and store.retailer_id != rid:
+                raise ValidationError({'default_store': 'Default store must belong to the user\'s retailer.'})
+
     class Meta:
         db_table = 'users'
+
+
+@receiver(m2m_changed, sender=User.assigned_stores.through)
+def _user_assigned_stores_retailer_check(sender, instance, action, pk_set, **kwargs):
+    if action != 'pre_add' or not pk_set:
+        return
+    rid = getattr(instance, 'retailer_id', None)
+    if not rid:
+        return
+    from backend.locations.models import Store
+
+    if Store.objects.filter(pk__in=pk_set).exclude(retailer_id=rid).exists():
+        raise ValidationError('Assigned stores must belong to the user\'s retailer.')
+
+
+class AccessPermission(models.Model):
+    """Granular UI / feature codename (global catalog). Roles attach subsets per retailer."""
+
+    codename = models.CharField(max_length=64, unique=True, db_index=True)
+    label = models.CharField(max_length=200)
+    category = models.CharField(max_length=64, blank=True)
+    description = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'access_permissions'
+        ordering = ['category', 'codename']
+
+    def __str__(self):
+        return self.codename
+
+
+class Role(models.Model):
+    """Named role per retailer: bundle of AccessPermissions (shop assignments use UserStoreRole)."""
+
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        related_name='access_roles',
+    )
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    permissions = models.ManyToManyField(AccessPermission, blank=True, related_name='roles')
+
+    class Meta:
+        db_table = 'access_roles'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'name'], name='uniq_access_role_retailer_name'),
+        ]
+        ordering = ['retailer_id', 'name']
+
+    def __str__(self):
+        return f'{self.retailer_id}:{self.name}'
+
+
+class UserStoreRole(models.Model):
+    """Which role this user has at a specific shop (additive with Django group permissions)."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='store_roles')
+    store = models.ForeignKey('locations.Store', on_delete=models.CASCADE, related_name='user_store_roles')
+    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='user_store_assignments')
+
+    class Meta:
+        db_table = 'user_store_roles'
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'store'], name='uniq_user_store_role'),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not (self.user_id and self.store_id and self.role_id):
+            return
+        if self.store.retailer_id != self.role.retailer_id:
+            raise ValidationError('Store and role must belong to the same retailer.')
+        uid = getattr(self.user, 'retailer_id', None)
+        if uid and self.store.retailer_id != uid:
+            raise ValidationError('Store must belong to the user\'s retailer.')
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
 
 class Setting(models.Model):

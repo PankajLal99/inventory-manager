@@ -39,6 +39,7 @@ import {
   CalendarDays,
   Coins,
   Boxes,
+  Truck,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -191,36 +192,28 @@ export default function Layout() {
   const canAccessLedger = user?.can_access_ledger === true;
   const canAccessHistory = user?.can_access_history === true;
 
-  // Debug logging
-  if (user && userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin')) {
-    console.log('Retail user permissions check:', {
-      groups: userGroups,
-      is_admin: user.is_admin,
-      is_staff: user.is_staff,
-      is_superuser: user.is_superuser,
-      can_access_customers: user.can_access_customers,
-      canAccessCustomers,
-      isAdmin
-    });
-  }
-
-  // Helper function to check if user has access based on showFor value
-  const hasAccess = (showFor: string | string[] | ((user: any, groups: string[]) => boolean)): boolean => {
+  /** Prefer server `permissions` (groups + per-shop roles); fall back to legacy group checks. */
+  const hasMenuAccess = (item: {
+    permission?: string;
+    showFor?: string | string[] | ((u: typeof user, groups: string[]) => boolean);
+  }): boolean => {
+    if (item.permission && Array.isArray(user?.permissions) && user.permissions.length > 0) {
+      return user.permissions.includes(item.permission);
+    }
+    const showFor = item.showFor;
     if (typeof showFor === 'function') {
       return showFor(user, userGroups);
     }
     if (Array.isArray(showFor)) {
-      // Show if user is in any of the specified groups
-      return showFor.some(group => userGroups.includes(group));
+      return showFor.some((group) => userGroups.includes(group));
     }
-    // String values
+    if (showFor === undefined) {
+      return false;
+    }
     switch (showFor) {
       case 'all':
         return true;
       case 'admin':
-        // For 'admin', check if user has admin-only permissions
-        // Use can_access_customers as the definitive check since only Admin group has it
-        // This ensures Retail users (even if staff/superuser) don't see admin-only items
         return canAccessCustomers;
       case 'dashboard':
         return canAccessDashboard;
@@ -230,9 +223,9 @@ export default function Layout() {
         return canAccessCustomers;
       case 'ledger':
         return canAccessLedger;
+      case 'history':
         return canAccessHistory;
       default:
-        // If it's a group name, check if user is in that group
         return userGroups.includes(showFor);
     }
   };
@@ -247,59 +240,57 @@ export default function Layout() {
     {
       title: 'Core Operations',
       items: [
-        { path: '/', icon: ShoppingCart, label: 'POS', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/pos-repair-new', icon: Plus, label: 'New Repair', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
-        { path: '/search', icon: Search, label: 'Search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair','Temp'] },
-        { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', showFor: ['Admin', 'RetailAdmin'] },
+        { path: '/', icon: ShoppingCart, label: 'POS', permission: 'nav.pos', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/pos-repair-new', icon: Plus, label: 'New Repair', permission: 'nav.repair_register', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
+        { path: '/search', icon: Search, label: 'Search', permission: 'nav.search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair','Temp'] },
+        { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: 'nav.dashboard', showFor: ['Admin', 'RetailAdmin'] },
       ],
     },
     {
       title: 'Sales & Transactions',
       items: [
-        { path: '/invoices', icon: FileText, label: 'Invoices', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
-        { path: '/customers', icon: Users, label: 'Customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/replacement', icon: RefreshCw, label: 'Replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
+        { path: '/invoices', icon: FileText, label: 'Invoices', permission: 'nav.invoices', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', permission: 'nav.credit_notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/customers', icon: Users, label: 'Customers', permission: 'nav.customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/replacement', icon: RefreshCw, label: 'Replacement', permission: 'nav.replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/repairs', icon: Wrench, label: 'Repairs', permission: 'nav.repairs', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
       ],
     },
     {
       title: 'Inventory & Products',
       items: [
-        { path: '/products', icon: Package, label: 'Products', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
-        { path: '/stock', icon: Boxes, label: 'Stock Overview', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/purchases', icon: ShoppingBag, label: 'Purchases', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        // { path: '/pricing', icon: Coins, label: 'Pricing', showFor: 'all' }, // Hidden for now
+        { path: '/products', icon: Package, label: 'Products', permission: 'nav.products', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
+        { path: '/stock', icon: Boxes, label: 'Stock Overview', permission: 'nav.stock_overview', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/stock-transfers', icon: Truck, label: 'Stock transfers', permission: 'nav.stock_transfers', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/purchases', icon: ShoppingBag, label: 'Purchases', permission: 'nav.purchases', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
       ],
     },
     {
       title: 'Financial',
       items: [
-        { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
-        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
-        { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
-        { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/expenses', icon: Coins, label: 'Expenses', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin','Temp','Retail','Wholesale'] },
-        { path: '/payments', icon: Coins, label: 'Payments', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/ledger', icon: BookOpen, label: 'Ledger', permission: 'nav.ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', permission: 'nav.personal_ledger', showFor: 'admin' },
+        { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', permission: 'nav.internal_ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
+        { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', permission: 'nav.payment_reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/expenses', icon: Coins, label: 'Expenses', permission: 'nav.expenses', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin','Temp','Retail','Wholesale'] },
+        { path: '/payments', icon: Coins, label: 'Payments', permission: 'nav.payments', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
       ],
     },
     {
       title: 'Administration',
       items: [
-        // { path: '/stores', icon: Store, label: 'Stores', showFor: 'admin' }, // Hidden for now
-        { path: '/active-carts', icon: ClipboardList, label: 'Active Carts', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/vendors', icon: Users, label: 'Vendors', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/reports', icon: BarChart3, label: 'Reports', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/history', icon: History, label: 'History', showFor: 'admin' },
+        { path: '/active-carts', icon: ClipboardList, label: 'Active Carts', permission: 'nav.active_carts', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/vendors', icon: Users, label: 'Vendors', permission: 'nav.vendors', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/reports', icon: BarChart3, label: 'Reports', permission: 'nav.reports', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/history', icon: History, label: 'History', permission: 'nav.history', showFor: 'admin' },
       ],
     },
   ];
 
-  // Filter menu groups and items based on user permissions
-  const filteredMenuGroups = menuGroups.map(group => ({
+  const filteredMenuGroups = menuGroups.map((group) => ({
     ...group,
-    items: group.items.filter(item => hasAccess(item.showFor)),
-  })).filter(group => group.items.length > 0); // Only show groups that have visible items
+    items: group.items.filter((item) => hasMenuAccess(item)),
+  })).filter((group) => group.items.length > 0);
 
   const getPageTitle = () => {
     // Flatten all menu items from all groups

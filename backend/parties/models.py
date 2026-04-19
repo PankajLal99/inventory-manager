@@ -1,11 +1,19 @@
 from django.db import models
+from django.db.models import Q
 from decimal import Decimal
 from backend.core.models import User
 
 
 class CustomerGroup(models.Model):
     """Customer groups for pricing"""
-    name = models.CharField(max_length=200, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='customer_groups',
+    )
+    name = models.CharField(max_length=200, db_index=True)
     description = models.TextField(blank=True)
     discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
     is_active = models.BooleanField(default=True)
@@ -17,12 +25,22 @@ class CustomerGroup(models.Model):
 
     class Meta:
         db_table = 'customer_groups'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'name'], name='uniq_custgroup_retailer_name'),
+        ]
 
 
 class Customer(models.Model):
     """Customers"""
-    name = models.CharField(max_length=200, unique=True)
-    phone = models.CharField(max_length=20, unique=True, blank=True, null=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='customers',
+    )
+    name = models.CharField(max_length=200, db_index=True)
+    phone = models.CharField(max_length=20, blank=True, null=True, db_index=True)
     email = models.EmailField(blank=True)
     address = models.TextField(blank=True)
     customer_group = models.ForeignKey(CustomerGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='customers')
@@ -37,6 +55,14 @@ class Customer(models.Model):
 
     class Meta:
         db_table = 'customers'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'name'], name='uniq_customer_retailer_name'),
+            models.UniqueConstraint(
+                fields=['retailer', 'phone'],
+                condition=Q(phone__isnull=False) & ~Q(phone=''),
+                name='uniq_customer_retailer_phone_nonnull',
+            ),
+        ]
 
 
 class PaymentReminder(models.Model):
@@ -67,8 +93,15 @@ class PaymentReminder(models.Model):
 
 class Supplier(models.Model):
     """Suppliers"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='suppliers',
+    )
     name = models.CharField(max_length=200)
-    code = models.CharField(max_length=50, unique=True, blank=True, null=True)
+    code = models.CharField(max_length=50, blank=True, null=True, db_index=True)
     phone = models.CharField(max_length=20, blank=True)
     email = models.EmailField(blank=True)
     address = models.TextField(blank=True)
@@ -82,6 +115,13 @@ class Supplier(models.Model):
 
     class Meta:
         db_table = 'suppliers'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['retailer', 'code'],
+                condition=Q(code__isnull=False) & ~Q(code=''),
+                name='uniq_supplier_retailer_code_nonnull',
+            ),
+        ]
 
 
 class LedgerEntry(models.Model):
@@ -96,7 +136,7 @@ class LedgerEntry(models.Model):
         ('mixed', 'Mixed (Cash + UPI)'),
         ('other', 'Other'),
     ]
-    
+
     customer = models.ForeignKey(
         Customer,
         on_delete=models.SET_NULL,
@@ -115,11 +155,11 @@ class LedgerEntry(models.Model):
     is_sent = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='ledger_entries')
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
-    
+
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'
         return f"{customer_name} - {self.entry_type} - {self.amount}"
-    
+
     class Meta:
         db_table = 'ledger_entries'
         ordering = ['-created_at', '-id']
@@ -127,6 +167,13 @@ class LedgerEntry(models.Model):
 
 class PersonalCustomer(models.Model):
     """Personal customers for personal ledger (separate from regular customers)"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='personal_customers',
+    )
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True)
@@ -135,10 +182,10 @@ class PersonalCustomer(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     def __str__(self):
         return self.name
-    
+
     class Meta:
         db_table = 'personal_customers'
         ordering = ['name']
@@ -150,7 +197,7 @@ class PersonalLedgerEntry(models.Model):
         ('credit', 'Credit'),
         ('debit', 'Debit'),
     ]
-    
+
     customer = models.ForeignKey(
         PersonalCustomer,
         on_delete=models.SET_NULL,
@@ -163,11 +210,11 @@ class PersonalLedgerEntry(models.Model):
     description = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='personal_ledger_entries')
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
-    
+
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'
         return f"{customer_name} - {self.entry_type} - {self.amount}"
-    
+
     class Meta:
         db_table = 'personal_ledger_entries'
         ordering = ['-created_at', '-id']
@@ -176,6 +223,13 @@ class PersonalLedgerEntry(models.Model):
 class InternalCustomer(models.Model):
     """Internal customers for internal ledger (separate from regular and personal customers).
     Only customers with customer_group name 'MTSHOP' are shown in Shop Boys Ledger."""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='internal_customers',
+    )
     name = models.CharField(max_length=200)
     phone = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True)
@@ -188,10 +242,10 @@ class InternalCustomer(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     def __str__(self):
         return self.name
-    
+
     class Meta:
         db_table = 'internal_customers'
         ordering = ['name']
@@ -203,7 +257,7 @@ class InternalLedgerEntry(models.Model):
         ('credit', 'Credit'),
         ('debit', 'Debit'),
     ]
-    
+
     customer = models.ForeignKey(
         Customer,
         on_delete=models.SET_NULL,
@@ -218,11 +272,11 @@ class InternalLedgerEntry(models.Model):
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
     # Set when created by backfill from main LedgerEntry; null when created from POS mirroring
     source_ledger_entry_id = models.PositiveIntegerField(null=True, blank=True, unique=True, db_index=True)
-    
+
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'
         return f"{customer_name} - {self.entry_type} - {self.amount}"
-    
+
     class Meta:
         db_table = 'internal_ledger_entries'
         ordering = ['-created_at', '-id']

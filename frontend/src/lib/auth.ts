@@ -16,6 +16,27 @@ export interface User {
     name: string;
     shop_type: string;
   };
+  /** Preferred shop (same as `store` when set); assign in Django Admin. */
+  default_store?: {
+    id: number;
+    name: string;
+    code: string;
+    shop_type: string;
+  } | null;
+  /** If non-empty, user is limited to these shops (plus group rules). */
+  assigned_stores?: {
+    id: number;
+    name: string;
+    code: string;
+    shop_type: string;
+  }[];
+  /** Effective menu/API feature keys from groups + per-shop roles (`GET /auth/me/`). */
+  permissions?: string[];
+  retailer?: {
+    id: number;
+    code: string;
+    name: string;
+  } | null;
   can_access_dashboard?: boolean;
   can_access_reports?: boolean;
   can_access_customers?: boolean;
@@ -52,6 +73,7 @@ export const auth = {
   logout: () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem('retailer_code');
     currentUser = null;
     loadUserInFlight = null;
   },

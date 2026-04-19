@@ -42,6 +42,10 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    const retailerCode = localStorage.getItem('retailer_code');
+    if (retailerCode) {
+      (config.headers as Record<string, string>)['X-Retailer-Code'] = retailerCode;
+    }
     return config;
   },
   (error) => {
@@ -164,7 +168,12 @@ export const inventoryApi = {
   },
   transfers: {
     list: () => api.get('/stock-transfers/'),
+    get: (id: number) => api.get(`/stock-transfers/${id}/`),
     create: (data: any) => api.post('/stock-transfers/', data),
+    update: (id: number, data: any) => api.patch(`/stock-transfers/${id}/`, data),
+    delete: (id: number) => api.delete(`/stock-transfers/${id}/`),
+    complete: (id: number) => api.post(`/stock-transfers/${id}/complete/`),
+    cancel: (id: number) => api.post(`/stock-transfers/${id}/cancel/`),
   },
 };
 
@@ -249,6 +258,10 @@ export const posApi = {
         }>;
       }) => api.post('/pos/replacement-pos/create/', data),
     },
+  },
+  replacementPos: {
+    lookup: (barcode: string) => api.post('/pos/replacement-pos/lookup/', { barcode }),
+    create: (data: any) => api.post('/pos/replacement-pos/create/', data),
   },
   repair: {
     invoices: {

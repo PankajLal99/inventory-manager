@@ -12,10 +12,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.core.paginator import Paginator
-from django.db.models import Q, Count, Sum, F
+from django.db.models import F
 from django.core.cache import cache
 from backend.inventory.models import Stock
 from backend.inventory.serializers import StockSerializer
+from backend.core.tenant_api import require_active_retailer
+from backend.inventory.views import _stock_queryset_for_retailer
 import logging
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,10 @@ def optimized_stock_list(request):
     3. Early filtering
     4. Cache support for repeated queries
     """
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
     product_id = request.query_params.get('product_id', None)
     store_id = request.query_params.get('store_id', None)
     warehouse_id = request.query_params.get('warehouse_id', None)
@@ -42,7 +48,7 @@ def optimized_stock_list(request):
     limit = int(request.query_params.get('limit', 20))  # Smaller default for stock (10K+ records)
     
     # Build cache key
-    cache_key = f"stock_list:{product_id}:{store_id}:{warehouse_id}:{page}:{limit}"
+    cache_key = f"stock_list:r{retailer.id}:{product_id}:{store_id}:{warehouse_id}:{page}:{limit}"
     try:
         cached_data = cache.get(cache_key)
         
@@ -57,14 +63,14 @@ def optimized_stock_list(request):
         logger.warning(f"Cache unavailable, proceeding without cache: {e}")
     
     # OPTIMIZATION 1: Use select_related to avoid N+1 queries
-    queryset = Stock.objects.select_related(
+    queryset = _stock_queryset_for_retailer(retailer).select_related(
         'product',
         'product__category',
         'product__brand',
         'variant',
         'store',
         'warehouse'
-    ).all()
+    )
     
     # OPTIMIZATION 2: Apply filters early
     if product_id:
@@ -121,7 +127,11 @@ def optimized_stock_low(request):
     2. select_related for related objects
     3. Caching with 5-minute TTL
     """
-    cache_key = "stock_low"
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
+    cache_key = f"stock_low:r{retailer.id}"
     try:
         cached_data = cache.get(cache_key)
         
@@ -133,16 +143,18 @@ def optimized_stock_low(request):
         logger.warning(f"Cache unavailable: {e}")
     
     # OPTIMIZATION: Use F() expression for database-level comparison
-    stocks = Stock.objects.select_related(
-        'product',
-        'product__category',
-        'product__brand',
-        'store'
-    ).filter(
-        product__low_stock_threshold__gt=0
-    ).filter(
-        quantity__lte=F('product__low_stock_threshold')
-    ).order_by('quantity')
+    stocks = (
+        _stock_queryset_for_retailer(retailer)
+        .select_related(
+            'product',
+            'product__category',
+            'product__brand',
+            'store',
+        )
+        .filter(product__low_stock_threshold__gt=0)
+        .filter(quantity__lte=F('product__low_stock_threshold'))
+        .order_by('quantity')
+    )
     
     serializer = StockSerializer(stocks, many=True)
     
@@ -163,7 +175,11 @@ def optimized_stock_out_of_stock(request):
     2. select_related for related objects
     3. Caching with 5-minute TTL
     """
-    cache_key = "stock_out_of_stock"
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+
+    cache_key = f"stock_out_of_stock:r{retailer.id}"
     try:
         cached_data = cache.get(cache_key)
         
@@ -174,14 +190,17 @@ def optimized_stock_out_of_stock(request):
     except Exception as e:
         logger.warning(f"Cache unavailable: {e}")
     
-    stocks = Stock.objects.select_related(
-        'product',
-        'product__category',
-        'product__brand',
-        'store'
-    ).filter(
-        quantity=0
-    ).order_by('product__name')
+    stocks = (
+        _stock_queryset_for_retailer(retailer)
+        .select_related(
+            'product',
+            'product__category',
+            'product__brand',
+            'store',
+        )
+        .filter(quantity=0)
+        .order_by('product__name')
+    )
     
     serializer = StockSerializer(stocks, many=True)
     

@@ -135,24 +135,27 @@ def user_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def user_me(request):
     """Get current user with groups and permissions"""
-    user = request.user
+    user = (
+        User.objects.select_related('retailer', 'default_store')
+        .prefetch_related(
+            'assigned_stores',
+            'store_roles__role__permissions',
+        )
+        .get(pk=request.user.pk)
+    )
     serializer = UserSerializer(user)
     user_data = serializer.data
     
     # Add Django groups
     user_data['groups'] = list(user.groups.values_list('name', flat=True))
-    
-    # Add store info if available (safely handle missing store field)
-    try:
-        if hasattr(user, 'store') and user.store:
-            user_data['store'] = {
-                'id': user.store.id,
-                'name': user.store.name,
-                'shop_type': getattr(user.store, 'shop_type', 'retail'),
-            }
-    except AttributeError:
-        # Store field not available (migration not run yet)
-        pass
+
+    # Backward compatibility: single `store` mirrors default_store when set
+    if user.default_store_id:
+        user_data['store'] = {
+            'id': user.default_store.id,
+            'name': user.default_store.name,
+            'shop_type': getattr(user.default_store, 'shop_type', 'retail'),
+        }
     
     # Determine access permissions based on groups
     # Priority: Group membership > superuser/staff status for application access control
@@ -197,6 +200,11 @@ def user_me(request):
         user_data['can_access_customers'] = is_superuser_or_staff
         user_data['can_access_ledger'] = is_superuser_or_staff
         user_data['can_access_history'] = is_superuser_or_staff
+
+    from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
+
+    base_nav = permissions_from_django_groups(user_data['groups'], user)
+    user_data['permissions'] = sorted(merge_store_role_permissions(user, base_nav))
     
     return Response(user_data)
 

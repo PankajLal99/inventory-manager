@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, customersApi, catalogApi } from '../../lib/api';
 import { printLabelsFromResponse } from '../../utils/printBarcodes';
 import { auth } from '../../lib/auth';
+import { isPosAdminContext } from '../../lib/access';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
@@ -46,7 +47,7 @@ export default function RepairRegistration() {
 
     const queryClient = useQueryClient();
     const user = auth.getUser();
-    const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
+    const isAdmin = isPosAdminContext(user);
 
     // Toast helpers
     const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {

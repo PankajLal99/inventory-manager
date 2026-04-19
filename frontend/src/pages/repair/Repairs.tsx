@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tansta
 import { useState, useEffect } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { canSeeSuperMetrics } from '../../lib/access';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -99,6 +100,7 @@ const STATUS_ORDER: string[] = [
   'work_in_progress',
   'received',
   'delivered',
+  'done',
   'not_repaired',
 ];
 
@@ -460,8 +462,8 @@ export default function Repairs() {
 
   // Search is applied server-side (invoice_number + customer_name)
   const filteredRepairs = repairInvoices;
-  const canSeeSuperMetrics = (user?.groups || []).includes('Super');
-  const canSeeTotalColumn = canSeeSuperMetrics;
+  const repairsUser = user ?? auth.getUser();
+  const canSeeTotalColumn = canSeeSuperMetrics(repairsUser);
 
   // Single "Not Repaired" group: keep latest rows only to avoid an oversized section.
   const allNotRepairedItems = filteredRepairs.filter((inv) => inv.repair?.status === 'not_repaired');

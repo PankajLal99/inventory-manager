@@ -8,18 +8,23 @@ import uuid
 from backend.catalog.models import Barcode, Product
 
 
-def generate_unique_sku(base_name=None):
-    """Generate a unique SKU"""
+def generate_unique_sku(base_name=None, retailer_id=None):
+    """Generate a unique SKU (unique per retailer when retailer_id is set)."""
     prefix = base_name[:4].upper().replace(' ', '') if base_name else 'PRD'
     timestamp = timezone.now().strftime('%Y%m%d')
     unique_id = str(uuid.uuid4())[:8].upper()
     sku = f"{prefix}-{timestamp}-{unique_id}"
-    
-    # Ensure uniqueness
-    while Product.all_objects.filter(sku=sku).exists():
+
+    def _exists(s):
+        qs = Product.all_objects.filter(sku=s)
+        if retailer_id is not None:
+            qs = qs.filter(retailer_id=retailer_id)
+        return qs.exists()
+
+    while _exists(sku):
         unique_id = str(uuid.uuid4())[:8].upper()
         sku = f"{prefix}-{timestamp}-{unique_id}"
-    
+
     return sku
 
 

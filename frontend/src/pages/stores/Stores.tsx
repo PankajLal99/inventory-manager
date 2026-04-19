@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { isStoreManagementAdmin } from '../../lib/access';
 import { Navigate } from 'react-router-dom';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -44,13 +45,7 @@ export default function Stores() {
 
   const [user, setUser] = useState(auth.getUser());
   // Check admin status: is_admin flag, is_staff flag, is_superuser flag, or Admin/RetailAdmin/WholesaleAdmin group membership
-  const userGroups = user?.groups || [];
-  const isAdmin = Boolean(
-    user?.is_admin || 
-    user?.is_staff || 
-    user?.is_superuser || 
-    (userGroups && (userGroups.includes('Admin') || userGroups.includes('RetailAdmin') || userGroups.includes('WholesaleAdmin')))
-  );
+  const isAdmin = isStoreManagementAdmin(user);
 
   useEffect(() => {
     if (!user) {

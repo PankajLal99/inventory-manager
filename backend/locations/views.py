@@ -8,6 +8,7 @@ from django.db import IntegrityError
 from django.core.cache import cache
 from .models import Store, Warehouse
 from .serializers import StoreSerializer, WarehouseSerializer
+from backend.core.tenant_api import require_active_retailer
 
 logger = logging.getLogger('backend.locations')
 
@@ -59,32 +60,48 @@ def get_shop_types_for_user(user):
 def store_list_create(request):
     """List all stores or create a new store (create requires admin)"""
     try:
+        retailer, tenant_err = require_active_retailer(request)
+        if tenant_err:
+            return tenant_err
         if request.method == 'GET':
             logger.info(f"User {request.user.username} requested store list")
-            
+
             # Filter stores based on user groups
             shop_types = get_shop_types_for_user(request.user)
-            
-            # Create cache key based on user groups
+
+            # Create cache key based on user groups and explicit store assignments
             user_groups_key = 'all' if shop_types is None else '-'.join(sorted(shop_types))
+            assigned_ids = list(
+                request.user.assigned_stores.filter(retailer_id=retailer.id).values_list('id', flat=True)
+            )
+            assignment_key = (
+                'all'
+                if not assigned_ids
+                else 'as-' + '-'.join(str(i) for i in sorted(assigned_ids))
+            )
             from backend.core.model_cache import get_store_list_cache_key, STORE_LIST_CACHE_TTL
-            
+
             # Try cache first
-            cache_key = get_store_list_cache_key(user_groups_key)
+            cache_key = get_store_list_cache_key(
+                user_groups_key, retailer_id=retailer.id, assignment_key=assignment_key
+            )
             cached_data = cache.get(cache_key)
             if cached_data:
                 logger.debug(f"Cache hit for store list (groups: {user_groups_key})")
                 return Response(cached_data)
-            
-            # Cache miss - fetch from database
+
+            # Cache miss - fetch from database (always scoped to tenant)
+            base = Store.objects.filter(is_active=True, retailer_id=retailer.id)
             if shop_types is None:
-                # Admin or superuser/staff without groups - return all active stores
-                stores = Store.objects.filter(is_active=True)
-                logger.debug(f"Admin user - returning all active stores")
+                stores = base
+                logger.debug(f"Admin user - returning all active stores for retailer {retailer.id}")
             else:
-                # Filter by shop_type and is_active
-                stores = Store.objects.filter(shop_type__in=shop_types, is_active=True)
+                stores = base.filter(shop_type__in=shop_types)
                 logger.debug(f"Filtering stores by shop_types: {shop_types}")
+
+            if assigned_ids:
+                stores = stores.filter(id__in=assigned_ids)
+                logger.debug(f"Filtering stores by user assignment: {assigned_ids}")
             
             serializer = StoreSerializer(stores, many=True)
             response_data = serializer.data
@@ -107,7 +124,7 @@ def store_list_create(request):
             serializer = StoreSerializer(data=request.data)
             if serializer.is_valid():
                 try:
-                    store = serializer.save()
+                    store = serializer.save(retailer_id=retailer.id)
                     logger.info(f"Store '{store.name}' created successfully by {request.user.username}")
                     return Response(serializer.data, status=status.HTTP_201_CREATED)
                 except IntegrityError as e:

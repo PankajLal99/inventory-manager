@@ -25,6 +25,7 @@ from backend.inventory.models import Stock
 from backend.locations.models import Store, Warehouse
 from backend.pos.models import InvoiceItem, Invoice
 from backend.core.utils import create_audit_log
+from backend.core.tenant_api import require_active_retailer
 from .validators import run_comprehensive_data_check
 from .utils import generate_unique_sku
 
@@ -244,12 +245,17 @@ def tax_rate_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def product_list_create(request):
     """List all products or create a new product"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
         # Optimize queryset with select_related and prefetch_related to avoid N+1 queries
         # Annotate with barcode count for performance (to avoid N+1 in serializer)
-        queryset = Product.objects.select_related('brand', 'category').prefetch_related('barcodes').annotate(
+        queryset = Product.objects.select_related('brand', 'category').prefetch_related('barcodes').filter(
+            retailer_id=retailer.id
+        ).annotate(
             annotated_barcode_count=Count('barcodes', filter=~Q(barcodes__tag='sold'))
-        ).all()
+        )
         
         # Use django-filter for filtering
         filterset = ProductFilter(request.query_params, queryset=queryset)
@@ -283,11 +289,13 @@ def product_list_create(request):
             # Get available barcodes (new or returned tag, not in carts, not sold)
             from backend.pos.models import CartItem
             
-            available_barcodes = Barcode.objects.filter(tag__in=['new', 'returned'])
-            
+            available_barcodes = Barcode.objects.filter(
+                tag__in=['new', 'returned'], retailer_id=retailer.id
+            )
+
             # Exclude barcodes that are in active carts - optimized to avoid looping
             cart_items = CartItem.objects.filter(
-                cart__status='active'
+                cart__status='active', cart__retailer_id=retailer.id
             ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
             
             # Flatten all scanned_barcodes from all cart items efficiently
@@ -303,7 +311,8 @@ def product_list_create(request):
             
             # Exclude sold barcodes
             sold_barcode_ids = InvoiceItem.objects.filter(
-                barcode__in=available_barcodes.values_list('id', flat=True)
+                barcode__in=available_barcodes.values_list('id', flat=True),
+                invoice__retailer_id=retailer.id,
             ).exclude(
                 invoice__status='void'
             ).values_list('barcode_id', flat=True)
@@ -314,6 +323,7 @@ def product_list_create(request):
             
             # For non-tracked products, also check if product barcode has 'new' or 'returned' tag
             non_tracked_with_available_tag = Product.objects.filter(
+                retailer_id=retailer.id,
                 track_inventory=False,
                 barcodes__tag__in=['new', 'returned']
             ).values_list('id', flat=True).distinct()
@@ -324,9 +334,11 @@ def product_list_create(request):
             # If tag='new' is specified, also include products WITHOUT any barcodes (unpurchased products)
             if tag == 'new':
                 # Get all products that have barcodes
-                products_with_barcodes = Barcode.objects.values_list('product_id', flat=True).distinct()
+                products_with_barcodes = Barcode.objects.filter(
+                    retailer_id=retailer.id
+                ).values_list('product_id', flat=True).distinct()
                 # Get products without barcodes (unpurchased)
-                products_without_barcodes = Product.objects.exclude(
+                products_without_barcodes = Product.objects.filter(retailer_id=retailer.id).exclude(
                     id__in=products_with_barcodes
                 ).values_list('id', flat=True)
                 # Add unpurchased products to the available list
@@ -351,7 +363,8 @@ def product_list_create(request):
                 # Get all available barcodes for these products in bulk
                 available_barcodes = Barcode.objects.filter(
                     product_id__in=all_product_ids,
-                    tag__in=['new', 'returned']
+                    tag__in=['new', 'returned'],
+                    retailer_id=retailer.id,
                 )
                 
                 # Get sold barcode IDs in bulk (barcodes assigned to non-void invoices)
@@ -422,7 +435,9 @@ def product_list_create(request):
         # Prepare context data for efficient serializer processing
         # Get all barcodes currently in active carts to avoid N+1 queries in serializer
         from backend.pos.models import CartItem
-        active_cart_items = CartItem.objects.filter(cart__status='active')
+        active_cart_items = CartItem.objects.filter(
+            cart__status='active', cart__retailer_id=retailer.id
+        )
         
         active_cart_barcodes = set()
         active_cart_product_quantities = {}
@@ -488,17 +503,18 @@ def product_list_create(request):
             else:
                 query &= Q(brand__isnull=True)
             
-            product = Product.objects.get(query)
+            product = Product.objects.get(query, retailer_id=retailer.id)
             product_created = False
         except Product.DoesNotExist:
             # Generate SKU before creating the product
-            product_data['sku'] = generate_unique_sku(product_name)
+            product_data['sku'] = generate_unique_sku(product_name, retailer_id=retailer.id)
+            product_data['retailer_id'] = retailer.id
             product = Product.objects.create(name=product_name, **product_data)
             product_created = True
         
         # Generate product-level SKU if it doesn't exist (for existing products)
         if not product.sku:
-            product.sku = generate_unique_sku(product_name)
+            product.sku = generate_unique_sku(product_name, retailer_id=retailer.id)
             product.save()
         
         # If product exists, update its properties (prices, etc.) but keep existing data
@@ -549,16 +565,19 @@ def product_list_create(request):
 @permission_classes([IsAuthenticated])
 def product_detail(request, pk):
     """Retrieve, update or delete a product"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
         # Prefetch for full ProductSerializer (barcodes, variants, components, stock)
         product_queryset = Product.objects.select_related('category', 'brand').prefetch_related(
             'stock_entries', 'stock_entries__store', 'stock_entries__warehouse',
             'barcodes', 'barcodes__purchase__supplier',
             'variants', 'components', 'components__component_product',
-        )
+        ).filter(retailer_id=retailer.id)
         product = get_object_or_404(product_queryset, pk=pk)
     else:
-        product = get_object_or_404(Product, pk=pk)
+        product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         # Always use full ProductSerializer - do NOT use get_cached_product here.

@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 from backend.core.models import Setting, AuditLog
+from backend.tenants.models import Retailer
 from backend.locations.models import Store, Warehouse
 from backend.catalog.models import Category, Brand, Product, ProductVariant, Barcode, TaxRate
 from backend.parties.models import Customer, Supplier, CustomerGroup
@@ -22,7 +23,15 @@ User = get_user_model()
 
 class TestDataFactory:
     """Factory class for creating test data"""
-    
+
+    @staticmethod
+    def get_or_create_default_retailer():
+        r, _ = Retailer.objects.get_or_create(
+            code='TST',
+            defaults={'name': 'Test Retailer', 'is_active': True},
+        )
+        return r
+
     @staticmethod
     def random_string(length=10):
         """Generate a random string"""
@@ -42,6 +51,9 @@ class TestDataFactory:
             is_staff=is_staff,
             is_superuser=is_superuser
         )
+        if not is_superuser:
+            user.retailer = TestDataFactory.get_or_create_default_retailer()
+            user.save(update_fields=['retailer_id'])
         return user
     
     
@@ -52,7 +64,9 @@ class TestDataFactory:
             name = f'Store_{TestDataFactory.random_string(6)}'
         if not code:
             code = f'STORE_{TestDataFactory.random_string(6).upper()}'
+        r = TestDataFactory.get_or_create_default_retailer()
         return Store.objects.create(
+            retailer=r,
             name=name,
             code=code,
             address=address or f'Test Address {name}',
@@ -66,7 +80,9 @@ class TestDataFactory:
             name = f'Warehouse_{TestDataFactory.random_string(6)}'
         if not code:
             code = f'WH_{TestDataFactory.random_string(6).upper()}'
+        r = TestDataFactory.get_or_create_default_retailer()
         return Warehouse.objects.create(
+            retailer=r,
             name=name,
             code=code,
             address=address or f'Test Address {name}',
@@ -78,7 +94,9 @@ class TestDataFactory:
         """Create a test category"""
         if not name:
             name = f'Category_{TestDataFactory.random_string(6)}'
+        r = TestDataFactory.get_or_create_default_retailer()
         return Category.objects.create(
+            retailer=r,
             name=name,
             description=description or f'Test category {name}'
         )
@@ -88,7 +106,9 @@ class TestDataFactory:
         """Create a test brand"""
         if not name:
             name = f'Brand_{TestDataFactory.random_string(6)}'
+        r = TestDataFactory.get_or_create_default_retailer()
         return Brand.objects.create(
+            retailer=r,
             name=name,
             description=description or f'Test brand {name}'
         )
@@ -100,7 +120,9 @@ class TestDataFactory:
             name = f'Tax_{TestDataFactory.random_string(6)}'
         if rate is None:
             rate = Decimal('10.00')
+        r = TestDataFactory.get_or_create_default_retailer()
         return TaxRate.objects.create(
+            retailer=r,
             name=name,
             rate=rate
         )
@@ -117,7 +139,9 @@ class TestDataFactory:
         if not brand:
             brand = TestDataFactory.create_brand()
         
+        rid = category.retailer_id
         return Product.objects.create(
+            retailer_id=rid,
             name=name,
             sku=sku,
             category=category,
@@ -132,6 +156,7 @@ class TestDataFactory:
         if not barcode:
             barcode = f'BC_{TestDataFactory.random_string(10)}'
         return Barcode.objects.create(
+            retailer_id=product.retailer_id,
             product=product,
             variant=variant,
             barcode=barcode,
@@ -148,7 +173,9 @@ class TestDataFactory:
             phone = f'9{random.randint(100000000, 999999999)}'
         if not email:
             email = f'{name.lower()}@test.com'
+        r = TestDataFactory.get_or_create_default_retailer()
         return Customer.objects.create(
+            retailer=r,
             name=name,
             phone=phone,
             email=email
@@ -163,7 +190,9 @@ class TestDataFactory:
             phone = f'9{random.randint(100000000, 999999999)}'
         if not email:
             email = f'{name.lower()}@test.com'
+        r = TestDataFactory.get_or_create_default_retailer()
         return Supplier.objects.create(
+            retailer=r,
             name=name,
             phone=phone,
             email=email
@@ -176,9 +205,11 @@ class TestDataFactory:
             store = TestDataFactory.create_store()
         # Generate unique cart_number
         cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        while Cart.objects.filter(cart_number=cart_number).exists():
+        rid = store.retailer_id
+        while Cart.objects.filter(cart_number=cart_number, retailer_id=rid).exists():
             cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         return Cart.objects.create(
+            retailer_id=rid,
             cart_number=cart_number,
             created_by=user,
             store=store,
@@ -193,9 +224,11 @@ class TestDataFactory:
             store = TestDataFactory.create_store()
         # Generate unique invoice_number
         invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        while Invoice.objects.filter(invoice_number=invoice_number).exists():
+        rid = store.retailer_id
+        while Invoice.objects.filter(invoice_number=invoice_number, retailer_id=rid).exists():
             invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         return Invoice.objects.create(
+            retailer_id=rid,
             invoice_number=invoice_number,
             created_by=user,
             customer=customer,
@@ -213,7 +246,9 @@ class TestDataFactory:
             store = TestDataFactory.create_store()
         if not purchase_date:
             purchase_date = timezone.now().date()
+        rid = store.retailer_id if store else supplier.retailer_id
         return Purchase.objects.create(
+            retailer_id=rid,
             created_by=user,
             supplier=supplier,
             store=store,

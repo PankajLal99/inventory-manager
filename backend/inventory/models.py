@@ -114,7 +114,14 @@ class StockTransfer(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
-    transfer_number = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='stock_transfers',
+    )
+    transfer_number = models.CharField(max_length=100, db_index=True)
     from_store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='transfers_from', null=True, blank=True)
     from_warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='transfers_from', null=True, blank=True)
     to_store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='transfers_to', null=True, blank=True)
@@ -125,8 +132,44 @@ class StockTransfer(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        has_fs = bool(self.from_store_id)
+        has_fw = bool(self.from_warehouse_id)
+        has_ts = bool(self.to_store_id)
+        has_tw = bool(self.to_warehouse_id)
+
+        if has_fs == has_fw:
+            raise ValidationError('Specify exactly one source: from_store or from_warehouse.')
+        if has_ts == has_tw:
+            raise ValidationError('Specify exactly one destination: to_store or to_warehouse.')
+
+        if has_fs and has_ts and self.from_store_id == self.to_store_id:
+            raise ValidationError('Source and destination cannot be the same store.')
+        if has_fw and has_tw and self.from_warehouse_id == self.to_warehouse_id:
+            raise ValidationError('Source and destination cannot be the same warehouse.')
+
+        rid = self.retailer_id
+        if rid:
+            if has_fs and self.from_store.retailer_id != rid:
+                raise ValidationError({'from_store': 'Store does not belong to this retailer.'})
+            if has_fw and self.from_warehouse.retailer_id != rid:
+                raise ValidationError({'from_warehouse': 'Warehouse does not belong to this retailer.'})
+            if has_ts and self.to_store.retailer_id != rid:
+                raise ValidationError({'to_store': 'Store does not belong to this retailer.'})
+            if has_tw and self.to_warehouse.retailer_id != rid:
+                raise ValidationError({'to_warehouse': 'Warehouse does not belong to this retailer.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'stock_transfers'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'transfer_number'], name='uniq_stockxfer_retailer_number'),
+        ]
 
 
 class StockTransferItem(models.Model):

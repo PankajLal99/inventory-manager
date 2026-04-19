@@ -1,20 +1,27 @@
-"""Strict Barcode lookups: barcode and short_code are globally unique — use get(), never queryset.first()."""
+"""Strict Barcode lookups per retailer: barcode and short_code are unique within a retailer — use get(), never queryset.first()."""
 
 from backend.catalog.models import Barcode
 
 
-def get_catalog_barcode_by_printed_value(raw: str):
-    """Return the single Barcode row for this printed value, or None."""
+def get_catalog_barcode_by_printed_value(raw: str, retailer_id: int | None = None):
+    """Return the single Barcode row for this printed value, or None.
+
+    When retailer_id is set, resolution is scoped to that tenant.
+    When retailer_id is None (legacy callers), search is unrestricted (single-tenant DBs only).
+    """
     if raw is None:
         return None
     raw = str(raw).strip().upper()
     if not raw:
         return None
+    qs = Barcode.all_objects.all()
+    if retailer_id is not None:
+        qs = qs.filter(retailer_id=retailer_id)
     try:
-        return Barcode.all_objects.get(barcode=raw)
+        return qs.get(barcode=raw)
     except Barcode.DoesNotExist:
         try:
-            return Barcode.all_objects.get(short_code=raw)
+            return qs.get(short_code=raw)
         except Barcode.DoesNotExist:
             return None
     except Barcode.MultipleObjectsReturned:

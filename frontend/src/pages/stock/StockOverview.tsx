@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Boxes, ChevronDown, ChevronRight, ExternalLink, Loader2 } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Boxes, ChevronDown, ChevronRight, ExternalLink, Loader2, Truck } from 'lucide-react';
 import { productsApi } from '../../lib/api';
 import PageHeader from '../../components/ui/PageHeader';
 import Input from '../../components/ui/Input';
@@ -124,12 +124,21 @@ export default function StockOverview() {
         subtitle="Read-only overview of warehouse, shop allocation, and available stock"
         icon={Boxes}
         action={
-          <div className="w-full sm:w-[360px]">
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search product name..."
-            />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto sm:min-w-[360px]">
+            <Link
+              to="/stock-transfers"
+              className="inline-flex items-center justify-center gap-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-2 whitespace-nowrap"
+            >
+              <Truck className="h-4 w-4 shrink-0" />
+              Stock transfers
+            </Link>
+            <div className="flex-1 w-full sm:w-[280px]">
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search product name..."
+              />
+            </div>
           </div>
         }
       />
