@@ -103,6 +103,51 @@ api.interceptors.response.use(
 
 export default api;
 
+export type OnboardingRetailerRef = {
+  id: number;
+  code: string;
+  name: string;
+};
+
+export type OnboardingStatusResponse = {
+  completed: boolean;
+  retailers: OnboardingRetailerRef[];
+};
+
+export type OnboardingStoreInput = {
+  name: string;
+  code: string;
+  shop_type: string;
+  is_primary: boolean;
+};
+
+export type OnboardingRoleInput = {
+  name: string;
+  description: string;
+  permission_codenames: string[];
+};
+
+export type OnboardingUserInput = {
+  username: string;
+  password: string;
+  email?: string;
+  groups: string[];
+  default_store_code?: string;
+  assigned_store_codes: string[];
+  role_name?: string;
+  dashboard_only?: boolean;
+};
+
+export type OnboardingPayload = {
+  password: string;
+  mode: 'create_retailer' | 'extend_retailer';
+  retailer?: { code: string; name: string };
+  existing_retailer?: { id?: number; code?: string };
+  stores: OnboardingStoreInput[];
+  roles: OnboardingRoleInput[];
+  users: OnboardingUserInput[];
+};
+
 // Auth API
 export const authApi = {
   register: (data: any) => api.post('/auth/register/', data),
@@ -114,7 +159,7 @@ export const authApi = {
 
 // Products API
 export const productsApi = {
-  list: (params?: any) => api.get('/products/', { params }),
+  list: (params?: any, config?: { signal?: AbortSignal }) => api.get('/products/', { params, signal: config?.signal }),
   get: (id: number) => api.get(`/products/${id}/`),
   create: (data: any) => api.post('/products/', data),
   update: (id: number, data: any) => api.patch(`/products/${id}/`, data),
@@ -504,8 +549,8 @@ export const coreApi = {
     updateUser: (id: number, data: any) => api.patch(`/access-control/users/${id}/`, data),
   },
   onboarding: {
-    status: () => api.get('/onboarding/status/'),
-    complete: (data: any) => api.post('/onboarding/complete/', data),
+    status: () => api.get<OnboardingStatusResponse>('/onboarding/status/'),
+    complete: (data: OnboardingPayload) => api.post('/onboarding/complete/', data),
   },
 };
 

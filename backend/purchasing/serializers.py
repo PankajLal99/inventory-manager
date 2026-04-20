@@ -12,6 +12,16 @@ from backend.core.utils import create_audit_log
 import uuid
 
 
+def _get_purchase_location_or_raise(purchase):
+    if purchase.store_id:
+        return purchase.store, None
+    if purchase.warehouse_id:
+        return None, purchase.warehouse
+    raise serializers.ValidationError(
+        {'detail': 'Purchase location is required. Set either store or warehouse.'}
+    )
+
+
 def generate_barcodes_for_purchase_item(purchase_item, quantity):
     """Generate barcodes for a purchase item. Always generates barcodes regardless of purchase status."""
     from backend.catalog.models import Barcode
@@ -527,16 +537,15 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     if purchase.status != 'finalized':
                         # Status changed, skip stock update
                         continue
-                    from backend.locations.models import Store, Warehouse
                     from backend.inventory.models import Stock
+                    store, warehouse = _get_purchase_location_or_raise(purchase)
                     
-                    # When purchase has warehouse set, add stock to that warehouse (direct-to-warehouse)
-                    if purchase.warehouse:
+                    if warehouse:
                         stock, _ = Stock.objects.get_or_create(
                             product=purchase_item.product,
                             variant=purchase_item.variant,
                             store=None,
-                            warehouse=purchase.warehouse,
+                            warehouse=warehouse,
                             defaults={'quantity': Decimal('0.000')}
                         )
                         old_stock = stock.quantity
@@ -561,86 +570,68 @@ class PurchaseSerializer(serializers.ModelSerializer):
                                     'quantity_added': str(quantity),
                                     'stock_before': str(old_stock),
                                     'stock_after': str(stock.quantity),
-                                    'location': f"Warehouse: {purchase.warehouse.name}",
+                                    'location': f"Warehouse: {warehouse.name}",
                                 }
                             )
-                    # Update Shop Stock (when no warehouse or when store is set)
+                    elif store and purchase_item.shop_quantity > 0:
+                        stock, _ = Stock.objects.get_or_create(
+                            product=purchase_item.product,
+                            variant=purchase_item.variant,
+                            store=store,
+                            warehouse=None,
+                            defaults={'quantity': Decimal('0.000')}
+                        )
+                        old_stock = stock.quantity
+                        stock.quantity += purchase_item.shop_quantity
+                        stock.save()
+                        
+                        # Audit log
+                        request = self.context.get('request')
+                        if request:
+                            create_audit_log(
+                                request=request,
+                                action='stock_purchase',
+                                model_name='Stock',
+                                object_id=str(stock.id),
+                                object_name=purchase_item.product.name,
+                                object_reference=purchase.purchase_number,
+                                barcode=None,
+                                changes={
+                                    'purchase_id': purchase.id,
+                                    'purchase_number': purchase.purchase_number,
+                                    'product_id': purchase_item.product.id,
+                                    'product_name': purchase_item.product.name,
+                                    'product_sku': purchase_item.product.sku,
+                                    'quantity_added': str(purchase_item.shop_quantity),
+                                    'stock_before': str(old_stock),
+                                    'stock_after': str(stock.quantity),
+                                    'location': f"Shop: {store.name}",
+                                }
+                            )
+                    # Optional split quantity can go to warehouse if both channels are used.
                     elif purchase_item.shop_quantity > 0:
-                        shop = Store.objects.filter(shop_type='retail', is_active=True).first()
-                        if not shop:
-                            shop = Store.objects.filter(is_active=True).exclude(shop_type='warehouse').first()
-                        
-                        if shop:
-                            stock, _ = Stock.objects.get_or_create(
-                                product=purchase_item.product,
-                                variant=purchase_item.variant,
-                                store=shop,
-                                warehouse=None,
-                                defaults={'quantity': Decimal('0.000')}
-                            )
-                            old_stock = stock.quantity
-                            stock.quantity += purchase_item.shop_quantity
-                            stock.save()
-                            
-                            # Audit log
-                            request = self.context.get('request')
-                            if request:
-                                create_audit_log(
-                                    request=request,
-                                    action='stock_purchase',
-                                    model_name='Stock',
-                                    object_id=str(stock.id),
-                                    object_name=purchase_item.product.name,
-                                    object_reference=purchase.purchase_number,
-                                    barcode=None,
-                                    changes={
-                                        'purchase_id': purchase.id,
-                                        'purchase_number': purchase.purchase_number,
-                                        'product_id': purchase_item.product.id,
-                                        'product_name': purchase_item.product.name,
-                                        'product_sku': purchase_item.product.sku,
-                                        'quantity_added': str(purchase_item.shop_quantity),
-                                        'stock_before': str(old_stock),
-                                        'stock_after': str(stock.quantity),
-                                        'location': f"Shop: {shop.name}",
-                                    }
-                                )
+                        raise serializers.ValidationError(
+                            {'detail': 'shop_quantity requires purchase.store to be set.'}
+                        )
 
-                    # Update Warehouse Stock
                     if purchase_item.warehouse_quantity > 0:
-                        warehouse = Warehouse.objects.filter(is_active=True).first()
                         if not warehouse:
-                            # Fallback if no dedicated Warehouse model, check Store with type 'warehouse'
-                            warehouse_store = Store.objects.filter(shop_type='warehouse', is_active=True).first()
-                            if warehouse_store:
-                                stock, _ = Stock.objects.get_or_create(
-                                    product=purchase_item.product,
-                                    variant=purchase_item.variant,
-                                    store=warehouse_store,
-                                    warehouse=None,
-                                    defaults={'quantity': Decimal('0.000')}
-                                )
-                                old_stock = stock.quantity
-                                stock.quantity += purchase_item.warehouse_quantity
-                                stock.save()
-                            else:
-                                # No warehouse found – skip or handle error
-                                pass
-                        else:
-                            stock, _ = Stock.objects.get_or_create(
-                                product=purchase_item.product,
-                                variant=purchase_item.variant,
-                                store=None,
-                                warehouse=warehouse,
-                                defaults={'quantity': Decimal('0.000')}
+                            raise serializers.ValidationError(
+                                {'detail': 'warehouse_quantity requires purchase.warehouse to be set.'}
                             )
-                            old_stock = stock.quantity
-                            stock.quantity += purchase_item.warehouse_quantity
-                            stock.save()
+                        stock, _ = Stock.objects.get_or_create(
+                            product=purchase_item.product,
+                            variant=purchase_item.variant,
+                            store=None,
+                            warehouse=warehouse,
+                            defaults={'quantity': Decimal('0.000')}
+                        )
+                        old_stock = stock.quantity
+                        stock.quantity += purchase_item.warehouse_quantity
+                        stock.save()
                         
-                        # Audit log for warehouse if stock was updated
-                        if (warehouse or warehouse_store) and request:
-                             create_audit_log(
+                        if request:
+                            create_audit_log(
                                 request=request,
                                 action='stock_purchase',
                                 model_name='Stock',
@@ -657,7 +648,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                                     'quantity_added': str(purchase_item.warehouse_quantity),
                                     'stock_before': str(old_stock),
                                     'stock_after': str(stock.quantity),
-                                    'location': f"Warehouse: {warehouse.name if warehouse else warehouse_store.name}",
+                                    'location': f"Warehouse: {warehouse.name}",
                                 }
                             )
         
@@ -789,49 +780,42 @@ class PurchaseSerializer(serializers.ModelSerializer):
             # Update stock for preserved items when finalizing (they already have barcodes)
             if new_status == 'finalized' and old_status != 'finalized':
                 for old_item in items_to_preserve:
-                    store = instance.store
-                    warehouse = instance.warehouse
-                    if not store and not warehouse:
-                        from backend.locations.models import Store, Warehouse
-                        store = Store.objects.filter(is_active=True).first()
-                        warehouse = Warehouse.objects.filter(is_active=True).first() if not store else None
+                    store, warehouse = _get_purchase_location_or_raise(instance)
+                    stock, stock_created = Stock.objects.get_or_create(
+                        product=old_item.product,
+                        variant=old_item.variant,
+                        store=store,
+                        warehouse=warehouse,
+                        defaults={'quantity': Decimal('0.000')}
+                    )
+                    # Add the quantity to stock (only if not already finalized)
+                    stock.quantity += old_item.quantity
+                    stock.save()
                     
-                    if store or warehouse:
-                        stock, stock_created = Stock.objects.get_or_create(
-                            product=old_item.product,
-                            variant=old_item.variant,
-                            store=store,
-                            warehouse=warehouse,
-                            defaults={'quantity': Decimal('0.000')}
+                    # Audit log
+                    request = self.context.get('request')
+                    if request:
+                        create_audit_log(
+                            request=request,
+                            action='stock_purchase',
+                            model_name='Stock',
+                            object_id=str(stock.id),
+                            object_name=old_item.product.name,
+                            object_reference=instance.purchase_number,
+                            barcode=None,
+                            changes={
+                                'purchase_id': instance.id,
+                                'purchase_number': instance.purchase_number,
+                                'product_id': old_item.product.id,
+                                'product_name': old_item.product.name,
+                                'product_sku': old_item.product.sku,
+                                'quantity_added': str(old_item.quantity),
+                                'stock_before': str(stock.quantity - old_item.quantity),
+                                'stock_after': str(stock.quantity),
+                                'unit_price': str(old_item.unit_price),
+                                'location': store.name if store else (warehouse.name if warehouse else None),
+                            }
                         )
-                        # Add the quantity to stock (only if not already finalized)
-                        stock.quantity += old_item.quantity
-                        stock.save()
-                        
-                        # Audit log
-                        request = self.context.get('request')
-                        if request:
-                            create_audit_log(
-                                request=request,
-                                action='stock_purchase',
-                                model_name='Stock',
-                                object_id=str(stock.id),
-                                object_name=old_item.product.name,
-                                object_reference=instance.purchase_number,
-                                barcode=None,
-                                changes={
-                                    'purchase_id': instance.id,
-                                    'purchase_number': instance.purchase_number,
-                                    'product_id': old_item.product.id,
-                                    'product_name': old_item.product.name,
-                                    'product_sku': old_item.product.sku,
-                                    'quantity_added': str(old_item.quantity),
-                                    'stock_before': str(stock.quantity - old_item.quantity),
-                                    'stock_after': str(stock.quantity),
-                                    'unit_price': str(old_item.unit_price),
-                                    'location': store.name if store else (warehouse.name if warehouse else None),
-                                }
-                            )
 
             # --- HANDLE UPDATED ITEMS (In-Place Update) ---
             # Instead of deleting and recreating, we update the existing PurchaseItem
@@ -893,14 +877,22 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 # Case 1: Status changed Draft -> Finalized
                 if old_status != 'finalized' and new_status == 'finalized':
                     # Add FULL new quantity to stock
-                    store = instance.store
-                    warehouse = instance.warehouse
-                    if not store and not warehouse:
-                        from backend.locations.models import Store, Warehouse
-                        store = Store.objects.filter(is_active=True).first()
-                        warehouse = Warehouse.objects.filter(is_active=True).first() if not store else None
-                    
-                    if store or warehouse:
+                    store, warehouse = _get_purchase_location_or_raise(instance)
+                    stock, _ = Stock.objects.get_or_create(
+                         product=old_item.product,
+                         variant=old_item.variant,
+                         store=store,
+                         warehouse=warehouse,
+                         defaults={'quantity': Decimal('0.000')}
+                    )
+                    stock.quantity += new_quantity
+                    stock.save()
+
+                # Case 2: Status Finalized -> Finalized (Quantity changed)
+                elif old_status == 'finalized' and new_status == 'finalized':
+                    if new_quantity != old_quantity:
+                        diff = new_quantity - old_quantity
+                        store, warehouse = _get_purchase_location_or_raise(instance)
                         stock, _ = Stock.objects.get_or_create(
                              product=old_item.product,
                              variant=old_item.variant,
@@ -908,33 +900,11 @@ class PurchaseSerializer(serializers.ModelSerializer):
                              warehouse=warehouse,
                              defaults={'quantity': Decimal('0.000')}
                         )
-                        stock.quantity += new_quantity
+                        stock.quantity += diff
+                        # Ensure stock doesn't go negative
+                        if stock.quantity < 0:
+                            stock.quantity = Decimal('0.000') 
                         stock.save()
-
-                # Case 2: Status Finalized -> Finalized (Quantity changed)
-                elif old_status == 'finalized' and new_status == 'finalized':
-                    if new_quantity != old_quantity:
-                        diff = new_quantity - old_quantity
-                        store = instance.store
-                        warehouse = instance.warehouse
-                        if not store and not warehouse:
-                            from backend.locations.models import Store, Warehouse
-                            store = Store.objects.filter(is_active=True).first()
-                            warehouse = Warehouse.objects.filter(is_active=True).first() if not store else None
-                        
-                        if store or warehouse:
-                            stock, _ = Stock.objects.get_or_create(
-                                 product=old_item.product,
-                                 variant=old_item.variant,
-                                 store=store,
-                                 warehouse=warehouse,
-                                 defaults={'quantity': Decimal('0.000')}
-                            )
-                            stock.quantity += diff
-                            # Ensure stock doesn't go negative
-                            if stock.quantity < 0:
-                                stock.quantity = Decimal('0.000') 
-                            stock.save()
 
             # --- HANDLE DELETED ITEMS ---
             for old_item in items_to_delete:
@@ -1009,55 +979,48 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 
                 # Only update stock when purchase status is 'finalized'
                 if new_status == 'finalized':
-                    store = instance.store
-                    warehouse = instance.warehouse
-                    if not store and not warehouse:
-                        from backend.locations.models import Store, Warehouse
-                        store = Store.objects.filter(is_active=True).first()
-                        warehouse = Warehouse.objects.filter(is_active=True).first() if not store else None
+                    store, warehouse = _get_purchase_location_or_raise(instance)
+                    # Count actual barcodes created for this purchase item
+                    actual_barcode_count = Barcode.objects.filter(
+                        purchase_item=purchase_item,
+                        tag='new'
+                    ).count()
                     
-                    if store or warehouse:
-                        # Count actual barcodes created for this purchase item
-                        actual_barcode_count = Barcode.objects.filter(
-                            purchase_item=purchase_item,
-                            tag='new'
-                        ).count()
-                        
-                        stock, stock_created = Stock.objects.get_or_create(
-                            product=purchase_item.product,
-                            variant=purchase_item.variant,
-                            store=store,
-                            warehouse=warehouse,
-                            defaults={'quantity': Decimal('0.000')}
+                    stock, stock_created = Stock.objects.get_or_create(
+                        product=purchase_item.product,
+                        variant=purchase_item.variant,
+                        store=store,
+                        warehouse=warehouse,
+                        defaults={'quantity': Decimal('0.000')}
+                    )
+                    # Add the actual barcode count to stock (not quantity, to match reality)
+                    stock.quantity += Decimal(str(actual_barcode_count))
+                    stock.save()
+                    
+                    # Audit log: Stock added from purchase (per item)
+                    request = self.context.get('request')
+                    if request:
+                        create_audit_log(
+                            request=request,
+                            action='stock_purchase',
+                            model_name='Stock',
+                            object_id=str(stock.id),
+                            object_name=purchase_item.product.name,
+                            object_reference=instance.purchase_number,
+                            barcode=None,
+                            changes={
+                                'purchase_id': instance.id,
+                                'purchase_number': instance.purchase_number,
+                                'product_id': purchase_item.product.id,
+                                'product_name': purchase_item.product.name,
+                                'product_sku': purchase_item.product.sku,
+                                'quantity_added': str(quantity),
+                                'stock_before': str(stock.quantity - quantity),
+                                'stock_after': str(stock.quantity),
+                                'unit_price': str(purchase_item.unit_price),
+                                'location': store.name if store else (warehouse.name if warehouse else None),
+                            }
                         )
-                        # Add the actual barcode count to stock (not quantity, to match reality)
-                        stock.quantity += Decimal(str(actual_barcode_count))
-                        stock.save()
-                        
-                        # Audit log: Stock added from purchase (per item)
-                        request = self.context.get('request')
-                        if request:
-                            create_audit_log(
-                                request=request,
-                                action='stock_purchase',
-                                model_name='Stock',
-                                object_id=str(stock.id),
-                                object_name=purchase_item.product.name,
-                                object_reference=instance.purchase_number,
-                                barcode=None,
-                                changes={
-                                    'purchase_id': instance.id,
-                                    'purchase_number': instance.purchase_number,
-                                    'product_id': purchase_item.product.id,
-                                    'product_name': purchase_item.product.name,
-                                    'product_sku': purchase_item.product.sku,
-                                    'quantity_added': str(quantity),
-                                    'stock_before': str(stock.quantity - quantity),
-                                    'stock_after': str(stock.quantity),
-                                    'unit_price': str(purchase_item.unit_price),
-                                    'location': store.name if store else (warehouse.name if warehouse else None),
-                                }
-                            )
         
         # Handle status change to cancelled - delete non-sold barcodes, keep product
         if old_status != 'cancelled' and new_status == 'cancelled':
@@ -1099,46 +1062,39 @@ class PurchaseSerializer(serializers.ModelSerializer):
             from decimal import Decimal
             
             for item in instance.items.all():
-                store = instance.store
-                warehouse = instance.warehouse
-                if not store and not warehouse:
-                    from backend.locations.models import Store, Warehouse
-                    store = Store.objects.filter(is_active=True).first()
-                    warehouse = Warehouse.objects.filter(is_active=True).first() if not store else None
+                store, warehouse = _get_purchase_location_or_raise(instance)
+                stock, _ = Stock.objects.get_or_create(
+                    product=item.product,
+                    variant=item.variant,
+                    store=store,
+                    warehouse=warehouse,
+                    defaults={'quantity': Decimal('0.000')}
+                )
+                stock.quantity += item.quantity
+                stock.save()
                 
-                if store or warehouse:
-                    stock, _ = Stock.objects.get_or_create(
-                        product=item.product,
-                        variant=item.variant,
-                        store=store,
-                        warehouse=warehouse,
-                        defaults={'quantity': Decimal('0.000')}
+                # Audit log
+                request = self.context.get('request')
+                if request:
+                    create_audit_log(
+                        request=request,
+                        action='stock_purchase',
+                        model_name='Stock',
+                        object_id=str(stock.id),
+                        object_name=item.product.name,
+                        object_reference=instance.purchase_number,
+                        barcode=None,
+                        changes={
+                            'purchase_id': instance.id,
+                            'purchase_number': instance.purchase_number,
+                            'product_id': item.product.id,
+                            'product_name': item.product.name,
+                            'quantity_added': str(item.quantity),
+                            'stock_before': str(stock.quantity - item.quantity),
+                            'stock_after': str(stock.quantity),
+                            'unit_price': str(item.unit_price),
+                        }
                     )
-                    stock.quantity += item.quantity
-                    stock.save()
-                    
-                    # Audit log
-                    request = self.context.get('request')
-                    if request:
-                        create_audit_log(
-                            request=request,
-                            action='stock_purchase',
-                            model_name='Stock',
-                            object_id=str(stock.id),
-                            object_name=item.product.name,
-                            object_reference=instance.purchase_number,
-                            barcode=None,
-                            changes={
-                                'purchase_id': instance.id,
-                                'purchase_number': instance.purchase_number,
-                                'product_id': item.product.id,
-                                'product_name': item.product.name,
-                                'quantity_added': str(item.quantity),
-                                'stock_before': str(stock.quantity - item.quantity),
-                                'stock_after': str(stock.quantity),
-                                'unit_price': str(item.unit_price),
-                            }
-                        )
         
         # Create audit log for purchase update
         request = self.context.get('request')

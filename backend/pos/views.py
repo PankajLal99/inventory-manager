@@ -719,16 +719,17 @@ def reduce_stock_for_cart_item(product, variant_id, store, quantity_to_reduce):
         stock.save()
 
 
-def get_available_stock_for_product(product, variant=None):
+def get_available_stock_for_product(product, variant=None, store=None):
     """Helper function to get available stock quantity for a product (non-tracked inventory)
     
     IMPORTANT: For non-tracked inventory products, stock is decremented when items are added to cart.
     So the stock quantity itself IS the available quantity - we don't need to subtract cart quantities.
     """
-    # Get total stock quantity for this product (sum across all stores/warehouses)
-    # For non-tracked products, stock is decremented when items are added to cart,
-    # so the stock quantity itself represents the available quantity
+    # Stock for POS should be store-scoped. Cross-store aggregation causes false availability.
+    if store is None:
+        return Decimal('0.000')
     stock_query = Stock.objects.filter(product=product)
+    stock_query = stock_query.filter(store=store, warehouse__isnull=True)
     if variant:
         stock_query = stock_query.filter(variant=variant)
     else:
@@ -1497,8 +1498,12 @@ def pos_session_close(request, pk):
 def active_carts_overview(request):
     """List all active and held carts (read-only overview): which user, locked, items. Includes EDIT-* (invoice edit) carts.
     Barcodes that are already on a paid/credit invoice are excluded from display (stale cart data)."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     carts = Cart.objects.filter(
-        status__in=['active', 'held']
+        status__in=['active', 'held'],
+        retailer_id=retailer.id,
     ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__variant').order_by('-updated_at')
     store_id = request.query_params.get('store')
     if store_id:
@@ -1506,12 +1511,23 @@ def active_carts_overview(request):
             carts = carts.filter(store_id=int(store_id))
         except ValueError:
             pass
+    elif not (request.user.is_superuser or request.user.is_staff):
+        assigned_ids = list(
+            request.user.assigned_stores.filter(retailer_id=retailer.id).values_list('id', flat=True)
+        )
+        if assigned_ids:
+            carts = carts.filter(store_id__in=assigned_ids)
+        elif request.user.default_store_id:
+            carts = carts.filter(store_id=request.user.default_store_id)
+        else:
+            carts = carts.none()
     # Barcode IDs that are already on paid/credit invoices — don't show them in overview (they're sold, cart is stale)
     from backend.pos.models import InvoiceItem
     from backend.catalog.models import Barcode
     # Treat PARTIAL invoices as sold too: their barcodes must never be reverted to "new" by cart cleanup.
     sold_barcode_ids = set(
         InvoiceItem.objects.filter(
+            invoice__retailer_id=retailer.id,
             invoice__status__in=['paid', 'partial', 'credit']
         ).exclude(barcode_id__isnull=True).values_list('barcode_id', flat=True).distinct()
     )
@@ -2176,7 +2192,7 @@ def cart_items(request, pk):
         requested_quantity = Decimal(str(request.data.get('quantity', 1)))
         
         # Check available stock (stock is only created when purchase is finalized)
-        available_stock = get_available_stock_for_product(product, variant_id)
+        available_stock = get_available_stock_for_product(product, variant_id, cart.store)
         
         # If existing item, calculate total quantity after adding
         if existing_item:
@@ -2881,7 +2897,7 @@ def cart_item_update(request, pk, item_id):
                 # For custom products, skip stock validation
                 if not is_custom_product:
                     # Check available stock
-                    available_stock = get_available_stock_for_product(cart_item.product, cart_item.variant)
+                    available_stock = get_available_stock_for_product(cart_item.product, cart_item.variant, cart.store)
                     # Check if stock is exhausted (only prevent incrementing when stock is 0 or less)
                     if available_stock <= Decimal('0.000'):
                         return Response({

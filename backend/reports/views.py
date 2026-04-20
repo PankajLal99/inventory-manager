@@ -12,7 +12,7 @@ from decimal import Decimal
 from backend.pos.models import Invoice, InvoiceItem, CartItem
 from backend.catalog.models import Product, Barcode
 from backend.parties.models import Customer
-from backend.core.tenant_api import require_active_retailer
+from backend.core.tenant_api import require_active_retailer, get_user_allowed_store_ids
 
 logger = logging.getLogger('backend.reports')
 
@@ -27,6 +27,9 @@ def sales_summary(request):
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     store_id = request.query_params.get('store', None)
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    if not allowed_store_ids:
+        return Response({'detail': 'No shop access for this retailer.'}, status=status.HTTP_403_FORBIDDEN)
     
     # Default to last 30 days if no dates provided
     if not date_from:
@@ -49,7 +52,15 @@ def sales_summary(request):
     ).exclude(customer__name__iexact='Manish Traders Loss')
     
     if store_id:
-        invoices = invoices.filter(store_id=store_id)
+        try:
+            sid = int(store_id)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+        if sid not in allowed_store_ids:
+            return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
+        invoices = invoices.filter(store_id=sid)
+    elif not (request.user.is_superuser or request.user.is_staff):
+        invoices = invoices.filter(store_id__in=allowed_store_ids)
     
     # Calculate metrics
     total_sales = invoices.aggregate(
@@ -151,6 +162,9 @@ def inventory_summary(request):
             return tenant_err
         store_id = request.query_params.get('store', None)
         warehouse_id = request.query_params.get('warehouse', None)
+        allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+        if not allowed_store_ids:
+            return Response({'detail': 'No shop access for this retailer.'}, status=status.HTTP_403_FORBIDDEN)
         
         logger.info(f"User {request.user.username} requested inventory summary (store={store_id}, warehouse={warehouse_id})")
         
@@ -163,8 +177,18 @@ def inventory_summary(request):
         
         # Filter by store if provided (through purchase relationship)
         if store_id:
+            try:
+                sid = int(store_id)
+            except (TypeError, ValueError):
+                return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+            if sid not in allowed_store_ids:
+                return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
             products_with_barcodes = products_with_barcodes.filter(
-                barcodes__purchase__store_id=store_id
+                barcodes__purchase__store_id=sid
+            ).distinct()
+        elif not (request.user.is_superuser or request.user.is_staff):
+            products_with_barcodes = products_with_barcodes.filter(
+                barcodes__purchase__store_id__in=allowed_store_ids
             ).distinct()
         
         # Calculate metrics - only for products that have been purchased
@@ -180,7 +204,9 @@ def inventory_summary(request):
         )
         
         if store_id:
-            total_quantity = total_quantity.filter(purchase__store_id=store_id)
+            total_quantity = total_quantity.filter(purchase__store_id=sid)
+        elif not (request.user.is_superuser or request.user.is_staff):
+            total_quantity = total_quantity.filter(purchase__store_id__in=allowed_store_ids)
         
         total_quantity_count = total_quantity.count()
         
@@ -357,6 +383,9 @@ def stock_ordering_report(request):
     if tenant_err:
         return tenant_err
     store_id = request.query_params.get('store', None)
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    if not allowed_store_ids:
+        return Response({'detail': 'No shop access for this retailer.'}, status=status.HTTP_403_FORBIDDEN)
     
     # Only include products that have been purchased (have barcodes)
     products_with_barcodes = Product.objects.filter(
@@ -366,8 +395,18 @@ def stock_ordering_report(request):
     
     # Filter by store if provided (through purchase relationship)
     if store_id:
+        try:
+            sid = int(store_id)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+        if sid not in allowed_store_ids:
+            return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
         products_with_barcodes = products_with_barcodes.filter(
-            barcodes__purchase__store_id=store_id
+            barcodes__purchase__store_id=sid
+        ).distinct()
+    elif not (request.user.is_superuser or request.user.is_staff):
+        products_with_barcodes = products_with_barcodes.filter(
+            barcodes__purchase__store_id__in=allowed_store_ids
         ).distinct()
     
     # Get barcodes in active carts (reserved)
@@ -392,7 +431,7 @@ def stock_ordering_report(request):
         if store_id:
             from backend.locations.models import Store
             try:
-                store = Store.objects.get(id=store_id, retailer_id=retailer.id)
+                store = Store.objects.get(id=sid, retailer_id=retailer.id)
                 store_name = store.name
             except Store.DoesNotExist:
                 pass
@@ -408,7 +447,9 @@ def stock_ordering_report(request):
         
         # Filter by store if provided
         if store_id:
-            product_barcodes = product_barcodes.filter(purchase__store_id=store_id)
+            product_barcodes = product_barcodes.filter(purchase__store_id=sid)
+        elif not (request.user.is_superuser or request.user.is_staff):
+            product_barcodes = product_barcodes.filter(purchase__store_id__in=allowed_store_ids)
         
         # Exclude barcodes in active carts
         if active_carts_barcodes:

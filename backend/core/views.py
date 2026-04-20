@@ -388,7 +388,109 @@ def access_control_user_update(request, pk):
 @permission_classes([AllowAny])
 def onboarding_status(request):
     # Onboarding is intentionally reusable; keep it unlocked.
-    return Response({'completed': False})
+    from backend.tenants.models import Retailer
+
+    retailers = list(
+        Retailer.objects.filter(is_active=True)
+        .order_by('name')
+        .values('id', 'code', 'name')
+    )
+    return Response({'completed': False, 'retailers': retailers})
+
+
+def _normalize_onboarding_mode(request_data):
+    mode = str(request_data.get('mode') or '').strip().lower()
+    if not mode:
+        # Backward compatibility: old payloads were create-only.
+        return 'create_retailer'
+    if mode not in {'create_retailer', 'extend_retailer'}:
+        return None
+    return mode
+
+
+def _resolve_onboarding_retailer(mode, request_data):
+    from backend.tenants.models import Retailer
+
+    if mode == 'create_retailer':
+        retailer_data = request_data.get('retailer') or {}
+        code = str(retailer_data.get('code') or '').strip().upper()
+        name = str(retailer_data.get('name') or '').strip()
+        if not code or not name:
+            return None, Response(
+                {'detail': 'Retailer code and name are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if Retailer.objects.filter(code__iexact=code).exists():
+            return None, Response(
+                {'detail': 'Retailer code already exists.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return {'create': True, 'code': code, 'name': name}, None
+
+    existing = request_data.get('existing_retailer') or {}
+    retailer_id = existing.get('id')
+    retailer_code = str(existing.get('code') or '').strip().upper()
+    retailer_name = str(existing.get('name') or '').strip()
+    retailer_qs = Retailer.objects.filter(is_active=True)
+    retailer = None
+    if retailer_id:
+        retailer = retailer_qs.filter(id=retailer_id).first()
+    elif retailer_code:
+        retailer = retailer_qs.filter(code__iexact=retailer_code).first()
+    elif retailer_name:
+        retailer = retailer_qs.filter(name__iexact=retailer_name).first()
+
+    if not retailer:
+        return None, Response(
+            {'detail': 'Existing retailer is required for extend mode.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return {'create': False, 'retailer': retailer}, None
+
+
+def _validate_onboarding_stores(stores_data, mode):
+    if not stores_data:
+        return None, Response({'detail': 'At least one store is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    normalized = []
+    seen_codes = set()
+    primary_count = 0
+    for row in stores_data:
+        s_name = str(row.get('name') or '').strip()
+        s_code = str(row.get('code') or '').strip().upper()
+        shop_type = str(row.get('shop_type') or 'retail').strip().lower()
+        if not s_name or not s_code:
+            return None, Response({'detail': 'Each store needs name and code.'}, status=status.HTTP_400_BAD_REQUEST)
+        if s_code in seen_codes:
+            return None, Response(
+                {'detail': f'Duplicate store code in payload: {s_code}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        seen_codes.add(s_code)
+        is_primary = bool(row.get('is_primary'))
+        if is_primary:
+            primary_count += 1
+        normalized.append(
+            {
+                'name': s_name,
+                'code': s_code,
+                'shop_type': shop_type,
+                'is_primary': is_primary,
+                'is_active': bool(row.get('is_active', True)),
+            }
+        )
+
+    if primary_count > 1:
+        return None, Response(
+            {'detail': 'Mark only one store as primary.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if mode == 'create_retailer' and primary_count != 1:
+        return None, Response(
+            {'detail': 'Exactly one primary store is required for create mode.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return normalized, None
 
 
 @api_view(['POST'])
@@ -402,61 +504,92 @@ def onboarding_complete(request):
     if provided_password != configured_password:
         return Response({'detail': 'Invalid onboarding password.'}, status=status.HTTP_403_FORBIDDEN)
 
-    retailer_data = request.data.get('retailer') or {}
+    mode = _normalize_onboarding_mode(request.data)
+    if not mode:
+        return Response(
+            {'detail': 'Invalid mode. Use create_retailer or extend_retailer.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     stores_data = request.data.get('stores') or []
     roles_data = request.data.get('roles') or []
     users_data = request.data.get('users') or []
 
-    code = str(retailer_data.get('code') or '').strip().upper()
-    name = str(retailer_data.get('name') or '').strip()
-    if not code or not name:
-        return Response({'detail': 'Retailer code and name are required.'}, status=status.HTTP_400_BAD_REQUEST)
-    if not stores_data:
-        return Response({'detail': 'At least one store is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
     from backend.locations.models import Store
     from backend.tenants.models import Retailer
 
-    if Retailer.objects.filter(code__iexact=code).exists():
-        return Response({'detail': 'Retailer code already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+    retailer_target, retailer_err = _resolve_onboarding_retailer(mode, request.data)
+    if retailer_err:
+        return retailer_err
+
+    normalized_stores, store_err = _validate_onboarding_stores(stores_data, mode)
+    if store_err:
+        return store_err
 
     with transaction.atomic():
-        retailer = Retailer.objects.create(code=code, name=name, is_active=True)
+        if retailer_target['create']:
+            retailer = Retailer.objects.create(
+                code=retailer_target['code'],
+                name=retailer_target['name'],
+                is_active=True,
+            )
+        else:
+            retailer = retailer_target['retailer']
 
         created_stores = {}
         primary_store = None
-        for row in stores_data:
-            s_name = str(row.get('name') or '').strip()
-            s_code = str(row.get('code') or '').strip().upper()
-            if not s_name or not s_code:
+        for row in normalized_stores:
+            s_name = row['name']
+            s_code = row['code']
+            if Store.objects.filter(retailer_id=retailer.id, code__iexact=s_code).exists():
                 transaction.set_rollback(True)
-                return Response({'detail': 'Each store needs name and code.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {'detail': f'Store code already exists for this retailer: {s_code}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             store = Store.objects.create(
                 retailer=retailer,
                 name=s_name,
                 code=s_code,
-                shop_type=str(row.get('shop_type') or 'retail'),
-                is_active=bool(row.get('is_active', True)),
+                shop_type=row['shop_type'],
+                is_active=row['is_active'],
             )
             created_stores[s_code] = store
-            if bool(row.get('is_primary')):
+            if row['is_primary']:
                 primary_store = store
 
-        if not primary_store:
-            primary_store = next(iter(created_stores.values()))
-        retailer.primary_store = primary_store
-        retailer.save(update_fields=['primary_store_id'])
+        if primary_store:
+            retailer.primary_store = primary_store
+            retailer.save(update_fields=['primary_store_id'])
+        elif mode == 'create_retailer':
+            transaction.set_rollback(True)
+            return Response(
+                {'detail': 'Create mode requires one primary store.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif not retailer.primary_store_id and created_stores:
+            transaction.set_rollback(True)
+            return Response(
+                {'detail': 'Extend mode needs an existing primary store or mark one new store as primary.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         created_roles = {}
+        existing_roles = {
+            r.name: r
+            for r in Role.objects.filter(retailer_id=retailer.id)
+        }
         for role in roles_data:
             role_name = str(role.get('name') or '').strip()
             if not role_name:
                 continue
-            access_role = Role.objects.create(
-                retailer=retailer,
-                name=role_name,
-                description=str(role.get('description') or '').strip(),
-            )
+            access_role = existing_roles.get(role_name)
+            if not access_role:
+                access_role = Role.objects.create(
+                    retailer=retailer,
+                    name=role_name,
+                    description=str(role.get('description') or '').strip(),
+                )
             codenames = role.get('permission_codenames') or []
             perms = AccessPermission.objects.filter(codename__in=codenames)
             access_role.permissions.set(perms)
@@ -480,6 +613,10 @@ def onboarding_complete(request):
             dashboard_role.permissions.set([dashboard_perm])
 
         created_user_ids = []
+        all_retailer_stores_by_code = {
+            s.code.upper(): s
+            for s in Store.objects.filter(retailer_id=retailer.id)
+        }
         for idx, u in enumerate(users_data):
             username = str(u.get('username') or '').strip()
             password = str(u.get('password') or '')
@@ -514,17 +651,22 @@ def onboarding_complete(request):
 
             assigned_codes = [str(x).strip().upper() for x in (u.get('assigned_store_codes') or []) if str(x).strip()]
             if assigned_codes:
-                assigned_store_ids = [created_stores[c].id for c in assigned_codes if c in created_stores]
-                user.assigned_stores.set(Store.objects.filter(id__in=assigned_store_ids))
+                assigned_stores = [all_retailer_stores_by_code[c] for c in assigned_codes if c in all_retailer_stores_by_code]
+                if len(assigned_stores) != len(assigned_codes):
+                    transaction.set_rollback(True)
+                    return Response(
+                        {'detail': f'Invalid assigned_store_codes for user {username}.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                user.assigned_stores.set(assigned_stores)
             elif idx == 0:
-                # Default onboarding owner can access all stores of this new retailer.
-                user.assigned_stores.set(created_stores.values())
+                user.assigned_stores.set(Store.objects.filter(retailer_id=retailer.id))
 
             default_code = str(u.get('default_store_code') or '').strip().upper()
-            if default_code and default_code in created_stores:
-                user.default_store = created_stores[default_code]
+            if default_code and default_code in all_retailer_stores_by_code:
+                user.default_store = all_retailer_stores_by_code[default_code]
             elif idx == 0:
-                user.default_store = primary_store
+                user.default_store = retailer.primary_store
             if user.default_store_id:
                 user.save(update_fields=['default_store'])
 
@@ -554,8 +696,7 @@ def onboarding_complete(request):
                         defaults={'role': dashboard_role},
                     )
             elif idx == 0:
-                # Onboarding owner gets full permissions on all stores of this retailer.
-                for store in created_stores.values():
+                for store in Store.objects.filter(retailer_id=retailer.id):
                     UserStoreRole.objects.update_or_create(
                         user_id=user.id,
                         store_id=store.id,
@@ -565,7 +706,9 @@ def onboarding_complete(request):
     return Response(
         {
             'detail': 'Onboarding completed.',
+            'mode': mode,
             'retailer_id': retailer.id,
+            'retailer_code': retailer.code,
             'store_count': len(created_stores),
             'user_count': len(created_user_ids),
             'role_count': len(created_roles),
@@ -622,11 +765,23 @@ def setting_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def audit_log_list(request):
     """List all audit logs with filtering"""
-    queryset = AuditLog.objects.all()
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    queryset = AuditLog.objects.filter(
+        Q(user__retailer_id=retailer.id) | Q(changes__retailer_id=retailer.id)
+    )
     
-    # Filter by user if not admin
-    if not request.user.is_staff:
-        queryset = queryset.filter(user=request.user)
+    is_admin = bool(request.user.is_staff or request.user.is_superuser)
+    allowed_store_ids = []
+    if not is_admin:
+        allowed_store_ids = list(
+            request.user.assigned_stores.filter(retailer_id=retailer.id).values_list('id', flat=True)
+        )
+        if not allowed_store_ids and request.user.default_store_id:
+            allowed_store_ids = [request.user.default_store_id]
+        if not allowed_store_ids:
+            return Response([])
     
     # Filter by action (comma-separated for multiple, e.g. action=invoice_update,invoice_edit)
     action_filter = request.query_params.get('action', None)
@@ -647,6 +802,37 @@ def audit_log_list(request):
         queryset = queryset.filter(created_at__gte=date_from)
     if date_to:
         queryset = queryset.filter(created_at__lte=date_to)
+
+    store_filter = request.query_params.get('store', None)
+    if store_filter:
+        try:
+            sid = int(store_filter)
+            if (not is_admin) and sid not in allowed_store_ids:
+                return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
+            queryset = queryset.filter(
+                Q(changes__store_id=sid)
+                | Q(changes__store=sid)
+                | Q(changes__store_id=str(sid))
+                | Q(changes__store=str(sid))
+                | Q(changes__from_store=sid)
+                | Q(changes__to_store=sid)
+                | Q(changes__from_store=str(sid))
+                | Q(changes__to_store=str(sid))
+            )
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+    elif not is_admin:
+        allowed_store_ids_str = [str(sid) for sid in allowed_store_ids]
+        queryset = queryset.filter(
+            Q(changes__store_id__in=allowed_store_ids)
+            | Q(changes__store__in=allowed_store_ids)
+            | Q(changes__store_id__in=allowed_store_ids_str)
+            | Q(changes__store__in=allowed_store_ids_str)
+            | Q(changes__from_store__in=allowed_store_ids)
+            | Q(changes__to_store__in=allowed_store_ids)
+            | Q(changes__from_store__in=allowed_store_ids_str)
+            | Q(changes__to_store__in=allowed_store_ids_str)
+        )
     
     queryset = queryset.order_by('-created_at')
     serializer = AuditLogSerializer(queryset, many=True)
@@ -657,11 +843,36 @@ def audit_log_list(request):
 @permission_classes([IsAuthenticated])
 def audit_log_detail(request, pk):
     """Retrieve an audit log"""
-    audit_log = get_object_or_404(AuditLog, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    audit_log = get_object_or_404(
+        AuditLog.objects.filter(
+            Q(user__retailer_id=retailer.id) | Q(changes__retailer_id=retailer.id)
+        ),
+        pk=pk,
+    )
     
-    # Check permission if not admin
-    if not request.user.is_staff and audit_log.user != request.user:
-        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+    # Non-admin users can access only logs tied to their assigned/default stores.
+    if not request.user.is_staff and not request.user.is_superuser:
+        allowed_store_ids = list(
+            request.user.assigned_stores.filter(retailer_id=retailer.id).values_list('id', flat=True)
+        )
+        if not allowed_store_ids and request.user.default_store_id:
+            allowed_store_ids = [request.user.default_store_id]
+        if not allowed_store_ids:
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        allowed_store_ids_str = {str(sid) for sid in allowed_store_ids}
+        log_changes = audit_log.changes or {}
+        log_store_refs = {
+            str(log_changes.get('store_id')) if log_changes.get('store_id') is not None else None,
+            str(log_changes.get('store')) if log_changes.get('store') is not None else None,
+            str(log_changes.get('from_store')) if log_changes.get('from_store') is not None else None,
+            str(log_changes.get('to_store')) if log_changes.get('to_store') is not None else None,
+        }
+        log_store_refs.discard(None)
+        if not (log_store_refs & allowed_store_ids_str):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
     
     serializer = AuditLogSerializer(audit_log)
     return Response(serializer.data)

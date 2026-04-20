@@ -123,6 +123,21 @@ export default function ActiveCartsOverview() {
     loadUser();
   }, []);
 
+  useEffect(() => {
+    const sessionUser = user ?? auth.getUser();
+    if (!sessionUser) return;
+    if (isPosAdminContext(sessionUser)) return;
+    if (storeId !== '') return;
+    const preferredStoreId =
+      sessionUser?.default_store?.id ||
+      (Array.isArray(sessionUser?.assigned_stores) && sessionUser.assigned_stores.length
+        ? sessionUser.assigned_stores[0].id
+        : null);
+    if (preferredStoreId) {
+      setStoreId(Number(preferredStoreId));
+    }
+  }, [user, storeId]);
+
   const { data: storesResponse } = useQuery({
     queryKey: ['stores'],
     queryFn: async () => {

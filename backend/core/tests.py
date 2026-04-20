@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.test import override_settings
 
 from backend.catalog.models import Product, Barcode, Category
 from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
@@ -651,3 +652,61 @@ class DashboardBlocksInUserMeTests(APITestCase):
         resp = self.client.get(reverse('user-me'))
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
         self.assertEqual(resp.data.get('dashboard_blocks'), {})
+
+
+@override_settings(ONBOARDING_SETUP_PASSWORD='test-onboard-pass')
+class OnboardingFlowTests(APITestCase):
+    def _payload(self):
+        return {
+            'password': 'test-onboard-pass',
+            'stores': [
+                {'name': 'Main Hub', 'code': 'HUB', 'shop_type': 'warehouse', 'is_primary': True},
+                {'name': 'Shop One', 'code': 'SHOP1', 'shop_type': 'retail', 'is_primary': False},
+            ],
+            'roles': [{'name': 'Cashier', 'description': 'Can bill', 'permission_codenames': ['nav.pos']}],
+            'users': [
+                {
+                    'username': 'owner_bootstrap',
+                    'password': 'pass12345',
+                    'groups': ['Admin'],
+                    'default_store_code': 'HUB',
+                    'assigned_store_codes': ['HUB', 'SHOP1'],
+                    'role_name': 'Cashier',
+                }
+            ],
+        }
+
+    def test_create_retailer_mode_creates_primary_store(self):
+        payload = self._payload()
+        payload['mode'] = 'create_retailer'
+        payload['retailer'] = {'code': 'RNEW1', 'name': 'Retailer New'}
+        response = self.client.post(reverse('onboarding-complete'), payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        retailer = Retailer.objects.get(code='RNEW1')
+        self.assertIsNotNone(retailer.primary_store_id)
+        self.assertEqual(retailer.primary_store.code, 'HUB')
+        self.assertEqual(retailer.primary_store.shop_type, 'warehouse')
+
+    def test_extend_retailer_mode_adds_store_to_existing(self):
+        retailer = Retailer.objects.create(code='REXT1', name='Retailer Extend', is_active=True)
+        existing = Store.objects.create(retailer=retailer, name='Existing', code='EXIST', shop_type='retail', is_active=True)
+        retailer.primary_store = existing
+        retailer.save(update_fields=['primary_store'])
+
+        payload = self._payload()
+        payload['mode'] = 'extend_retailer'
+        payload['existing_retailer'] = {'id': retailer.id}
+        response = self.client.post(reverse('onboarding-complete'), payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(Store.objects.filter(retailer=retailer, code='SHOP1').exists())
+        retailer.refresh_from_db()
+        self.assertEqual(retailer.primary_store.code, 'HUB')
+
+    def test_onboarding_rejects_multiple_primary_in_payload(self):
+        payload = self._payload()
+        payload['mode'] = 'create_retailer'
+        payload['retailer'] = {'code': 'RNEW2', 'name': 'Retailer New 2'}
+        payload['stores'][1]['is_primary'] = True
+        response = self.client.post(reverse('onboarding-complete'), payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('primary', str(response.data).lower())

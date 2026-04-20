@@ -52,7 +52,7 @@ def normalize_barcode_for_search(barcode_str: str) -> str:
     return ''.join(result_parts)
 
 
-def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=False):
+def find_barcode_by_search_value(search_value: str, retailer_id=None, logger=None, skip_cache=False):
     """
     Find a Barcode by search value. EXACT match only — no .first(), no prefix/icontains/iexact.
     Priority: cache by id (unless skip_cache=True), then exact short_code (get), then exact barcode (get).
@@ -60,6 +60,8 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
     skip_cache: if True, do not read from or write to barcode cache (use for invoice add to avoid stale matches).
     """
     if not search_value or not search_value.strip():
+        return None
+    if retailer_id is None:
         return None
     
     barcode_clean = search_value.strip().upper()
@@ -74,7 +76,7 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
                 try:
                     barcode_obj = Barcode.objects.select_related(
                         'product', 'product__category', 'product__brand'
-                    ).get(id=cached_data['id'])
+                    ).get(id=cached_data['id'], retailer_id=retailer_id)
                     if barcode_obj.product and barcode_obj.product.is_active:
                         if logger:
                             logger.debug(f"Cache hit for barcode: '{barcode_clean}' -> ID: {barcode_obj.id}")
@@ -87,7 +89,7 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
                 try:
                     barcode_obj = Barcode.objects.select_related(
                         'product', 'product__category', 'product__brand'
-                    ).get(id=cached_data['id'])
+                    ).get(id=cached_data['id'], retailer_id=retailer_id)
                     if barcode_obj.product and barcode_obj.product.is_active:
                         if logger:
                             logger.debug(f"Cache hit for short_code: '{barcode_clean}' -> ID: {barcode_obj.id}")
@@ -100,7 +102,7 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
 
     # EXACT match only: short_code then barcode. Use get(), never first().
     try:
-        barcode_obj = Barcode.objects.filter(short_code=barcode_clean).select_related(
+        barcode_obj = Barcode.objects.filter(short_code=barcode_clean, retailer_id=retailer_id).select_related(
             'product', 'product__category', 'product__brand'
         ).get()
         if barcode_obj.product and barcode_obj.product.is_active:
@@ -115,7 +117,7 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
         pass
 
     try:
-        barcode_obj = Barcode.objects.filter(barcode=barcode_clean).select_related(
+        barcode_obj = Barcode.objects.filter(barcode=barcode_clean, retailer_id=retailer_id).select_related(
             'product', 'product__category', 'product__brand'
         ).get()
         if barcode_obj.product and barcode_obj.product.is_active:

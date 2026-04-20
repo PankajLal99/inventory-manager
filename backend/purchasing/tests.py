@@ -223,6 +223,51 @@ class PurchaseStockUpdateTests(TestCase):
         # Check stock was updated
         stock = Stock.objects.get(product=self.product, store=self.store)
         self.assertEqual(stock.quantity, initial_quantity + Decimal('10.00'))
+
+
+class PurchaseLocationValidationTests(TestCase):
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.client = AuthenticatedAPIClient()
+        self.client.authenticate_user(self.user)
+        self.supplier = TestDataFactory.create_supplier()
+        self.store = TestDataFactory.create_store()
+        self.product = TestDataFactory.create_product(track_inventory=True)
+
+    def test_create_finalized_purchase_requires_location(self):
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': timezone.now().date().isoformat(),
+            'status': 'finalized',
+            'items': [{'product': self.product.id, 'quantity': '2.00', 'unit_price': '10.00'}],
+        }
+        response = self.client.post('/api/v1/purchases/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('location', str(response.data).lower())
+
+    def test_redistribute_requires_explicit_purchase_location(self):
+        purchase = Purchase.objects.create(
+            supplier=self.supplier,
+            purchase_date=timezone.now().date(),
+            status='finalized',
+            created_by=self.user,
+            retailer=self.user.retailer,
+        )
+        item = PurchaseItem.objects.create(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('2.00'),
+            shop_quantity=Decimal('1.00'),
+            warehouse_quantity=Decimal('1.00'),
+            unit_price=Decimal('10.00'),
+        )
+        response = self.client.post(
+            f'/api/v1/purchases/{purchase.id}/redistribute-stock/',
+            {'items': [{'item_id': item.id, 'shop_quantity': '1.00', 'warehouse_quantity': '1.00'}]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('location', str(response.data).lower())
     
     def test_update_purchase_quantity_increases_stock(self):
         """Test that increasing purchase quantity increases stock correctly"""

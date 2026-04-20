@@ -51,6 +51,11 @@ def create_audit_log(request=None, action=None, model_name=None, object_id=None,
             )
             return None
 
+        payload_changes = dict(changes or {})
+        # Persist tenant context on each log entry so history can be safely scoped.
+        if audit_user and getattr(audit_user, 'retailer_id', None):
+            payload_changes.setdefault('retailer_id', audit_user.retailer_id)
+
         AuditLog.objects.create(
             user=audit_user if audit_user and audit_user.is_authenticated else None,
             action=action,
@@ -59,7 +64,7 @@ def create_audit_log(request=None, action=None, model_name=None, object_id=None,
             object_name=object_name,
             object_reference=object_reference,
             barcode=barcode,
-            changes=changes or {},
+            changes=payload_changes,
             ip_address=ip_address
         )
     except Exception as e:

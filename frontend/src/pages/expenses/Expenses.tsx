@@ -46,10 +46,10 @@ interface ExpenseFormState {
   expense_amount: string;
 }
 
-const getDefaultFormState = (): ExpenseFormState => ({
+const getDefaultFormState = (defaultLenderName: string): ExpenseFormState => ({
   expense_date: getTodayDateString(),
   expense_type: '',
-  lender_name: 'Manish Traders',
+  lender_name: defaultLenderName,
   borrower_name: '',
   payment_choices_type: 'CASH',
   expense_amount: '',
@@ -65,10 +65,14 @@ export default function Expenses() {
   const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
+  const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState(''));
   const [debouncedExpenseType, setDebouncedExpenseType] = useState('');
   const [debouncedBorrowerName, setDebouncedBorrowerName] = useState('');
   const canSeeExpenseListing = canSeeSuperMetrics(user);
+  const defaultLenderName = useMemo(
+    () => (user?.retailer?.name ? String(user.retailer.name) : ''),
+    [user]
+  );
 
   useEffect(() => {
     const loadUser = async () => {
@@ -200,12 +204,12 @@ export default function Expenses() {
   const closeModal = () => {
     setIsModalOpen(false);
     setEditingExpense(null);
-    setForm(getDefaultFormState());
+    setForm(getDefaultFormState(defaultLenderName));
   };
 
   const openCreateModal = () => {
     setEditingExpense(null);
-    setForm(getDefaultFormState());
+    setForm(getDefaultFormState(defaultLenderName));
     setIsModalOpen(true);
   };
 
@@ -214,7 +218,7 @@ export default function Expenses() {
     setForm({
       expense_date: expense.expense_date || '',
       expense_type: expense.expense_type || '',
-      lender_name: expense.lender_name || 'Manish Traders',
+      lender_name: expense.lender_name || defaultLenderName,
       borrower_name: expense.borrower_name || '',
       payment_choices_type: expense.payment_choices_type || 'CASH',
       expense_amount: String(expense.expense_amount ?? ''),
@@ -270,7 +274,7 @@ export default function Expenses() {
     const payload: ExpenseFormState = {
       ...form,
       expense_type: form.expense_type.trim(),
-      lender_name: form.lender_name.trim() || 'Manish Traders',
+      lender_name: form.lender_name.trim() || defaultLenderName,
       borrower_name: form.borrower_name.trim(),
       expense_amount: String(Number(form.expense_amount)),
     };

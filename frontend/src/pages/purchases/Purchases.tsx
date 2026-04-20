@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { purchasingApi, productsApi } from '../../lib/api';
+import { purchasingApi, productsApi, catalogApi } from '../../lib/api';
 import { formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import { isStoreManagementAdmin } from '../../lib/access';
@@ -160,12 +160,15 @@ export default function Purchases() {
     purchase_date: toLocalDateString(new Date()),
     bill_number: '',
     notes: '',
+    store: '',
+    warehouse: '',
   });
   const [supplierSearch, setSupplierSearch] = useState(''); // For typable supplier in modal
   const [supplierFilterInput, setSupplierFilterInput] = useState(''); // For filtering suppliers in modal dropdown
   const [showSupplierDropdown, setShowSupplierDropdown] = useState(false);
   const [purchaseItems, setPurchaseItems] = useState<PurchaseItem[]>([]);
   const [productSearch, setProductSearch] = useState('');
+  const [debouncedProductSearch, setDebouncedProductSearch] = useState('');
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [supplierFormData, setSupplierFormData] = useState({
@@ -190,6 +193,65 @@ export default function Purchases() {
 
   const purchasesInfiniteQueryKey = ['purchases', supplierFilter, productFilter, dateFrom, dateTo] as const;
 
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedProductSearch(productSearch.trim());
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [productSearch]);
+
+  const { data: storesData } = useQuery({
+    queryKey: ['stores', 'purchases-form'],
+    queryFn: async () => {
+      const response = await catalogApi.stores.list();
+      return response.data;
+    },
+    retry: false,
+  });
+
+  const { data: warehousesData } = useQuery({
+    queryKey: ['warehouses', 'purchases-form'],
+    queryFn: async () => {
+      const response = await catalogApi.warehouses.list();
+      return response.data;
+    },
+    retry: false,
+  });
+
+  const visibleStores = useMemo(() => {
+    if (Array.isArray(storesData)) return storesData;
+    if (Array.isArray((storesData as any)?.results)) return (storesData as any).results;
+    if (Array.isArray((storesData as any)?.data)) return (storesData as any).data;
+    return [];
+  }, [storesData]);
+
+  const visibleWarehouses = useMemo(() => {
+    if (Array.isArray(warehousesData)) return warehousesData;
+    if (Array.isArray((warehousesData as any)?.results)) return (warehousesData as any).results;
+    if (Array.isArray((warehousesData as any)?.data)) return (warehousesData as any).data;
+    return [];
+  }, [warehousesData]);
+
+  const autoResolvedLocation = useMemo(() => {
+    const userAssigned = Array.isArray(user?.assigned_stores) ? user.assigned_stores : [];
+    const userDefault = user?.default_store || null;
+    if (userAssigned.length === 1) {
+      return { type: 'store' as const, id: String(userAssigned[0].id) };
+    }
+    if (userAssigned.length === 0 && userDefault?.id) {
+      return { type: 'store' as const, id: String(userDefault.id) };
+    }
+    if (visibleStores.length === 1) {
+      return { type: 'store' as const, id: String(visibleStores[0].id) };
+    }
+    if (visibleStores.length === 0 && visibleWarehouses.length === 1) {
+      return { type: 'warehouse' as const, id: String(visibleWarehouses[0].id) };
+    }
+    return null;
+  }, [user, visibleStores, visibleWarehouses]);
+
+  const shouldAskLocation = !editingPurchase && !autoResolvedLocation && (visibleStores.length + visibleWarehouses.length > 1);
+
   // Fetch products for search (must be before useEffect hooks that use products)
   const {
     data: productsData,
@@ -197,16 +259,16 @@ export default function Purchases() {
     hasNextPage: hasNextProductsPage,
     isFetchingNextPage: isFetchingNextProductsPage,
   } = useInfiniteQuery({
-    queryKey: ['products', 'purchase-search', productSearch],
-    queryFn: async ({ pageParam = 1 }) => {
-      if (!productSearch.trim()) return { results: [], next: null };
+    queryKey: ['products', 'purchase-search', debouncedProductSearch],
+    queryFn: async ({ pageParam = 1, signal }) => {
+      if (!debouncedProductSearch) return { results: [], next: null };
       const response = await productsApi.list({
-        search: productSearch.trim(),
+        search: debouncedProductSearch,
         tag: 'new',
         search_mode: 'name_only',
         exclude_other_custom: 'true',
         page: pageParam,
-      });
+      }, { signal });
       return response.data;
     },
     getNextPageParam: (lastPage: any) => {
@@ -217,9 +279,10 @@ export default function Purchases() {
       if (nextMatch) return Number(nextMatch[1]);
       return undefined;
     },
-    enabled: productSearch.trim().length > 0,
+    enabled: debouncedProductSearch.length >= 2,
     initialPageParam: 1,
     retry: false,
+    staleTime: 30_000,
   });
 
   // Compute products array from productsData (needed for keyboard shortcuts)
@@ -567,6 +630,8 @@ export default function Purchases() {
           purchase_date: createdPurchase.purchase_date || formData.purchase_date,
           bill_number: createdPurchase.bill_number || '',
           notes: createdPurchase.notes || '',
+          store: createdPurchase.store ? String(createdPurchase.store) : '',
+          warehouse: createdPurchase.warehouse ? String(createdPurchase.warehouse) : '',
         });
         const items = (createdPurchase?.items || []).map((item: any) => ({
           id: item.id,
@@ -673,6 +738,8 @@ export default function Purchases() {
       purchase_date: toLocalDateString(new Date()),
       bill_number: '',
       notes: '',
+      store: '',
+      warehouse: '',
     });
     setPurchaseItems([]);
     setProductSearch('');
@@ -709,6 +776,8 @@ export default function Purchases() {
         purchase_date: fullPurchase.purchase_date || toLocalDateString(new Date()),
         bill_number: fullPurchase.bill_number || '',
         notes: fullPurchase.notes || '',
+        store: fullPurchase.store ? String(fullPurchase.store) : '',
+        warehouse: fullPurchase.warehouse ? String(fullPurchase.warehouse) : '',
       });
 
       // Convert items to form format; for draft, show empty string for 0 qty/price (placeholders)
@@ -850,6 +919,17 @@ export default function Purchases() {
     return purchaseItems.reduce((sum, item) => sum + (parseInt(item.quantity) || 0), 0);
   };
 
+  useEffect(() => {
+    if (!showForm || editingPurchase) return;
+    if (formData.store || formData.warehouse) return;
+    if (!autoResolvedLocation) return;
+    if (autoResolvedLocation.type === 'store') {
+      setFormData((prev) => ({ ...prev, store: autoResolvedLocation.id, warehouse: '' }));
+    } else {
+      setFormData((prev) => ({ ...prev, warehouse: autoResolvedLocation.id, store: '' }));
+    }
+  }, [showForm, editingPurchase, autoResolvedLocation, formData.store, formData.warehouse]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -936,6 +1016,14 @@ export default function Purchases() {
 
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
     if (formData.notes) submitData.notes = formData.notes;
+    const resolvedStore = formData.store || (autoResolvedLocation?.type === 'store' ? autoResolvedLocation.id : '');
+    const resolvedWarehouse = formData.warehouse || (autoResolvedLocation?.type === 'warehouse' ? autoResolvedLocation.id : '');
+    if (resolvedStore) submitData.store = parseInt(resolvedStore, 10);
+    if (resolvedWarehouse) submitData.warehouse = parseInt(resolvedWarehouse, 10);
+    if (!submitData.store && !submitData.warehouse) {
+      alert('Please select a purchase location (store/warehouse).');
+      return;
+    }
 
     if (editingPurchase) {
       if (editingPurchaseStatus === 'draft') {
@@ -1002,6 +1090,14 @@ export default function Purchases() {
     };
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
     if (formData.notes) submitData.notes = formData.notes;
+    const resolvedStore = formData.store || (autoResolvedLocation?.type === 'store' ? autoResolvedLocation.id : '');
+    const resolvedWarehouse = formData.warehouse || (autoResolvedLocation?.type === 'warehouse' ? autoResolvedLocation.id : '');
+    if (resolvedStore) submitData.store = parseInt(resolvedStore, 10);
+    if (resolvedWarehouse) submitData.warehouse = parseInt(resolvedWarehouse, 10);
+    if (!submitData.store && !submitData.warehouse) {
+      alert('Please select a purchase location (store/warehouse).');
+      return;
+    }
 
     if (editingPurchase) {
       updateMutation.mutate({ id: editingPurchase, data: submitData });
@@ -2258,6 +2354,37 @@ export default function Purchases() {
               />
             </div>
 
+            {shouldAskLocation && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Store</label>
+                  <select
+                    value={formData.store}
+                    onChange={(e) => setFormData({ ...formData, store: e.target.value, warehouse: '' })}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Select store</option>
+                    {visibleStores.map((s: any) => (
+                      <option key={`store-${s.id}`} value={String(s.id)}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Warehouse</label>
+                  <select
+                    value={formData.warehouse}
+                    onChange={(e) => setFormData({ ...formData, warehouse: e.target.value, store: '' })}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  >
+                    <option value="">Select warehouse</option>
+                    {visibleWarehouses.map((w: any) => (
+                      <option key={`warehouse-${w.id}`} value={String(w.id)}>{w.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
             {/* Add Products Section */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Products *</label>
@@ -2335,7 +2462,9 @@ export default function Purchases() {
                     ) : productSearch.trim().length > 0 ? (
                       <div>
                         <div className="px-4 py-3 text-sm text-gray-500 text-center border-b border-gray-200">
-                          No products found matching "{productSearch}"
+                          {productSearch.trim().length < 2
+                            ? 'Type at least 2 characters to search products'
+                            : `No products found matching "${productSearch}"`}
                         </div>
                         <button
                           type="button"

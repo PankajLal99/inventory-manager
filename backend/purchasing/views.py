@@ -17,6 +17,20 @@ def _resolve_retailer_or_legacy(request):
     return retailer, tenant_err
 
 
+def _resolve_default_purchase_location(request, retailer):
+    user = request.user
+    assigned_ids = list(
+        user.assigned_stores.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True)
+    )
+    if len(assigned_ids) == 1:
+        return {'store': assigned_ids[0]}
+    if not assigned_ids and getattr(user, 'default_store_id', None):
+        return {'store': user.default_store_id}
+    if not assigned_ids and getattr(retailer, 'primary_store_id', None):
+        return {'store': retailer.primary_store_id}
+    return {}
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def purchase_list_create(request):
@@ -80,6 +94,10 @@ def purchase_list_create(request):
     else:  # POST
         data = request.data.copy()
         items_data = data.pop('items', [])
+        if retailer and not data.get('store') and not data.get('warehouse'):
+            location_defaults = _resolve_default_purchase_location(request, retailer)
+            for key, value in location_defaults.items():
+                data[key] = value
         
         serializer = PurchaseSerializer(
             data=data,
@@ -671,10 +689,7 @@ def vendor_purchase_cancel(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def purchase_redistribute_stock(request, pk):
-    """Redistribute stock for a finalized purchase between shop and warehouse.
-    Uses purchase.store (Store model) for shop stock and purchase.warehouse (Warehouse model)
-    or Store with shop_type='warehouse' for warehouse stock. Falls back to first active location if not set.
-    """
+    """Redistribute stock for a finalized purchase between explicit locations."""
     from django.db import transaction
     from backend.inventory.models import Stock
     from backend.catalog.models import Barcode
@@ -701,37 +716,19 @@ def purchase_redistribute_stock(request, pk):
     if not items_distribution:
         return Response({'error': 'Distribution data is required.'}, status=status.HTTP_400_BAD_REQUEST)
     
-    # Use purchase's store/warehouse from Purchase model; fallback to defaults if not set
+    # Use purchase's explicit store/warehouse only.
     shop_store = purchase.store
-    if not shop_store:
-        shop_store = Store.objects.filter(shop_type='retail', is_active=True)
-        if retailer:
-            shop_store = shop_store.filter(retailer_id=retailer.id)
-        shop_store = shop_store.first()
-    if not shop_store:
-        shop_store = Store.objects.filter(is_active=True).exclude(shop_type='warehouse')
-        if retailer:
-            shop_store = shop_store.filter(retailer_id=retailer.id)
-        shop_store = shop_store.first()
 
     warehouse_obj = purchase.warehouse
     warehouse_store = None  # Store with shop_type='warehouse' as alternative
-    if not warehouse_obj:
-        # Prefer Warehouse with code GODOWN (primary warehouse)
-        wh_qs = Warehouse.objects.filter(code='GODOWN', is_active=True)
-        if retailer:
-            wh_qs = wh_qs.filter(retailer_id=retailer.id)
-        warehouse_obj = wh_qs.first()
-    if not warehouse_obj:
-        wh_store_qs = Store.objects.filter(shop_type='warehouse', is_active=True)
-        if retailer:
-            wh_store_qs = wh_store_qs.filter(retailer_id=retailer.id)
-        warehouse_store = wh_store_qs.first()
-    if not warehouse_obj and not warehouse_store:
-        wh_qs = Warehouse.objects.filter(is_active=True)
-        if retailer:
-            wh_qs = wh_qs.filter(retailer_id=retailer.id)
-        warehouse_obj = wh_qs.first()
+    if not warehouse_obj and shop_store and shop_store.shop_type == 'warehouse':
+        warehouse_store = shop_store
+
+    if not shop_store and not warehouse_obj and not warehouse_store:
+        return Response(
+            {'error': 'Purchase has no location. Set store or warehouse before redistribution.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     with transaction.atomic():
         for dist in items_distribution:
@@ -754,6 +751,17 @@ def purchase_redistribute_stock(request, pk):
                 return Response(
                     {'error': f"Distribution sum ({new_shop_qty + new_wh_qty}) for {item.product.name} must equal total quantity ({item.quantity})."},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if new_shop_qty > 0 and not shop_store:
+                return Response(
+                    {'error': f'{item.product.name} has shop quantity but purchase.store is not set.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if new_wh_qty > 0 and not (warehouse_obj or warehouse_store):
+                return Response(
+                    {'error': f'{item.product.name} has warehouse quantity but purchase.warehouse is not set.'},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
             
             # Calculate differences to update Stock model

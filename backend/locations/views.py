@@ -125,10 +125,9 @@ def store_detail(request, pk):
     """Retrieve, update or delete a store (update/delete requires admin)"""
     try:
         retailer, tenant_err = require_active_retailer(request)
-        filters = {'pk': pk}
-        if not tenant_err and retailer:
-            filters['retailer_id'] = retailer.id
-        store = get_object_or_404(Store, **filters)
+        if tenant_err:
+            return tenant_err
+        store = get_object_or_404(Store, pk=pk, retailer_id=retailer.id)
         
         if request.method == 'GET':
             logger.debug(f"User {request.user.username} retrieved store {pk}")
@@ -189,10 +188,10 @@ def store_detail(request, pk):
 def warehouse_list_create(request):
     """List all warehouses or create a new warehouse"""
     retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        warehouses = Warehouse.objects.all()
-        if not tenant_err and retailer:
-            warehouses = warehouses.filter(retailer_id=retailer.id)
+        warehouses = Warehouse.objects.filter(retailer_id=retailer.id)
         serializer = WarehouseSerializer(warehouses, many=True)
         return Response(serializer.data)
     else:
@@ -200,10 +199,7 @@ def warehouse_list_create(request):
             return Response({'error': 'Only administrators can create warehouses'}, status=status.HTTP_403_FORBIDDEN)
         serializer = WarehouseSerializer(data=request.data)
         if serializer.is_valid():
-            if not tenant_err and retailer:
-                serializer.save(retailer_id=retailer.id)
-            else:
-                serializer.save()
+            serializer.save(retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -213,10 +209,9 @@ def warehouse_list_create(request):
 def warehouse_detail(request, pk):
     """Retrieve, update or delete a warehouse"""
     retailer, tenant_err = require_active_retailer(request)
-    filters = {'pk': pk}
-    if not tenant_err and retailer:
-        filters['retailer_id'] = retailer.id
-    warehouse = get_object_or_404(Warehouse, **filters)
+    if tenant_err:
+        return tenant_err
+    warehouse = get_object_or_404(Warehouse, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = WarehouseSerializer(warehouse)

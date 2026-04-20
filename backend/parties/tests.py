@@ -18,6 +18,9 @@ from backend.parties.models import (
     InternalCustomer,
     InternalLedgerEntry,
 )
+from backend.tenants.models import Retailer
+from backend.locations.models import Store
+from backend.pos.models import Invoice
 
 User = get_user_model()
 
@@ -239,6 +242,109 @@ class LedgerAPITestCase(APITestCase):
         self.assertEqual(self.client.patch(detail_url, {'amount': '20'}, format='json').status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(self.client.delete(detail_url).status_code, status.HTTP_403_FORBIDDEN)
 
+
+class LedgerStoreScopedSummaryTests(APITestCase):
+    def setUp(self):
+        self.retailer = Retailer.objects.create(code='LEDGER_R1', name='Ledger Retailer 1', is_active=True)
+        self.other_retailer = Retailer.objects.create(code='LEDGER_R2', name='Ledger Retailer 2', is_active=True)
+        self.admin = User.objects.create_user(
+            username='ledger_store_admin',
+            password='testpass123',
+            retailer=self.retailer,
+        )
+        admin_group, _ = Group.objects.get_or_create(name='Admin')
+        self.admin.groups.add(admin_group)
+        self.client.force_authenticate(user=self.admin)
+        self.customer = Customer.objects.create(
+            retailer=self.retailer,
+            name='Store Scoped Customer',
+            phone='987650001',
+            credit_balance=Decimal('0.00'),
+        )
+        self.other_customer = Customer.objects.create(
+            retailer=self.other_retailer,
+            name='Other Tenant Customer',
+            phone='987650002',
+            credit_balance=Decimal('0.00'),
+        )
+        self.store_a = Store.objects.create(retailer=self.retailer, name='Store A', code='SA', shop_type='retail', is_active=True)
+        self.store_b = Store.objects.create(retailer=self.retailer, name='Store B', code='SB', shop_type='retail', is_active=True)
+        self.other_store = Store.objects.create(retailer=self.other_retailer, name='Other Store', code='OS', shop_type='retail', is_active=True)
+
+    def _create_invoice(self, store, number: str):
+        return Invoice.objects.create(
+            retailer=store.retailer,
+            invoice_number=number,
+            store=store,
+            status='credit',
+            invoice_type='credit',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('0.00'),
+            due_amount=Decimal('100.00'),
+            created_by=self.admin,
+        )
+
+    def test_summary_is_tenant_scoped(self):
+        local_invoice = self._create_invoice(self.store_a, 'INV-R1-1')
+        other_invoice = self._create_invoice(self.other_store, 'INV-R2-1')
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=local_invoice,
+            entry_type='credit',
+            amount=Decimal('100.00'),
+            description='Local credit',
+            created_by=self.admin,
+            is_sent=True,
+        )
+        LedgerEntry.objects.create(
+            customer=self.other_customer,
+            invoice=other_invoice,
+            entry_type='credit',
+            amount=Decimal('999.00'),
+            description='Foreign credit',
+            created_by=self.admin,
+            is_sent=True,
+        )
+        response = self.client.get(reverse('ledger-summary'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(Decimal(response.data['total_credit']), Decimal('100.00'))
+        self.assertEqual(response.data['num_accounts'], 1)
+
+    def test_store_summary_excludes_manual_entries_without_invoice(self):
+        invoice_a = self._create_invoice(self.store_a, 'INV-SA-1')
+        invoice_b = self._create_invoice(self.store_b, 'INV-SB-1')
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=invoice_a,
+            entry_type='credit',
+            amount=Decimal('50.00'),
+            description='Store A credit',
+            created_by=self.admin,
+            is_sent=True,
+        )
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=invoice_b,
+            entry_type='credit',
+            amount=Decimal('80.00'),
+            description='Store B credit',
+            created_by=self.admin,
+            is_sent=True,
+        )
+        LedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=None,
+            entry_type='credit',
+            amount=Decimal('70.00'),
+            description='Manual global credit',
+            created_by=self.admin,
+            is_sent=True,
+        )
+        response = self.client.get(reverse('ledger-summary'), {'store': self.store_a.id})
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(Decimal(response.data['total_credit']), Decimal('50.00'))
+
     def test_manual_payments_ledger_list_retail_only(self):
         """GET .../ledger/entries/?manual_only=true is limited to Retail/RetailAdmin (not all authenticated users)."""
         list_url = reverse('ledger-entry-list-create')
@@ -272,6 +378,18 @@ class LedgerAPITestCase(APITestCase):
             self.client.get(list_url, {'manual_only': 'true', 'entry_type': 'credit'}).status_code,
             status.HTTP_403_FORBIDDEN,
         )
+
+class LedgerLegacyBehaviorTests(APITestCase):
+    """Legacy ledger behavior tests kept separate from store-scoped tenancy tests."""
+
+    def setUp(self):
+        self.admin = create_admin_user()
+        self.customer = Customer.objects.create(
+            name='Test Customer Ledger',
+            phone='9999990001',
+            credit_balance=Decimal('0.00'),
+        )
+        self.client.force_authenticate(user=self.admin)
 
     def test_ledger_by_customer_returns_aggregated_rows(self):
         """GET ledger/by-customer/ returns one row per customer with totals and entry_count."""

@@ -1575,14 +1575,17 @@ def product_regenerate_labels(request, pk):
 @permission_classes([IsAuthenticated])
 def product_variant_list_create(request):
     """List all product variants or create a new variant"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        variants = ProductVariant.objects.all()
+        variants = ProductVariant.objects.filter(retailer_id=retailer.id)
         serializer = ProductVariantSerializer(variants, many=True)
         return Response(serializer.data)
     else:
         serializer = ProductVariantSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1686,14 +1689,17 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
 @permission_classes([IsAuthenticated])
 def barcode_list_create(request):
     """List all barcodes or create a new barcode"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        barcodes = Barcode.objects.all()
+        barcodes = Barcode.objects.filter(retailer_id=retailer.id)
         serializer = BarcodeSerializer(barcodes, many=True)
         return Response(serializer.data)
     else:
         serializer = BarcodeSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1747,6 +1753,9 @@ def barcode_by_barcode(request, barcode=None):
     - Query parameter: /barcodes/by-barcode/?barcode={barcode}
     """
     try:
+        retailer, tenant_err = require_active_retailer(request)
+        if tenant_err:
+            return tenant_err
         # Support both path parameter and query parameter
         if not barcode:
             barcode = request.query_params.get('barcode', None)
@@ -1777,7 +1786,7 @@ def barcode_by_barcode(request, barcode=None):
         logger.info(f"Looking up barcode/SKU: '{barcode_clean}'")
         
         # Check cache first (5 minute TTL for barcode lookups) — skip when no_cache=true (e.g. invoice creation)
-        cache_key = f'barcode_lookup:{barcode_clean}'
+        cache_key = f'barcode_lookup:{retailer.id}:{barcode_clean}'
         if not no_cache:
             cached_response = cache.get(cache_key)
             if cached_response:
@@ -1790,7 +1799,12 @@ def barcode_by_barcode(request, barcode=None):
         # Use centralized barcode search function from filters.py (skip_cache=no_cache for invoice add)
         # This handles all flexible matching: normalized, prefix, exact, case-insensitive, contains
         # All barcode search logic is now centralized in filters.py for consistency
-        barcode_obj = find_barcode_by_search_value(barcode_clean, logger, skip_cache=no_cache)
+        barcode_obj = find_barcode_by_search_value(
+            barcode_clean,
+            retailer_id=retailer.id,
+            logger=logger,
+            skip_cache=no_cache,
+        )
         if barcode_obj:
             product = barcode_obj.product or (barcode_obj.variant.product if barcode_obj.variant else None)
             if product and product.is_active:
@@ -1825,6 +1839,7 @@ def barcode_by_barcode(request, barcode=None):
                 try:
                     product = Product.objects.select_related('category', 'brand').get(
                         id=cached_product['id'],
+                        retailer_id=retailer.id,
                         is_active=True
                     )
                 except Product.DoesNotExist:
@@ -1834,7 +1849,7 @@ def barcode_by_barcode(request, barcode=None):
                 try:
                     product = Product.objects.exclude(sku__isnull=True).exclude(sku='').select_related(
                         'category', 'brand'
-                    ).get(sku=barcode_clean, is_active=True)
+                    ).get(sku=barcode_clean, is_active=True, retailer_id=retailer.id)
                 except (Product.DoesNotExist, Product.MultipleObjectsReturned):
                     product = None
                 
@@ -1888,6 +1903,7 @@ def barcode_by_barcode(request, barcode=None):
                 try:
                     product = Product.objects.select_related('category', 'brand').get(
                         id=cached_product['id'],
+                        retailer_id=retailer.id,
                         is_active=True
                     )
                 except Product.DoesNotExist:
@@ -1897,7 +1913,7 @@ def barcode_by_barcode(request, barcode=None):
                 try:
                     product = Product.objects.exclude(sku__isnull=True).exclude(sku='').select_related(
                         'category', 'brand'
-                    ).get(sku__iexact=barcode_clean, is_active=True)
+                    ).get(sku__iexact=barcode_clean, is_active=True, retailer_id=retailer.id)
                 except (Product.DoesNotExist, Product.MultipleObjectsReturned):
                     product = None
                 
@@ -1951,7 +1967,8 @@ def barcode_by_barcode(request, barcode=None):
         if not barcode_only:
             name_qs = Product.objects.filter(
                 name__icontains=barcode_clean,
-                is_active=True
+                is_active=True,
+                retailer_id=retailer.id,
             )
             if name_qs.count() == 1:
                 product = name_qs.get()
@@ -2132,6 +2149,9 @@ def bulk_update_barcode_tags(request):
     from rest_framework.response import Response
     from django.db import transaction
     
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     barcode_ids = request.data.get('barcode_ids', [])
     new_tag = request.data.get('tag')
     confirmed = request.data.get('confirmed', False)
@@ -2161,7 +2181,7 @@ def bulk_update_barcode_tags(request):
     with transaction.atomic():
         for barcode_id in barcode_ids:
             try:
-                barcode_obj = Barcode.objects.select_for_update().get(pk=barcode_id)
+                barcode_obj = Barcode.objects.select_for_update().get(pk=barcode_id, retailer_id=retailer.id)
                 old_tag = barcode_obj.tag
                 
                 # Validate transitions (same rules as single update)

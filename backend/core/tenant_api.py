@@ -66,3 +66,30 @@ def assign_retailer_on_save(instance, retailer, field_name='retailer'):
         return
     if getattr(instance, f'{field_name}_id', None) is None:
         setattr(instance, f'{field_name}_id', retailer.id)
+
+
+def get_user_allowed_store_ids(user, retailer):
+    """
+    Resolve store scope for the current user in a retailer.
+
+    - Admin/staff: all active stores in the retailer.
+    - Non-admin: assigned stores if present, else default_store only.
+    """
+    from backend.locations.models import Store
+
+    if user.is_superuser or user.is_staff:
+        return list(Store.objects.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True))
+
+    assigned_ids = list(
+        user.assigned_stores.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True)
+    )
+    if assigned_ids:
+        return assigned_ids
+    if getattr(user, 'default_store_id', None):
+        return [user.default_store_id]
+    if getattr(retailer, 'primary_store_id', None):
+        return [retailer.primary_store_id]
+    first_store_id = (
+        Store.objects.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True).first()
+    )
+    return [first_store_id] if first_store_id else []

@@ -649,9 +649,8 @@ def _ledger_entries_base_queryset(request):
         else:
             queryset = queryset.filter(invoice__status=invoice_status)
     if store_id:
-        queryset = queryset.filter(
-            Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
-        )
+        # Store-specific views must be strict: only invoice-linked entries from that store.
+        queryset = queryset.filter(invoice__store_id=store_id)
     if customer_id:
         queryset = queryset.filter(customer_id=customer_id)
     if customer_group_id:
@@ -770,9 +769,8 @@ def ledger_entry_list_create(request):
         
         # Filter by store if provided (through invoice relationship)
         if store_id:
-            queryset = queryset.filter(
-                Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
-            )
+            # Store-specific views must be strict: only invoice-linked entries from that store.
+            queryset = queryset.filter(invoice__store_id=store_id)
         
         if customer_id:
             queryset = queryset.filter(customer_id=customer_id)
@@ -934,6 +932,9 @@ def ledger_summary(request):
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     store_id = request.query_params.get('store', None)
     invoice_status = request.query_params.get('invoice_status', None)
     
@@ -943,6 +944,7 @@ def ledger_summary(request):
     base_queryset = _exclude_standard_ledger_group_entries(LedgerEntry.objects.all()).filter(
         Q(invoice__isnull=False) | Q(invoice__isnull=True, is_sent=True)
     )
+    base_queryset = base_queryset.filter(customer__retailer_id=retailer.id)
     
     # Filter by invoice status if provided (only show entries from invoices with this status)
     if invoice_status:
@@ -952,14 +954,8 @@ def ledger_summary(request):
             base_queryset = base_queryset.filter(invoice__status=invoice_status)
     
     if store_id:
-        # Include entries that have invoices from the specified store OR manual entries (no invoice)
-        # But if invoice_status is set, we only want entries with invoices (no manual entries)
-        if invoice_status:
-            base_queryset = base_queryset.filter(invoice__store_id=store_id)
-        else:
-            base_queryset = base_queryset.filter(
-                Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
-            )
+        # Store-specific views must be strict: only invoice-linked entries from that store.
+        base_queryset = base_queryset.filter(invoice__store_id=store_id)
     
     total_credit = base_queryset.filter(entry_type='credit').aggregate(
         total=Sum('amount')
@@ -969,13 +965,13 @@ def ledger_summary(request):
         total=Sum('amount')
     )['total'] or Decimal('0.00')
     
-    # Count unique customers with ledger entries (filtered by store and invoice_status if provided)
-    if store_id or invoice_status:
-        num_accounts = Customer.objects.filter(
-            ledger_entries__in=base_queryset
-        ).distinct().count()
-    else:
-        num_accounts = Customer.objects.filter(ledger_entries__isnull=False).distinct().count()
+    # Count unique customer accounts represented in the filtered queryset.
+    num_accounts = (
+        base_queryset.exclude(customer__isnull=True)
+        .values('customer_id')
+        .distinct()
+        .count()
+    )
     
     return Response({
         'total_credit': str(total_credit),
@@ -993,8 +989,11 @@ def ledger_customer_detail(request, customer_id):
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     customer = get_object_or_404(
-        Customer.objects.exclude(customer_group__name__iexact=INTERNAL_LEDGER_GROUP_NAME),
+        Customer.objects.exclude(customer_group__name__iexact=INTERNAL_LEDGER_GROUP_NAME).filter(retailer_id=retailer.id),
         pk=customer_id
     )
     store_id = request.query_params.get('store', None)
@@ -1018,9 +1017,8 @@ def ledger_customer_detail(request, customer_id):
     
     # Filter by store if provided (through invoice relationship)
     if store_id:
-        entries = entries.filter(
-            Q(invoice__store_id=store_id) | Q(invoice__isnull=True)
-        )
+        # Store-specific detail should only include invoice-linked entries from that store.
+        entries = entries.filter(invoice__store_id=store_id)
     if date_from or date_to:
         date_filter = Q()
         if date_from and date_to:
@@ -1054,6 +1052,7 @@ def ledger_customer_detail(request, customer_id):
     from backend.pos.models import Invoice, InvoiceItem
     pending_invoices = Invoice.objects.filter(
         customer=customer,
+        retailer_id=retailer.id,
         invoice_type='pending',
     ).exclude(
         status='void'
