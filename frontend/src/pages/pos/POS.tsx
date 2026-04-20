@@ -323,8 +323,10 @@ export default function POS() {
   // Check if user is in Retail group or RetailAdmin (both get store selector)
   const isRetailGroup = isPosRetailLane(sessionUser);
 
+  // Admin/super context bypasses wholesale-only invoice restrictions.
+  const hasAdminBypass = isAdmin;
   // Check if user is in Wholesale or WholesaleAdmin group (invoice type should be 'pending' only)
-  const isWholesaleGroup = isPosWholesaleLane(sessionUser);
+  const isWholesaleGroup = !hasAdminBypass && isPosWholesaleLane(sessionUser);
   const isWholesaleAdmin = isPosWholesaleAdmin(sessionUser);
 
   // Filter stores based on user group
@@ -366,7 +368,7 @@ export default function POS() {
   }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
 
   // Wholesale shop: selected store is wholesale → only pending or credit, default pending
-  const isWholesaleShop = defaultStore?.shop_type === 'wholesale';
+  const isWholesaleShop = !hasAdminBypass && defaultStore?.shop_type === 'wholesale';
 
   // Update selectedStoreId when stores load and Admin/Retail/WholesaleAdmin hasn't selected one yet
   useEffect(() => {

@@ -3,7 +3,7 @@ import json
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.db import connection
-from django.db.models import Q, TextField
+from django.db.models import Count, Q, TextField
 from django.db.models.functions import Cast
 from django.utils.html import format_html
 

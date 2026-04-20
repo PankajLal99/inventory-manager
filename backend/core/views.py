@@ -12,6 +12,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
 from backend.core.tenant_api import require_active_retailer
 
 from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
@@ -55,11 +56,6 @@ def _default_dashboard_blocks_for_retailer(retailer) -> dict:
         'kpi.totalCredit': False,
         'kpi.overallProfit': True,
     }
-
-
-def _onboarding_is_completed() -> bool:
-    done = Setting.objects.filter(key='onboarding_completed').first()
-    return bool(done and str(done.value).lower() in {'1', 'true', 'yes'})
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -210,9 +206,13 @@ def user_me(request):
     user_data['can_access_history'] = 'nav.history' in pset
     user_data['dashboard_blocks'] = _default_dashboard_blocks_for_retailer(getattr(user, 'retailer', None))
     if user.retailer_id:
-        cfg = RetailerDashboardViewConfig.objects.filter(retailer_id=user.retailer_id).first()
-        if cfg:
-            user_data['dashboard_blocks'] = dict(getattr(cfg, 'block_visibility', {}) or {})
+        try:
+            cfg = RetailerDashboardViewConfig.objects.filter(retailer_id=user.retailer_id).first()
+            if cfg:
+                user_data['dashboard_blocks'] = dict(getattr(cfg, 'block_visibility', {}) or {})
+        except (ProgrammingError, OperationalError):
+            # Keep auth/me backward-compatible on environments missing this table.
+            pass
     
     return Response(user_data)
 
@@ -387,15 +387,13 @@ def access_control_user_update(request, pk):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def onboarding_status(request):
-    return Response({'completed': _onboarding_is_completed()})
+    # Onboarding is intentionally reusable; keep it unlocked.
+    return Response({'completed': False})
 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def onboarding_complete(request):
-    if _onboarding_is_completed():
-        return Response({'detail': 'Onboarding is already completed.'}, status=status.HTTP_409_CONFLICT)
-
     configured_password = str(getattr(settings, 'ONBOARDING_SETUP_PASSWORD', '') or '')
     if not configured_password:
         return Response({'detail': 'Onboarding password is not configured.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -563,14 +561,6 @@ def onboarding_complete(request):
                         store_id=store.id,
                         defaults={'role': owner_role},
                     )
-
-        Setting.objects.update_or_create(
-            key='onboarding_completed',
-            defaults={
-                'value': 'true',
-                'description': 'One-time onboarding completed lock',
-            },
-        )
 
     return Response(
         {

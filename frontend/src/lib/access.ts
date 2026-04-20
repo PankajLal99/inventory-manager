@@ -18,14 +18,25 @@ export const P = {
   ROLE_MANAGEMENT: 'feature.role_management',
 } as const;
 
+function normalizedGroups(user: User | null | undefined): Set<string> {
+  return new Set((user?.groups || []).map((g) => String(g || '').trim().toLowerCase()));
+}
+
+export function hasAdminSuperBypass(user: User | null | undefined): boolean {
+  const groups = normalizedGroups(user);
+  return groups.has('admin') && groups.has('super');
+}
+
 export function hasPermission(
   user: User | null | undefined,
   codename: string,
   legacy: () => boolean
 ): boolean {
+  // Group-first priority: explicit Admin + Super bypass.
+  if (hasAdminSuperBypass(user)) return true;
+  if (user?.is_superuser || user?.is_staff) return true;
   const p = user?.permissions;
   if (Array.isArray(p)) return p.includes(codename);
-  if (user?.is_superuser || user?.is_staff) return true;
   return legacy();
 }
 
@@ -42,6 +53,7 @@ export function isPosRetailLane(user: User | null | undefined): boolean {
 }
 
 export function isPosWholesaleLane(user: User | null | undefined): boolean {
+  if (hasAdminSuperBypass(user)) return false;
   return hasPermission(user, P.POS_WHOLESALE, () => false);
 }
 
@@ -62,14 +74,17 @@ export function canSeeSuperMetrics(user: User | null | undefined): boolean {
 }
 
 export function isInvoiceRestrictedUser(user: User | null | undefined): boolean {
+  if (hasAdminSuperBypass(user)) return false;
   return hasPermission(user, P.INVOICE_RESTRICTED, () => false);
 }
 
 export function hasInvoiceHideCashCheckout(user: User | null | undefined): boolean {
+  if (hasAdminSuperBypass(user)) return false;
   return hasPermission(user, P.INVOICE_HIDE_CASH_CHECKOUT, () => false);
 }
 
 export function isRetailCatalogRestricted(user: User | null | undefined): boolean {
+  if (hasAdminSuperBypass(user)) return false;
   return hasPermission(user, P.RETAIL_CATALOG_RESTRICTED, () => false);
 }
 
