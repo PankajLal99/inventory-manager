@@ -22,6 +22,7 @@ from django.utils import timezone
 
 from backend.pos.invoice_credit_service import revert_credit_invoice_to_draft_pending
 from backend.pos.models import Invoice
+from backend.tenants.models import Retailer
 
 User = get_user_model()
 
@@ -74,6 +75,12 @@ class Command(BaseCommand):
             default='',
             help='Optional comma-separated IDs; each must still match date + shop-type filters.',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope run to one tenant.',
+        )
 
     def handle(self, *args, **options):
         user = User.objects.filter(username=(options['username'] or '').strip()).first()
@@ -97,6 +104,13 @@ class Command(BaseCommand):
             raise CommandError('--shop-types expanded to empty list')
 
         id_filter = []
+        retailer_code = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                raise CommandError(f'Retailer code "{retailer_code}" not found or inactive.')
+
         raw_ids = (options['invoice_ids'] or '').strip()
         if raw_ids:
             for p in raw_ids.split(','):
@@ -118,6 +132,8 @@ class Command(BaseCommand):
             .select_related('store', 'customer')
             .order_by('id')
         )
+        if retailer:
+            qs = qs.filter(retailer_id=retailer.id)
         if id_filter:
             qs = qs.filter(pk__in=id_filter)
 

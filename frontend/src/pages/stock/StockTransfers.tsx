@@ -40,11 +40,18 @@ type StockTransferRow = {
     id: number;
     product: number;
     product_name?: string;
-    variant: number | null;
     quantity: string;
     received_quantity: string;
+    selected_barcodes?: string[];
   }[];
 };
+
+function parseLineBarcodes(input: string): string[] {
+  return input
+    .split(/\r?\n|,/)
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+}
 
 function normalizeListResponse(data: unknown): unknown[] {
   if (!data) return [];
@@ -138,8 +145,15 @@ export default function StockTransfers() {
   const [notes, setNotes] = useState('');
 
   const [lines, setLines] = useState<
-    { key: string; productId: number | null; productName: string; variantId: string; quantity: string; search: string }[]
-  >([{ key: '1', productId: null, productName: '', variantId: '', quantity: '1', search: '' }]);
+    {
+      key: string;
+      productId: number | null;
+      productName: string;
+      quantity: string;
+      serialsText: string;
+      search: string;
+    }[]
+  >([{ key: '1', productId: null, productName: '', quantity: '1', serialsText: '', search: '' }]);
 
   const { data: transfersRaw, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['stock-transfers'],
@@ -241,7 +255,7 @@ export default function StockTransfers() {
     setDstKind('store');
     setDstId('');
     setNotes('');
-    setLines([{ key: '1', productId: null, productName: '', variantId: '', quantity: '1', search: '' }]);
+    setLines([{ key: '1', productId: null, productName: '', quantity: '1', serialsText: '', search: '' }]);
   };
 
   const addLine = () => {
@@ -251,8 +265,8 @@ export default function StockTransfers() {
         key: `${Date.now()}-${Math.random()}`,
         productId: null,
         productName: '',
-        variantId: '',
         quantity: '1',
+        serialsText: '',
         search: '',
       },
     ]);
@@ -273,16 +287,45 @@ export default function StockTransfers() {
       toastError('Source and destination cannot be the same store.');
       return;
     }
-    const items = lines
-      .filter((l) => l.productId != null && Number(l.quantity) > 0)
-      .map((l) => ({
-        productId: l.productId as number,
-        variantId: l.variantId.trim() ? Number(l.variantId) : null,
-        quantity: l.quantity,
-      }));
+    let items: { productId: number; quantity: string; selectedBarcodes: string[] }[] = [];
+    try {
+      items = lines
+        .filter((l) => l.productId != null && Number(l.quantity) > 0)
+        .map((l) => {
+          const qty = Number(l.quantity);
+          const selectedBarcodes = parseLineBarcodes(l.serialsText);
+          if (!Number.isInteger(qty)) {
+            throw new Error(`Quantity must be whole number for "${l.productName || `Product #${l.productId}`}".`);
+          }
+          if (selectedBarcodes.length !== qty) {
+            throw new Error(
+              `"${l.productName || `Product #${l.productId}`}" needs ${qty} barcode/serial value(s), got ${selectedBarcodes.length}.`
+            );
+          }
+          return {
+            productId: l.productId as number,
+            quantity: l.quantity,
+            selectedBarcodes,
+          };
+        });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Invalid transfer lines.';
+      toastError(message);
+      return;
+    }
     if (items.length === 0) {
       toastError('Add at least one line with a product and positive quantity.');
       return;
+    }
+    const seen = new Set<string>();
+    for (const item of items) {
+      for (const code of item.selectedBarcodes) {
+        if (seen.has(code)) {
+          toastError(`Duplicate barcode/serial across lines: ${code}`);
+          return;
+        }
+        seen.add(code);
+      }
     }
     const body = buildStockTransferCreatePayload({
       source: { kind: srcKind, id: sid },
@@ -410,6 +453,7 @@ export default function StockTransfers() {
                         <th className="px-3 py-2 text-left font-medium">Product</th>
                         <th className="px-3 py-2 text-right font-medium">Qty</th>
                         <th className="px-3 py-2 text-right font-medium">Received</th>
+                        <th className="px-3 py-2 text-left font-medium">Barcodes/Serials</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -418,17 +462,27 @@ export default function StockTransfers() {
                           <tr key={it.id}>
                             <td className="px-3 py-2">
                               <div className="font-medium text-gray-900">{it.product_name || `Product #${it.product}`}</div>
-                              {it.variant != null ? (
-                                <div className="text-xs text-gray-500">Variant #{it.variant}</div>
-                              ) : null}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums">{it.quantity}</td>
                             <td className="px-3 py-2 text-right tabular-nums">{it.received_quantity}</td>
+                            <td className="px-3 py-2 text-xs text-gray-700">
+                              {it.selected_barcodes?.length ? (
+                                <div className="space-y-1 max-h-24 overflow-y-auto">
+                                  {it.selected_barcodes.map((code) => (
+                                    <div key={code} className="font-mono">
+                                      {code}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </td>
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={3} className="px-3 py-4 text-center text-gray-500">
+                          <td colSpan={4} className="px-3 py-4 text-center text-gray-500">
                             No lines
                           </td>
                         </tr>
@@ -540,6 +594,16 @@ export default function StockTransfers() {
               </Select>
             </div>
           </div>
+          <p className="text-xs text-gray-600 bg-blue-50 border border-blue-100 rounded-md px-3 py-2">
+            Source:{' '}
+            <span className="font-medium">
+              {srcId ? (srcKind === 'store' ? storeName(Number(srcId)) : whName(Number(srcId))) : 'Not selected'}
+            </span>{' '}
+            → Destination:{' '}
+            <span className="font-medium">
+              {dstId ? (dstKind === 'store' ? storeName(Number(dstId)) : whName(Number(dstId))) : 'Not selected'}
+            </span>
+          </p>
 
           <div>
             <label htmlFor="xfer-notes" className="block text-sm font-medium text-gray-700 mb-1">
@@ -603,8 +667,8 @@ function TransferLineEditor({
     key: string;
     productId: number | null;
     productName: string;
-    variantId: string;
     quantity: string;
+    serialsText: string;
     search: string;
   };
   onUpdate: (patch: Partial<typeof line>) => void;
@@ -613,6 +677,10 @@ function TransferLineEditor({
 }) {
   const q = line.search.trim();
   const enabled = q.length >= 2;
+  const parsedBarcodes = parseLineBarcodes(line.serialsText);
+  const qty = Number(line.quantity || 0);
+  const qtyWhole = Number.isInteger(qty) && qty > 0;
+  const match = qtyWhole && parsedBarcodes.length === qty;
 
   const { data, isFetching } = useQuery({
     queryKey: ['xfer-product-search', q],
@@ -644,15 +712,7 @@ function TransferLineEditor({
         results={results}
         searching={enabled && isFetching}
       />
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Variant ID (optional)</label>
-          <Input
-            value={line.variantId}
-            onChange={(e) => onUpdate({ variantId: e.target.value })}
-            placeholder="—"
-          />
-        </div>
+      <div className="grid grid-cols-1 gap-3">
         <div>
           <label className="text-xs font-medium text-gray-600 block mb-1">Quantity</label>
           <Input
@@ -660,6 +720,32 @@ function TransferLineEditor({
             onChange={(e) => onUpdate({ quantity: e.target.value })}
             placeholder="1"
           />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">
+            Barcodes / Serials (one per line)
+          </label>
+          <Textarea
+            rows={4}
+            value={line.serialsText}
+            onChange={(e) => onUpdate({ serialsText: e.target.value })}
+            placeholder={'ABC-0001\nABC-0002'}
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Enter exact barcodes/serials to transfer. Count must match quantity.
+          </p>
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <Badge variant={match ? 'success' : 'warning'}>
+              {parsedBarcodes.length} entered / {qtyWhole ? qty : '—'} required
+            </Badge>
+            {!qtyWhole ? (
+              <span className="text-red-600">Quantity must be a whole number.</span>
+            ) : match ? (
+              <span className="text-green-700">Ready for transfer.</span>
+            ) : (
+              <span className="text-amber-700">Add/remove barcode rows to match quantity.</span>
+            )}
+          </div>
         </div>
       </div>
     </div>

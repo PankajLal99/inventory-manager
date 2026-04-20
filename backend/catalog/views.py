@@ -116,14 +116,20 @@ def get_barcode_status_message(barcode_obj, sold_invoice=None):
 @permission_classes([IsAuthenticated])
 def category_list_create(request):
     """List all categories or create a new category"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         categories = Category.objects.all()
+        if not tenant_err and retailer:
+            categories = categories.filter(retailer_id=retailer.id)
         serializer = CategorySerializer(categories, many=True)
         return Response(serializer.data)
     else:
         serializer = CategorySerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -132,7 +138,11 @@ def category_list_create(request):
 @permission_classes([IsAuthenticated])
 def category_detail(request, pk):
     """Retrieve, update or delete a category"""
-    category = get_object_or_404(Category, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    category = get_object_or_404(Category, **filters)
     
     if request.method == 'GET':
         serializer = CategorySerializer(category)
@@ -159,14 +169,20 @@ def category_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def brand_list_create(request):
     """List all brands or create a new brand"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         brands = Brand.objects.all()
+        if not tenant_err and retailer:
+            brands = brands.filter(retailer_id=retailer.id)
         serializer = BrandSerializer(brands, many=True)
         return Response(serializer.data)
     else:
         serializer = BrandSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -175,7 +191,11 @@ def brand_list_create(request):
 @permission_classes([IsAuthenticated])
 def brand_detail(request, pk):
     """Retrieve, update or delete a brand"""
-    brand = get_object_or_404(Brand, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    brand = get_object_or_404(Brand, **filters)
     
     if request.method == 'GET':
         serializer = BrandSerializer(brand)
@@ -202,14 +222,20 @@ def brand_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def tax_rate_list_create(request):
     """List all tax rates or create a new tax rate"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         tax_rates = TaxRate.objects.all()
+        if not tenant_err and retailer:
+            tax_rates = tax_rates.filter(retailer_id=retailer.id)
         serializer = TaxRateSerializer(tax_rates, many=True)
         return Response(serializer.data)
     else:
         serializer = TaxRateSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -218,7 +244,11 @@ def tax_rate_list_create(request):
 @permission_classes([IsAuthenticated])
 def tax_rate_detail(request, pk):
     """Retrieve, update or delete a tax rate"""
-    tax_rate = get_object_or_404(TaxRate, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    tax_rate = get_object_or_404(TaxRate, **filters)
     
     if request.method == 'GET':
         serializer = TaxRateSerializer(tax_rate)
@@ -372,6 +402,8 @@ def product_list_create(request):
                     barcode__in=available_barcodes.values_list('id', flat=True)
                 ).exclude(
                     invoice__status='void'
+                ).filter(
+                    invoice__retailer_id=retailer.id
                 ).values_list('barcode_id', flat=True))
                 
                 # Exclude sold barcodes
@@ -380,7 +412,8 @@ def product_list_create(request):
                 # Get active cart barcodes (reuse logic from above if not already computed)
                 from backend.pos.models import CartItem
                 cart_items = CartItem.objects.filter(
-                    cart__status='active'
+                    cart__status='active',
+                    cart__retailer_id=retailer.id,
                 ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
                 
                 active_carts_barcodes = set()
@@ -569,11 +602,11 @@ def product_detail(request, pk):
     if tenant_err:
         return tenant_err
     if request.method == 'GET':
-        # Prefetch for full ProductSerializer (barcodes, variants, components, stock)
+        # Prefetch for full ProductSerializer (barcodes, components, stock)
         product_queryset = Product.objects.select_related('category', 'brand').prefetch_related(
             'stock_entries', 'stock_entries__store', 'stock_entries__warehouse',
             'barcodes', 'barcodes__purchase__supplier',
-            'variants', 'components', 'components__component_product',
+            'components', 'components__component_product',
         ).filter(retailer_id=retailer.id)
         product = get_object_or_404(product_queryset, pk=pk)
     else:
@@ -581,7 +614,7 @@ def product_detail(request, pk):
     
     if request.method == 'GET':
         # Always use full ProductSerializer - do NOT use get_cached_product here.
-        # The product cache stores minimal data (no barcodes, variants, components, stock).
+        # The product cache stores minimal data (no barcodes, components, stock).
         # Product detail page needs full data; cache is for quick lookups (POS, barcode scan).
         serializer = ProductSerializer(product)
         return Response(serializer.data)
@@ -681,7 +714,10 @@ def product_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def product_variants(request, pk):
     """Get or create variants for a product"""
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         variants = product.variants.all()
@@ -700,12 +736,16 @@ def product_variants(request, pk):
 def product_barcodes_full(request, pk):
     """Get all barcodes for a product, grouped by tag, with location. For product detail page only."""
     from backend.pos.models import InvoiceItem
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     product = get_object_or_404(
         Product.objects.prefetch_related(
             'barcodes', 'barcodes__purchase', 'barcodes__purchase__store',
             'barcodes__purchase__warehouse', 'barcodes__purchase__supplier',
         ),
-        pk=pk
+        pk=pk,
+        retailer_id=retailer.id,
     )
     sold_barcode_ids = list(product.barcodes.filter(tag='sold').values_list('id', flat=True))
     inv_items_by_barcode = {}
@@ -762,7 +802,10 @@ def product_invoices(request, pk):
     Query params: limit (default 20, max 100), offset (default 0).
     """
     from backend.pos.models import InvoiceItem, Invoice
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     try:
         limit = int(request.query_params.get('limit', 20))
     except (TypeError, ValueError):
@@ -809,7 +852,10 @@ def product_invoices(request, pk):
 @permission_classes([IsAuthenticated])
 def product_barcodes(request, pk):
     """Get or create barcodes for a product"""
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         # Get tag filter from query params
@@ -849,7 +895,10 @@ def product_barcodes(request, pk):
 @permission_classes([IsAuthenticated])
 def product_components(request, pk):
     """Get or update components for a product"""
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         components = product.components.all()
@@ -870,8 +919,11 @@ def product_components(request, pk):
 @permission_classes([IsAuthenticated])
 def product_backfill_barcodes(request):
     """Backfill barcodes for products that don't have them"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     # Get all products with SKU that don't have any barcodes
-    all_products = Product.objects.filter(sku__isnull=False)
+    all_products = Product.objects.filter(sku__isnull=False, retailer_id=retailer.id)
     products_without_barcodes = [p for p in all_products if not p.barcodes.exists()]
     
     created_count = 0
@@ -882,7 +934,7 @@ def product_backfill_barcodes(request):
             try:
                 # Check if barcode with this SKU already exists (exact match only)
                 try:
-                    existing = Barcode.objects.get(barcode=product.sku)
+                    existing = Barcode.objects.get(barcode=product.sku, retailer_id=retailer.id)
                 except Barcode.DoesNotExist:
                     existing = None
                 if existing:
@@ -897,6 +949,7 @@ def product_backfill_barcodes(request):
                 else:
                     # Create new barcode
                     Barcode.objects.create(
+                        retailer_id=retailer.id,
                         product=product,
                         barcode=product.sku,
                         is_primary=True,
@@ -997,7 +1050,10 @@ def product_generate_labels(request, pk):
     Request body (optional):
         purchase_id: Filter barcodes by purchase ID
     """
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     # Get purchase_id from request body if provided
     purchase_id = request.data.get('purchase_id', None)
@@ -1309,7 +1365,10 @@ def product_get_labels(request, pk):
     Query parameters:
         purchase_id: Optional. Filter barcodes by purchase ID
     """
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     # Get purchase_id from query parameters if provided
     purchase_id = request.query_params.get('purchase_id', None)
@@ -1368,7 +1427,10 @@ def product_labels_status(request, pk):
     Query parameters:
         purchase_id: Optional. Filter barcodes by purchase ID
     """
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     # Get purchase_id from query parameters if provided
     purchase_id = request.query_params.get('purchase_id', None)
@@ -1416,7 +1478,10 @@ def product_regenerate_labels(request, pk):
     """
     from .azure_label_service import queue_bulk_label_generation_via_azure
     
-    product = get_object_or_404(Product, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    product = get_object_or_404(Product, pk=pk, retailer_id=retailer.id)
     
     # Get purchase_id from request body if provided
     purchase_id = request.data.get('purchase_id', None)
@@ -1482,9 +1547,10 @@ def product_regenerate_labels(request, pk):
                 blob_url = blob_urls[barcode.id]
                 if blob_url:
                     # Get or create BarcodeLabel
-                    label_obj, created = BarcodeLabel.objects.get_or_create(barcode=barcode)
-                    label_obj.label_image = blob_url
-                    label_obj.save(update_fields=['label_image', 'updated_at'])
+                    BarcodeLabel.objects.update_or_create(
+                        barcode_id=barcode.id,
+                        defaults={'label_image': blob_url},
+                    )
                     updated_count += 1
         
         return Response({
@@ -1525,7 +1591,10 @@ def product_variant_list_create(request):
 @permission_classes([IsAuthenticated])
 def product_variant_detail(request, pk):
     """Retrieve, update or delete a product variant"""
-    variant = get_object_or_404(ProductVariant, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    variant = get_object_or_404(ProductVariant, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = ProductVariantSerializer(variant)
@@ -1633,7 +1702,10 @@ def barcode_list_create(request):
 @permission_classes([IsAuthenticated])
 def barcode_detail(request, pk):
     """Retrieve, update or delete a barcode"""
-    barcode = get_object_or_404(Barcode, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    barcode = get_object_or_404(Barcode, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = BarcodeSerializer(barcode)
@@ -1892,10 +1964,16 @@ def barcode_by_barcode(request, barcode=None):
             # Exact match: searched value as barcode or short_code (get, not first)
             searched_barcode_obj = None
             try:
-                searched_barcode_obj = Barcode.objects.get(barcode=barcode_clean)
+                searched_barcode_obj = Barcode.objects.get(
+                    barcode=barcode_clean,
+                    retailer_id=product.retailer_id,
+                )
             except Barcode.DoesNotExist:
                 try:
-                    searched_barcode_obj = Barcode.objects.get(short_code=barcode_clean)
+                    searched_barcode_obj = Barcode.objects.get(
+                        short_code=barcode_clean,
+                        retailer_id=product.retailer_id,
+                    )
                 except Barcode.DoesNotExist:
                     pass
             if searched_barcode_obj and searched_barcode_obj.product_id == product.id:
@@ -1956,7 +2034,10 @@ def update_barcode_tag(request, barcode_id):
     from rest_framework import status
     from rest_framework.response import Response
     
-    barcode_obj = get_object_or_404(Barcode, pk=barcode_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    barcode_obj = get_object_or_404(Barcode, pk=barcode_id, retailer_id=retailer.id)
     new_tag = request.data.get('tag')
     
     if not new_tag:
@@ -2184,7 +2265,7 @@ def bulk_update_barcode_tags(request):
             from backend.pos.views import update_invoice_totals
             for invoice_id in updated_invoices:
                 try:
-                    invoice = Invoice.objects.get(pk=invoice_id)
+                    invoice = Invoice.objects.get(pk=invoice_id, retailer_id=retailer.id)
                     update_invoice_totals(invoice)
                 except Invoice.DoesNotExist:
                     pass
@@ -2245,6 +2326,9 @@ def defective_product_move_out(request):
     from backend.pos.models import Cart
     
     try:
+        retailer, tenant_err = require_active_retailer(request)
+        if tenant_err:
+            return tenant_err
         data = request.data
         store_id = data.get('store')
         reason = data.get('reason', 'defective')
@@ -2258,13 +2342,13 @@ def defective_product_move_out(request):
         if not product_ids:
             return Response({'error': 'At least one product must be selected'}, status=status.HTTP_400_BAD_REQUEST)
         
-        store = get_object_or_404(Store, pk=store_id)
+        store = get_object_or_404(Store, pk=store_id, retailer_id=retailer.id)
         
         # Generate move-out number
         move_out_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         
         # Get selected products and their defective barcodes
-        products = Product.objects.filter(id__in=product_ids)
+        products = Product.objects.filter(id__in=product_ids, retailer_id=retailer.id)
         total_loss = Decimal('0.00')
         total_items = 0
         items_to_create = []
@@ -2277,13 +2361,15 @@ def defective_product_move_out(request):
                 barcodes = Barcode.objects.filter(
                     id__in=barcode_ids,
                     product=product,
-                    tag='defective'
+                    tag='defective',
+                    retailer_id=retailer.id,
                 )
             else:
                 # Get all defective barcodes for this product
                 barcodes = Barcode.objects.filter(
                     product=product,
-                    tag='defective'
+                    tag='defective',
+                    retailer_id=retailer.id,
                 )
             
             # Track items for move-out record
@@ -2300,12 +2386,13 @@ def defective_product_move_out(request):
         # Create invoice directly (no cart needed)
         invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         # Ensure invoice number uniqueness
-        while Invoice.objects.filter(invoice_number=invoice_number).exists():
+        while Invoice.objects.filter(invoice_number=invoice_number, retailer_id=retailer.id).exists():
             invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         
         invoice = Invoice.objects.create(
             invoice_number=invoice_number,
             cart=None,  # No cart needed for move-out
+            retailer_id=retailer.id,
             store=store,
             invoice_type='defective',  # Mark as defective invoice type
             status='void', 
@@ -2439,7 +2526,12 @@ def defective_product_move_out(request):
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_list(request):
     """List all defective product move-outs"""
-    move_outs = DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items').all()
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    move_outs = DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items').filter(
+        invoice__retailer_id=retailer.id
+    )
     
     # Apply filters
     store_id = request.query_params.get('store', None)
@@ -2486,7 +2578,14 @@ def defective_product_move_out_list(request):
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_detail(request, pk):
     """Get details of a specific move-out or update total_adjustment"""
-    move_out = get_object_or_404(DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items'), pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    move_out = get_object_or_404(
+        DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items'),
+        pk=pk,
+        invoice__retailer_id=retailer.id,
+    )
     
     if request.method == 'PATCH':
         # Only allow updating total_adjustment

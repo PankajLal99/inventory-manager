@@ -7,7 +7,7 @@ from .models import Barcode, BarcodeLabel, Product
 from backend.inventory.models import Stock
 
 
-def validate_stock_barcode_consistency(product_id: int, store_id=None, warehouse_id=None):
+def validate_stock_barcode_consistency(product_id: int, store_id=None, warehouse_id=None, retailer_id=None):
     """
     Validate that stock quantity matches barcode count for a product.
     
@@ -27,7 +27,10 @@ def validate_stock_barcode_consistency(product_id: int, store_id=None, warehouse
         }
     """
     try:
-        product = Product.objects.get(id=product_id)
+        product_qs = Product.objects.all()
+        if retailer_id is not None:
+            product_qs = product_qs.filter(retailer_id=retailer_id)
+        product = product_qs.get(id=product_id)
     except Product.DoesNotExist:
         return {
             'is_consistent': False,
@@ -95,7 +98,7 @@ def validate_stock_barcode_consistency(product_id: int, store_id=None, warehouse
     }
 
 
-def validate_label_generation_status(product_id: int):
+def validate_label_generation_status(product_id: int, retailer_id=None):
     """
     Validate label generation status for a product.
     
@@ -111,7 +114,10 @@ def validate_label_generation_status(product_id: int):
         }
     """
     try:
-        product = Product.objects.get(id=product_id)
+        product_qs = Product.objects.all()
+        if retailer_id is not None:
+            product_qs = product_qs.filter(retailer_id=retailer_id)
+        product = product_qs.get(id=product_id)
     except Product.DoesNotExist:
         return {
             'all_labels_generated': False,
@@ -166,7 +172,7 @@ def validate_label_generation_status(product_id: int):
     }
 
 
-def validate_purchase_barcodes(purchase_id: int):
+def validate_purchase_barcodes(purchase_id: int, retailer_id=None):
     """
     Validate barcodes for a purchase.
     
@@ -176,7 +182,10 @@ def validate_purchase_barcodes(purchase_id: int):
     from backend.purchasing.models import Purchase, PurchaseItem
     
     try:
-        purchase = Purchase.objects.get(id=purchase_id)
+        purchase_qs = Purchase.objects.all()
+        if retailer_id is not None:
+            purchase_qs = purchase_qs.filter(retailer_id=retailer_id)
+        purchase = purchase_qs.get(id=purchase_id)
     except Purchase.DoesNotExist:
         return {
             'is_valid': False,

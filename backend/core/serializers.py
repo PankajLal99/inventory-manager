@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
-from .models import User, Setting, AuditLog
+from .models import AccessPermission, AuditLog, Role, Setting, User
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -84,4 +84,39 @@ class AuditLogSerializer(serializers.ModelSerializer):
         model = AuditLog
         fields = ['id', 'user', 'action', 'model_name', 'object_id', 'object_name', 
                   'object_reference', 'barcode', 'changes', 'ip_address', 'created_at']
+
+
+class AccessPermissionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccessPermission
+        fields = ['id', 'codename', 'label', 'category', 'description']
+
+
+class RoleSerializer(serializers.ModelSerializer):
+    permissions = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=AccessPermission.objects.all(), required=False
+    )
+    permission_codenames = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Role
+        fields = [
+            'id',
+            'retailer',
+            'name',
+            'description',
+            'permissions',
+            'permission_codenames',
+        ]
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        retailer = attrs.get('retailer') or getattr(self.instance, 'retailer', None)
+        if user and not user.is_superuser and retailer and user.retailer_id != retailer.id:
+            raise serializers.ValidationError('You can only manage roles for your own retailer.')
+        return attrs
+
+    def get_permission_codenames(self, obj):
+        return sorted(obj.permissions.values_list('codename', flat=True))
 

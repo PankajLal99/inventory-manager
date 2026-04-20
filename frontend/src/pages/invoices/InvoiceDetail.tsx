@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { hasInvoiceHideCashCheckout, isInvoiceRestrictedUser } from '../../lib/access';
-import { formatNumber, getProductNameColor, getTodayDateString } from '../../lib/utils';
+import { formatNumber, getProductNameColor } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -244,6 +244,7 @@ export default function InvoiceDetail() {
   });
 
   const inv = invoice?.data;
+  const isReplacementReturn = Boolean(inv?.is_replacement_return);
 
   const getEffectiveInvoiceTypeFromPayments = (payments: any[]): 'cash' | 'upi' | 'mixed' | null => {
     if (!Array.isArray(payments) || payments.length === 0) return null;

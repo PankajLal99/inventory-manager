@@ -206,7 +206,8 @@ def barcode_pre_save(sender, instance, **kwargs):
     """Store old values before save to enable cache invalidation"""
     if instance.pk:
         try:
-            old_instance = Barcode.objects.get(pk=instance.pk)
+            # Use all_objects so old values are available even for soft-deleted rows.
+            old_instance = Barcode.all_objects.get(pk=instance.pk)
             instance._old_barcode = old_instance.barcode
             instance._old_short_code = old_instance.short_code
         except Barcode.DoesNotExist:

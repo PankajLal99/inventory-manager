@@ -15,6 +15,7 @@ export const P = {
   STORE_MANAGEMENT: 'feature.store_management',
   PAYMENTS_EXTENDED: 'feature.payments_extended_columns',
   DISCARD_INVOICE_EDIT_CARTS: 'feature.discard_invoice_edit_carts',
+  ROLE_MANAGEMENT: 'feature.role_management',
 } as const;
 
 export function hasPermission(
@@ -23,39 +24,29 @@ export function hasPermission(
   legacy: () => boolean
 ): boolean {
   const p = user?.permissions;
-  if (Array.isArray(p) && p.length > 0) return p.includes(codename);
+  if (Array.isArray(p)) return p.includes(codename);
+  if (user?.is_superuser || user?.is_staff) return true;
   return legacy();
 }
 
+export function hasNavPermission(user: User | null | undefined, navCodename: string): boolean {
+  return hasPermission(user, navCodename, () => false);
+}
+
 export function isPosAdminContext(user: User | null | undefined): boolean {
-  return hasPermission(user, P.POS_ADMIN, () =>
-    Boolean(
-      user?.is_admin ||
-        user?.is_superuser ||
-        user?.is_staff ||
-        (user?.groups && user.groups.includes('Admin'))
-    )
-  );
+  return hasPermission(user, P.POS_ADMIN, () => Boolean(user?.is_admin || user?.is_superuser || user?.is_staff));
 }
 
 export function isPosRetailLane(user: User | null | undefined): boolean {
-  return hasPermission(user, P.POS_RETAIL_LANE, () => {
-    const g = user?.groups || [];
-    return g.includes('Retail') || g.includes('RetailAdmin');
-  });
+  return hasPermission(user, P.POS_RETAIL_LANE, () => false);
 }
 
 export function isPosWholesaleLane(user: User | null | undefined): boolean {
-  return hasPermission(user, P.POS_WHOLESALE, () => {
-    const g = user?.groups || [];
-    return g.includes('Wholesale') || g.includes('WholesaleAdmin');
-  });
+  return hasPermission(user, P.POS_WHOLESALE, () => false);
 }
 
 export function isPosWholesaleAdmin(user: User | null | undefined): boolean {
-  return hasPermission(user, P.POS_WHOLESALE_ADMIN, () =>
-    Boolean(user?.groups && user.groups.includes('WholesaleAdmin'))
-  );
+  return hasPermission(user, P.POS_WHOLESALE_ADMIN, () => false);
 }
 
 export function isPosWholesaleStaffOnly(user: User | null | undefined): boolean {
@@ -63,73 +54,41 @@ export function isPosWholesaleStaffOnly(user: User | null | undefined): boolean 
 }
 
 export function isInvoiceAdminStores(user: User | null | undefined): boolean {
-  return hasPermission(user, P.INVOICE_ADMIN_STORES, () =>
-    (user?.groups || []).some((x: string) => String(x).includes('Admin'))
-  );
+  return hasPermission(user, P.INVOICE_ADMIN_STORES, () => false);
 }
 
 export function canSeeSuperMetrics(user: User | null | undefined): boolean {
-  return hasPermission(user, P.SUPER_METRICS, () => (user?.groups || []).includes('Super'));
+  return hasPermission(user, P.SUPER_METRICS, () => false);
 }
 
 export function isInvoiceRestrictedUser(user: User | null | undefined): boolean {
-  return hasPermission(user, P.INVOICE_RESTRICTED, () => {
-    const g = user?.groups || [];
-    return (
-      (g.includes('Retail') || g.includes('Wholesale')) &&
-      !g.includes('Admin') &&
-      !g.includes('RetailAdmin') &&
-      !g.includes('WholesaleAdmin')
-    );
-  });
+  return hasPermission(user, P.INVOICE_RESTRICTED, () => false);
 }
 
 export function hasInvoiceHideCashCheckout(user: User | null | undefined): boolean {
-  return hasPermission(user, P.INVOICE_HIDE_CASH_CHECKOUT, () => {
-    const g = user?.groups || [];
-    return g.includes('Wholesale') || g.includes('WholesaleAdmin');
-  });
+  return hasPermission(user, P.INVOICE_HIDE_CASH_CHECKOUT, () => false);
 }
 
 export function isRetailCatalogRestricted(user: User | null | undefined): boolean {
-  return hasPermission(user, P.RETAIL_CATALOG_RESTRICTED, () => {
-    const g = user?.groups || [];
-    return g.includes('Retail') && !g.includes('Admin') && !g.includes('RetailAdmin');
-  });
+  return hasPermission(user, P.RETAIL_CATALOG_RESTRICTED, () => false);
 }
 
 export function isLedgerAdminContext(user: User | null | undefined): boolean {
-  return hasPermission(user, P.LEDGER_ADMIN, () =>
-    Boolean(
-      user?.is_admin ||
-        user?.is_superuser ||
-        user?.is_staff ||
-        (user?.groups || []).some((group: string) => group.includes('Admin'))
-    )
-  );
+  return hasPermission(user, P.LEDGER_ADMIN, () => Boolean(user?.is_admin || user?.is_superuser || user?.is_staff));
 }
 
 export function isStoreManagementAdmin(user: User | null | undefined): boolean {
-  return hasPermission(user, P.STORE_MANAGEMENT, () => {
-    const g = user?.groups || [];
-    return Boolean(
-      user?.is_admin ||
-        user?.is_staff ||
-        user?.is_superuser ||
-        g.includes('Admin') ||
-        g.includes('RetailAdmin') ||
-        g.includes('WholesaleAdmin')
-    );
-  });
+  return hasPermission(user, P.STORE_MANAGEMENT, () => Boolean(user?.is_admin || user?.is_staff || user?.is_superuser));
 }
 
 export function hasPaymentsExtendedColumns(user: User | null | undefined): boolean {
-  return hasPermission(user, P.PAYMENTS_EXTENDED, () => !(user?.groups || []).includes('Retail'));
+  return hasPermission(user, P.PAYMENTS_EXTENDED, () => false);
 }
 
 export function canDiscardInvoiceEditCarts(user: User | null | undefined): boolean {
-  return hasPermission(user, P.DISCARD_INVOICE_EDIT_CARTS, () => {
-    const g = user?.groups || [];
-    return g.includes('Super') || g.includes('Admin');
-  });
+  return hasPermission(user, P.DISCARD_INVOICE_EDIT_CARTS, () => false);
+}
+
+export function canManageRoles(user: User | null | undefined): boolean {
+  return hasPermission(user, P.ROLE_MANAGEMENT, () => false);
 }

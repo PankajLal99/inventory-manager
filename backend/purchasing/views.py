@@ -6,16 +6,28 @@ from django.shortcuts import get_object_or_404
 from .models import Purchase, PurchaseItem, PurchaseStockMovement
 from .serializers import PurchaseSerializer, PurchaseItemSerializer
 from backend.core.utils import create_audit_log
+from backend.core.tenant_api import require_active_retailer
 from backend.inventory.models import Stock
 from decimal import Decimal
+
+
+def _resolve_retailer_or_legacy(request):
+    """Return active retailer or explicit selection/create error."""
+    retailer, tenant_err = require_active_retailer(request)
+    return retailer, tenant_err
 
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def purchase_list_create(request):
     """List all purchases or create a new purchase"""
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        queryset = Purchase.objects.all().prefetch_related('items', 'items__product')
+        queryset = Purchase.objects.prefetch_related('items', 'items__product').all()
+        if retailer:
+            queryset = queryset.filter(retailer_id=retailer.id)
         
         # Filters
         supplier = request.query_params.get('supplier', None)
@@ -74,7 +86,10 @@ def purchase_list_create(request):
             context={'items_data': items_data, 'request': request, 'is_vendor_purchase': False}
         )
         if serializer.is_valid():
-            purchase = serializer.save(created_by=request.user)
+            save_kwargs = {'created_by': request.user}
+            if retailer:
+                save_kwargs['retailer_id'] = retailer.id
+            purchase = serializer.save(**save_kwargs)
             return Response(PurchaseSerializer(purchase).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -83,7 +98,13 @@ def purchase_list_create(request):
 @permission_classes([IsAuthenticated])
 def purchase_detail(request, pk):
     """Retrieve, update or delete a purchase"""
-    purchase = get_object_or_404(Purchase.objects.prefetch_related('items', 'items__product'), pk=pk)
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
+    purchase_qs = Purchase.objects.prefetch_related('items', 'items__product').all()
+    if retailer:
+        purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+    purchase = get_object_or_404(purchase_qs, pk=pk)
     
     if request.method == 'GET':
         serializer = PurchaseSerializer(purchase)
@@ -278,7 +299,13 @@ def purchase_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def purchase_items(request, pk):
     """Get, create, update or delete items for a purchase"""
-    purchase = get_object_or_404(Purchase, pk=pk)
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
+    purchase_qs = Purchase.objects.all()
+    if retailer:
+        purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+    purchase = get_object_or_404(purchase_qs, pk=pk)
     
     if request.method == 'GET':
         items = purchase.items.all().select_related('product')
@@ -331,8 +358,13 @@ def purchase_items(request, pk):
 def purchase_item_update_printed(request, item_id):
     """Update the printed status of a purchase item"""
     from django.utils import timezone
-    
-    item = get_object_or_404(PurchaseItem, pk=item_id)
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
+    item_qs = PurchaseItem.objects.all()
+    if retailer:
+        item_qs = item_qs.filter(purchase__retailer_id=retailer.id)
+    item = get_object_or_404(item_qs, pk=item_id)
     
     printed = request.data.get('printed', None)
     
@@ -360,6 +392,9 @@ def purchase_item_update_printed(request, item_id):
 def vendor_purchases(request):
     """Public endpoint for vendors to view and create their purchases"""
     from backend.core.utils import create_audit_log
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
     
     supplier_id = request.query_params.get('supplier', None)
     
@@ -368,6 +403,8 @@ def vendor_purchases(request):
     
     if request.method == 'GET':
         queryset = Purchase.objects.filter(supplier_id=supplier_id).prefetch_related('items', 'items__product')
+        if retailer:
+            queryset = queryset.filter(retailer_id=retailer.id)
         
         # Optional filters
         date_from = request.query_params.get('date_from', None)
@@ -424,7 +461,10 @@ def vendor_purchases(request):
             context={'items_data': items_data, 'request': request, 'is_vendor_purchase': True}
         )
         if serializer.is_valid():
-            purchase = serializer.save()  # No created_by for vendor purchases
+            if retailer:
+                purchase = serializer.save(retailer_id=retailer.id)  # No created_by for vendor purchases
+            else:
+                purchase = serializer.save()
             
             # Audit log for vendor purchase creation
             try:
@@ -462,16 +502,18 @@ def vendor_purchases(request):
 @permission_classes([IsAuthenticated])
 def vendor_purchase_detail(request, pk):
     """Public endpoint for vendors to view and update their purchases"""
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
     supplier_id = request.query_params.get('supplier', None)
     
     if not supplier_id:
         return Response({'error': 'supplier parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
     
-    purchase = get_object_or_404(
-        Purchase.objects.prefetch_related('items', 'items__product'),
-        pk=pk,
-        supplier_id=supplier_id
-    )
+    purchase_qs = Purchase.objects.prefetch_related('items', 'items__product').filter(supplier_id=supplier_id)
+    if retailer:
+        purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+    purchase = get_object_or_404(purchase_qs, pk=pk)
     
     # Vendors can only edit draft purchases
     if request.method == 'PATCH' and purchase.status != 'draft':
@@ -507,7 +549,13 @@ def vendor_purchase_detail(request, pk):
 @permission_classes([IsAuthenticated])  # Only authenticated admins can finalize
 def purchase_finalize(request, pk):
     """Finalize a purchase - updates inventory and changes status to finalized"""
-    purchase = get_object_or_404(Purchase.objects.prefetch_related('items', 'items__product'), pk=pk)
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
+    purchase_qs = Purchase.objects.prefetch_related('items', 'items__product').all()
+    if retailer:
+        purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+    purchase = get_object_or_404(purchase_qs, pk=pk)
     
     if purchase.status != 'draft':
         return Response(
@@ -569,13 +617,19 @@ def vendor_purchase_cancel(request, pk):
     """Cancel a draft purchase (vendor endpoint) - deletes non-sold barcodes, keeps product"""
     from backend.catalog.models import Barcode
     from django.db import transaction
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
     
     supplier_id = request.query_params.get('supplier', None)
     
     if not supplier_id:
         return Response({'error': 'supplier parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
     
-    purchase = get_object_or_404(Purchase.objects.prefetch_related('items', 'items__product'), pk=pk, supplier_id=supplier_id)
+    purchase_qs = Purchase.objects.prefetch_related('items', 'items__product').filter(supplier_id=supplier_id)
+    if retailer:
+        purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+    purchase = get_object_or_404(purchase_qs, pk=pk)
     
     if purchase.status != 'draft':
         return Response(
@@ -623,13 +677,16 @@ def purchase_redistribute_stock(request, pk):
     """
     from django.db import transaction
     from backend.inventory.models import Stock
+    from backend.catalog.models import Barcode
     from backend.locations.models import Store, Warehouse
     from decimal import Decimal
-    
-    purchase = get_object_or_404(
-        Purchase.objects.select_related('store', 'warehouse').prefetch_related('items', 'items__product'),
-        pk=pk
-    )
+    retailer, tenant_err = _resolve_retailer_or_legacy(request)
+    if tenant_err:
+        return tenant_err
+    purchase_qs = Purchase.objects.select_related('store', 'warehouse').prefetch_related('items', 'items__product').all()
+    if retailer:
+        purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+    purchase = get_object_or_404(purchase_qs, pk=pk)
     
     if purchase.status != 'finalized':
         return Response(
@@ -647,19 +704,34 @@ def purchase_redistribute_stock(request, pk):
     # Use purchase's store/warehouse from Purchase model; fallback to defaults if not set
     shop_store = purchase.store
     if not shop_store:
-        shop_store = Store.objects.filter(shop_type='retail', is_active=True).first()
+        shop_store = Store.objects.filter(shop_type='retail', is_active=True)
+        if retailer:
+            shop_store = shop_store.filter(retailer_id=retailer.id)
+        shop_store = shop_store.first()
     if not shop_store:
-        shop_store = Store.objects.filter(is_active=True).exclude(shop_type='warehouse').first()
+        shop_store = Store.objects.filter(is_active=True).exclude(shop_type='warehouse')
+        if retailer:
+            shop_store = shop_store.filter(retailer_id=retailer.id)
+        shop_store = shop_store.first()
 
     warehouse_obj = purchase.warehouse
     warehouse_store = None  # Store with shop_type='warehouse' as alternative
     if not warehouse_obj:
         # Prefer Warehouse with code GODOWN (primary warehouse)
-        warehouse_obj = Warehouse.objects.filter(code='GODOWN', is_active=True).first()
+        wh_qs = Warehouse.objects.filter(code='GODOWN', is_active=True)
+        if retailer:
+            wh_qs = wh_qs.filter(retailer_id=retailer.id)
+        warehouse_obj = wh_qs.first()
     if not warehouse_obj:
-        warehouse_store = Store.objects.filter(shop_type='warehouse', is_active=True).first()
+        wh_store_qs = Store.objects.filter(shop_type='warehouse', is_active=True)
+        if retailer:
+            wh_store_qs = wh_store_qs.filter(retailer_id=retailer.id)
+        warehouse_store = wh_store_qs.first()
     if not warehouse_obj and not warehouse_store:
-        warehouse_obj = Warehouse.objects.filter(is_active=True).first()
+        wh_qs = Warehouse.objects.filter(is_active=True)
+        if retailer:
+            wh_qs = wh_qs.filter(retailer_id=retailer.id)
+        warehouse_obj = wh_qs.first()
 
     with transaction.atomic():
         for dist in items_distribution:
@@ -763,6 +835,51 @@ def purchase_redistribute_stock(request, pk):
                     )
                     stock.quantity += wh_diff
                     stock.save()
+
+            # Keep barcode ownership aligned with redistribution.
+            move_qty = int(abs(shop_diff))
+            if move_qty > 0:
+                if shop_diff > 0:
+                    source_qs = Barcode.objects.select_for_update().filter(
+                        purchase_item=item,
+                        tag__in=['new', 'returned'],
+                    )
+                    if warehouse_obj:
+                        source_qs = source_qs.filter(current_warehouse=warehouse_obj)
+                    elif warehouse_store:
+                        source_qs = source_qs.filter(current_store=warehouse_store)
+                    to_move = list(source_qs.order_by('id')[:move_qty])
+                    if len(to_move) != move_qty:
+                        return Response(
+                            {'error': f'Barcode ownership mismatch: not enough warehouse barcodes for {item.product.name}.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    Barcode.objects.filter(id__in=[b.id for b in to_move]).update(
+                        current_store=shop_store,
+                        current_warehouse=None,
+                    )
+                else:
+                    source_qs = Barcode.objects.select_for_update().filter(
+                        purchase_item=item,
+                        tag__in=['new', 'returned'],
+                        current_store=shop_store,
+                    )
+                    to_move = list(source_qs.order_by('id')[:move_qty])
+                    if len(to_move) != move_qty:
+                        return Response(
+                            {'error': f'Barcode ownership mismatch: not enough shop barcodes for {item.product.name}.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if warehouse_obj:
+                        Barcode.objects.filter(id__in=[b.id for b in to_move]).update(
+                            current_store=None,
+                            current_warehouse=warehouse_obj,
+                        )
+                    elif warehouse_store:
+                        Barcode.objects.filter(id__in=[b.id for b in to_move]).update(
+                            current_store=warehouse_store,
+                            current_warehouse=None,
+                        )
             
         # Create audit log for redistribution
         create_audit_log(

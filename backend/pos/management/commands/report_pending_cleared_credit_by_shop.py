@@ -15,6 +15,7 @@ from django.db.models import Count
 from django.utils import timezone
 
 from backend.pos.models import Invoice
+from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
@@ -32,6 +33,12 @@ class Command(BaseCommand):
             action='store_true',
             help='Print invoice id, number, store id, shop_type for retail + repair only.',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope report to one tenant.',
+        )
 
     def handle(self, *args, **options):
         raw = (options['date'] or '').strip()
@@ -42,12 +49,20 @@ class Command(BaseCommand):
                 raise CommandError(f'Invalid --date (use YYYY-MM-DD): {e}') from e
         else:
             d = timezone.localdate()
+        retailer_code = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                raise CommandError(f'Retailer code "{retailer_code}" not found or inactive.')
 
         base = Invoice.objects.filter(
             pending_cleared_at__date=d,
             status='credit',
             invoice_type='credit',
         )
+        if retailer:
+            base = base.filter(retailer_id=retailer.id)
 
         total = base.count()
         self.stdout.write(

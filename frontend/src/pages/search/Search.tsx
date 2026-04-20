@@ -15,7 +15,6 @@ import {
   ShoppingBag,
   Loader2,
   ExternalLink,
-  Box,
   Barcode as BarcodeIcon,
   Camera,
   X,
@@ -28,7 +27,6 @@ import BarcodeScanner from '../../components/BarcodeScanner';
 
 interface SearchResults {
   products: any[];
-  variants: any[];
   barcodes: any[];
   customers: any[];
   invoices: any[];
@@ -71,7 +69,6 @@ export default function Search() {
       if (!debouncedQuery.trim()) {
         return {
           products: [],
-          variants: [],
           barcodes: [],
           customers: [],
           invoices: [],
@@ -629,15 +626,6 @@ export default function Search() {
                       </div>
                     )}
                 </>
-
-              <ResultSection
-                title="Product Variants"
-                icon={Box}
-                items={data.variants}
-                onItemClick={(item) => navigate(`/products/${item.product}`)}
-                getItemLabel={(item) => item.name}
-                getItemSubLabel={(item) => `SKU: ${item.sku}`}
-              />
 
               {/* Barcodes: show all matching barcodes with current status; if sold, show invoice detail */}
               <ResultSection

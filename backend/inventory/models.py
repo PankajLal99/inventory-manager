@@ -185,6 +185,7 @@ class StockTransferItem(models.Model):
     )
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     received_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
+    selected_barcodes = models.JSONField(default=list, blank=True)
 
     class Meta:
         db_table = 'stock_transfer_items'

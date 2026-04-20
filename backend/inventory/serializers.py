@@ -1,6 +1,7 @@
 from rest_framework import serializers
+from django.db.models import Q
 from .models import Stock, StockBatch, StockAdjustment, StockTransfer, StockTransferItem
-from backend.catalog.models import Product, ProductVariant
+from backend.catalog.models import Product, ProductVariant, Barcode
 from backend.catalog.serializers import ProductSerializer, ProductVariantSerializer
 
 
@@ -35,20 +36,75 @@ class StockTransferItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StockTransferItem
-        fields = ['id', 'product', 'product_name', 'variant', 'quantity', 'received_quantity']
+        fields = ['id', 'product', 'product_name', 'variant', 'quantity', 'received_quantity', 'selected_barcodes']
 
 
 class StockTransferLineSerializer(serializers.ModelSerializer):
     """Writable line for create payload."""
+    selected_barcodes = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False,
+        allow_empty=True,
+    )
 
     class Meta:
         model = StockTransferItem
-        fields = ['product', 'variant', 'quantity']
+        fields = ['product', 'variant', 'quantity', 'selected_barcodes']
 
     def validate_quantity(self, value):
         if value is None or value <= 0:
             raise serializers.ValidationError('Quantity must be positive.')
         return value
+
+    def validate_selected_barcodes(self, value):
+        normalized = []
+        seen = set()
+        for raw in value or []:
+            token = str(raw or '').strip().upper()
+            if not token:
+                continue
+            if token in seen:
+                raise serializers.ValidationError(f'Duplicate barcode in line: {token}')
+            seen.add(token)
+            normalized.append(token)
+        return normalized
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        quantity = attrs.get('quantity')
+        product = attrs.get('product')
+        retailer = self.context.get('retailer')
+        selected = attrs.get('selected_barcodes') or []
+        if quantity != quantity.to_integral_value():
+            raise serializers.ValidationError(
+                {'quantity': 'Quantity must be a whole number when transferring barcode/serial tracked stock.'}
+            )
+        if not selected:
+            raise serializers.ValidationError({'selected_barcodes': 'Provide barcode/serial values for this line.'})
+        if int(quantity) != len(selected):
+            raise serializers.ValidationError(
+                {'selected_barcodes': 'Count of barcode/serial values must match quantity.'}
+            )
+        if retailer is None:
+            return attrs
+
+        barcode_qs = Barcode.all_objects.filter(
+            retailer_id=retailer.id,
+            product_id=product.id,
+            tag__in=['new', 'returned'],
+        ).filter(Q(barcode__in=selected) | Q(short_code__in=selected)).values_list('barcode', 'short_code')
+        existing = set()
+        for barcode_value, short_code in barcode_qs:
+            if barcode_value:
+                existing.add(str(barcode_value).upper())
+            if short_code:
+                existing.add(str(short_code).upper())
+        missing = [code for code in selected if code not in existing]
+        if missing:
+            raise serializers.ValidationError(
+                {'selected_barcodes': f'Invalid/unavailable barcode(s): {", ".join(missing)}'}
+            )
+        return attrs
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -90,7 +146,59 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError('At least one line item is required.')
+        seen = set()
+        duplicates = set()
+        for row in value:
+            for code in row.get('selected_barcodes') or []:
+                if code in seen:
+                    duplicates.add(code)
+                seen.add(code)
+        if duplicates:
+            joined = ', '.join(sorted(duplicates))
+            raise serializers.ValidationError(f'Barcode/serial values repeated across lines: {joined}')
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        retailer = self.context.get('retailer')
+        if retailer is None:
+            return attrs
+        from_store = attrs.get('from_store')
+        from_warehouse = attrs.get('from_warehouse')
+        source_filter = {}
+        if from_store is not None:
+            source_filter['current_store_id'] = from_store.id
+        elif from_warehouse is not None:
+            source_filter['current_warehouse_id'] = from_warehouse.id
+        for row in attrs.get('items') or []:
+            selected = row.get('selected_barcodes') or []
+            if not selected:
+                continue
+            found = set(
+                Barcode.all_objects.filter(
+                    retailer_id=retailer.id,
+                    product_id=row['product'].id,
+                    tag__in=['new', 'returned'],
+                    **source_filter,
+                ).filter(Q(barcode__in=selected) | Q(short_code__in=selected)).values_list('barcode', 'short_code')
+            )
+            resolved = set()
+            for barcode_value, short_code in found:
+                if barcode_value:
+                    resolved.add(str(barcode_value).upper())
+                if short_code:
+                    resolved.add(str(short_code).upper())
+            missing = [code for code in selected if code not in resolved]
+            if missing:
+                raise serializers.ValidationError(
+                    {
+                        'items': (
+                            f'Selected barcode/serial not present at source location for '
+                            f'product {row["product"].id}: {", ".join(missing)}'
+                        )
+                    }
+                )
+        return attrs
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

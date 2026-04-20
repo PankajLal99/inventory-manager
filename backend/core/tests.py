@@ -10,9 +10,14 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from backend.catalog.models import Product, Barcode, Category
 from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
-from backend.core.models import AccessPermission, Role, UserStoreRole
+from backend.core.models import AccessPermission, RetailerDashboardViewConfig, Role, UserStoreRole
 from backend.locations.models import Store
-from backend.pos.models import Invoice, InvoiceItem
+from backend.locations.models import Warehouse
+from backend.parties.models import Supplier, Customer, LedgerEntry
+from backend.parties.models import Customer
+from backend.pos.models import Invoice, InvoiceItem, Cart, CartItem, Payment
+from backend.pos.models import CreditNote, Return
+from backend.tenants.models import Retailer
 User = get_user_model()
 
 
@@ -231,3 +236,418 @@ class BarcodeAuditDisplayLabelTests(TestCase):
             tag='new',
         )
         self.assertEqual(bc.audit_display_label(), 'SIMPLE')
+
+
+class TenantIsolationRegressionTests(APITestCase):
+    """
+    Regression tests to enforce strict tenant scoping on list/search APIs.
+    These tests intentionally create same-domain data in two retailers and
+    assert only active retailer data is visible.
+    """
+
+    def setUp(self):
+        self.retailer_a = Retailer.objects.create(code='RTA', name='Retailer A', is_active=True)
+        self.retailer_b = Retailer.objects.create(code='RTB', name='Retailer B', is_active=True)
+
+        self.user_a = User.objects.create_user(
+            username='tenant_user_a',
+            password='testpass123',
+            retailer=self.retailer_a,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.user_a)
+
+        self.store_a = Store.objects.create(
+            retailer=self.retailer_a,
+            name='Store A',
+            code='STA',
+            shop_type='retail',
+        )
+        self.store_b = Store.objects.create(
+            retailer=self.retailer_b,
+            name='Store B',
+            code='STB',
+            shop_type='retail',
+        )
+
+        self.customer_a = Customer.objects.create(
+            retailer=self.retailer_a,
+            name='Customer A',
+            phone='9000000001',
+        )
+        self.customer_b = Customer.objects.create(
+            retailer=self.retailer_b,
+            name='Customer B',
+            phone='9000000002',
+        )
+
+        self.invoice_a = Invoice.objects.create(
+            retailer=self.retailer_a,
+            invoice_number='INV-A-1',
+            store=self.store_a,
+            customer=self.customer_a,
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            created_by=self.user_a,
+        )
+        self.invoice_b = Invoice.objects.create(
+            retailer=self.retailer_b,
+            invoice_number='INV-B-1',
+            store=self.store_b,
+            customer=self.customer_b,
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            created_by=self.user_a,
+        )
+
+        return_a = Return.objects.create(
+            retailer=self.retailer_a,
+            return_number='RET-A-1',
+            invoice=self.invoice_a,
+            reason='Damaged',
+            created_by=self.user_a,
+        )
+        return_b = Return.objects.create(
+            retailer=self.retailer_b,
+            return_number='RET-B-1',
+            invoice=self.invoice_b,
+            reason='Damaged',
+            created_by=self.user_a,
+        )
+
+        self.credit_note_a = CreditNote.objects.create(
+            retailer=self.retailer_a,
+            credit_note_number='CN-A-1',
+            return_obj=return_a,
+            amount=Decimal('10.00'),
+            created_by=self.user_a,
+        )
+        self.credit_note_b = CreditNote.objects.create(
+            retailer=self.retailer_b,
+            credit_note_number='CN-B-1',
+            return_obj=return_b,
+            amount=Decimal('10.00'),
+            created_by=self.user_a,
+        )
+
+        Product.objects.create(retailer=self.retailer_a, name='Alpha Product', sku='A-SKU')
+        Product.objects.create(retailer=self.retailer_b, name='Beta Product', sku='B-SKU')
+
+    def test_customer_list_is_scoped_to_active_retailer(self):
+        response = self.client.get(reverse('customer-list-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = {row['id'] for row in response.data}
+        self.assertIn(self.customer_a.id, ids)
+        self.assertNotIn(self.customer_b.id, ids)
+
+    def test_credit_note_list_is_scoped_to_active_retailer(self):
+        response = self.client.get(reverse('credit-note-list'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        numbers = {row['credit_note_number'] for row in response.data}
+        self.assertIn('CN-A-1', numbers)
+        self.assertNotIn('CN-B-1', numbers)
+
+    def test_credit_note_detail_blocks_other_retailer_record(self):
+        response = self.client.get(reverse('credit-note-detail', args=[self.credit_note_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_store_list_is_scoped_to_active_retailer(self):
+        response = self.client.get(reverse('store-list-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = {row['id'] for row in response.data}
+        self.assertIn(self.store_a.id, ids)
+        self.assertNotIn(self.store_b.id, ids)
+
+    def test_customer_detail_blocks_other_retailer_record(self):
+        response = self.client.get(reverse('customer-detail', args=[self.customer_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_global_search_is_scoped_to_active_retailer(self):
+        response = self.client.get(reverse('global-search'), {'q': 'Product', 'type': 'product'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        names = {row['name'] for row in response.data['products']}
+        self.assertIn('Alpha Product', names)
+        self.assertNotIn('Beta Product', names)
+
+
+class MultiTenantRetailFlowE2ETests(APITestCase):
+    """End-to-end tenant flow: setup -> purchase -> isolation -> POS sell -> KPIs."""
+
+    def setUp(self):
+        self.retailer_a = Retailer.objects.create(code='E2EA', name='E2E Retailer A', is_active=True)
+        self.retailer_b = Retailer.objects.create(code='E2EB', name='E2E Retailer B', is_active=True)
+
+        self.store_a = Store.objects.create(
+            retailer=self.retailer_a,
+            name='E2E Store A',
+            code='E2ESA',
+            shop_type='retail',
+        )
+        self.store_b = Store.objects.create(
+            retailer=self.retailer_b,
+            name='E2E Store B',
+            code='E2ESB',
+            shop_type='retail',
+        )
+        self.warehouse_a = Warehouse.objects.create(
+            retailer=self.retailer_a,
+            name='E2E Warehouse A',
+            code='E2EWA',
+        )
+
+        self.retailer_a.primary_store = self.store_a
+        self.retailer_a.save(update_fields=['primary_store'])
+        self.retailer_b.primary_store = self.store_b
+        self.retailer_b.save(update_fields=['primary_store'])
+
+        self.user_a = User.objects.create_user(
+            username='e2e_user_a',
+            password='testpass123',
+            retailer=self.retailer_a,
+            default_store=self.store_a,
+            is_staff=True,
+        )
+        self.user_b = User.objects.create_user(
+            username='e2e_user_b',
+            password='testpass123',
+            retailer=self.retailer_b,
+            default_store=self.store_b,
+            is_staff=True,
+        )
+        self.user_a.assigned_stores.add(self.store_a)
+        self.user_b.assigned_stores.add(self.store_b)
+
+        self.category_a = Category.objects.create(retailer=self.retailer_a, name='E2E Cat A')
+        self.product_a = Product.objects.create(
+            retailer=self.retailer_a,
+            name='E2E Product A',
+            sku='E2E-SKU-A',
+            category=self.category_a,
+            product_type='simple',
+            track_inventory=False,
+        )
+        self.supplier_a = Supplier.objects.create(
+            retailer=self.retailer_a,
+            name='E2E Supplier A',
+            phone='9000000301',
+        )
+        self.customer_a = Customer.objects.create(
+            retailer=self.retailer_a,
+            name='E2E Customer A',
+            phone='9000000302',
+        )
+
+    def test_multitenant_purchase_pos_and_kpis(self):
+        self.client.force_authenticate(user=self.user_a)
+
+        # 1) Purchase for retailer A.
+        purchase_resp = self.client.post(
+            reverse('purchase-list-create'),
+            {
+                'supplier': self.supplier_a.id,
+                'purchase_date': '2026-04-20',
+                'store': self.store_a.id,
+                'items': [
+                    {
+                        'product': self.product_a.id,
+                        'quantity': '5.00',
+                        'unit_price': '100.00',
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(purchase_resp.status_code, status.HTTP_201_CREATED, purchase_resp.data)
+        purchase_id = purchase_resp.data['id']
+
+        # 2) Other retailer cannot access this purchase.
+        self.client.force_authenticate(user=self.user_b)
+        denied_purchase = self.client.get(reverse('purchase-detail', args=[purchase_id]))
+        self.assertEqual(denied_purchase.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 3) Build POS cart for owner retailer and sell.
+        self.client.force_authenticate(user=self.user_a)
+        cart = Cart.objects.create(
+            retailer=self.retailer_a,
+            cart_number='E2E-CART-A',
+            store=self.store_a,
+            customer=self.customer_a,
+            created_by=self.user_a,
+            invoice_type='credit',
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product_a,
+            quantity=Decimal('2.000'),
+            unit_price=Decimal('150.00'),
+        )
+        checkout_resp = self.client.post(
+            reverse('cart-checkout', args=[cart.id]),
+            {'invoice_type': 'credit', 'customer': self.customer_a.id},
+            format='json',
+        )
+        self.assertEqual(checkout_resp.status_code, status.HTTP_201_CREATED, checkout_resp.data)
+        invoice_id = checkout_resp.data['id']
+        invoice = Invoice.objects.get(pk=invoice_id)
+        self.assertEqual(invoice.retailer_id, self.retailer_a.id)
+        self.assertEqual(invoice.total, Decimal('300.00'))
+        self.assertEqual(invoice.invoice_type, 'credit')
+
+        # 4) Other retailer cannot access this cart/invoice.
+        self.client.force_authenticate(user=self.user_b)
+        denied_cart = self.client.get(reverse('cart-detail', args=[cart.id]))
+        denied_invoice = self.client.get(reverse('invoice-detail', args=[invoice_id]))
+        self.assertEqual(denied_cart.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(denied_invoice.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 5) Owner retailer can read ledger summaries and dashboard KPIs.
+        self.client.force_authenticate(user=self.user_a)
+        ledger_summary_resp = self.client.get(reverse('ledger-summary'))
+        self.assertEqual(ledger_summary_resp.status_code, status.HTTP_200_OK, ledger_summary_resp.data)
+        self.assertIn('total_credit', ledger_summary_resp.data)
+        self.assertIn('total_debit', ledger_summary_resp.data)
+        self.assertIn('num_accounts', ledger_summary_resp.data)
+
+        kpi_resp = self.client.get(reverse('dashboard-kpis'))
+        self.assertEqual(kpi_resp.status_code, status.HTTP_200_OK, kpi_resp.data)
+        self.assertIsInstance(kpi_resp.data, dict)
+        self.assertGreaterEqual(len(kpi_resp.data.keys()), 1)
+
+        # 6) Validate accounting artifacts exist for owner retailer only.
+        self.assertTrue(
+            LedgerEntry.objects.filter(invoice_id=invoice_id, customer=self.customer_a).exists()
+        )
+        self.assertFalse(
+            Payment.objects.filter(invoice_id=invoice_id, invoice__retailer_id=self.retailer_b.id).exists()
+        )
+
+    def test_mixed_and_cash_payments_reflect_in_kpis(self):
+        self.client.force_authenticate(user=self.user_a)
+
+        # Mixed payment invoice.
+        cart_mixed = Cart.objects.create(
+            retailer=self.retailer_a,
+            cart_number='E2E-CART-MIXED',
+            store=self.store_a,
+            customer=self.customer_a,
+            created_by=self.user_a,
+            invoice_type='mixed',
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart_mixed,
+            product=self.product_a,
+            quantity=Decimal('2.000'),
+            unit_price=Decimal('150.00'),
+        )
+        mixed_resp = self.client.post(
+            reverse('cart-checkout', args=[cart_mixed.id]),
+            {
+                'invoice_type': 'mixed',
+                'customer': self.customer_a.id,
+                'cash_amount': '120.00',
+                'upi_amount': '180.00',
+            },
+            format='json',
+        )
+        self.assertEqual(mixed_resp.status_code, status.HTTP_201_CREATED, mixed_resp.data)
+        mixed_invoice_id = mixed_resp.data['id']
+        mixed_invoice = Invoice.objects.get(pk=mixed_invoice_id)
+        self.assertEqual(mixed_invoice.total, Decimal('300.00'))
+
+        mixed_payments = Payment.objects.filter(invoice_id=mixed_invoice_id).order_by('payment_method')
+        self.assertEqual(mixed_payments.count(), 2)
+        by_method = {p.payment_method: p.amount for p in mixed_payments}
+        self.assertEqual(by_method.get('cash'), Decimal('120.00'))
+        self.assertEqual(by_method.get('upi'), Decimal('180.00'))
+
+        # Cash-only invoice.
+        cart_cash = Cart.objects.create(
+            retailer=self.retailer_a,
+            cart_number='E2E-CART-CASH',
+            store=self.store_a,
+            customer=self.customer_a,
+            created_by=self.user_a,
+            invoice_type='cash',
+            status='active',
+        )
+        CartItem.objects.create(
+            cart=cart_cash,
+            product=self.product_a,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('200.00'),
+        )
+        cash_resp = self.client.post(
+            reverse('cart-checkout', args=[cart_cash.id]),
+            {'invoice_type': 'cash', 'customer': self.customer_a.id},
+            format='json',
+        )
+        self.assertEqual(cash_resp.status_code, status.HTTP_201_CREATED, cash_resp.data)
+        cash_invoice_id = cash_resp.data['id']
+        cash_payments = Payment.objects.filter(invoice_id=cash_invoice_id)
+        self.assertEqual(cash_payments.count(), 1)
+        self.assertEqual(cash_payments.first().payment_method, 'cash')
+        self.assertEqual(cash_payments.first().amount, Decimal('200.00'))
+
+        # Dashboard KPI should include payment aggregates with cash and upi methods.
+        kpi_resp = self.client.get(reverse('dashboard-kpis'))
+        self.assertEqual(kpi_resp.status_code, status.HTTP_200_OK, kpi_resp.data)
+        self.assertIn('kpis', kpi_resp.data)
+        self.assertIn('payments_by_method', kpi_resp.data)
+        self.assertIn('total_payments', kpi_resp.data['kpis'])
+        self.assertGreaterEqual(Decimal(str(kpi_resp.data['kpis']['total_payments'])), Decimal('500.00'))
+
+        methods = {row.get('payment_method') for row in (kpi_resp.data.get('payments_by_method') or [])}
+        self.assertIn('cash', methods)
+        self.assertIn('upi', methods)
+
+
+class DashboardBlocksInUserMeTests(APITestCase):
+    def setUp(self):
+        self.retailer = Retailer.objects.create(code='DBCFG', name='Dashboard Config Retailer', is_active=True)
+        self.user = User.objects.create_user(
+            username='dashboard_cfg_user',
+            password='testpass123',
+            retailer=self.retailer,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_user_me_returns_retailer_dashboard_blocks(self):
+        RetailerDashboardViewConfig.objects.create(
+            retailer=self.retailer,
+            block_visibility={
+                'profits': False,
+                'stockAndDefective': True,
+                'wholesalePendingCleared': False,
+            },
+        )
+        resp = self.client.get(reverse('user-me'))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.assertIn('dashboard_blocks', resp.data)
+        self.assertEqual(resp.data['dashboard_blocks'].get('profits'), False)
+        self.assertEqual(resp.data['dashboard_blocks'].get('stockAndDefective'), True)
+        self.assertEqual(resp.data['dashboard_blocks'].get('wholesalePendingCleared'), False)
+
+    def test_user_me_applies_limited_defaults_for_non_manish_retailer(self):
+        resp = self.client.get(reverse('user-me'))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        blocks = resp.data.get('dashboard_blocks') or {}
+        self.assertEqual(blocks.get('profits'), False)
+        self.assertEqual(blocks.get('kpi.totalPending'), False)
+        self.assertEqual(blocks.get('kpi.totalCredit'), False)
+        self.assertEqual(blocks.get('kpi.overallProfit'), True)
+
+    def test_user_me_keeps_full_defaults_for_manish_traders(self):
+        manish = Retailer.objects.create(code='MANISH_TRADERS', name='Manish Traders', is_active=True)
+        manish_user = User.objects.create_user(
+            username='manish_dashboard_user',
+            password='testpass123',
+            retailer=manish,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=manish_user)
+        resp = self.client.get(reverse('user-me'))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.assertEqual(resp.data.get('dashboard_blocks'), {})

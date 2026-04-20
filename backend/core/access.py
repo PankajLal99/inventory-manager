@@ -1,8 +1,8 @@
 """
-Navigation / feature permission codenames and resolution from Django groups.
+Navigation / feature permission codenames.
 
-Store-scoped roles (UserStoreRole) add their Role.permissions on top of group-derived
-permissions (union). Assign roles per user+shop in Django Admin.
+SaaS model: app access is role-driven via Role + UserStoreRole. Django groups may
+still exist for admin/platform workflows, but they should not encode tenant app ACLs.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ ACCESS_PERMISSION_SEED: list[tuple[str, str, str]] = [
     ('nav.vendors', 'Vendors', 'admin'),
     ('nav.reports', 'Reports', 'admin'),
     ('nav.history', 'History', 'admin'),
+    ('nav.role_management', 'Role management', 'admin'),
 ]
 
 # Page-level gates (POS, invoices, ledger, etc.) — keep in sync with frontend `lib/access.ts` `P`.
@@ -54,6 +55,7 @@ FEATURE_PERMISSION_SEED: list[tuple[str, str, str]] = [
     ('feature.store_management', 'Stores CRUD: admin / store admins', 'feature'),
     ('feature.payments_extended_columns', 'Payments: extended columns (non-Retail group)', 'feature'),
     ('feature.discard_invoice_edit_carts', 'Active carts: discard EDIT-* carts', 'feature'),
+    ('feature.role_management', 'Manage roles and page visibility from app UI', 'feature'),
 ]
 
 
@@ -61,176 +63,29 @@ def _all_nav_codenames() -> set[str]:
     return {c for c, _, _ in ACCESS_PERMISSION_SEED}
 
 
-def _groups_set(user_groups: list[str]) -> set[str]:
-    return set(user_groups or [])
-
-
 def permissions_from_django_groups(user_groups: list[str], user: User | None) -> set[str]:
     """
-    Reproduce legacy Layout / user_me visibility as permission codenames.
+    SaaS mode: do not derive app permissions from static Django group names.
+    Permissions should come from Role/UserStoreRole assignments.
+    Keep staff/superuser fallback for platform operations.
     """
-    g = _groups_set(user_groups)
-    is_admin = 'Admin' in g
-    is_retail_admin = 'RetailAdmin' in g
-    is_retail = 'Retail' in g
-    is_wholesale = 'Wholesale' in g
-    is_wholesale_admin = 'WholesaleAdmin' in g
-    is_repair = 'Repair' in g
-    is_repair_admin = 'RepairAdmin' in g
-    has_app = bool(
-        is_admin
-        or is_retail_admin
-        or is_retail
-        or is_wholesale
-        or is_wholesale_admin
-        or is_repair
-        or is_repair_admin
-    )
-
+    if user and (user.is_superuser or user.is_staff):
+        return _all_nav_codenames() | {c for c, _, _ in FEATURE_PERMISSION_SEED}
+    # Legacy fallback: keep existing group-based behavior for non-migrated users.
+    groups = {g.lower() for g in (user_groups or [])}
     perms: set[str] = set()
+    has_admin = any('admin' in g for g in groups)
+    has_retail = 'retail' in groups
+    has_retail_admin = 'retailadmin' in groups
 
-    if not has_app:
-        if user and (user.is_superuser or user.is_staff):
-            out = _all_nav_codenames()
-            out.update(_feature_permissions_for_staff_no_app_groups())
-            return out
-        return perms
-
-    # —— Core ——
-    if is_admin or is_retail_admin or is_retail or is_wholesale_admin or is_wholesale:
-        perms.add('nav.pos')
-    if (
-        is_admin
-        or is_retail_admin
-        or is_wholesale_admin
-        or is_repair
-        or is_retail
-        or is_wholesale
-    ):
-        perms.add('nav.repair_register')
-    if (
-        is_admin
-        or is_retail_admin
-        or is_retail
-        or is_wholesale_admin
-        or is_wholesale
-        or is_repair
-        or 'Temp' in g
-    ):
-        perms.add('nav.search')
-    if is_admin or is_retail_admin:
-        perms.add('nav.dashboard')
-
-    # —— Sales ——
-    if is_admin or is_retail_admin or is_retail or is_wholesale_admin or is_wholesale:
-        perms.add('nav.invoices')
-    if is_admin or is_retail_admin or is_retail:
-        perms.add('nav.credit_notes')
-    if is_admin or is_retail_admin or is_wholesale_admin:
-        perms.add('nav.customers')
-    if is_admin or is_retail or is_retail_admin or is_wholesale_admin or is_wholesale:
-        perms.add('nav.replacement')
-    if (
-        is_admin
-        or is_retail_admin
-        or is_wholesale_admin
-        or is_repair
-        or is_retail
-        or is_wholesale
-    ):
-        perms.add('nav.repairs')
-
-    # —— Inventory ——
-    if (
-        is_admin
-        or is_retail_admin
-        or is_retail
-        or is_wholesale_admin
-        or is_wholesale
-        or is_repair
-    ):
-        perms.add('nav.products')
-    if is_admin or is_retail_admin or is_retail or is_wholesale_admin or is_wholesale:
-        perms.add('nav.stock_overview')
-        perms.add('nav.stock_transfers')
-        perms.add('nav.purchases')
-
-    # —— Financial ——
-    if is_admin or is_retail_admin or is_retail:
-        perms.add('nav.ledger')
-    if is_admin or is_retail_admin or is_wholesale_admin or is_repair or is_retail:
-        perms.add('nav.internal_ledger')
-    if is_admin or is_retail_admin or is_wholesale_admin:
-        perms.add('nav.payment_reminders')
-    if is_admin or is_retail_admin or is_wholesale_admin or 'Temp' in g or is_retail or is_wholesale:
-        perms.add('nav.expenses')
-    if is_admin or is_retail_admin or is_retail:
+    if has_admin:
+        perms.update({'feature.ledger_admin', 'feature.store_management', 'nav.payments'})
+    if has_retail_admin:
+        perms.update({'feature.store_management', 'nav.payments'})
+    if has_retail:
         perms.add('nav.payments')
 
-    # —— Admin-only style (matches can_access_customers / history checks) ——
-    can_admin_nav = is_admin or is_retail_admin or is_wholesale_admin or is_repair_admin
-    if can_admin_nav:
-        perms.add('nav.personal_ledger')
-    if is_admin or is_retail_admin or is_retail or is_wholesale_admin or is_wholesale:
-        perms.add('nav.active_carts')
-    if is_admin or is_retail_admin or is_wholesale_admin:
-        perms.add('nav.vendors')
-        perms.add('nav.reports')
-    # Legacy Layout used showFor 'admin' → can_access_customers (not can_access_history)
-    if can_admin_nav:
-        perms.add('nav.history')
-
-    # —— Feature gates (page-level, mirrors frontend group checks) ——
-    perms.update(_feature_permissions_from_groups(g, user))
-
     return perms
-
-
-def _feature_permissions_for_staff_no_app_groups() -> set[str]:
-    """Staff/superuser with no app group: nav already full; grant safe feature defaults."""
-    return {
-        'feature.pos_admin',
-        'feature.ledger_admin',
-        'feature.store_management',
-        'feature.payments_extended_columns',
-    }
-
-
-def _feature_permissions_from_groups(g: set[str], user: User | None) -> set[str]:
-    fp: set[str] = set()
-    is_admin = 'Admin' in g
-    is_retail_admin = 'RetailAdmin' in g
-    is_retail = 'Retail' in g
-    is_wholesale = 'Wholesale' in g
-    is_wholesale_admin = 'WholesaleAdmin' in g
-
-    if 'Super' in g:
-        fp.add('feature.super_metrics')
-    if (user and (user.is_superuser or user.is_staff)) or is_admin:
-        fp.add('feature.pos_admin')
-    if is_retail or is_retail_admin:
-        fp.add('feature.pos_retail_lane')
-    if is_wholesale or is_wholesale_admin:
-        fp.add('feature.pos_wholesale')
-    if is_wholesale_admin:
-        fp.add('feature.pos_wholesale_admin')
-    if any('Admin' in str(name) for name in g):
-        fp.add('feature.invoice_admin_stores')
-    if (is_retail or is_wholesale) and not is_admin and not is_retail_admin and not is_wholesale_admin:
-        fp.add('feature.invoice_restricted')
-    if is_wholesale or is_wholesale_admin:
-        fp.add('feature.invoice_hide_cash_checkout')
-    if is_retail and not is_admin and not is_retail_admin:
-        fp.add('feature.retail_catalog_restricted')
-    if (user and (user.is_superuser or user.is_staff)) or any('Admin' in str(name) for name in g):
-        fp.add('feature.ledger_admin')
-    if (user and (user.is_superuser or user.is_staff)) or is_admin or is_retail_admin or is_wholesale_admin:
-        fp.add('feature.store_management')
-    if 'Retail' not in g:
-        fp.add('feature.payments_extended_columns')
-    if 'Super' in g or is_admin:
-        fp.add('feature.discard_invoice_edit_carts')
-    return fp
 
 
 def merge_store_role_permissions(user: User, base: set[str]) -> set[str]:

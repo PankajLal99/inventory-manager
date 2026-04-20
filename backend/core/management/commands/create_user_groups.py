@@ -65,7 +65,18 @@ class Command(BaseCommand):
         updated_count = 0
 
         for group_config in groups_config:
-            group, created = Group.objects.get_or_create(name=group_config['name'])
+            target_name = group_config['name']
+            existing_group = Group.objects.filter(name__iexact=target_name).first()
+            if existing_group:
+                group = existing_group
+                created = False
+                # Normalize the canonical group name if case differs.
+                if group.name != target_name:
+                    group.name = target_name
+                    group.save(update_fields=['name'])
+            else:
+                group = Group.objects.create(name=target_name)
+                created = True
             
             if created:
                 self.stdout.write(self.style.SUCCESS(f'✓ Created group: {group_config["name"]}'))

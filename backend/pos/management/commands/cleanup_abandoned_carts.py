@@ -26,6 +26,7 @@ from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.catalog.models import Barcode
 from backend.inventory.models import Stock
 from backend.pos.models import Cart
+from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
@@ -40,16 +41,31 @@ class Command(BaseCommand):
             '--apply', action='store_true',
             help='Actually delete carts. Without this flag, runs in dry-run mode.',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope cleanup to one tenant.',
+        )
 
     def handle(self, *args, **options):
         hours = options['hours']
         apply = options['apply']
+        retailer_code = (options.get('retailer_code') or '').strip()
         cutoff = timezone.now() - timedelta(hours=hours)
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                self.stderr.write(f'Retailer code "{retailer_code}" not found or inactive.')
+                return
 
         abandoned = Cart.objects.filter(
             status__in=['active', 'held'],
             updated_at__lt=cutoff,
         ).prefetch_related('items', 'items__product', 'items__variant')
+        if retailer:
+            abandoned = abandoned.filter(retailer_id=retailer.id)
 
         count = abandoned.count()
         if count == 0:
@@ -88,10 +104,11 @@ class Command(BaseCommand):
                                     continue
                                 b_upper = str(bc_val).strip().upper()
                                 try:
+                                    barcode_qs = Barcode.objects.select_for_update().filter(retailer_id=cart.retailer_id)
                                     try:
-                                        barcode_obj = Barcode.objects.select_for_update().get(barcode=b_upper)
+                                        barcode_obj = barcode_qs.get(barcode=b_upper)
                                     except Barcode.DoesNotExist:
-                                        barcode_obj = Barcode.objects.select_for_update().get(short_code=b_upper)
+                                        barcode_obj = barcode_qs.get(short_code=b_upper)
                                     if barcode_obj.tag == 'in-cart':
                                         barcode_obj.tag = 'new'
                                         barcode_obj.save(update_fields=['tag'])

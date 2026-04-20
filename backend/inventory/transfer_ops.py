@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from django.db.models import Q
 
 from backend.inventory.models import Stock, StockTransfer
+from backend.catalog.models import Barcode
 
 
 def generate_next_transfer_number(retailer) -> str:
@@ -32,6 +34,7 @@ def apply_stock_transfer_completion(transfer: StockTransfer) -> None:
     if not items:
         raise ValueError('Transfer has no line items.')
 
+    used_barcodes = set()
     for item in items:
         if item.product.retailer_id != transfer.retailer_id:
             raise ValueError(f'Product {item.product_id} does not belong to this retailer.')
@@ -41,6 +44,43 @@ def apply_stock_transfer_completion(transfer: StockTransfer) -> None:
         qty = item.quantity
         if qty <= 0:
             raise ValueError('Line quantity must be positive.')
+        if qty != qty.to_integral_value():
+            raise ValueError('Line quantity must be a whole number for barcode/serial transfers.')
+
+        selected_barcodes = [str(v).strip().upper() for v in (item.selected_barcodes or []) if str(v).strip()]
+        if len(selected_barcodes) != int(qty):
+            raise ValueError(f'Barcode/serial count mismatch for product {item.product_id}.')
+        for code in selected_barcodes:
+            if code in used_barcodes:
+                raise ValueError(f'Barcode/serial repeated across lines: {code}')
+            used_barcodes.add(code)
+        if selected_barcodes:
+            source_filter = {}
+            if from_store:
+                source_filter['current_store_id'] = from_store
+            else:
+                source_filter['current_warehouse_id'] = from_wh
+            barcode_qs = Barcode.all_objects.select_for_update().filter(
+                retailer_id=transfer.retailer_id,
+                product_id=item.product_id,
+                tag__in=['new', 'returned'],
+                **source_filter,
+            ).filter(Q(barcode__in=selected_barcodes) | Q(short_code__in=selected_barcodes))
+            found = set()
+            for barcode_value, short_code in barcode_qs.values_list('barcode', 'short_code'):
+                if barcode_value:
+                    found.add(str(barcode_value).upper())
+                if short_code:
+                    found.add(str(short_code).upper())
+            missing = [c for c in selected_barcodes if c not in found]
+            if missing:
+                raise ValueError(
+                    f'Selected barcode/serial not available for product {item.product_id}: {", ".join(missing)}'
+                )
+            if to_store:
+                barcode_qs.update(current_store_id=to_store, current_warehouse_id=None)
+            else:
+                barcode_qs.update(current_store_id=None, current_warehouse_id=to_wh)
 
         src_kwargs = {
             'product_id': item.product_id,

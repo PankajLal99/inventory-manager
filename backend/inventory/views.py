@@ -95,7 +95,10 @@ def stock_out_of_stock(request):
 @permission_classes([IsAuthenticated])
 def stock_batch_list(request):
     """List all stock batches"""
+    retailer, err = require_active_retailer(request)
     batches = StockBatch.objects.all()
+    if not err and retailer:
+        batches = batches.filter(product__retailer_id=retailer.id)
     serializer = StockBatchSerializer(batches, many=True)
     return Response(serializer.data)
 
@@ -104,7 +107,11 @@ def stock_batch_list(request):
 @permission_classes([IsAuthenticated])
 def stock_batch_detail(request, pk):
     """Retrieve a stock batch"""
-    batch = get_object_or_404(StockBatch, pk=pk)
+    retailer, err = require_active_retailer(request)
+    batch_filters = {'pk': pk}
+    if not err and retailer:
+        batch_filters['product__retailer_id'] = retailer.id
+    batch = get_object_or_404(StockBatch, **batch_filters)
     serializer = StockBatchSerializer(batch)
     return Response(serializer.data)
 
@@ -114,13 +121,25 @@ def stock_batch_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def stock_adjustment_list_create(request):
     """List all stock adjustments or create a new adjustment"""
+    retailer, err = require_active_retailer(request)
     if request.method == 'GET':
         adjustments = StockAdjustment.objects.all()
+        if not err and retailer:
+            adjustments = adjustments.filter(product__retailer_id=retailer.id)
         serializer = StockAdjustmentSerializer(adjustments, many=True)
         return Response(serializer.data)
     else:  # POST
         serializer = StockAdjustmentSerializer(data=request.data)
         if serializer.is_valid():
+            product = serializer.validated_data.get('product')
+            if not err and retailer and product and getattr(product, 'retailer_id', None) != retailer.id:
+                return Response({'error': 'Product does not belong to your retailer.'}, status=status.HTTP_400_BAD_REQUEST)
+            store = serializer.validated_data.get('store')
+            warehouse = serializer.validated_data.get('warehouse')
+            if not err and retailer and store and getattr(store, 'retailer_id', None) != retailer.id:
+                return Response({'error': 'Store does not belong to your retailer.'}, status=status.HTTP_400_BAD_REQUEST)
+            if not err and retailer and warehouse and getattr(warehouse, 'retailer_id', None) != retailer.id:
+                return Response({'error': 'Warehouse does not belong to your retailer.'}, status=status.HTTP_400_BAD_REQUEST)
             adjustment = serializer.save(created_by=request.user)
             
             # Update or create Stock entry based on the adjustment
@@ -160,12 +179,15 @@ def stock_adjustment_list_create(request):
                         
                         # Create barcode for this item
                         Barcode.objects.create(
+                            retailer_id=(retailer.id if (not err and retailer) else None),
                             product=adjustment.product,
                             variant=adjustment.variant,
                             barcode=barcode_value,
                             short_code=short_code,
                             is_primary=False,
-                            tag='new'  # Explicitly set tag to 'new' for fresh inventory items
+                            tag='new',  # Explicitly set tag to 'new' for fresh inventory items
+                            current_store=adjustment.store,
+                            current_warehouse=adjustment.warehouse,
                         )
             elif adjustment.adjustment_type == 'out':
                 stock.quantity -= adjustment.quantity
@@ -212,7 +234,11 @@ def stock_adjustment_list_create(request):
 @permission_classes([IsAuthenticated])
 def stock_adjustment_detail(request, pk):
     """Retrieve, update or delete a stock adjustment"""
-    adjustment = get_object_or_404(StockAdjustment, pk=pk)
+    retailer, err = require_active_retailer(request)
+    adjustment_filters = {'pk': pk}
+    if not err and retailer:
+        adjustment_filters['product__retailer_id'] = retailer.id
+    adjustment = get_object_or_404(StockAdjustment, **adjustment_filters)
     
     if request.method == 'GET':
         serializer = StockAdjustmentSerializer(adjustment)

@@ -13,6 +13,8 @@ from backend.core.models import AuditLog
 from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from backend.pos.models import Return
+from backend.tenants.models import Retailer
 
 User = get_user_model()
 
@@ -2749,3 +2751,157 @@ class ReplacementPOSTests(APITestCase):
         results = r.data.get('results') or []
         self.assertEqual(len(results), 1)
         self.assertTrue(results[0].get('is_replacement_return'))
+
+
+class PosTenantIsolationTests(APITestCase):
+    """Concrete multi-tenant regression tests for POS cart/invoice/return flows."""
+
+    def setUp(self):
+        self.retailer_a = Retailer.objects.create(code='PSA', name='POS Tenant A', is_active=True)
+        self.retailer_b = Retailer.objects.create(code='PSB', name='POS Tenant B', is_active=True)
+
+        self.user_a = User.objects.create_user(
+            username=f'pos_tenant_user_a_{uuid.uuid4().hex[:6]}',
+            password='testpass123',
+            retailer=self.retailer_a,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.user_a)
+
+        self.store_a = Store.objects.create(
+            retailer=self.retailer_a,
+            name='POS Store A',
+            code='POSA',
+            shop_type='retail',
+        )
+        self.store_b = Store.objects.create(
+            retailer=self.retailer_b,
+            name='POS Store B',
+            code='POSB',
+            shop_type='retail',
+        )
+        self.category_a = Category.objects.create(retailer=self.retailer_a, name='POS Category A')
+        self.category_b = Category.objects.create(retailer=self.retailer_b, name='POS Category B')
+        self.product_a = Product.objects.create(
+            retailer=self.retailer_a,
+            name='POS Product A',
+            category=self.category_a,
+            product_type='simple',
+        )
+        self.product_b = Product.objects.create(
+            retailer=self.retailer_b,
+            name='POS Product B',
+            category=self.category_b,
+            product_type='simple',
+        )
+        self.customer_a = Customer.objects.create(retailer=self.retailer_a, name='POS Customer A', phone='9000000201')
+        self.customer_b = Customer.objects.create(retailer=self.retailer_b, name='POS Customer B', phone='9000000202')
+
+        self.cart_a = Cart.objects.create(
+            retailer=self.retailer_a,
+            cart_number=f'POS-CART-A-{uuid.uuid4().hex[:6]}',
+            store=self.store_a,
+            created_by=self.user_a,
+            invoice_type='cash',
+        )
+        self.cart_b = Cart.objects.create(
+            retailer=self.retailer_b,
+            cart_number=f'POS-CART-B-{uuid.uuid4().hex[:6]}',
+            store=self.store_b,
+            created_by=self.user_a,
+            invoice_type='cash',
+        )
+
+        self.invoice_a = Invoice.objects.create(
+            retailer=self.retailer_a,
+            invoice_number=f'POS-INV-A-{uuid.uuid4().hex[:6]}',
+            store=self.store_a,
+            customer=self.customer_a,
+            status='draft',
+            invoice_type='cash',
+            subtotal=Decimal('50.00'),
+            total=Decimal('50.00'),
+            created_by=self.user_a,
+        )
+        self.invoice_b = Invoice.objects.create(
+            retailer=self.retailer_b,
+            invoice_number=f'POS-INV-B-{uuid.uuid4().hex[:6]}',
+            store=self.store_b,
+            customer=self.customer_b,
+            status='draft',
+            invoice_type='cash',
+            subtotal=Decimal('50.00'),
+            total=Decimal('50.00'),
+            created_by=self.user_a,
+        )
+
+        self.return_a = Return.objects.create(
+            retailer=self.retailer_a,
+            return_number=f'POS-RET-A-{uuid.uuid4().hex[:6]}',
+            invoice=self.invoice_a,
+            reason='Test return',
+            created_by=self.user_a,
+        )
+        self.return_b = Return.objects.create(
+            retailer=self.retailer_b,
+            return_number=f'POS-RET-B-{uuid.uuid4().hex[:6]}',
+            invoice=self.invoice_b,
+            reason='Test return',
+            created_by=self.user_a,
+        )
+
+    def test_invoice_list_scoped_to_active_retailer(self):
+        response = self.client.get(reverse('invoice-list-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.data.get('results', [])
+        ids = {row['id'] for row in rows}
+        self.assertIn(self.invoice_a.id, ids)
+        self.assertNotIn(self.invoice_b.id, ids)
+
+    def test_cart_detail_blocks_other_retailer_cart(self):
+        response = self.client.get(reverse('cart-detail', args=[self.cart_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invoice_detail_blocks_other_retailer_invoice(self):
+        response = self.client.get(reverse('invoice-detail', args=[self.invoice_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_return_detail_blocks_other_retailer_return(self):
+        response = self.client.get(reverse('return-detail', args=[self.return_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cart_patch_blocks_other_retailer_cart(self):
+        response = self.client.patch(
+            reverse('cart-detail', args=[self.cart_b.id]),
+            {'notes': 'cross-tenant edit attempt'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cart_delete_blocks_other_retailer_cart(self):
+        response = self.client.delete(reverse('cart-detail', args=[self.cart_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invoice_patch_blocks_other_retailer_invoice(self):
+        response = self.client.patch(
+            reverse('invoice-detail', args=[self.invoice_b.id]),
+            {'invoice_type': 'pending'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_invoice_delete_blocks_other_retailer_invoice(self):
+        response = self.client.delete(reverse('invoice-detail', args=[self.invoice_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_return_patch_blocks_other_retailer_return(self):
+        response = self.client.patch(
+            reverse('return-detail', args=[self.return_b.id]),
+            {'notes': 'cross-tenant patch'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_return_delete_blocks_other_retailer_return(self):
+        response = self.client.delete(reverse('return-detail', args=[self.return_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

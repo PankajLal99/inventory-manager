@@ -13,45 +13,24 @@ from backend.core.tenant_api import require_active_retailer
 logger = logging.getLogger('backend.locations')
 
 
+def _has_access_permission(user, codename: str) -> bool:
+    from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
+
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    groups = list(user.groups.values_list('name', flat=True))
+    base = permissions_from_django_groups(groups, user)
+    effective = merge_store_role_permissions(user, base)
+    return codename in effective
+
+
 def get_shop_types_for_user(user):
     """
-    Map user groups to shop_types they can access.
-    Returns a list of shop_type values or None (for Admin - all stores).
-    
-    Mapping:
-    - Retail/RetailAdmin → 'retail'
-    - Wholesale/WholesaleAdmin → 'wholesale'
-    - Repair → 'repair'
-    - Admin → None (all stores)
+    SaaS mode: do not derive store visibility from static group names.
+    Store visibility is controlled by tenant + assigned_stores + role permissions.
+    Returning None means "no shop_type restriction here".
     """
-    user_groups = user.groups.values_list('name', flat=True)
-    user_group_names = list(user_groups)
-    
-    # Admin group sees all stores
-    if 'Admin' in user_group_names:
-        return None
-    
-    # Map groups to shop_types
-    shop_types = []
-    
-    if 'Retail' in user_group_names or 'RetailAdmin' in user_group_names:
-        shop_types.append('retail')
-        # Retail group users also have access to Repair stores
-        shop_types.append('repair')
-    
-    if 'Wholesale' in user_group_names or 'WholesaleAdmin' in user_group_names:
-        shop_types.append('wholesale')
-    
-    # Check for Repair group (if it exists)
-    # Note: You may need to create a RepairAdmin group if needed
-    if 'Repair' in user_group_names:
-        shop_types.append('repair')
-    
-    # If user is superuser/staff but not in any application group, return all
-    if not shop_types and (user.is_superuser or user.is_staff):
-        return None
-    
-    return shop_types if shop_types else None
+    return None
 
 
 # Store views
@@ -112,11 +91,7 @@ def store_list_create(request):
             
             return Response(response_data)
         else:
-            # Only admins can create stores
-            is_admin = (request.user.is_superuser or request.user.is_staff or 
-                       request.user.groups.filter(name__in=['Admin', 'RetailAdmin', 'WholesaleAdmin']).exists())
-            
-            if not is_admin:
+            if not _has_access_permission(request.user, 'feature.store_management'):
                 logger.warning(f"User {request.user.username} attempted to create store without admin privileges")
                 return Response({'error': 'Only administrators can create stores'}, status=status.HTTP_403_FORBIDDEN)
             
@@ -149,7 +124,11 @@ def store_list_create(request):
 def store_detail(request, pk):
     """Retrieve, update or delete a store (update/delete requires admin)"""
     try:
-        store = get_object_or_404(Store, pk=pk)
+        retailer, tenant_err = require_active_retailer(request)
+        filters = {'pk': pk}
+        if not tenant_err and retailer:
+            filters['retailer_id'] = retailer.id
+        store = get_object_or_404(Store, **filters)
         
         if request.method == 'GET':
             logger.debug(f"User {request.user.username} retrieved store {pk}")
@@ -169,11 +148,7 @@ def store_detail(request, pk):
             
             return Response(response_data)
         
-        # Only admins can update or delete stores
-        is_admin = (request.user.is_superuser or request.user.is_staff or 
-                   request.user.groups.filter(name__in=['Admin', 'RetailAdmin', 'WholesaleAdmin']).exists())
-        
-        if not is_admin:
+        if not _has_access_permission(request.user, 'feature.store_management'):
             logger.warning(f"User {request.user.username} attempted to modify store {pk} without admin privileges")
             return Response({'error': 'Only administrators can modify stores'}, status=status.HTTP_403_FORBIDDEN)
         
@@ -213,14 +188,22 @@ def store_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def warehouse_list_create(request):
     """List all warehouses or create a new warehouse"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         warehouses = Warehouse.objects.all()
+        if not tenant_err and retailer:
+            warehouses = warehouses.filter(retailer_id=retailer.id)
         serializer = WarehouseSerializer(warehouses, many=True)
         return Response(serializer.data)
     else:
+        if not _has_access_permission(request.user, 'feature.store_management'):
+            return Response({'error': 'Only administrators can create warehouses'}, status=status.HTTP_403_FORBIDDEN)
         serializer = WarehouseSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -229,23 +212,33 @@ def warehouse_list_create(request):
 @permission_classes([IsAuthenticated])
 def warehouse_detail(request, pk):
     """Retrieve, update or delete a warehouse"""
-    warehouse = get_object_or_404(Warehouse, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    warehouse = get_object_or_404(Warehouse, **filters)
     
     if request.method == 'GET':
         serializer = WarehouseSerializer(warehouse)
         return Response(serializer.data)
     elif request.method == 'PUT':
+        if not _has_access_permission(request.user, 'feature.store_management'):
+            return Response({'error': 'Only administrators can modify warehouses'}, status=status.HTTP_403_FORBIDDEN)
         serializer = WarehouseSerializer(warehouse, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     elif request.method == 'PATCH':
+        if not _has_access_permission(request.user, 'feature.store_management'):
+            return Response({'error': 'Only administrators can modify warehouses'}, status=status.HTTP_403_FORBIDDEN)
         serializer = WarehouseSerializer(warehouse, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE
+        if not _has_access_permission(request.user, 'feature.store_management'):
+            return Response({'error': 'Only administrators can delete warehouses'}, status=status.HTTP_403_FORBIDDEN)
         warehouse.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

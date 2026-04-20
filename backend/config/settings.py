@@ -357,6 +357,9 @@ AZURE_USE_SAS_TOKENS = os.getenv('AZURE_USE_SAS_TOKENS', 'false').lower() == 'tr
 # is skipped. Use to avoid Azure calls while keeping inventory/barcode counts correct.
 DISABLE_BARCODE_LABEL_GENERATION = os.getenv('DISABLE_BARCODE_LABEL_GENERATION', 'false').lower() == 'true'
 
+# One-time onboarding setup password (used by /api/v1/onboarding/complete/)
+ONBOARDING_SETUP_PASSWORD = os.getenv('ONBOARDING_SETUP_PASSWORD', '')
+
 # Cache Configuration - OPTIMIZED FOR BEST PERFORMANCE
 # =====================================================
 # 

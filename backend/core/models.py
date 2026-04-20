@@ -178,6 +178,24 @@ class Setting(models.Model):
         db_table = 'settings'
 
 
+class RetailerDashboardViewConfig(models.Model):
+    """Per-retailer dashboard block visibility flags for frontend rendering."""
+
+    retailer = models.OneToOneField(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        related_name='dashboard_view_config',
+    )
+    block_visibility = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'retailer_dashboard_view_configs'
+
+    def __str__(self):
+        return f'dashboard-config:{self.retailer_id}'
+
+
 class AuditLog(models.Model):
     """Audit log for critical operations"""
     ACTION_CHOICES = [

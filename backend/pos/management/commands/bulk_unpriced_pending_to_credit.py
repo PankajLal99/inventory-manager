@@ -32,6 +32,7 @@ from backend.pos.invoice_credit_service import (
     resolve_item_purchase_unit_cost,
 )
 from backend.pos.models import Invoice
+from backend.tenants.models import Retailer
 
 User = get_user_model()
 
@@ -90,12 +91,25 @@ class Command(BaseCommand):
             action='store_true',
             help='Include invoices linked to a repair (default: skip repair invoices).',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope run to one tenant.',
+        )
 
     def handle(self, *args, **options):
         dry_run: bool = options['dry_run']
         username: str = (options['username'] or '').strip()
         limit: int = options['limit'] or 0
         include_repair: bool = options['include_repair']
+        retailer_code: str = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                raise CommandError(f'Retailer code "{retailer_code}" not found or inactive.')
+
 
         try:
             profit = Decimal(str(options['profit']))
@@ -131,6 +145,8 @@ class Command(BaseCommand):
             .prefetch_related('items__product', 'items__barcode')
             .order_by('id')
         )
+        if retailer:
+            qs = qs.filter(retailer_id=retailer.id)
         if not include_repair:
             qs = qs.filter(repair__isnull=True)
         if id_list:

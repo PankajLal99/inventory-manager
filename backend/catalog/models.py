@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.utils import timezone
 
 from backend.core.models import SoftDeleteModel, SoftDeleteQuerySet, SoftDeleteManager
+from backend.locations.models import Store, Warehouse
 
 
 class ProductQuerySet(SoftDeleteQuerySet):
@@ -217,6 +218,20 @@ class Barcode(SoftDeleteModel):
     # Link to purchase - tracks which purchase this barcode came from
     purchase = models.ForeignKey('purchasing.Purchase', on_delete=models.SET_NULL, null=True, blank=True, related_name='barcodes')
     purchase_item = models.ForeignKey('purchasing.PurchaseItem', on_delete=models.SET_NULL, null=True, blank=True, related_name='barcodes')
+    current_store = models.ForeignKey(
+        Store,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='current_barcodes',
+    )
+    current_warehouse = models.ForeignKey(
+        Warehouse,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='current_barcodes',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -268,6 +283,15 @@ class Barcode(SoftDeleteModel):
             return selling_price
         return None
 
+    def set_current_location(self, *, store=None, warehouse=None, save=True):
+        """Set a barcode's current ownership location."""
+        if store is not None and warehouse is not None:
+            raise ValueError('Set either store or warehouse, not both.')
+        self.current_store = store
+        self.current_warehouse = warehouse
+        if save:
+            self.save(update_fields=['current_store', 'current_warehouse'])
+
     def save(self, *args, **kwargs):
         """Override save to ensure short_code uniqueness before saving (per retailer)."""
         if self.short_code and self.retailer_id:
@@ -300,6 +324,8 @@ class Barcode(SoftDeleteModel):
             models.Index(fields=['product', 'tag'], name='idx_barcode_product_tag'),
             models.Index(fields=['tag', 'product'], name='idx_barcode_tag_product'),
             models.Index(fields=['purchase', 'tag'], name='idx_barcode_purchase_tag'),
+            models.Index(fields=['retailer', 'current_store', 'tag'], name='idx_barcode_retailer_store_tag'),
+            models.Index(fields=['retailer', 'current_warehouse', 'tag'], name='idx_barcode_retailer_wh_tag'),
         ]
         constraints = [
             models.UniqueConstraint(fields=['retailer', 'barcode'], name='uniq_barcode_retailer_barcode'),
@@ -307,6 +333,10 @@ class Barcode(SoftDeleteModel):
                 fields=['retailer', 'short_code'],
                 condition=Q(short_code__isnull=False) & ~Q(short_code=''),
                 name='uniq_barcode_retailer_short_code_nonnull',
+            ),
+            models.CheckConstraint(
+                check=~(Q(current_store__isnull=False) & Q(current_warehouse__isnull=False)),
+                name='barcode_single_current_location',
             ),
         ]
 

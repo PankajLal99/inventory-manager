@@ -201,12 +201,21 @@ class Command(BaseCommand):
 
         if inv_no:
             self.stdout.write(self.style.WARNING(f'\n=== Invoice + lines for {inv_no!r} ==='))
-            try:
-                inv = Invoice.objects.get(invoice_number=inv_no)
-            except Invoice.DoesNotExist:
-                inv = None
+            inv_qs = Invoice.objects.filter(invoice_number=inv_no).select_related('retailer').order_by('-id')
+            inv_count = inv_qs.count()
+            inv = inv_qs.first()
+            if inv_count > 1:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f'  Multiple invoices found for number {inv_no!r} (count={inv_count}); '
+                        f'showing latest id={inv.id}.'
+                    )
+                )
             if inv:
-                self.stdout.write(f'  invoice id={inv.id} status={inv.status} total={inv.total}')
+                self.stdout.write(
+                    f'  invoice id={inv.id} retailer={getattr(inv.retailer, "code", None)} '
+                    f'status={inv.status} total={inv.total}'
+                )
                 for ii in inv.items.select_related('product', 'barcode').all():
                     self.stdout.write(
                         f'  line id={ii.id} product_id={ii.product_id} barcode_id={ii.barcode_id} '

@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand
 from django.db.models import Sum
 from backend.catalog.models import Product
 from backend.purchasing.models import PurchaseItem
+from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
@@ -23,13 +24,28 @@ class Command(BaseCommand):
             action='store_true',
             help='Check all products instead of a single product.',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope checks.',
+        )
 
     def handle(self, *args, **options):
         product_id = options.get('product_id')
         check_all = options.get('all', False)
+        retailer_code = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                self.stdout.write(self.style.ERROR(f'Retailer code "{retailer_code}" not found or inactive.'))
+                return
 
         if check_all or product_id is None:
             qs = Product.objects.all().order_by('id')
+            if retailer:
+                qs = qs.filter(retailer_id=retailer.id)
             self.stdout.write(f'Checking warehouse totals for all products (count={qs.count()})...')
             for product in qs:
                 self._print_product_total(product)
@@ -37,7 +53,10 @@ class Command(BaseCommand):
             return
 
         try:
-            product = Product.objects.get(pk=product_id)
+            product_qs = Product.objects.all()
+            if retailer:
+                product_qs = product_qs.filter(retailer_id=retailer.id)
+            product = product_qs.get(pk=product_id)
         except Product.DoesNotExist:
             self.stdout.write(self.style.ERROR(f'Product id={product_id} not found.'))
             return

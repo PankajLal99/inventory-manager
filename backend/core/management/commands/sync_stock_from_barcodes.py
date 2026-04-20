@@ -9,6 +9,7 @@ from decimal import Decimal
 from backend.inventory.models import Stock
 from backend.catalog.models import Product, Barcode
 from backend.locations.models import Store, Warehouse
+from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
@@ -30,11 +31,24 @@ class Command(BaseCommand):
             action='store_true',
             help='Force sync even if no discrepancies found',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope sync to one tenant.',
+        )
 
     def handle(self, *args, **options):
         dry_run = options.get('dry_run', False)
         product_id = options.get('product_id')
         force = options.get('force', False)
+        retailer_code = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                self.stdout.write(self.style.ERROR(f'ERROR: Retailer code "{retailer_code}" not found or inactive.'))
+                return
 
         self.stdout.write("=" * 80)
         self.stdout.write(self.style.SUCCESS("STOCK SYNC FROM BARCODES"))
@@ -50,10 +64,17 @@ class Command(BaseCommand):
             products = Product.objects.filter(id=product_id)
         else:
             products = Product.objects.filter(track_inventory=True).order_by('id')
+        if retailer:
+            products = products.filter(retailer_id=retailer.id)
 
         # Get default location (first active store or warehouse)
-        default_store = Store.objects.filter(is_active=True).first()
-        default_warehouse = Warehouse.objects.filter(is_active=True).first() if not default_store else None
+        default_store_qs = Store.objects.filter(is_active=True)
+        default_warehouse_qs = Warehouse.objects.filter(is_active=True)
+        if retailer:
+            default_store_qs = default_store_qs.filter(retailer_id=retailer.id)
+            default_warehouse_qs = default_warehouse_qs.filter(retailer_id=retailer.id)
+        default_store = default_store_qs.first()
+        default_warehouse = default_warehouse_qs.first() if not default_store else None
 
         if not default_store and not default_warehouse:
             self.stdout.write(self.style.ERROR("ERROR: No active Store or Warehouse found. Cannot sync stock."))
@@ -65,10 +86,13 @@ class Command(BaseCommand):
         with transaction.atomic():
             for product in products:
                 # Count barcodes with 'new' and 'returned' tags (available stock)
-                barcode_count = Barcode.objects.filter(
+                barcode_qs = Barcode.objects.filter(
                     product=product,
                     tag__in=['new', 'returned']
-                ).count()
+                )
+                if retailer:
+                    barcode_qs = barcode_qs.filter(retailer_id=retailer.id)
+                barcode_count = barcode_qs.count()
 
                 # Get or create stock entry for default location
                 stock, created = Stock.objects.get_or_create(

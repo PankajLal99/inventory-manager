@@ -9,7 +9,7 @@ from django.utils.html import format_html
 
 from backend.locations.models import Store
 
-from .models import AccessPermission, AuditLog, Role, Setting, User, UserStoreRole
+from .models import AccessPermission, AuditLog, RetailerDashboardViewConfig, Role, Setting, User, UserStoreRole
 
 
 class UserStoreRoleInline(admin.TabularInline):
@@ -103,6 +103,14 @@ class SettingAdmin(admin.ModelAdmin):
     list_display = ['key', 'value', 'updated_at']
     search_fields = ['key', 'description']
     ordering = ['key']
+    readonly_fields = ['updated_at']
+
+
+@admin.register(RetailerDashboardViewConfig)
+class RetailerDashboardViewConfigAdmin(admin.ModelAdmin):
+    list_display = ['retailer', 'updated_at']
+    search_fields = ['retailer__code', 'retailer__name']
+    autocomplete_fields = ['retailer']
     readonly_fields = ['updated_at']
 
 

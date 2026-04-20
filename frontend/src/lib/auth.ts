@@ -37,6 +37,7 @@ export interface User {
     code: string;
     name: string;
   } | null;
+  dashboard_blocks?: Record<string, boolean>;
   can_access_dashboard?: boolean;
   can_access_reports?: boolean;
   can_access_customers?: boolean;

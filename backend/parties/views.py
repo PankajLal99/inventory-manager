@@ -16,6 +16,17 @@ from backend.core.tenant_api import require_active_retailer
 INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
 
 
+def _has_access_permission(user, codename: str) -> bool:
+    from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
+
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    groups = list(user.groups.values_list('name', flat=True))
+    base = permissions_from_django_groups(groups, user)
+    effective = merge_store_role_permissions(user, base)
+    return codename in effective
+
+
 def _credit_invoice_plus_manual_payment_filter():
     """Credit-ledger view = invoices moved to ledger (status=credit) + manual received payments +
     replacement-return POS instant settlements (debit on paid replacement invoice reduces store credit).
@@ -42,32 +53,13 @@ def _exclude_standard_ledger_group_entries(queryset):
 
 
 def is_admin_user(user):
-    """
-    Check if user is an admin user.
-    Returns True if:
-    - User is in 'Admin' group, OR
-    - User is superuser/staff and not in any application group (fallback)
-    """
-    user_groups = user.groups.values_list('name', flat=True)
-    user_group_names = list(user_groups)
-    
-    # Check if user is in Admin group
-    if 'Admin' in user_group_names:
-        return True
-    
-    # Check if user is superuser/staff but not in any application group (fallback)
-    application_groups = ['Admin', 'Retail', 'RetailAdmin', 'Wholesale', 'WholesaleAdmin', 'Repair', 'RepairAdmin']
-    has_application_group = any(group in user_group_names for group in application_groups)
-    
-    if not has_application_group and (user.is_superuser or user.is_staff):
-        return True
-    
-    return False
+    """Permission-based admin lane for ledger/customer management."""
+    return _has_access_permission(user, 'feature.ledger_admin')
 
 
 def is_retail_admin_user(user):
-    """Retail managers: same app nav as Retail but elevated (e.g. Payments delete)."""
-    return 'RetailAdmin' in set(user.groups.values_list('name', flat=True))
+    """Payments elevated lane."""
+    return _has_access_permission(user, 'feature.store_management')
 
 
 def can_view_manual_payments_ledger(user):
@@ -77,14 +69,12 @@ def can_view_manual_payments_ledger(user):
     Must stay aligned with frontend nav for Payments (Admin, RetailAdmin, Retail).
     Admins use is_admin_user() and bypass this.
     """
-    names = set(user.groups.values_list('name', flat=True))
-    return bool(names & {'Retail', 'RetailAdmin'})
+    return _has_access_permission(user, 'nav.payments')
 
 
 def can_create_manual_payments(user):
     """Whether user may create manual payment ledger entries from Payments page."""
-    names = set(user.groups.values_list('name', flat=True))
-    return bool(names & {'Retail', 'RetailAdmin'})
+    return _has_access_permission(user, 'nav.payments')
 
 
 # CustomerGroup views
@@ -173,7 +163,7 @@ def customer_list_create(request):
             return response
         
         # Cache miss - fetch from database
-        queryset = Customer.objects.all().order_by('-created_at')
+        queryset = Customer.objects.filter(retailer_id=retailer.id).order_by('-created_at')
         if exact_name:
             queryset = queryset.filter(name__iexact=exact_name.strip())
         if search:
@@ -266,7 +256,11 @@ def customer_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def customer_balance(request, pk):
     """Get customer credit balance"""
-    customer = get_object_or_404(Customer, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    customer_filters = {'pk': pk}
+    if not tenant_err and retailer:
+        customer_filters['retailer_id'] = retailer.id
+    customer = get_object_or_404(Customer, **customer_filters)
     return Response({'credit_balance': customer.credit_balance, 'credit_limit': customer.credit_limit})
 
 
@@ -275,7 +269,11 @@ def customer_balance(request, pk):
 def customer_adjust_credit(request, pk):
     """Adjust customer credit balance"""
     from decimal import Decimal
-    customer = get_object_or_404(Customer, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    customer_filters = {'pk': pk}
+    if not tenant_err and retailer:
+        customer_filters['retailer_id'] = retailer.id
+    customer = get_object_or_404(Customer, **customer_filters)
     amount = Decimal(str(request.data.get('amount', 0)))
     customer.credit_balance += amount
     customer.save()
@@ -286,8 +284,11 @@ def customer_adjust_credit(request, pk):
 @permission_classes([IsAuthenticated])
 def payment_reminder_list_create(request):
     """List payment reminders or create a new reminder."""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         queryset = PaymentReminder.objects.select_related('customer', 'customer__customer_group').all()
+        if not tenant_err and retailer:
+            queryset = queryset.filter(customer__retailer_id=retailer.id)
         search = request.query_params.get('search')
         customer_group = request.query_params.get('customer_group')
         customer_id = request.query_params.get('customer')
@@ -328,6 +329,9 @@ def payment_reminder_list_create(request):
     else:
         serializer = PaymentReminderSerializer(data=request.data)
         if serializer.is_valid():
+            customer = serializer.validated_data.get('customer')
+            if not tenant_err and retailer and customer and customer.retailer_id != retailer.id:
+                return Response({'error': 'Customer does not belong to your retailer.'}, status=status.HTTP_400_BAD_REQUEST)
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -337,7 +341,12 @@ def payment_reminder_list_create(request):
 @permission_classes([IsAuthenticated])
 def payment_reminder_detail(request, reminder_id):
     """Retrieve, update, or delete a payment reminder."""
-    reminder = get_object_or_404(PaymentReminder, pk=reminder_id)
+    retailer, tenant_err = require_active_retailer(request)
+    reminder_qs = PaymentReminder.objects.select_related('customer')
+    reminder_filters = {'pk': reminder_id}
+    if not tenant_err and retailer:
+        reminder_filters['customer__retailer_id'] = retailer.id
+    reminder = get_object_or_404(reminder_qs, **reminder_filters)
     if request.method == 'GET':
         return Response(PaymentReminderSerializer(reminder).data)
     if request.method == 'PATCH':
@@ -362,6 +371,7 @@ def payment_reminder_detail(request, reminder_id):
 @permission_classes([IsAuthenticated])
 def payment_reminder_calendar(request):
     """Calendar data for payment reminders with customer/date/group filters."""
+    retailer, tenant_err = require_active_retailer(request)
     month_param = request.query_params.get('month')
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
@@ -401,6 +411,8 @@ def payment_reminder_calendar(request):
         return Response({'error': 'date_from cannot be greater than date_to.'}, status=status.HTTP_400_BAD_REQUEST)
 
     customers_qs = Customer.objects.select_related('customer_group').all()
+    if not tenant_err and retailer:
+        customers_qs = customers_qs.filter(retailer_id=retailer.id)
     if search:
         customers_qs = customers_qs.filter(
             Q(name__icontains=search) |
@@ -542,8 +554,11 @@ def _sync_customer_name_for_supplier_rename(old_name: str, new_name: str) -> Non
 @permission_classes([IsAuthenticated])
 def supplier_list_create(request):
     """List all suppliers or create a new supplier"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         queryset = Supplier.objects.all().order_by('name')
+        if not tenant_err and retailer:
+            queryset = queryset.filter(retailer_id=retailer.id)
         search = request.query_params.get('search', None)
         if search:
             queryset = queryset.filter(
@@ -557,7 +572,10 @@ def supplier_list_create(request):
     else:
         serializer = SupplierSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -566,7 +584,11 @@ def supplier_list_create(request):
 @permission_classes([IsAuthenticated])
 def supplier_detail(request, pk):
     """Retrieve, update or delete a supplier"""
-    supplier = get_object_or_404(Supplier, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    supplier_filters = {'pk': pk}
+    if not tenant_err and retailer:
+        supplier_filters['retailer_id'] = retailer.id
+    supplier = get_object_or_404(Supplier, **supplier_filters)
     
     if request.method == 'GET':
         serializer = SupplierSerializer(supplier)
@@ -597,7 +619,10 @@ def supplier_detail(request, pk):
 
 def _ledger_entries_base_queryset(request):
     """Build base LedgerEntry queryset from request query params (same filters as list view)."""
+    retailer, tenant_err = require_active_retailer(request)
     queryset = _exclude_standard_ledger_group_entries(LedgerEntry.objects.all())
+    if not tenant_err and retailer:
+        queryset = queryset.filter(customer__retailer_id=retailer.id)
     customer_id = request.query_params.get('customer', None)
     customer_group_id = request.query_params.get('customer_group', None)
     date_from = request.query_params.get('date_from', None)
@@ -653,7 +678,7 @@ def _ledger_entries_base_queryset(request):
             Q(description__icontains=search) |
             Q(invoice__invoice_number__icontains=search)
         )
-    return queryset
+    return queryset, None
 
 
 @api_view(['GET'])
@@ -663,7 +688,9 @@ def ledger_by_customer(request):
     Use this for credit-only view to avoid loading all entries; supports same filters as entries list."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
-    base = _ledger_entries_base_queryset(request)
+    base, tenant_err = _ledger_entries_base_queryset(request)
+    if tenant_err:
+        return tenant_err
     latest_desc = base.filter(customer_id=OuterRef('customer')).order_by('-created_at', '-id').values('description')[:1]
     grouped = base.values('customer', 'customer__name', 'customer__customer_group__name').annotate(
         total_credit=Sum(Case(When(entry_type='credit', then=F('amount')), default=Value(Decimal('0')))),
@@ -711,9 +738,12 @@ def ledger_entry_list_create(request):
                 return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'GET':
+        retailer, tenant_err = require_active_retailer(request)
         queryset = _exclude_standard_ledger_group_entries(
             LedgerEntry.objects.select_related('customer', 'customer__customer_group', 'invoice', 'created_by').all()
         )
+        if not tenant_err and retailer:
+            queryset = queryset.filter(customer__retailer_id=retailer.id)
         customer_id = request.query_params.get('customer', None)
         customer_group_id = request.query_params.get('customer_group', None)
         date_from = request.query_params.get('date_from', None)
@@ -841,7 +871,11 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
     RetailAdmin: full access for manual entries.
     Retail: PATCH manual entries with `is_sent` only.
     """
-    entry = get_object_or_404(_exclude_standard_ledger_group_entries(LedgerEntry.objects.all()), pk=entry_id)
+    retailer, tenant_err = require_active_retailer(request)
+    entry_qs = _exclude_standard_ledger_group_entries(LedgerEntry.objects.all())
+    if not tenant_err and retailer:
+        entry_qs = entry_qs.filter(customer__retailer_id=retailer.id)
+    entry = get_object_or_404(entry_qs, pk=entry_id)
     is_admin = is_admin_user(request.user)
     retail_admin_manual = (
         not is_admin
@@ -1079,7 +1113,10 @@ def ledger_customer_invoice_items_by_category(request, customer_id):
         return Response({'error': 'Only Admin users can access ledger'}, status=status.HTTP_403_FORBIDDEN)
     from backend.pos.models import InvoiceItem
 
-    customer = get_object_or_404(Customer, pk=customer_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    customer = get_object_or_404(Customer, pk=customer_id, retailer_id=retailer.id)
     store_id = request.query_params.get('store', None)
     categories_param = request.query_params.get('categories', None)
     date_from = request.query_params.get('date_from', None)
@@ -1139,8 +1176,11 @@ def ledger_customer_invoice_items_by_category(request, customer_id):
 @permission_classes([IsAuthenticated])
 def personal_customer_list_create(request):
     """List all personal customers or create a new personal customer"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        queryset = PersonalCustomer.objects.all().order_by('name')
+        queryset = PersonalCustomer.objects.filter(retailer_id=retailer.id).order_by('name')
         search = request.query_params.get('search', None)
         if search:
             queryset = queryset.filter(Q(name__icontains=search) | Q(phone__icontains=search) | Q(email__icontains=search))
@@ -1149,7 +1189,7 @@ def personal_customer_list_create(request):
     else:
         serializer = PersonalCustomerSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1158,7 +1198,10 @@ def personal_customer_list_create(request):
 @permission_classes([IsAuthenticated])
 def personal_customer_detail(request, pk):
     """Retrieve, update or delete a personal customer"""
-    customer = get_object_or_404(PersonalCustomer, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    customer = get_object_or_404(PersonalCustomer, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = PersonalCustomerSerializer(customer)
@@ -1188,8 +1231,13 @@ def personal_ledger_entry_list_create(request):
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access personal ledger'}, status=status.HTTP_403_FORBIDDEN)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        queryset = PersonalLedgerEntry.objects.select_related('customer', 'created_by').all()
+        queryset = PersonalLedgerEntry.objects.select_related('customer', 'created_by').filter(
+            customer__retailer_id=retailer.id
+        )
         customer_id = request.query_params.get('customer', None)
         customer_group_id = request.query_params.get('customer_group', None)
         date_from = request.query_params.get('date_from', None)
@@ -1234,6 +1282,9 @@ def personal_ledger_entry_list_create(request):
     else:  # POST
         serializer = PersonalLedgerEntrySerializer(data=request.data)
         if serializer.is_valid():
+            customer = serializer.validated_data.get('customer')
+            if customer and customer.retailer_id != retailer.id:
+                return Response({'error': 'Customer does not belong to your retailer.'}, status=status.HTTP_400_BAD_REQUEST)
             # Handle custom date if provided, otherwise use current time
             from django.utils import timezone
             entry = serializer.save(created_by=request.user)
@@ -1260,7 +1311,10 @@ def personal_ledger_entry_retrieve_update_destroy(request, entry_id):
     """Retrieve, update or delete a personal ledger entry (Admin only)."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can edit/delete personal ledger entries'}, status=status.HTTP_403_FORBIDDEN)
-    entry = get_object_or_404(PersonalLedgerEntry, pk=entry_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    entry = get_object_or_404(PersonalLedgerEntry, pk=entry_id, customer__retailer_id=retailer.id)
     if request.method == 'GET':
         serializer = PersonalLedgerEntrySerializer(entry)
         return Response(serializer.data)
@@ -1285,6 +1339,9 @@ def personal_ledger_entry_retrieve_update_destroy(request, entry_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_summary(request):
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     """Get personal ledger summary: Total Credit, Total Debit, Number of Accounts (Admin only)"""
     # Check Admin permission
     if not is_admin_user(request.user):
@@ -1293,7 +1350,7 @@ def personal_ledger_summary(request):
     
     # Base queryset - Personal ledger doesn't have store relationship
     # Store param is kept for API consistency but not used
-    base_queryset = PersonalLedgerEntry.objects.all()
+    base_queryset = PersonalLedgerEntry.objects.filter(customer__retailer_id=retailer.id)
     
     total_credit = base_queryset.filter(entry_type='credit').aggregate(
         total=Sum('amount')
@@ -1304,7 +1361,10 @@ def personal_ledger_summary(request):
     )['total'] or Decimal('0.00')
     
     # Count unique personal customers with personal ledger entries
-    num_accounts = PersonalCustomer.objects.filter(personal_ledger_entries__isnull=False).distinct().count()
+    num_accounts = PersonalCustomer.objects.filter(
+        retailer_id=retailer.id,
+        personal_ledger_entries__isnull=False,
+    ).distinct().count()
     
     return Response({
         'total_credit': str(total_credit),
@@ -1322,7 +1382,10 @@ def personal_ledger_customer_detail(request, customer_id):
     # Check Admin permission
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access personal ledger'}, status=status.HTTP_403_FORBIDDEN)
-    customer = get_object_or_404(PersonalCustomer, pk=customer_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    customer = get_object_or_404(PersonalCustomer, pk=customer_id, retailer_id=retailer.id)
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     entry_type = request.query_params.get('entry_type', None)
@@ -1385,6 +1448,9 @@ def _internal_ledger_customer_filter():
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def internal_customer_list_create(request):
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     """List Customers in MTSHOP group or create one (Admin only). Uses Customer model only."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
@@ -1394,7 +1460,7 @@ def internal_customer_list_create(request):
         mtshop = _get_mtshop_group()
         if not mtshop:
             return Response([])
-        queryset = Customer.objects.filter(customer_group=mtshop)
+        queryset = Customer.objects.filter(customer_group=mtshop, retailer_id=retailer.id)
         if search:
             queryset = queryset.filter(
                 Q(name__icontains=search) |
@@ -1416,7 +1482,7 @@ def internal_customer_list_create(request):
             data['customer_group'] = mtshop.id
         serializer = CustomerSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1424,13 +1490,16 @@ def internal_customer_list_create(request):
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def internal_customer_detail(request, pk):
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     """Retrieve, update or delete a Customer in MTSHOP group (Admin only). Uses Customer model only."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
     mtshop = _get_mtshop_group()
     if not mtshop:
         return Response({'error': 'MTSHOP group not found'}, status=status.HTTP_404_NOT_FOUND)
-    customer = get_object_or_404(Customer, pk=pk, customer_group=mtshop)
+    customer = get_object_or_404(Customer, pk=pk, customer_group=mtshop, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = CustomerSerializer(customer)
@@ -1455,13 +1524,17 @@ def internal_customer_detail(request, pk):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def internal_ledger_entry_list_create(request):
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     """List internal ledger entries for MTSHOP customers only, or create a new entry (Admin only)."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
     
     if request.method == 'GET':
         queryset = InternalLedgerEntry.objects.select_related('customer', 'created_by').filter(
-            _internal_ledger_customer_filter()
+            _internal_ledger_customer_filter(),
+            customer__retailer_id=retailer.id,
         )
         customer_id = request.query_params.get('customer', None)
         date_from = request.query_params.get('date_from', None)
@@ -1496,6 +1569,8 @@ def internal_ledger_entry_list_create(request):
         serializer = InternalLedgerEntrySerializer(data=request.data)
         if serializer.is_valid():
             customer = serializer.validated_data.get('customer')
+            if customer and customer.retailer_id != retailer.id:
+                return Response({'error': 'Customer does not belong to your retailer.'}, status=status.HTTP_400_BAD_REQUEST)
             if customer and ((customer.customer_group is None) or (customer.customer_group.name or '').upper() != INTERNAL_LEDGER_GROUP_NAME):
                 return Response(
                     {'error': f'Customer must belong to "{INTERNAL_LEDGER_GROUP_NAME}" group for internal ledger.'},
@@ -1525,7 +1600,10 @@ def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
     """Retrieve, update or delete an internal ledger entry for MTSHOP customers only (Admin only)."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can edit/delete internal ledger entries'}, status=status.HTTP_403_FORBIDDEN)
-    entry = get_object_or_404(InternalLedgerEntry, pk=entry_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    entry = get_object_or_404(InternalLedgerEntry, pk=entry_id, customer__retailer_id=retailer.id)
     if entry.customer and ((entry.customer.customer_group is None) or (entry.customer.customer_group.name or '').upper() != INTERNAL_LEDGER_GROUP_NAME):
         return Response({'error': f'Entry not in internal ledger (customer group must be {INTERNAL_LEDGER_GROUP_NAME}).'}, status=status.HTTP_404_NOT_FOUND)
     if request.method == 'GET':
@@ -1556,7 +1634,13 @@ def internal_ledger_summary(request):
     Optional query param entry_type=credit for credit-only totals."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
-    base_queryset = InternalLedgerEntry.objects.filter(_internal_ledger_customer_filter())
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    base_queryset = InternalLedgerEntry.objects.filter(
+        _internal_ledger_customer_filter(),
+        customer__retailer_id=retailer.id,
+    )
     entry_type_filter = request.query_params.get('entry_type', None)
     if entry_type_filter:
         base_queryset = base_queryset.filter(entry_type=entry_type_filter)
@@ -1568,7 +1652,8 @@ def internal_ledger_summary(request):
     )['total'] or Decimal('0.00')
     num_accounts = Customer.objects.filter(
         customer_group__name__iexact=INTERNAL_LEDGER_GROUP_NAME,
-        internal_ledger_entries__isnull=False
+        internal_ledger_entries__isnull=False,
+        retailer_id=retailer.id,
     ).distinct().count()
     if entry_type_filter == 'credit':
         num_accounts = base_queryset.filter(customer__isnull=False).values('customer').distinct().count()
@@ -1587,7 +1672,10 @@ def internal_ledger_customer_detail(request, customer_id):
     Query params: date_from, date_to, entry_type, search."""
     if not is_admin_user(request.user):
         return Response({'error': 'Only Admin users can access internal ledger'}, status=status.HTTP_403_FORBIDDEN)
-    customer = get_object_or_404(Customer, pk=customer_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    customer = get_object_or_404(Customer, pk=customer_id, retailer_id=retailer.id)
     if (customer.customer_group is None) or (customer.customer_group.name or '').upper() != INTERNAL_LEDGER_GROUP_NAME:
         return Response({'error': f'Customer must belong to {INTERNAL_LEDGER_GROUP_NAME} group for internal ledger.'}, status=status.HTTP_404_NOT_FOUND)
     date_from = request.query_params.get('date_from', None)

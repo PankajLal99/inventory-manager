@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from decimal import Decimal
 from backend.pos.models import Invoice, Payment
+from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
@@ -33,12 +34,25 @@ class Command(BaseCommand):
             type=int,
             help='Limit the number of invoices to process (useful for testing)',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope processing to one tenant.',
+        )
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
         verbose = options['verbose']
         invoice_type_filter = options['invoice_type']
         limit = options.get('limit')
+        retailer_code = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                self.stdout.write(self.style.ERROR(f'Retailer code "{retailer_code}" not found or inactive.'))
+                return
 
         self.stdout.write(self.style.SUCCESS('Backfilling Payment records for paid invoices...\n'))
 
@@ -53,6 +67,8 @@ class Command(BaseCommand):
         ).exclude(
             payments__isnull=False
         ).select_related('created_by', 'store', 'customer')
+        if retailer:
+            invoices_query = invoices_query.filter(retailer_id=retailer.id)
 
         # Filter by invoice_type if specified
         if invoice_type_filter != 'all':

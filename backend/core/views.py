@@ -6,18 +6,60 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+from django.db import transaction
+from backend.core.tenant_api import require_active_retailer
 
 from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
-from .models import Setting, AuditLog
+from .models import AccessPermission, AuditLog, RetailerDashboardViewConfig, Role, Setting, UserStoreRole
 from .serializers import (
     UserSerializer, UserCreateSerializer,
-    SettingSerializer, AuditLogSerializer
+    SettingSerializer, AuditLogSerializer, AccessPermissionSerializer, RoleSerializer
 )
 
 User = get_user_model()
+
+
+def _effective_permissions(user) -> set[str]:
+    from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
+
+    groups = list(user.groups.values_list('name', flat=True))
+    base = permissions_from_django_groups(groups, user)
+    return merge_store_role_permissions(user, base)
+
+
+def _can_manage_roles(user) -> bool:
+    return user.is_superuser or ('feature.role_management' in _effective_permissions(user))
+
+
+def _default_dashboard_blocks_for_retailer(retailer) -> dict:
+    if not retailer:
+        return {}
+    code = str(getattr(retailer, 'code', '') or '').strip().upper()
+    name = str(getattr(retailer, 'name', '') or '').strip().upper()
+    # Explicit request: Manish Traders sees full dashboard; others see limited default KPIs.
+    if code == 'MANISH_TRADERS' or name == 'MANISH TRADERS':
+        return {}
+    return {
+        'profits': False,
+        'manualLedgerPayments': False,
+        'overallPendingInvoices': False,
+        'wholesalePendingCleared': False,
+        'stockAndDefective': False,
+        'storeBreakdowns': False,
+        'kpi.totalPending': False,
+        'kpi.totalCredit': False,
+        'kpi.overallProfit': True,
+    }
+
+
+def _onboarding_is_completed() -> bool:
+    done = Setting.objects.filter(key='onboarding_completed').first()
+    return bool(done and str(done.value).lower() in {'1', 'true', 'yes'})
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -157,56 +199,389 @@ def user_me(request):
             'shop_type': getattr(user.default_store, 'shop_type', 'retail'),
         }
     
-    # Determine access permissions based on groups
-    # Priority: Group membership > superuser/staff status for application access control
-    user_groups = user_data['groups']
-    is_admin_group = 'Admin' in user_groups
-    is_retail_admin = 'RetailAdmin' in user_groups
-    is_retail = 'Retail' in user_groups
-    is_wholesale = 'Wholesale' in user_groups
-    is_wholesale_admin = 'WholesaleAdmin' in user_groups
-    is_repair = 'Repair' in user_groups
-    is_repair_admin = 'RepairAdmin' in user_groups
-    
-    # If user is in a specific group, use group-based permissions
-    # Only use superuser/staff if user is NOT in any application group
-    has_application_group = is_admin_group or is_retail_admin or is_retail or is_wholesale or is_wholesale_admin or is_repair or is_repair_admin
-    
-    if has_application_group:
-        # User is in an application group - use group-based permissions
-        # Admin group has all access
-        user_data['is_admin'] = is_admin_group
-        
-        # Dashboard access: Admin, RetailAdmin, and WholesaleAdmin only (not Retail/Wholesale)
-        user_data['can_access_dashboard'] = is_admin_group or is_retail_admin or is_wholesale_admin
-        
-        # Reports access: Admin, RetailAdmin, and WholesaleAdmin only (not Retail/Wholesale)
-        user_data['can_access_reports'] = is_admin_group or is_retail_admin or is_wholesale_admin
-        
-        # Additional granular permissions for frontend
-        # Retail/Wholesale groups can access: POS, Search, Invoices, Replacement, Products, Purchases
-        # RetailAdmin/WholesaleAdmin can access: Everything Retail/Wholesale can + Dashboard, Reports, Customers
-        # Admin can access: Everything
-        user_data['can_access_customers'] = is_admin_group or is_retail_admin or is_wholesale_admin or is_repair_admin  # Admin, RetailAdmin, and WholesaleAdmin
-        user_data['can_access_ledger'] = is_admin_group  # Only Admin group
-        user_data['can_access_history'] = is_admin_group  # Only Admin group
-    else:
-        # User is not in any application group - fall back to superuser/staff
-        # This allows superusers/staff without groups to have admin access
-        is_superuser_or_staff = user.is_superuser or user.is_staff
-        user_data['is_admin'] = is_superuser_or_staff
-        user_data['can_access_dashboard'] = is_superuser_or_staff
-        user_data['can_access_reports'] = is_superuser_or_staff
-        user_data['can_access_customers'] = is_superuser_or_staff
-        user_data['can_access_ledger'] = is_superuser_or_staff
-        user_data['can_access_history'] = is_superuser_or_staff
-
-    from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
-
-    base_nav = permissions_from_django_groups(user_data['groups'], user)
-    user_data['permissions'] = sorted(merge_store_role_permissions(user, base_nav))
+    perms = sorted(_effective_permissions(user))
+    user_data['permissions'] = perms
+    pset = set(perms)
+    user_data['is_admin'] = user.is_superuser or user.is_staff
+    user_data['can_access_dashboard'] = 'nav.dashboard' in pset
+    user_data['can_access_reports'] = 'nav.reports' in pset
+    user_data['can_access_customers'] = 'nav.customers' in pset
+    user_data['can_access_ledger'] = 'nav.ledger' in pset
+    user_data['can_access_history'] = 'nav.history' in pset
+    user_data['dashboard_blocks'] = _default_dashboard_blocks_for_retailer(getattr(user, 'retailer', None))
+    if user.retailer_id:
+        cfg = RetailerDashboardViewConfig.objects.filter(retailer_id=user.retailer_id).first()
+        if cfg:
+            user_data['dashboard_blocks'] = dict(getattr(cfg, 'block_visibility', {}) or {})
     
     return Response(user_data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def access_permission_list(request):
+    if not _can_manage_roles(request.user):
+        return Response({'detail': 'You do not have permission to manage roles.'}, status=status.HTTP_403_FORBIDDEN)
+    perms = AccessPermission.objects.all().order_by('category', 'codename')
+    return Response(AccessPermissionSerializer(perms, many=True).data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def role_list_create(request):
+    if not _can_manage_roles(request.user):
+        return Response({'detail': 'You do not have permission to manage roles.'}, status=status.HTTP_403_FORBIDDEN)
+
+    qs = Role.objects.prefetch_related('permissions')
+    if not request.user.is_superuser:
+        qs = qs.filter(retailer_id=request.user.retailer_id)
+
+    if request.method == 'GET':
+        serializer = RoleSerializer(qs.order_by('name'), many=True)
+        return Response(serializer.data)
+
+    payload = dict(request.data)
+    if not request.user.is_superuser and request.user.retailer_id:
+        payload['retailer'] = request.user.retailer_id
+    serializer = RoleSerializer(data=payload, context={'request': request})
+    if serializer.is_valid():
+        role = serializer.save()
+        return Response(RoleSerializer(role).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def role_detail(request, pk):
+    if not _can_manage_roles(request.user):
+        return Response({'detail': 'You do not have permission to manage roles.'}, status=status.HTTP_403_FORBIDDEN)
+
+    qs = Role.objects.prefetch_related('permissions')
+    if not request.user.is_superuser:
+        qs = qs.filter(retailer_id=request.user.retailer_id)
+    role = get_object_or_404(qs, pk=pk)
+
+    if request.method == 'GET':
+        return Response(RoleSerializer(role).data)
+    if request.method == 'PATCH':
+        payload = dict(request.data)
+        if not request.user.is_superuser and request.user.retailer_id:
+            payload['retailer'] = request.user.retailer_id
+        serializer = RoleSerializer(role, data=payload, partial=True, context={'request': request})
+        if serializer.is_valid():
+            role = serializer.save()
+            return Response(RoleSerializer(role).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    role.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def access_control_users(request):
+    if not _can_manage_roles(request.user):
+        return Response({'detail': 'You do not have permission to manage access.'}, status=status.HTTP_403_FORBIDDEN)
+
+    qs = User.objects.select_related('default_store').prefetch_related('assigned_stores', 'groups')
+    if not request.user.is_superuser:
+        qs = qs.filter(retailer_id=request.user.retailer_id)
+    data = []
+    for user in qs.order_by('username'):
+        data.append(
+            {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'groups': list(user.groups.values_list('name', flat=True)),
+                'default_store_id': user.default_store_id,
+                'assigned_store_ids': list(user.assigned_stores.values_list('id', flat=True)),
+                'dashboard_only': user.store_roles.filter(role__name='Dashboard Viewer').exists(),
+            }
+        )
+    return Response(data)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def access_control_user_update(request, pk):
+    if not _can_manage_roles(request.user):
+        return Response({'detail': 'You do not have permission to manage access.'}, status=status.HTTP_403_FORBIDDEN)
+
+    target_qs = User.objects.prefetch_related('assigned_stores', 'groups')
+    if not request.user.is_superuser:
+        target_qs = target_qs.filter(retailer_id=request.user.retailer_id)
+    target = get_object_or_404(target_qs, pk=pk)
+
+    assigned_store_ids = request.data.get('assigned_store_ids')
+    default_store_id = request.data.get('default_store_id')
+    dashboard_only = request.data.get('dashboard_only')
+    role_id = request.data.get('role_id')
+
+    from backend.locations.models import Store
+    from backend.core.models import UserStoreRole
+
+    with transaction.atomic():
+        if assigned_store_ids is not None:
+            valid_stores = Store.objects.filter(retailer_id=target.retailer_id, id__in=assigned_store_ids)
+            target.assigned_stores.set(valid_stores)
+            UserStoreRole.objects.filter(user_id=target.id).exclude(store_id__in=valid_stores.values_list('id', flat=True)).delete()
+
+        if default_store_id is not None:
+            if default_store_id == '':
+                target.default_store = None
+            else:
+                ds = Store.objects.filter(retailer_id=target.retailer_id, id=default_store_id).first()
+                if not ds:
+                    return Response({'detail': 'Invalid default store.'}, status=status.HTTP_400_BAD_REQUEST)
+                target.default_store = ds
+            target.save(update_fields=['default_store'])
+
+        if role_id is not None:
+            if role_id == '':
+                UserStoreRole.objects.filter(user_id=target.id).delete()
+            else:
+                role = Role.objects.filter(id=role_id, retailer_id=target.retailer_id).first()
+                if not role:
+                    return Response({'detail': 'Invalid role.'}, status=status.HTTP_400_BAD_REQUEST)
+                store_ids = list(target.assigned_stores.values_list('id', flat=True))
+                for sid in store_ids:
+                    UserStoreRole.objects.update_or_create(
+                        user_id=target.id,
+                        store_id=sid,
+                        defaults={'role': role},
+                    )
+
+        if dashboard_only is not None:
+            if bool(dashboard_only):
+                dashboard_perm = AccessPermission.objects.filter(codename='nav.dashboard').first()
+                if not dashboard_perm:
+                    return Response({'detail': 'Dashboard permission not found.'}, status=status.HTTP_400_BAD_REQUEST)
+                dash_role, _ = Role.objects.get_or_create(
+                    retailer_id=target.retailer_id,
+                    name='Dashboard Viewer',
+                    defaults={'description': 'System-managed role: dashboard only'},
+                )
+                dash_role.permissions.set([dashboard_perm])
+                UserStoreRole.objects.filter(user_id=target.id).delete()
+                store_ids = list(target.assigned_stores.values_list('id', flat=True))
+                if not store_ids and target.default_store_id:
+                    store_ids = [target.default_store_id]
+                if not store_ids:
+                    store_ids = list(Store.objects.filter(retailer_id=target.retailer_id).values_list('id', flat=True))
+                for sid in store_ids:
+                    UserStoreRole.objects.update_or_create(
+                        user_id=target.id,
+                        store_id=sid,
+                        defaults={'role': dash_role},
+                    )
+            else:
+                UserStoreRole.objects.filter(
+                    user_id=target.id,
+                    role__retailer_id=target.retailer_id,
+                    role__name='Dashboard Viewer',
+                ).delete()
+
+    return Response({'detail': 'Access updated successfully.'})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def onboarding_status(request):
+    return Response({'completed': _onboarding_is_completed()})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def onboarding_complete(request):
+    if _onboarding_is_completed():
+        return Response({'detail': 'Onboarding is already completed.'}, status=status.HTTP_409_CONFLICT)
+
+    configured_password = str(getattr(settings, 'ONBOARDING_SETUP_PASSWORD', '') or '')
+    if not configured_password:
+        return Response({'detail': 'Onboarding password is not configured.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    provided_password = str(request.data.get('password') or '')
+    if provided_password != configured_password:
+        return Response({'detail': 'Invalid onboarding password.'}, status=status.HTTP_403_FORBIDDEN)
+
+    retailer_data = request.data.get('retailer') or {}
+    stores_data = request.data.get('stores') or []
+    roles_data = request.data.get('roles') or []
+    users_data = request.data.get('users') or []
+
+    code = str(retailer_data.get('code') or '').strip().upper()
+    name = str(retailer_data.get('name') or '').strip()
+    if not code or not name:
+        return Response({'detail': 'Retailer code and name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not stores_data:
+        return Response({'detail': 'At least one store is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from backend.locations.models import Store
+    from backend.tenants.models import Retailer
+
+    if Retailer.objects.filter(code__iexact=code).exists():
+        return Response({'detail': 'Retailer code already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        retailer = Retailer.objects.create(code=code, name=name, is_active=True)
+
+        created_stores = {}
+        primary_store = None
+        for row in stores_data:
+            s_name = str(row.get('name') or '').strip()
+            s_code = str(row.get('code') or '').strip().upper()
+            if not s_name or not s_code:
+                transaction.set_rollback(True)
+                return Response({'detail': 'Each store needs name and code.'}, status=status.HTTP_400_BAD_REQUEST)
+            store = Store.objects.create(
+                retailer=retailer,
+                name=s_name,
+                code=s_code,
+                shop_type=str(row.get('shop_type') or 'retail'),
+                is_active=bool(row.get('is_active', True)),
+            )
+            created_stores[s_code] = store
+            if bool(row.get('is_primary')):
+                primary_store = store
+
+        if not primary_store:
+            primary_store = next(iter(created_stores.values()))
+        retailer.primary_store = primary_store
+        retailer.save(update_fields=['primary_store_id'])
+
+        created_roles = {}
+        for role in roles_data:
+            role_name = str(role.get('name') or '').strip()
+            if not role_name:
+                continue
+            access_role = Role.objects.create(
+                retailer=retailer,
+                name=role_name,
+                description=str(role.get('description') or '').strip(),
+            )
+            codenames = role.get('permission_codenames') or []
+            perms = AccessPermission.objects.filter(codename__in=codenames)
+            access_role.permissions.set(perms)
+            created_roles[role_name] = access_role
+
+        all_permissions = list(AccessPermission.objects.all())
+        owner_role, _ = Role.objects.get_or_create(
+            retailer=retailer,
+            name='Owner',
+            defaults={'description': 'System default full-access role for onboarding owner'},
+        )
+        owner_role.permissions.set(all_permissions)
+        dashboard_perm = AccessPermission.objects.filter(codename='nav.dashboard').first()
+        dashboard_role = None
+        if dashboard_perm:
+            dashboard_role, _ = Role.objects.get_or_create(
+                retailer=retailer,
+                name='Dashboard Viewer',
+                defaults={'description': 'System-managed role: dashboard only'},
+            )
+            dashboard_role.permissions.set([dashboard_perm])
+
+        created_user_ids = []
+        for idx, u in enumerate(users_data):
+            username = str(u.get('username') or '').strip()
+            password = str(u.get('password') or '')
+            if not username or not password:
+                transaction.set_rollback(True)
+                return Response({'detail': 'Each user needs username and password.'}, status=status.HTTP_400_BAD_REQUEST)
+            if User.objects.filter(username=username).exists():
+                transaction.set_rollback(True)
+                return Response({'detail': f'Username already exists: {username}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            user = User.objects.create_user(
+                username=username,
+                password=password,
+                email=str(u.get('email') or f'{username}@local'),
+                first_name=str(u.get('first_name') or ''),
+                last_name=str(u.get('last_name') or ''),
+                phone=str(u.get('phone') or ''),
+                retailer=retailer,
+                # First onboarding user is store owner/admin by default.
+                is_staff=bool(u.get('is_staff', False) or idx == 0),
+                is_active=True,
+            )
+            created_user_ids.append(user.id)
+
+            group_names = [str(g).strip() for g in (u.get('groups') or []) if str(g).strip()]
+            if group_names:
+                groups = []
+                for gname in list(dict.fromkeys(group_names)):
+                    g, _ = Group.objects.get_or_create(name=gname)
+                    groups.append(g)
+                user.groups.add(*groups)
+
+            assigned_codes = [str(x).strip().upper() for x in (u.get('assigned_store_codes') or []) if str(x).strip()]
+            if assigned_codes:
+                assigned_store_ids = [created_stores[c].id for c in assigned_codes if c in created_stores]
+                user.assigned_stores.set(Store.objects.filter(id__in=assigned_store_ids))
+            elif idx == 0:
+                # Default onboarding owner can access all stores of this new retailer.
+                user.assigned_stores.set(created_stores.values())
+
+            default_code = str(u.get('default_store_code') or '').strip().upper()
+            if default_code and default_code in created_stores:
+                user.default_store = created_stores[default_code]
+            elif idx == 0:
+                user.default_store = primary_store
+            if user.default_store_id:
+                user.save(update_fields=['default_store'])
+
+            role_name = str(u.get('role_name') or '').strip()
+            if role_name and role_name in created_roles:
+                role_obj = created_roles[role_name]
+                store_ids = list(user.assigned_stores.values_list('id', flat=True))
+                if not store_ids and user.default_store_id:
+                    store_ids = [user.default_store_id]
+                for sid in store_ids:
+                    UserStoreRole.objects.update_or_create(
+                        user_id=user.id,
+                        store_id=sid,
+                        defaults={'role': role_obj},
+                    )
+            elif bool(u.get('dashboard_only')) and dashboard_role:
+                store_ids = list(user.assigned_stores.values_list('id', flat=True))
+                if not store_ids and user.default_store_id:
+                    store_ids = [user.default_store_id]
+                if not store_ids:
+                    store_ids = list(created_stores.values())
+                    store_ids = [s.id for s in store_ids]
+                for sid in store_ids:
+                    UserStoreRole.objects.update_or_create(
+                        user_id=user.id,
+                        store_id=sid,
+                        defaults={'role': dashboard_role},
+                    )
+            elif idx == 0:
+                # Onboarding owner gets full permissions on all stores of this retailer.
+                for store in created_stores.values():
+                    UserStoreRole.objects.update_or_create(
+                        user_id=user.id,
+                        store_id=store.id,
+                        defaults={'role': owner_role},
+                    )
+
+        Setting.objects.update_or_create(
+            key='onboarding_completed',
+            defaults={
+                'value': 'true',
+                'description': 'One-time onboarding completed lock',
+            },
+        )
+
+    return Response(
+        {
+            'detail': 'Onboarding completed.',
+            'retailer_id': retailer.id,
+            'store_count': len(created_stores),
+            'user_count': len(created_user_ids),
+            'role_count': len(created_roles),
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 # Setting views
@@ -306,6 +681,9 @@ def audit_log_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def global_search(request):
     """Global search across all entities. Optional product_limit (default 40); 0 or 'all' = cap at 500."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     query = request.query_params.get('q', '').strip()
     search_type = request.query_params.get('type', 'all').lower()
     raw_limit = request.query_params.get('product_limit') or request.query_params.get('limit')
@@ -379,7 +757,7 @@ def global_search(request):
         from django.db.models import Case, When, Value, IntegerField
 
         # Lean queryset for search + ranking (id/name only); prefetches only on the final page.
-        products_base = Product.objects.filter(is_active=True).exclude(
+        products_base = Product.objects.filter(is_active=True, retailer_id=retailer.id).exclude(
             name__istartswith='Other -'
         )
         products_filter = ProductFilter(
@@ -412,7 +790,7 @@ def global_search(request):
 
         # Pass active_cart_barcodes so available_quantity matches Products page (barcode count is source of truth)
         active_cart_barcodes = set()
-        for item in CartItem.objects.filter(cart__status='active').exclude(
+        for item in CartItem.objects.filter(cart__status='active', cart__retailer_id=retailer.id).exclude(
             scanned_barcodes__isnull=True
         ).exclude(scanned_barcodes=[]).only('scanned_barcodes'):
             if item.scanned_barcodes:
@@ -426,12 +804,12 @@ def global_search(request):
     
     # Search Product Variants (SKU Search)
     if search_type in ['all', 'sku']:
-        variants = ProductVariant.objects.filter(
+        variants = ProductVariant.objects.filter(retailer_id=retailer.id).filter(
             Q(sku__icontains=query) | Q(name__icontains=query)
         )[:20]
         if search_type == 'sku':
             # Priority to SKU match
-            variants = ProductVariant.objects.filter(Q(sku__icontains=query))[:20]
+            variants = ProductVariant.objects.filter(retailer_id=retailer.id, sku__icontains=query)[:20]
         add_to_results('variants', variants, ProductVariantSerializer)
     
     # Search Barcodes - exact match for barcode/short_code; optionally by tag (barcode_status)
@@ -444,7 +822,7 @@ def global_search(request):
         if search_type == 'barcode_status':
             # Also search by tag (exact match, e.g. "sold", "new", "defective", "returned")
             barcode_q |= Q(tag__iexact=query_clean.lower())
-        barcodes = Barcode.objects.filter(barcode_q).select_related('product').prefetch_related(
+        barcodes = Barcode.objects.filter(barcode_q, retailer_id=retailer.id).select_related('product').prefetch_related(
             'invoice_items__invoice', 'invoice_items__invoice__customer'
         )[:20]
         add_to_results('barcodes', barcodes, BarcodeSerializer)
@@ -452,6 +830,8 @@ def global_search(request):
     # Search Customers
     if search_type in ['all', 'customer']:
         customers = Customer.objects.filter(
+            retailer_id=retailer.id
+        ).filter(
             Q(name__icontains=query) |
             Q(phone__icontains=query) |
             Q(email__icontains=query)
@@ -461,6 +841,8 @@ def global_search(request):
     # Search Invoices
     if search_type in ['all']: # Invoices only in 'all' for now unless requested
         invoices = Invoice.objects.filter(
+            retailer_id=retailer.id
+        ).filter(
             Q(invoice_number__icontains=query)
         )[:20]
         add_to_results('invoices', invoices, InvoiceSerializer)
@@ -468,6 +850,8 @@ def global_search(request):
     # Search Carts
     if search_type in ['all']:
         carts = Cart.objects.filter(
+            retailer_id=retailer.id
+        ).filter(
             Q(cart_number__icontains=query)
         )[:20]
         add_to_results('carts', carts, CartSerializer)
@@ -475,6 +859,8 @@ def global_search(request):
     # Search Suppliers
     if search_type in ['all']:
         suppliers = Supplier.objects.filter(
+            retailer_id=retailer.id
+        ).filter(
             Q(name__icontains=query) |
             Q(code__icontains=query) |
             Q(phone__icontains=query) |
@@ -485,6 +871,8 @@ def global_search(request):
     # Search Brands
     if search_type in ['all', 'brand']:
         brands = Brand.objects.filter(
+            retailer_id=retailer.id
+        ).filter(
             Q(name__icontains=query)
         )[:20]
         add_to_results('brands', brands, BrandSerializer)
@@ -492,19 +880,21 @@ def global_search(request):
     # Search Categories
     if search_type in ['all', 'category']:
         categories = Category.objects.filter(
+            retailer_id=retailer.id
+        ).filter(
             Q(name__icontains=query)
         )[:20]
         add_to_results('categories', categories, CategorySerializer)
     
     # Search Stores/Warehouses/Purchases only in 'all'
     if search_type == 'all':
-        stores = Store.objects.filter(Q(name__icontains=query) | Q(code__icontains=query))[:20]
+        stores = Store.objects.filter(retailer_id=retailer.id).filter(Q(name__icontains=query) | Q(code__icontains=query))[:20]
         add_to_results('stores', stores, StoreSerializer)
         
-        warehouses = Warehouse.objects.filter(Q(name__icontains=query) | Q(code__icontains=query))[:20]
+        warehouses = Warehouse.objects.filter(retailer_id=retailer.id).filter(Q(name__icontains=query) | Q(code__icontains=query))[:20]
         add_to_results('warehouses', warehouses, WarehouseSerializer)
         
-        purchases = Purchase.objects.filter(Q(purchase_number__icontains=query) | Q(bill_number__icontains=query))[:20]
+        purchases = Purchase.objects.filter(retailer_id=retailer.id).filter(Q(purchase_number__icontains=query) | Q(bill_number__icontains=query))[:20]
         add_to_results('purchases', purchases, PurchaseSerializer)
     
     return Response(results)

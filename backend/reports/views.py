@@ -12,6 +12,7 @@ from decimal import Decimal
 from backend.pos.models import Invoice, InvoiceItem, CartItem
 from backend.catalog.models import Product, Barcode
 from backend.parties.models import Customer
+from backend.core.tenant_api import require_active_retailer
 
 logger = logging.getLogger('backend.reports')
 
@@ -20,6 +21,9 @@ logger = logging.getLogger('backend.reports')
 @permission_classes([IsAuthenticated])
 def sales_summary(request):
     """Sales summary report"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     store_id = request.query_params.get('store', None)
@@ -38,6 +42,7 @@ def sales_summary(request):
     # Base queryset
     # Exclude Manish Traders Loss customer (internal shop usage, not actual sales)
     invoices = Invoice.objects.filter(
+        retailer_id=retailer.id,
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
         status__in=['paid', 'partial']
@@ -90,6 +95,9 @@ def sales_summary(request):
 @permission_classes([IsAuthenticated])
 def top_products(request):
     """Top selling products report"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     limit = int(request.query_params.get('limit', 10))
@@ -106,6 +114,7 @@ def top_products(request):
     
     # Exclude Manish Traders Loss customer (internal shop usage, not actual sales)
     invoices = Invoice.objects.filter(
+        retailer_id=retailer.id,
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
         status__in=['paid', 'partial']
@@ -137,6 +146,9 @@ def top_products(request):
 def inventory_summary(request):
     """Inventory summary report - uses barcode-based calculations"""
     try:
+        retailer, tenant_err = require_active_retailer(request)
+        if tenant_err:
+            return tenant_err
         store_id = request.query_params.get('store', None)
         warehouse_id = request.query_params.get('warehouse', None)
         
@@ -145,6 +157,7 @@ def inventory_summary(request):
         # Use barcode-based calculations - only count products that have been purchased
         # Get all products that have at least one barcode (have been purchased)
         products_with_barcodes = Product.objects.filter(
+            retailer_id=retailer.id,
             barcodes__isnull=False
         ).distinct()
         
@@ -159,6 +172,7 @@ def inventory_summary(request):
         
         # Calculate total quantity from barcodes (new + returned tags, excluding draft purchases)
         total_quantity = Barcode.objects.filter(
+            retailer_id=retailer.id,
             tag__in=['new', 'returned'],
             product__in=products_with_barcodes
         ).exclude(
@@ -173,7 +187,8 @@ def inventory_summary(request):
         # Get barcodes in active carts (reserved)
         active_carts_barcodes = set()
         cart_items = CartItem.objects.filter(
-            cart__status='active'
+            cart__status='active',
+            cart__retailer_id=retailer.id,
         ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
         
         for cart_item in cart_items:
@@ -193,6 +208,7 @@ def inventory_summary(request):
         for product in products_with_barcodes.select_related():
             # Count available barcodes for this product (new + returned, not in carts, not sold, not from draft purchases)
             product_barcodes = Barcode.objects.filter(
+                retailer_id=retailer.id,
                 product=product,
                 tag__in=['new', 'returned']
             ).exclude(
@@ -242,10 +258,14 @@ def inventory_summary(request):
 @permission_classes([IsAuthenticated])
 def revenue_report(request):
     """Revenue report with monthly breakdown"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     year = int(request.query_params.get('year', timezone.now().year))
     
     # Exclude Manish Traders Loss customer (internal shop usage, not actual sales)
     invoices = Invoice.objects.filter(
+        retailer_id=retailer.id,
         created_at__year=year,
         status__in=['paid', 'partial']
     ).exclude(customer__name__iexact='Manish Traders Loss')
@@ -275,6 +295,9 @@ def revenue_report(request):
 @permission_classes([IsAuthenticated])
 def customer_summary(request):
     """Customer summary report"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     date_from = request.query_params.get('date_from', None)
     date_to = request.query_params.get('date_to', None)
     
@@ -290,6 +313,7 @@ def customer_summary(request):
     
     # Exclude Manish Traders Loss customer (internal shop usage, not actual sales)
     invoices = Invoice.objects.filter(
+        retailer_id=retailer.id,
         created_at__date__gte=date_from,
         created_at__date__lte=date_to,
         status__in=['paid', 'partial'],
@@ -309,7 +333,7 @@ def customer_summary(request):
     ).order_by('-total_spent')[:10]
     
     # Total customers
-    total_customers = Customer.objects.count()
+    total_customers = Customer.objects.filter(retailer_id=retailer.id).count()
     active_customers = invoices.values('customer').distinct().count()
     
     return Response({
@@ -329,10 +353,14 @@ def customer_summary(request):
 @permission_classes([IsAuthenticated])
 def stock_ordering_report(request):
     """Stock ordering report - low stock and out of stock products (barcode-based)"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     store_id = request.query_params.get('store', None)
     
     # Only include products that have been purchased (have barcodes)
     products_with_barcodes = Product.objects.filter(
+        retailer_id=retailer.id,
         barcodes__isnull=False
     ).distinct()
     
@@ -345,7 +373,8 @@ def stock_ordering_report(request):
     # Get barcodes in active carts (reserved)
     active_carts_barcodes = set()
     cart_items = CartItem.objects.filter(
-        cart__status='active'
+        cart__status='active',
+        cart__retailer_id=retailer.id,
     ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
     
     for cart_item in cart_items:
@@ -363,13 +392,14 @@ def stock_ordering_report(request):
         if store_id:
             from backend.locations.models import Store
             try:
-                store = Store.objects.get(id=store_id)
+                store = Store.objects.get(id=store_id, retailer_id=retailer.id)
                 store_name = store.name
             except Store.DoesNotExist:
                 pass
         
         # Count available barcodes for this product (new + returned, not in carts, not sold, not from draft purchases)
         product_barcodes = Barcode.objects.filter(
+            retailer_id=retailer.id,
             product=product,
             tag__in=['new', 'returned']
         ).exclude(

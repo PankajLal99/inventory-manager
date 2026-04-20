@@ -4,7 +4,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './lib/toast';
 import { auth } from './lib/auth';
 import Login from './pages/auth/Login';
-import Register from './pages/auth/Register';
 import Dashboard from './pages/dashboard/Dashboard';
 import Products from './pages/products/Products';
 import ProductDetail from './pages/products/ProductDetail';
@@ -27,7 +26,6 @@ import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
 import ReturnToStock from './pages/replacement/ReturnToStock';
 import CreditNoteReplacement from './pages/replacement/CreditNoteReplacement';
-import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import CreditNotes from './pages/credit-notes/CreditNotes';
 import CreditNoteShowcase from './pages/credit-notes/CreditNoteShowcase';
 import Repairs from './pages/repair/Repairs';
@@ -52,6 +50,8 @@ import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingD
 import OverallPendingInvoiceDetails from './pages/dashboard/OverallPendingInvoiceDetails';
 import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingClearedDetails';
 import StockTransfers from './pages/stock/StockTransfers';
+import RoleManagement from './pages/admin/RoleManagement';
+import OnboardingSetup from './pages/onboarding/OnboardingSetup';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -81,6 +81,27 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function PermissionRoute({
+  children,
+  permission,
+  fallbackAllowed: _fallbackAllowed,
+}: {
+  children: React.ReactNode;
+  permission: string;
+  fallbackAllowed: (groups: string[]) => boolean;
+}) {
+  const user = auth.getUser();
+  if (!user) {
+    return <>{children}</>;
+  }
+  const effective = user.permissions;
+  const hasAccess = Array.isArray(effective) && effective.includes(permission);
+  if (!hasAccess) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <ErrorBoundary>
@@ -89,7 +110,8 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
+              <Route path="/register" element={<Navigate to="/login" replace />} />
+              <Route path="/onboarding" element={<OnboardingSetup />} />
               {/* Public vendor routes (no auth required) */}
               <Route path="/vendor-purchases" element={<VendorPurchases />} />
               <Route path="/vendor-purchases/:id" element={<VendorPurchaseDetail />} />
@@ -101,59 +123,60 @@ function App() {
                   </ProtectedRoute>
                 }
               >
-                <Route index element={<POS />} />
-                <Route path="dashboard" element={<Dashboard />} />
+                <Route index element={<PermissionRoute permission="nav.pos" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><POS /></PermissionRoute>} />
+                <Route path="dashboard" element={<PermissionRoute permission="nav.dashboard" fallbackAllowed={(g) => ['Admin', 'RetailAdmin'].some((x) => g.includes(x))}><Dashboard /></PermissionRoute>} />
                 <Route
                   path="dashboard/overall-profit-billing-details"
-                  element={<OverallProfitBillingDetails />}
+                  element={<PermissionRoute permission="nav.dashboard" fallbackAllowed={(g) => ['Admin', 'RetailAdmin'].some((x) => g.includes(x))}><OverallProfitBillingDetails /></PermissionRoute>}
                 />
                 <Route
                   path="dashboard/overall-pending-invoice-details"
-                  element={<OverallPendingInvoiceDetails />}
+                  element={<PermissionRoute permission="nav.dashboard" fallbackAllowed={(g) => ['Admin', 'RetailAdmin'].some((x) => g.includes(x))}><OverallPendingInvoiceDetails /></PermissionRoute>}
                 />
                 <Route
                   path="dashboard/wholesale-pending-cleared-details"
-                  element={<WholesalePendingClearedDetails />}
+                  element={<PermissionRoute permission="nav.dashboard" fallbackAllowed={(g) => ['Admin', 'RetailAdmin'].some((x) => g.includes(x))}><WholesalePendingClearedDetails /></PermissionRoute>}
                 />
-                <Route path="products" element={<Products />} />
-                <Route path="products/:id" element={<ProductDetail />} />
-                <Route path="pos" element={<POS />} />
-                <Route path="active-carts" element={<ActiveCartsOverview />} />
-                <Route path="pos-repair" element={<POSRepair />} />
-                <Route path="pos-repair-new" element={<RepairRegistration />} />
-                <Route path="customers" element={<Customers />} />
+                <Route path="products" element={<PermissionRoute permission="nav.products" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'].some((x) => g.includes(x))}><Products /></PermissionRoute>} />
+                <Route path="products/:id" element={<PermissionRoute permission="nav.products" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'].some((x) => g.includes(x))}><ProductDetail /></PermissionRoute>} />
+                <Route path="pos" element={<PermissionRoute permission="nav.pos" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><POS /></PermissionRoute>} />
+                <Route path="active-carts" element={<PermissionRoute permission="nav.active_carts" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><ActiveCartsOverview /></PermissionRoute>} />
+                <Route path="pos-repair" element={<PermissionRoute permission="nav.repairs" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'].some((x) => g.includes(x))}><POSRepair /></PermissionRoute>} />
+                <Route path="pos-repair-new" element={<PermissionRoute permission="nav.repair_register" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'].some((x) => g.includes(x))}><RepairRegistration /></PermissionRoute>} />
+                <Route path="customers" element={<PermissionRoute permission="nav.customers" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><Customers /></PermissionRoute>} />
                 <Route path="personal-customers" element={<PersonalCustomers />} />
-                <Route path="purchases" element={<Purchases />} />
-                <Route path="purchases/:id" element={<PurchaseDetail />} />
+                <Route path="purchases" element={<PermissionRoute permission="nav.purchases" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><Purchases /></PermissionRoute>} />
+                <Route path="purchases/:id" element={<PermissionRoute permission="nav.purchases" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><PurchaseDetail /></PermissionRoute>} />
                 <Route path="pricing" element={<Pricing />} />
-                <Route path="invoices" element={<Invoices />} />
-                <Route path="invoices/:id" element={<InvoiceDetail />} />
-                <Route path="invoices/:id/edit" element={<InvoiceEdit />} />
-                <Route path="credit-notes" element={<CreditNotes />} />
-                <Route path="credit-notes/:id" element={<CreditNoteShowcase />} />
-                <Route path="history" element={<History />} />
-                <Route path="reports" element={<Reports />} />
-                <Route path="replacement" element={<Replacement />} />
-                <Route path="replacement/pos" element={<ReplacementPOS />} />
-                <Route path="replacement/replace-product" element={<ReplaceProduct />} />
-                <Route path="replacement/return-to-stock" element={<ReturnToStock />} />
-                <Route path="replacement/credit-note" element={<CreditNoteReplacement />} />
-                <Route path="repairs" element={<Repairs />} />
-                <Route path="ledger" element={<Ledger />} />
-                <Route path="ledger/:customerId" element={<LedgerDetail />} />
-                <Route path="personal-ledger" element={<PersonalLedger />} />
+                <Route path="invoices" element={<PermissionRoute permission="nav.invoices" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><Invoices /></PermissionRoute>} />
+                <Route path="invoices/:id" element={<PermissionRoute permission="nav.invoices" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><InvoiceDetail /></PermissionRoute>} />
+                <Route path="invoices/:id/edit" element={<PermissionRoute permission="nav.invoices" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><InvoiceEdit /></PermissionRoute>} />
+                <Route path="credit-notes" element={<PermissionRoute permission="nav.credit_notes" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><CreditNotes /></PermissionRoute>} />
+                <Route path="credit-notes/:id" element={<PermissionRoute permission="nav.credit_notes" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><CreditNoteShowcase /></PermissionRoute>} />
+                <Route path="history" element={<PermissionRoute permission="nav.history" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><History /></PermissionRoute>} />
+                <Route path="reports" element={<PermissionRoute permission="nav.reports" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><Reports /></PermissionRoute>} />
+                <Route path="replacement" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><Replacement /></PermissionRoute>} />
+                <Route path="replacement/pos" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><ReplacementPOS /></PermissionRoute>} />
+                <Route path="replacement/replace-product" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><ReplaceProduct /></PermissionRoute>} />
+                <Route path="replacement/return-to-stock" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><ReturnToStock /></PermissionRoute>} />
+                <Route path="replacement/credit-note" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><CreditNoteReplacement /></PermissionRoute>} />
+                <Route path="repairs" element={<PermissionRoute permission="nav.repairs" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'].some((x) => g.includes(x))}><Repairs /></PermissionRoute>} />
+                <Route path="ledger" element={<PermissionRoute permission="nav.ledger" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><Ledger /></PermissionRoute>} />
+                <Route path="ledger/:customerId" element={<PermissionRoute permission="nav.ledger" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><LedgerDetail /></PermissionRoute>} />
+                <Route path="personal-ledger" element={<PermissionRoute permission="nav.personal_ledger" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><PersonalLedger /></PermissionRoute>} />
                 <Route path="personal-ledger/:customerId" element={<PersonalLedgerDetail />} />
-                <Route path="internal-ledger" element={<InternalLedger />} />
-                <Route path="internal-ledger/:customerId" element={<InternalLedgerDetail />} />
-                <Route path="payment-reminders" element={<PaymentReminders />} />
-                <Route path="expenses" element={<Expenses />} />
-                <Route path="payments" element={<Payments />} />
-                <Route path="stock" element={<StockOverview />} />
-                <Route path="stock-transfers" element={<StockTransfers />} />
+                <Route path="internal-ledger" element={<PermissionRoute permission="nav.internal_ledger" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'Repair'].some((x) => g.includes(x))}><InternalLedger /></PermissionRoute>} />
+                <Route path="internal-ledger/:customerId" element={<PermissionRoute permission="nav.internal_ledger" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'Repair'].some((x) => g.includes(x))}><InternalLedgerDetail /></PermissionRoute>} />
+                <Route path="payment-reminders" element={<PermissionRoute permission="nav.payment_reminders" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><PaymentReminders /></PermissionRoute>} />
+                <Route path="expenses" element={<PermissionRoute permission="nav.expenses" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Temp', 'Retail', 'Wholesale'].some((x) => g.includes(x))}><Expenses /></PermissionRoute>} />
+                <Route path="payments" element={<PermissionRoute permission="nav.payments" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><Payments /></PermissionRoute>} />
+                <Route path="stock" element={<PermissionRoute permission="nav.stock_overview" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><StockOverview /></PermissionRoute>} />
+                <Route path="stock-transfers" element={<PermissionRoute permission="nav.stock_transfers" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><StockTransfers /></PermissionRoute>} />
                 <Route path="stores" element={<Stores />} />
-                <Route path="search" element={<Search />} />
-                <Route path="vendors" element={<Vendors />} />
+                <Route path="search" element={<PermissionRoute permission="nav.search" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair', 'Temp'].some((x) => g.includes(x))}><Search /></PermissionRoute>} />
+                <Route path="vendors" element={<PermissionRoute permission="nav.vendors" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><Vendors /></PermissionRoute>} />
                 <Route path="defective-move-outs" element={<DefectiveMoveOuts />} />
+                <Route path="role-management" element={<PermissionRoute permission="nav.role_management" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><RoleManagement /></PermissionRoute>} />
               </Route>
             </Routes>
           </BrowserRouter>

@@ -409,50 +409,6 @@ export default function ProductDetail() {
         </div>
       )}
 
-      {p.variants && Array.isArray(p.variants) && p.variants.length > 0 && (
-        <div className="bg-white rounded-2xl shadow p-6">
-          <h2 className="text-xl font-semibold mb-4">Variants</h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Name</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">SKU</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Attributes</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {p.variants.map((variant: any) => (
-                  <tr key={variant.id}>
-                    <td className="px-4 py-3 text-sm font-medium">{variant.name}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{variant.sku}</td>
-                    <td className="px-4 py-3 text-sm">
-                      {variant.attributes && Object.keys(variant.attributes).length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {Object.entries(variant.attributes).map(([key, value]) => (
-                            <Badge key={key} variant="info" className="text-xs">
-                              {key}: {String(value)}
-                            </Badge>
-                          ))}
-                        </div>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-sm">
-                      <Badge variant={variant.is_active ? 'success' : 'default'}>
-                        {variant.is_active ? 'Active' : 'Inactive'}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {p.components && Array.isArray(p.components) && p.components.length > 0 && (
         <div className="bg-white rounded-2xl shadow p-6">
           <h2 className="text-xl font-semibold mb-4 flex items-center">

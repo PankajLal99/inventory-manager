@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from .models import PriceList, PriceListItem, BulkPriceUpdateLog, Promotion
 from .serializers import PriceListSerializer, PriceListItemSerializer, BulkPriceUpdateLogSerializer, PromotionSerializer
+from backend.core.tenant_api import require_active_retailer
 
 
 # PriceList views
@@ -12,14 +13,20 @@ from .serializers import PriceListSerializer, PriceListItemSerializer, BulkPrice
 @permission_classes([IsAuthenticated])
 def price_list_list_create(request):
     """List all price lists or create a new price list"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         price_lists = PriceList.objects.all()
+        if not tenant_err and retailer:
+            price_lists = price_lists.filter(retailer_id=retailer.id)
         serializer = PriceListSerializer(price_lists, many=True)
         return Response(serializer.data)
     else:  # POST
         serializer = PriceListSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -28,7 +35,11 @@ def price_list_list_create(request):
 @permission_classes([IsAuthenticated])
 def price_list_detail(request, pk):
     """Retrieve, update or delete a price list"""
-    price_list = get_object_or_404(PriceList, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    price_list = get_object_or_404(PriceList, **filters)
     
     if request.method == 'GET':
         serializer = PriceListSerializer(price_list)
@@ -54,7 +65,11 @@ def price_list_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def price_list_items(request, pk):
     """Get or create items for a price list"""
-    price_list = get_object_or_404(PriceList, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    price_list = get_object_or_404(PriceList, **filters)
     
     if request.method == 'GET':
         items = price_list.items.all()
@@ -84,6 +99,7 @@ def bulk_price_update_preview(request):
 @permission_classes([IsAuthenticated])
 def bulk_price_update_commit(request):
     """Commit bulk price update"""
+    retailer, tenant_err = require_active_retailer(request)
     filters = request.data.get('filters', {})
     update_type = request.data.get('update_type')
     value = request.data.get('value')
@@ -95,6 +111,9 @@ def bulk_price_update_commit(request):
         affected_count=0,
         created_by=request.user
     )
+    if not tenant_err and retailer:
+        log.retailer_id = retailer.id
+        log.save(update_fields=['retailer'])
     return Response(BulkPriceUpdateLogSerializer(log).data)
 
 
@@ -103,14 +122,20 @@ def bulk_price_update_commit(request):
 @permission_classes([IsAuthenticated])
 def promotion_list_create(request):
     """List all promotions or create a new promotion"""
+    retailer, tenant_err = require_active_retailer(request)
     if request.method == 'GET':
         promotions = Promotion.objects.all()
+        if not tenant_err and retailer:
+            promotions = promotions.filter(retailer_id=retailer.id)
         serializer = PromotionSerializer(promotions, many=True)
         return Response(serializer.data)
     else:  # POST
         serializer = PromotionSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save()
+            if not tenant_err and retailer:
+                serializer.save(retailer_id=retailer.id)
+            else:
+                serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -119,7 +144,11 @@ def promotion_list_create(request):
 @permission_classes([IsAuthenticated])
 def promotion_detail(request, pk):
     """Retrieve, update or delete a promotion"""
-    promotion = get_object_or_404(Promotion, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    promotion = get_object_or_404(Promotion, **filters)
     
     if request.method == 'GET':
         serializer = PromotionSerializer(promotion)
@@ -155,7 +184,10 @@ def promotion_validate(request):
 @permission_classes([IsAuthenticated])
 def bulk_price_update_log_list(request):
     """List all bulk price update logs"""
+    retailer, tenant_err = require_active_retailer(request)
     logs = BulkPriceUpdateLog.objects.all()
+    if not tenant_err and retailer:
+        logs = logs.filter(retailer_id=retailer.id)
     serializer = BulkPriceUpdateLogSerializer(logs, many=True)
     return Response(serializer.data)
 
@@ -164,6 +196,10 @@ def bulk_price_update_log_list(request):
 @permission_classes([IsAuthenticated])
 def bulk_price_update_log_detail(request, pk):
     """Retrieve a bulk price update log"""
-    log = get_object_or_404(BulkPriceUpdateLog, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    filters = {'pk': pk}
+    if not tenant_err and retailer:
+        filters['retailer_id'] = retailer.id
+    log = get_object_or_404(BulkPriceUpdateLog, **filters)
     serializer = BulkPriceUpdateLogSerializer(log)
     return Response(serializer.data)

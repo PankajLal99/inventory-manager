@@ -30,7 +30,7 @@ export default function Login() {
       <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-2xl shadow-lg">
         <div className="text-center">
           <LogIn className="mx-auto h-12 w-12 text-blue-600" />
-          <h2 className="mt-6 text-3xl font-bold text-gray-900">MT Inventory Manager</h2>
+          <h2 className="mt-6 text-3xl font-bold text-gray-900">Inventory Manager</h2>
           <p className="mt-2 text-sm text-gray-600">Sign in to your account</p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
@@ -91,9 +91,9 @@ export default function Login() {
             {loading ? 'Signing in...' : 'Sign in'}
           </button>
           <div className="text-center text-sm">
-            <span className="text-gray-600">Don't have an account? </span>
-            <Link to="/register" className="text-blue-600 hover:text-blue-800 font-medium">
-              Sign up
+            <span className="text-gray-600">New store setup? </span>
+            <Link to="/onboarding" className="text-blue-600 hover:text-blue-800 font-medium">
+              Join us
             </Link>
           </div>
         </form>

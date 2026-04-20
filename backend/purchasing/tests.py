@@ -3,15 +3,20 @@ Comprehensive test suite for Purchasing module
 Tests: Purchase creation, updates, stock management, barcode handling, and edge cases
 """
 from django.test import TestCase
+from django.urls import reverse
 from rest_framework import status
 from decimal import Decimal
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 from backend.core.test_utils import TestDataFactory, AuthenticatedAPIClient
 from backend.purchasing.models import Purchase, PurchaseItem
-from backend.catalog.models import Product, Barcode
+from backend.catalog.models import Product, Barcode, Category
 from backend.inventory.models import Stock
 from backend.parties.models import Supplier
 from backend.locations.models import Store
+from backend.tenants.models import Retailer
+
+User = get_user_model()
 
 
 class PurchaseModelTests(TestCase):
@@ -918,3 +923,122 @@ class PurchaseItemAPITests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(PurchaseItem.objects.filter(id=item.id).exists())
+
+
+class PurchaseTenantIsolationTests(TestCase):
+    """Concrete multi-tenant regression tests for purchase flows."""
+
+    def setUp(self):
+        self.client = AuthenticatedAPIClient()
+        self.retailer_a = Retailer.objects.create(code='PTA', name='Purchase Tenant A', is_active=True)
+        self.retailer_b = Retailer.objects.create(code='PTB', name='Purchase Tenant B', is_active=True)
+
+        self.user_a = User.objects.create_user(
+            username='purchase_tenant_user_a',
+            password='testpass123',
+            retailer=self.retailer_a,
+            is_staff=True,
+        )
+        self.client.authenticate_user(self.user_a)
+
+        self.supplier_a = Supplier.objects.create(retailer=self.retailer_a, name='Supplier A', phone='9000000101')
+        self.supplier_b = Supplier.objects.create(retailer=self.retailer_b, name='Supplier B', phone='9000000102')
+        self.store_a = Store.objects.create(retailer=self.retailer_a, name='Store A', code='PSTA', shop_type='retail')
+        self.store_b = Store.objects.create(retailer=self.retailer_b, name='Store B', code='PSTB', shop_type='retail')
+        self.category_a = Category.objects.create(retailer=self.retailer_a, name='Purchase Cat A')
+        self.category_b = Category.objects.create(retailer=self.retailer_b, name='Purchase Cat B')
+        self.product_a = Product.objects.create(
+            retailer=self.retailer_a,
+            name='Purchase Product A',
+            category=self.category_a,
+            product_type='simple',
+            track_inventory=True,
+        )
+        self.product_b = Product.objects.create(
+            retailer=self.retailer_b,
+            name='Purchase Product B',
+            category=self.category_b,
+            product_type='simple',
+            track_inventory=True,
+        )
+
+        self.purchase_a = TestDataFactory.create_purchase(
+            user=self.user_a,
+            supplier=self.supplier_a,
+            store=self.store_a,
+            status='draft',
+        )
+        TestDataFactory.create_purchase_item(
+            purchase=self.purchase_a,
+            product=self.product_a,
+            quantity=Decimal('2.00'),
+            unit_price=Decimal('10.00'),
+        )
+
+        self.purchase_b = Purchase.objects.create(
+            retailer=self.retailer_b,
+            created_by=self.user_a,
+            supplier=self.supplier_b,
+            store=self.store_b,
+            status='draft',
+            purchase_date=timezone.now().date(),
+        )
+        TestDataFactory.create_purchase_item(
+            purchase=self.purchase_b,
+            product=self.product_b,
+            quantity=Decimal('3.00'),
+            unit_price=Decimal('20.00'),
+        )
+
+    def test_purchase_list_scoped_to_active_retailer(self):
+        response = self.client.get(reverse('purchase-list-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.data.get('results', [])
+        ids = {row['id'] for row in rows}
+        self.assertIn(self.purchase_a.id, ids)
+        self.assertNotIn(self.purchase_b.id, ids)
+
+    def test_purchase_detail_blocks_other_retailer_purchase(self):
+        response = self.client.get(reverse('purchase-detail', args=[self.purchase_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_purchase_items_blocks_other_retailer_purchase(self):
+        response = self.client.get(reverse('purchase-items', args=[self.purchase_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_purchase_update_blocks_other_retailer_purchase(self):
+        response = self.client.put(
+            reverse('purchase-detail', args=[self.purchase_b.id]),
+            {
+                'supplier': self.supplier_b.id,
+                'purchase_date': timezone.now().date().isoformat(),
+                'store': self.store_b.id,
+                'items': [{'product': self.product_b.id, 'quantity': '4.00', 'unit_price': '22.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_purchase_delete_blocks_other_retailer_purchase(self):
+        response = self.client.delete(reverse('purchase-detail', args=[self.purchase_b.id]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_purchase_items_create_blocks_other_retailer_purchase(self):
+        response = self.client.post(
+            reverse('purchase-items', args=[self.purchase_b.id]),
+            {
+                'product': self.product_b.id,
+                'quantity': '1.00',
+                'unit_price': '10.00',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_purchase_items_delete_blocks_other_retailer_purchase(self):
+        other_item = self.purchase_b.items.first()
+        self.assertIsNotNone(other_item)
+        response = self.client.delete(
+            f"{reverse('purchase-items', args=[self.purchase_b.id])}?item_id={other_item.id}"
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

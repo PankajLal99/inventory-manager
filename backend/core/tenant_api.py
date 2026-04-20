@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from backend.tenants.tenancy import is_platform_user, resolve_request_retailer
+from backend.tenants.models import Retailer
 
 
 def get_active_retailer(request):
@@ -26,13 +27,27 @@ def require_active_retailer(request):
     if r is not None:
         return r, None
     user = getattr(request, 'user', None)
+    available_retailers = list(
+        Retailer.objects.filter(is_active=True)
+        .order_by('name')
+        .values('id', 'code', 'name')
+    )
     if user and user.is_authenticated and is_platform_user(user):
         return None, Response(
-            {'detail': 'Platform access requires X-Retailer-Code header for this resource.'},
+            {
+                'detail': 'Platform access requires X-Retailer-Code header for this resource.',
+                'available_retailers': available_retailers,
+                'action': 'select_retailer',
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
     return None, Response(
-        {'detail': 'User is not assigned to a retailer.'},
+        {
+            'detail': 'User is not assigned to a retailer. Choose an existing retailer code or create a new retailer first.',
+            'available_retailers': available_retailers,
+            'action': 'select_or_create_retailer',
+            'create_hint': 'Use onboarding flow to create a new retailer and initial stores/users.',
+        },
         status=status.HTTP_403_FORBIDDEN,
     )
 

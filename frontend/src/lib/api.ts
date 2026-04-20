@@ -119,7 +119,6 @@ export const productsApi = {
   create: (data: any) => api.post('/products/', data),
   update: (id: number, data: any) => api.patch(`/products/${id}/`, data),
   delete: (id: number) => api.delete(`/products/${id}/`),
-  variants: (id: number) => api.get(`/products/${id}/variants/`),
   barcodes: (id: number, params?: any) => api.get(`/products/${id}/barcodes/`, { params }),
   barcodesFull: (id: number) => api.get(`/products/${id}/barcodes-full/`),
   invoices: (id: number, params?: { limit?: number; offset?: number }) =>
@@ -488,5 +487,25 @@ export const reportsApi = {
 export const searchApi = {
   search: (query: string, type: string = 'all', params?: { product_limit?: number }) =>
     api.get('/search/', { params: { q: query, type, ...params } }),
+};
+
+export const coreApi = {
+  accessPermissions: {
+    list: () => api.get('/access-permissions/'),
+  },
+  roles: {
+    list: () => api.get('/roles/'),
+    create: (data: any) => api.post('/roles/', data),
+    update: (id: number, data: any) => api.patch(`/roles/${id}/`, data),
+    delete: (id: number) => api.delete(`/roles/${id}/`),
+  },
+  accessControl: {
+    users: () => api.get('/access-control/users/'),
+    updateUser: (id: number, data: any) => api.patch(`/access-control/users/${id}/`, data),
+  },
+  onboarding: {
+    status: () => api.get('/onboarding/status/'),
+    complete: (data: any) => api.post('/onboarding/complete/', data),
+  },
 };
 

@@ -40,6 +40,7 @@ import {
   Coins,
   Boxes,
   Truck,
+  ShieldCheck,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -182,107 +183,65 @@ export default function Layout() {
   };
 
 
-  const userGroups = user?.groups || [];
-  // Check if user is Admin (superuser, staff, or Admin group)
-  // Note: For Retail users, is_admin should be false unless they're also superuser/staff
-  const isAdmin = Boolean(user?.is_admin);
-  const canAccessDashboard = user?.can_access_dashboard === true;
-  const canAccessReports = user?.can_access_reports === true;
-  const canAccessCustomers = user?.can_access_customers === true;
-  const canAccessLedger = user?.can_access_ledger === true;
-  const canAccessHistory = user?.can_access_history === true;
-
-  /** Prefer server `permissions` (groups + per-shop roles); fall back to legacy group checks. */
+  /** Permission-driven menu (Role/UserStoreRole based). */
   const hasMenuAccess = (item: {
     permission?: string;
     showFor?: string | string[] | ((u: typeof user, groups: string[]) => boolean);
   }): boolean => {
-    if (item.permission && Array.isArray(user?.permissions) && user.permissions.length > 0) {
+    if (item.permission && Array.isArray(user?.permissions)) {
       return user.permissions.includes(item.permission);
     }
-    const showFor = item.showFor;
-    if (typeof showFor === 'function') {
-      return showFor(user, userGroups);
-    }
-    if (Array.isArray(showFor)) {
-      return showFor.some((group) => userGroups.includes(group));
-    }
-    if (showFor === undefined) {
-      return false;
-    }
-    switch (showFor) {
-      case 'all':
-        return true;
-      case 'admin':
-        return canAccessCustomers;
-      case 'dashboard':
-        return canAccessDashboard;
-      case 'reports':
-        return canAccessReports;
-      case 'customers':
-        return canAccessCustomers;
-      case 'ledger':
-        return canAccessLedger;
-      case 'history':
-        return canAccessHistory;
-      default:
-        return userGroups.includes(showFor);
-    }
+    return false;
   };
-
-  // Debug: Log admin status (remove in production)
-  useEffect(() => {
-    if (user) {
-    }
-  }, [user, userGroups, isAdmin]);
 
   const menuGroups = [
     {
       title: 'Core Operations',
       items: [
-        { path: '/', icon: ShoppingCart, label: 'POS', permission: 'nav.pos', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/pos-repair-new', icon: Plus, label: 'New Repair', permission: 'nav.repair_register', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
-        { path: '/search', icon: Search, label: 'Search', permission: 'nav.search', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair','Temp'] },
-        { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: 'nav.dashboard', showFor: ['Admin', 'RetailAdmin'] },
+        { path: '/', icon: ShoppingCart, label: 'POS', permission: 'nav.pos' },
+        { path: '/pos-repair-new', icon: Plus, label: 'New Repair', permission: 'nav.repair_register' },
+        { path: '/search', icon: Search, label: 'Search', permission: 'nav.search' },
+        { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: 'nav.dashboard' },
       ],
     },
     {
       title: 'Sales & Transactions',
       items: [
-        { path: '/invoices', icon: FileText, label: 'Invoices', permission: 'nav.invoices', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', permission: 'nav.credit_notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
-        { path: '/customers', icon: Users, label: 'Customers', permission: 'nav.customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/replacement', icon: RefreshCw, label: 'Replacement', permission: 'nav.replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/repairs', icon: Wrench, label: 'Repairs', permission: 'nav.repairs', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },
+        { path: '/invoices', icon: FileText, label: 'Invoices', permission: 'nav.invoices' },
+        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', permission: 'nav.credit_notes' },
+        { path: '/customers', icon: Users, label: 'Customers', permission: 'nav.customers' },
+        { path: '/replacement', icon: RefreshCw, label: 'Replacement', permission: 'nav.replacement' },
+        { path: '/repairs', icon: Wrench, label: 'Repairs', permission: 'nav.repairs' },
       ],
     },
     {
       title: 'Inventory & Products',
       items: [
-        { path: '/products', icon: Package, label: 'Products', permission: 'nav.products', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair'] },
-        { path: '/stock', icon: Boxes, label: 'Stock Overview', permission: 'nav.stock_overview', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/stock-transfers', icon: Truck, label: 'Stock transfers', permission: 'nav.stock_transfers', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/purchases', icon: ShoppingBag, label: 'Purchases', permission: 'nav.purchases', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
+        { path: '/products', icon: Package, label: 'Products', permission: 'nav.products' },
+        { path: '/stock', icon: Boxes, label: 'Stock Overview', permission: 'nav.stock_overview' },
+        { path: '/stock-transfers', icon: Truck, label: 'Stock transfers', permission: 'nav.stock_transfers' },
+        { path: '/purchases', icon: ShoppingBag, label: 'Purchases', permission: 'nav.purchases' },
       ],
     },
     {
       title: 'Financial',
       items: [
-        { path: '/ledger', icon: BookOpen, label: 'Ledger', permission: 'nav.ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
-        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', permission: 'nav.personal_ledger', showFor: 'admin' },
-        { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', permission: 'nav.internal_ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
-        { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', permission: 'nav.payment_reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/expenses', icon: Coins, label: 'Expenses', permission: 'nav.expenses', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin','Temp','Retail','Wholesale'] },
-        { path: '/payments', icon: Coins, label: 'Payments', permission: 'nav.payments', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/ledger', icon: BookOpen, label: 'Ledger', permission: 'nav.ledger' },
+        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', permission: 'nav.personal_ledger' },
+        { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', permission: 'nav.internal_ledger' },
+        { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', permission: 'nav.payment_reminders' },
+        { path: '/expenses', icon: Coins, label: 'Expenses', permission: 'nav.expenses' },
+        { path: '/payments', icon: Coins, label: 'Payments', permission: 'nav.payments' },
       ],
     },
     {
       title: 'Administration',
       items: [
-        { path: '/active-carts', icon: ClipboardList, label: 'Active Carts', permission: 'nav.active_carts', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/vendors', icon: Users, label: 'Vendors', permission: 'nav.vendors', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/reports', icon: BarChart3, label: 'Reports', permission: 'nav.reports', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
-        { path: '/history', icon: History, label: 'History', permission: 'nav.history', showFor: 'admin' },
+        { path: '/active-carts', icon: ClipboardList, label: 'Active Carts', permission: 'nav.active_carts' },
+        { path: '/vendors', icon: Users, label: 'Vendors', permission: 'nav.vendors' },
+        { path: '/reports', icon: BarChart3, label: 'Reports', permission: 'nav.reports' },
+        { path: '/history', icon: History, label: 'History', permission: 'nav.history' },
+        { path: '/role-management', icon: ShieldCheck, label: 'Role Management', permission: 'nav.role_management' },
       ],
     },
   ];

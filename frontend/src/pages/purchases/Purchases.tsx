@@ -4,7 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
 import { formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
 import { auth } from '../../lib/auth';
-import { isRetailCatalogRestricted } from '../../lib/access';
+import { isStoreManagementAdmin } from '../../lib/access';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -25,11 +25,8 @@ import { toast } from '../../lib/toast';
 interface PurchaseItem {
   id?: number;
   product: number;
-  variant?: number | null;
   product_name?: string;
   product_sku?: string;
-  variant_name?: string;
-  variant_sku?: string;
   quantity: string;
   unit_price: string;
   selling_price?: string | null;
@@ -144,13 +141,7 @@ function clearPrintedFlagsInPurchasesInfiniteCache(old: unknown, purchaseId: num
 
 export default function Purchases() {
   const user = auth.getUser();
-  const userGroups = user?.groups || [];
-  const isAdminUser = Boolean(
-    user?.is_admin ||
-    user?.is_superuser ||
-    user?.is_staff ||
-    userGroups.some((group: string) => group.includes('Admin'))
-  );
+  const isAdminUser = isStoreManagementAdmin(user);
   const [searchParams, setSearchParams] = useSearchParams();
   const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
   const [supplierFilterSearch, setSupplierFilterSearch] = useState(''); // For typable filter dropdown
@@ -580,11 +571,8 @@ export default function Purchases() {
         const items = (createdPurchase?.items || []).map((item: any) => ({
           id: item.id,
           product: item.product,
-          variant: item.variant || null,
           product_name: item.product_name,
           product_sku: item.product_sku,
-          variant_name: item.variant_name || null,
-          variant_sku: item.variant_sku || null,
           quantity: formatNumber(item.quantity, 3, false),
           unit_price: formatNumber(item.unit_price, 2, false),
           selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
@@ -710,7 +698,7 @@ export default function Purchases() {
     }
 
     try {
-      // Fetch full purchase details to ensure we have all items with variants and sold counts
+      // Fetch full purchase details to ensure we have all items and sold counts
       const response = await purchasingApi.purchases.get(purchase.id);
       const fullPurchase = response.data;
 
@@ -731,11 +719,8 @@ export default function Purchases() {
         return {
           id: item.id,
           product: item.product,
-          variant: item.variant || null,
           product_name: item.product_name,
           product_sku: item.product_sku,
-          variant_name: item.variant_name || null,
-          variant_sku: item.variant_sku || null,
           quantity: isDraft && qty === 0 ? '' : formatNumber(item.quantity, 3, false),
           unit_price: isDraft && price === 0 ? '' : formatNumber(item.unit_price, 2, false),
           selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
@@ -769,11 +754,8 @@ export default function Purchases() {
   };
 
   const handleAddProduct = (product: any) => {
-    // Check if product already exists in purchase items (same product and variant)
-    const existingItem = purchaseItems.find(item =>
-      item.product === product.id &&
-      (item.variant === (product.variant?.id || null) || (!item.variant && !product.variant?.id))
-    );
+    // Check if product already exists in purchase items.
+    const existingItem = purchaseItems.find(item => item.product === product.id);
 
     if (existingItem) {
       // If product already exists, increase quantity by 1 instead of adding duplicate
@@ -790,11 +772,8 @@ export default function Purchases() {
 
     const newItem: PurchaseItem = {
       product: product.id,
-      variant: product.variant?.id || null,
       product_name: product.name,
       product_sku: product.sku,
-      variant_name: product.variant?.name || null,
-      variant_sku: product.variant?.sku || null,
       quantity: '',
       unit_price: '',
       selling_price: '',
@@ -926,9 +905,8 @@ export default function Purchases() {
       if (editingPurchase) {
         const soldCount = item.sold_count || 0;
         if (quantity < soldCount) {
-          const variantText = item.variant_name ? ` (${item.variant_name})` : '';
           alert(
-            `Cannot reduce quantity for "${item.product_name || 'product'}${variantText}" below ${soldCount} ` +
+            `Cannot reduce quantity for "${item.product_name || 'product'}" below ${soldCount} ` +
             `because ${soldCount} item(s) have already been sold. Minimum allowed quantity is ${soldCount}.`
           );
           return;
@@ -936,7 +914,7 @@ export default function Purchases() {
       }
     }
 
-    // Prepare submit data with all required fields including variants
+    // Prepare submit data with required fields.
     const submitData: any = {
       supplier: parseInt(supplierId),
       purchase_date: formData.purchase_date,
@@ -946,11 +924,6 @@ export default function Purchases() {
           quantity: parseInt(item.quantity) || 0,
           unit_price: parseFloat(item.unit_price) || 0,
         };
-
-        // Include variant if it exists (backend expects variant or null/undefined)
-        if (item.variant) {
-          itemData.variant = item.variant;
-        }
 
         // Include selling_price if provided
         if (item.selling_price && item.selling_price.trim() !== '') {
@@ -1003,9 +976,8 @@ export default function Purchases() {
         const quantity = parseInt(item.quantity) || 0;
         const soldCount = (item as any).sold_count || 0;
         if (quantity < soldCount) {
-          const variantText = (item as any).variant_name ? ` (${(item as any).variant_name})` : '';
           alert(
-            `Cannot set quantity for "${item.product_name || 'product'}${variantText}" below ${soldCount} (already sold).`
+            `Cannot set quantity for "${item.product_name || 'product'}" below ${soldCount} (already sold).`
           );
           return;
         }
@@ -1022,7 +994,6 @@ export default function Purchases() {
           quantity: parseInt(item.quantity) || 0,
           unit_price: parseFloat(String(item.unit_price).trim() || '0') || 0,
         };
-        if (item.variant) itemData.variant = item.variant;
         if (item.selling_price && String(item.selling_price).trim() !== '') {
           itemData.selling_price = parseFloat(item.selling_price) || null;
         }
@@ -1758,7 +1729,6 @@ export default function Purchases() {
                                 <thead className="bg-gray-100">
                                   <tr>
                                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 uppercase">Product</th>
-                                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 uppercase">Variant</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Quantity</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Unit Price</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Total</th>
@@ -1778,16 +1748,6 @@ export default function Purchases() {
                                         <td className="px-3 py-2">
                                           <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</div>
                                           <div className="text-xs text-gray-500">{item.product_sku || 'N/A'}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
-                                          {item.variant_name ? (
-                                            <>
-                                              <div className="text-sm text-gray-900">{item.variant_name}</div>
-                                              <div className="text-xs text-gray-500">{item.variant_sku || 'N/A'}</div>
-                                            </>
-                                          ) : (
-                                            <span className="text-sm text-gray-400">-</span>
-                                          )}
                                         </td>
                                         <td className="px-3 py-2 text-right">
                                           <span className="text-sm text-gray-900">{item.quantity || 0}</span>
@@ -2052,14 +2012,6 @@ export default function Purchases() {
                                 <div className="flex-1 min-w-0">
                                   <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</div>
                                   <div className="text-xs text-gray-500 mt-0.5">{item.product_sku || 'N/A'}</div>
-                                  {item.variant_name && (
-                                    <>
-                                      <div className="text-xs text-gray-700 mt-1">Variant: {item.variant_name}</div>
-                                      {item.variant_sku && (
-                                        <div className="text-xs text-gray-500">{item.variant_sku}</div>
-                                      )}
-                                    </>
-                                  )}
                                 </div>
                               </div>
                               <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-gray-100 text-xs">
@@ -2349,7 +2301,6 @@ export default function Purchases() {
                             <div className="font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</div>
                             <div className="text-xs text-gray-500">
                               {product.brand_name ? `Brand: ${product.brand_name} • ` : ''}SKU: {product.sku || 'N/A'}
-                              {product.variants && product.variants.length > 0 && ` • ${product.variants.length} variant(s)`}
                             </div>
                           </button>
                         ))}
@@ -2435,7 +2386,6 @@ export default function Purchases() {
                                 <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || 'Product'}</div>
                                 <div className="text-xs text-gray-500">
                                   {item.product_sku || 'N/A'}
-                                  {item.variant_name && ` • Variant: ${item.variant_name} `}
                                 </div>
                                 {editingPurchase && soldCount > 0 && (
                                   <div className="text-xs text-amber-600 mt-1 font-medium">
@@ -2554,7 +2504,6 @@ export default function Purchases() {
                               <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || 'Product'}</div>
                               <div className="text-xs text-gray-500 mt-0.5">
                                 {item.product_sku || 'N/A'}
-                                {item.variant_name && ` • Variant: ${item.variant_name} `}
                               </div>
                               {editingPurchase && soldCount > 0 && (
                                 <div className="text-xs text-amber-600 mt-1 font-medium">

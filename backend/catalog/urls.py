@@ -4,11 +4,10 @@ from .views import (
     brand_list_create, brand_detail,
     tax_rate_list_create, tax_rate_detail,
     product_list_create, product_detail,
-    product_variants, product_barcodes, product_barcodes_full, product_invoices, product_components,
+    product_barcodes, product_barcodes_full, product_invoices, product_components,
     product_backfill_barcodes, product_generate_label,
     product_generate_labels, product_get_labels, product_labels_status,
     product_regenerate_labels,
-    product_variant_list_create, product_variant_detail,
     barcode_list_create, barcode_detail, barcode_by_barcode,
     update_barcode_tag, bulk_update_barcode_tags,
     data_validation_check,
@@ -44,7 +43,6 @@ urlpatterns = [
     # Product endpoints
     path('products/', product_list_wrapper, name='product-list-create'),  # 🚀 OPTIMIZED GET!
     path('products/<int:pk>/', product_detail, name='product-detail'),
-    path('products/<int:pk>/variants/', product_variants, name='product-variants'),
     path('products/<int:pk>/barcodes/', product_barcodes, name='product-barcodes'),
     path('products/<int:pk>/barcodes-full/', product_barcodes_full, name='product-barcodes-full'),
     path('products/<int:pk>/invoices/', product_invoices, name='product-invoices'),
@@ -55,10 +53,6 @@ urlpatterns = [
     path('products/<int:pk>/labels/', product_get_labels, name='product-get-labels'),
     path('products/<int:pk>/labels-status/', product_labels_status, name='product-labels-status'),
     path('products/<int:pk>/regenerate-labels/', product_regenerate_labels, name='product-regenerate-labels'),
-    
-    # ProductVariant endpoints
-    path('variants/', product_variant_list_create, name='variant-list-create'),
-    path('variants/<int:pk>/', product_variant_detail, name='variant-detail'),
     
     # Barcode endpoints
     path('barcodes/', barcode_list_create, name='barcode-list-create'),

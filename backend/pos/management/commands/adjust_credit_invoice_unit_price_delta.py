@@ -20,6 +20,7 @@ from backend.pos.invoice_credit_service import (
     reconcile_ledger_after_credit_invoice_total_change,
 )
 from backend.pos.models import Invoice
+from backend.tenants.models import Retailer
 
 User = get_user_model()
 
@@ -66,9 +67,16 @@ class Command(BaseCommand):
             action='store_true',
             help='Show planned new prices and totals only.',
         )
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope invoice IDs to one tenant.',
+        )
 
     def handle(self, *args, **options):
         dry_run: bool = options['dry_run']
+        retailer_code = (options.get('retailer_code') or '').strip()
         username = (options['username'] or '').strip()
         user = User.objects.filter(username=username).first()
         if not user:
@@ -101,7 +109,15 @@ class Command(BaseCommand):
         except ValueError as e:
             raise CommandError(f'Invalid invoice id: {e}') from e
 
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                raise CommandError(f'Retailer code "{retailer_code}" not found or inactive.')
+
         qs = Invoice.objects.filter(pk__in=ids).select_related('customer', 'store')
+        if retailer:
+            qs = qs.filter(retailer_id=retailer.id)
         found = {inv.pk: inv for inv in qs}
         for pk in ids:
             if pk not in found:

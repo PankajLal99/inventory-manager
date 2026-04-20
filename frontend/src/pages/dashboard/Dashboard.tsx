@@ -15,6 +15,53 @@ const DASHBOARD_UNLOCKED_SESSION_KEY = 'dashboard_unlocked_v1';
 /** When false, the “Manual / POS payments” KPI block is hidden (code kept for later). */
 const SHOW_MANUAL_POS_PAYMENTS_SECTION = false;
 
+type DashboardBlockKey =
+  | 'kpiCards'
+  | 'profits'
+  | 'manualLedgerPayments'
+  | 'overallPendingInvoices'
+  | 'wholesalePendingCleared'
+  | 'stockAndDefective'
+  | 'storeBreakdowns'
+  | 'kpi.totalCash'
+  | 'kpi.totalOnline'
+  | 'kpi.totalPending'
+  | 'kpi.totalCredit'
+  | 'kpi.totalExpense'
+  | 'kpi.totalInhand'
+  | 'kpi.overallProfit';
+
+type DashboardVisibilityMap = Record<DashboardBlockKey, boolean>;
+
+const DEFAULT_DASHBOARD_VISIBILITY: DashboardVisibilityMap = {
+  kpiCards: true,
+  profits: true,
+  manualLedgerPayments: true,
+  overallPendingInvoices: true,
+  wholesalePendingCleared: true,
+  stockAndDefective: true,
+  storeBreakdowns: true,
+  'kpi.totalCash': true,
+  'kpi.totalOnline': true,
+  'kpi.totalPending': true,
+  'kpi.totalCredit': true,
+  'kpi.totalExpense': true,
+  'kpi.totalInhand': true,
+  'kpi.overallProfit': false,
+};
+
+function resolveDashboardVisibility(overrides?: Record<string, boolean> | null): DashboardVisibilityMap {
+  const out: DashboardVisibilityMap = { ...DEFAULT_DASHBOARD_VISIBILITY };
+  if (overrides && typeof overrides === 'object') {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (Object.prototype.hasOwnProperty.call(out, key as DashboardBlockKey)) {
+        out[key as DashboardBlockKey] = Boolean(value);
+      }
+    }
+  }
+  return out;
+}
+
 type StoreAmountRow = {
   store_id: number;
   store_name: string;
@@ -457,6 +504,7 @@ export default function Dashboard() {
 
   const canAccessDashboard = user?.can_access_dashboard !== false;
   if (user && !canAccessDashboard) return <Navigate to="/" replace />;
+  const dashboardVisibility = resolveDashboardVisibility(user?.dashboard_blocks || null);
 
   if (!unlocked) {
     return (
@@ -683,7 +731,9 @@ export default function Dashboard() {
           </div>
         ) : (
           <>
+            {dashboardVisibility.kpiCards ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+              {dashboardVisibility['kpi.totalCash'] ? (
               <DashboardMetricCard
                 title="Total cash"
                 subtitle="Repair shop amounts: delivered only, by delivery date in range."
@@ -702,6 +752,8 @@ export default function Dashboard() {
                   { label: 'Manual cash (ledger, no invoice)', amount: Number(cashBreakdown.manual_cash ?? 0) },
                 ]}
               />
+              ) : null}
+              {dashboardVisibility['kpi.totalOnline'] ? (
               <DashboardMetricCard
                 title="Total online"
                 subtitle="Repair shop amounts: delivered only, by delivery date in range."
@@ -720,6 +772,8 @@ export default function Dashboard() {
                   { label: 'Manual UPI (ledger, no invoice)', amount: Number(onlineBreakdown.manual_upi ?? 0) },
                 ]}
               />
+              ) : null}
+              {dashboardVisibility['kpi.totalPending'] ? (
               <DashboardMetricCard
                 title="Total pending"
                 icon={<Clock className="h-5 w-5 text-orange-800" />}
@@ -729,6 +783,8 @@ export default function Dashboard() {
                 iconClass=""
                 breakdownRows={totalPendingCardRows}
               />
+              ) : null}
+              {dashboardVisibility['kpi.totalCredit'] ? (
               <DashboardMetricCard
                 title="Total credit"
                 subtitle="Repair shops: only delivered jobs, by delivery date in range. Other shops: invoice date in range."
@@ -746,6 +802,8 @@ export default function Dashboard() {
                     : [{ label: 'Σ credit invoices (by shop)', amount: totalCredit }]
                 }
               />
+              ) : null}
+              {dashboardVisibility['kpi.totalExpense'] ? (
               <DashboardMetricCard
                 title="Total expense"
                 icon={<TrendingDown className="h-5 w-5 text-red-700" />}
@@ -760,6 +818,8 @@ export default function Dashboard() {
                   },
                 ]}
               />
+              ) : null}
+              {dashboardVisibility['kpi.totalInhand'] ? (
               <DashboardMetricCard
                 title="Total in-hand"
                 icon={<Wallet className="h-5 w-5 text-emerald-700" />}
@@ -772,8 +832,25 @@ export default function Dashboard() {
                   { label: 'Total expense', amount: totalExpenses },
                 ]}
               />
+              ) : null}
+              {dashboardVisibility['kpi.overallProfit'] ? (
+              <DashboardMetricCard
+                title="Overall profit (selected period)"
+                icon={<BarChart3 className="h-5 w-5 text-teal-700" />}
+                totalFormatted={`₹${formatNumber(overallProfit, 2)}`}
+                gradientClass="bg-gradient-to-br from-teal-50 to-teal-100"
+                borderClass="border-teal-200"
+                iconClass=""
+                breakdownRows={[
+                  { label: 'Retail (counter)', amount: counterProfit },
+                  { label: 'Repair', amount: repairProfit },
+                ]}
+              />
+              ) : null}
             </div>
+            ) : null}
 
+            {dashboardVisibility.profits ? (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-gray-600" />
@@ -851,6 +928,7 @@ export default function Dashboard() {
                 />
               </div>
             </div>
+            ) : null}
 
             {SHOW_MANUAL_POS_PAYMENTS_SECTION ? (
               <div>
@@ -895,6 +973,7 @@ export default function Dashboard() {
               </div>
             ) : null}
 
+            {dashboardVisibility.manualLedgerPayments ? (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <Wallet className="h-5 w-5 text-gray-600" />
@@ -950,7 +1029,9 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+            ) : null}
 
+            {dashboardVisibility.overallPendingInvoices ? (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <ClipboardList className="h-5 w-5 text-gray-600" />
@@ -995,7 +1076,9 @@ export default function Dashboard() {
                 <PendingPurchaseItemStatsTable rows={pendingPurchaseItemStatsByStore} />
               </div>
             </div>
+            ) : null}
 
+            {dashboardVisibility.wholesalePendingCleared ? (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <TrendingUp className="h-5 w-5 text-gray-600" />
@@ -1177,7 +1260,9 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
+            ) : null}
 
+            {dashboardVisibility.stockAndDefective ? (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <Package className="h-5 w-5 text-gray-600" />
@@ -1245,7 +1330,9 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+            ) : null}
 
+            {dashboardVisibility.storeBreakdowns ? (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                 <Store className="h-5 w-5 text-gray-600" />
@@ -1263,6 +1350,7 @@ export default function Dashboard() {
                 />
               </div>
             </div>
+            ) : null}
           </>
         )}
       </div>

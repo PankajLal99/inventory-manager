@@ -6,8 +6,8 @@ export type TransferEndpointKind = 'store' | 'warehouse';
 
 export type StockTransferLineInput = {
   productId: number;
-  variantId?: number | null;
   quantity: string;
+  selectedBarcodes: string[];
 };
 
 export type BuildStockTransferCreateInput = {
@@ -22,8 +22,8 @@ export function buildStockTransferCreatePayload(input: BuildStockTransferCreateI
     notes: input.notes?.trim() ?? '',
     items: input.items.map((row) => ({
       product: row.productId,
-      variant: row.variantId ?? null,
       quantity: String(row.quantity).trim(),
+      selected_barcodes: row.selectedBarcodes,
     })),
   };
 

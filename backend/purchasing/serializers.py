@@ -102,7 +102,9 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
                         is_primary=(i == 0),  # First barcode is primary
                         tag='new',  # Fresh from purchase
                         purchase=purchase_item.purchase,
-                        purchase_item=purchase_item
+                        purchase_item=purchase_item,
+                        current_store=purchase_item.purchase.store,
+                        current_warehouse=purchase_item.purchase.warehouse,
                     )
                     created_barcodes.append(barcode)
         except Exception as e:
@@ -160,7 +162,9 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
                 is_primary=True,
                 tag='new',
                 purchase=purchase_item.purchase,
-                purchase_item=purchase_item
+                purchase_item=purchase_item,
+                current_store=purchase_item.purchase.store,
+                current_warehouse=purchase_item.purchase.warehouse,
             )
             created_barcodes.append(barcode)
     
@@ -489,7 +493,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 
                 # Convert IDs to model instances
                 try:
-                    product = Product.objects.get(id=product_id)
+                    product = Product.objects.get(id=product_id, retailer_id=purchase.retailer_id)
                 except Product.DoesNotExist:
                     raise serializers.ValidationError(f'Product with id {product_id} does not exist')
                 
@@ -497,7 +501,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 variant = None
                 if variant_id and variant_id not in [None, '', 0, '0']:
                     try:
-                        variant = ProductVariant.objects.get(id=variant_id)
+                        variant = ProductVariant.objects.get(id=variant_id, retailer_id=purchase.retailer_id)
                     except ProductVariant.DoesNotExist:
                         raise serializers.ValidationError(f'ProductVariant with id {variant_id} does not exist')
                 
@@ -972,7 +976,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 
                 # Convert IDs to model instances
                 try:
-                    product = Product.objects.get(id=product_id)
+                    product = Product.objects.get(id=product_id, retailer_id=instance.retailer_id)
                 except Product.DoesNotExist:
                     raise serializers.ValidationError(f'Product with id {product_id} does not exist')
                 
@@ -980,7 +984,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 variant = None
                 if variant_id and variant_id not in [None, '', 0, '0']:
                     try:
-                        variant = ProductVariant.objects.get(id=variant_id)
+                        variant = ProductVariant.objects.get(id=variant_id, retailer_id=instance.retailer_id)
                     except ProductVariant.DoesNotExist:
                         raise serializers.ValidationError(f'ProductVariant with id {variant_id} does not exist')
                 

@@ -15,7 +15,6 @@ import { formatNumber, formatDateOnlyDisplay } from '../../lib/utils';
 interface PurchaseItem {
     id: number;
     product_name: string;
-    variant_name?: string;
     quantity: string;
     shop_quantity: string;
     warehouse_quantity: string;
@@ -178,9 +177,6 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                                                 </div>
                                                 <div>
                                                     <p className="font-semibold text-slate-900">{item.product_name}</p>
-                                                    {item.variant_name && (
-                                                        <p className="text-xs text-slate-500">{item.variant_name}</p>
-                                                    )}
                                                 </div>
                                             </div>
                                         </td>

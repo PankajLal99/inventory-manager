@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from backend.pos.models import Invoice
+from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
@@ -22,12 +23,28 @@ class Command(BaseCommand):
             default=0,
             help="Optional cap on how many invoices to update (0 = no limit).",
         )
+        parser.add_argument(
+            "--retailer-code",
+            type=str,
+            default="",
+            help="Optional retailer code to scope updates to one tenant.",
+        )
 
     def handle(self, *args, **options):
         apply_changes = options["apply"]
         limit = int(options["limit"] or 0)
+        retailer_code = (options.get("retailer_code") or "").strip()
+        retailer = None
+        if retailer_code:
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                self.stdout.write(self.style.ERROR(f'Retailer code "{retailer_code}" not found or inactive.'))
+                return
 
-        qs = Invoice.objects.filter(invoice_type="pending").exclude(status="draft").order_by("id")
+        qs = Invoice.objects.filter(invoice_type="pending").exclude(status="draft")
+        if retailer:
+            qs = qs.filter(retailer_id=retailer.id)
+        qs = qs.order_by("id")
         total = qs.count()
         if total == 0:
             self.stdout.write(self.style.SUCCESS("No historical pending invoices require fixing."))

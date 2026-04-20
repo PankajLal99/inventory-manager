@@ -5,9 +5,28 @@ from ...models import Product, Barcode
 class Command(BaseCommand):
     help = 'Backfill barcodes for products that have SKUs but no barcodes'
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--retailer-code',
+            type=str,
+            default='',
+            help='Optional retailer code to scope backfill to one tenant.',
+        )
+
     def handle(self, *args, **options):
+        retailer_code = (options.get('retailer_code') or '').strip()
+        retailer = None
+        if retailer_code:
+            from backend.tenants.models import Retailer
+            retailer = Retailer.objects.filter(code__iexact=retailer_code, is_active=True).first()
+            if not retailer:
+                self.stdout.write(self.style.ERROR(f'Retailer code "{retailer_code}" not found or inactive.'))
+                return
+
         # Get all products with SKU
         products = Product.objects.filter(sku__isnull=False).prefetch_related('barcodes')
+        if retailer:
+            products = products.filter(retailer_id=retailer.id)
         products_without_barcodes = [p for p in products if not p.barcodes.exists()]
         
         created_count = 0
@@ -21,7 +40,10 @@ class Command(BaseCommand):
                 try:
                     # Check if barcode with this SKU already exists globally (exact match only)
                     try:
-                        existing_barcode = Barcode.objects.get(barcode=product.sku)
+                        existing_qs = Barcode.objects.filter(barcode=product.sku)
+                        if retailer:
+                            existing_qs = existing_qs.filter(retailer_id=retailer.id)
+                        existing_barcode = existing_qs.get()
                     except Barcode.DoesNotExist:
                         existing_barcode = None
                     if existing_barcode:
@@ -38,6 +60,7 @@ class Command(BaseCommand):
                     else:
                         # Create new barcode
                         Barcode.objects.create(
+                            retailer_id=product.retailer_id,
                             product=product,
                             barcode=product.sku,
                             is_primary=True

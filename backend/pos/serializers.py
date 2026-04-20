@@ -35,11 +35,15 @@ class CartItemSerializer(serializers.ModelSerializer):
             return None
         try:
             barcode_obj = None
+            retailer_id = getattr(getattr(obj, 'cart', None), 'retailer_id', None)
+            barcode_qs = Barcode.objects.all()
+            if retailer_id:
+                barcode_qs = barcode_qs.filter(retailer_id=retailer_id)
             try:
-                barcode_obj = Barcode.objects.get(barcode=first_bc)
+                barcode_obj = barcode_qs.get(barcode=first_bc)
             except Barcode.DoesNotExist:
                 try:
-                    barcode_obj = Barcode.objects.get(short_code=first_bc)
+                    barcode_obj = barcode_qs.get(short_code=first_bc)
                 except Barcode.DoesNotExist:
                     pass
             if barcode_obj and barcode_obj.purchase_item and barcode_obj.purchase_item.purchase and barcode_obj.purchase_item.purchase.supplier:
@@ -69,11 +73,15 @@ class CartItemSerializer(serializers.ModelSerializer):
                 # Exact match only, standardized to .upper(): try barcode then short_code
                 b_upper = str(barcode_str or '').strip().upper()
                 barcode_obj = None
+                retailer_id = getattr(getattr(obj, 'cart', None), 'retailer_id', None)
+                barcode_qs = Barcode.objects.all()
+                if retailer_id:
+                    barcode_qs = barcode_qs.filter(retailer_id=retailer_id)
                 try:
-                    barcode_obj = Barcode.objects.get(barcode=b_upper)
+                    barcode_obj = barcode_qs.get(barcode=b_upper)
                 except Barcode.DoesNotExist:
                     try:
-                        barcode_obj = Barcode.objects.get(short_code=b_upper)
+                        barcode_obj = barcode_qs.get(short_code=b_upper)
                     except Barcode.DoesNotExist:
                         pass
                 if barcode_obj:
@@ -128,12 +136,22 @@ class CartItemSerializer(serializers.ModelSerializer):
         
         # If cart item has scanned barcodes, use the first barcode's selling price
         if obj.scanned_barcodes and len(obj.scanned_barcodes) > 0:
+            first_val = str(obj.scanned_barcodes[0] or '').strip().upper()
+            retailer_id = getattr(getattr(obj, 'cart', None), 'retailer_id', None)
+            barcode_qs = Barcode.objects.all()
+            if retailer_id:
+                barcode_qs = barcode_qs.filter(retailer_id=retailer_id)
             try:
-                first_barcode = Barcode.objects.get(barcode=obj.scanned_barcodes[0])
+                first_barcode = barcode_qs.get(barcode=first_val)
                 selling_price = first_barcode.get_selling_price()
                 return float(selling_price) if selling_price else None
             except Barcode.DoesNotExist:
-                pass
+                try:
+                    first_barcode = barcode_qs.get(short_code=first_val)
+                    selling_price = first_barcode.get_selling_price()
+                    return float(selling_price) if selling_price else None
+                except Barcode.DoesNotExist:
+                    pass
         
         # For non-tracked products or when scanned_barcodes is empty, primary or single catalog barcode only
         if obj.product:

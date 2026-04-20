@@ -24,6 +24,7 @@ from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.inventory.models import Stock
 from backend.locations.models import Store
 from backend.parties.models import LedgerEntry, Customer
+from backend.core.tenant_api import require_active_retailer
 from backend.core.utils import create_audit_log
 from backend.parties.internal_ledger_utils import (
     create_internal_ledger_entry_if_mtshop,
@@ -34,6 +35,17 @@ from .serializers import (
     RepairInvoiceListSerializer, InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
 )
 from backend.catalog.label_generator import generate_label_image
+
+
+def _has_access_permission(user, codename: str) -> bool:
+    from backend.core.access import merge_store_role_permissions, permissions_from_django_groups
+
+    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
+        return True
+    groups = list(user.groups.values_list('name', flat=True))
+    base = permissions_from_django_groups(groups, user)
+    effective = merge_store_role_permissions(user, base)
+    return codename in effective
 
 
 def _get_barcode_supplier_id(barcode_obj):
@@ -683,11 +695,16 @@ def reduce_stock_for_cart_item(product, variant_id, store, quantity_to_reduce):
     """
     if not store:
         return
+    # Tenant safety: never mutate stock across retailer boundaries.
+    if getattr(product, 'retailer_id', None) and getattr(store, 'retailer_id', None):
+        if product.retailer_id != store.retailer_id:
+            return
     
     stock, created = Stock.objects.get_or_create(
         product=product,
         variant_id=variant_id if variant_id else None,
         store=store,
+        warehouse=None,
         defaults={'quantity': Decimal('0.000')}
     )
     # Use F() to ensure atomic decrement - prevents race conditions
@@ -726,7 +743,7 @@ def get_available_stock_for_product(product, variant=None):
     return max(Decimal('0.000'), total_stock_quantity)
 
 
-def validate_barcode_for_pos(barcode_obj):
+def validate_barcode_for_pos(barcode_obj, store=None):
     """Validate barcode can be added to POS - must have tag='new' or 'returned'
     
     Returns:
@@ -737,6 +754,11 @@ def validate_barcode_for_pos(barcode_obj):
     if barcode_obj.tag not in ['new', 'returned']:
         tag_display = barcode_obj.get_tag_display() if hasattr(barcode_obj, 'get_tag_display') else barcode_obj.tag
         return False, f'This item cannot be added as it is already {tag_display.lower()}.'
+    if store is not None:
+        if barcode_obj.current_warehouse_id:
+            return False, 'This barcode currently belongs to warehouse stock and cannot be sold from this shop.'
+        if barcode_obj.current_store_id and barcode_obj.current_store_id != store.id:
+            return False, 'This barcode belongs to a different shop. Transfer it before selling.'
     return True, None
 
 
@@ -1209,6 +1231,9 @@ def replacement_pos_lookup(request):
 @permission_classes([IsAuthenticated])
 def replacement_pos_create(request):
     """Create a replacement-return invoice (pending draft or instant finalize)."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     mode = (request.data.get('mode') or 'pending').strip().lower()
     lines = request.data.get('lines') or []
     customer_id = request.data.get('customer')
@@ -1254,7 +1279,7 @@ def replacement_pos_create(request):
         return Response({'error': 'Duplicate original_invoice_item_id in request'}, status=status.HTTP_400_BAD_REQUEST)
 
     orig_items = list(
-        InvoiceItem.objects.filter(pk__in=orig_ids)
+        InvoiceItem.objects.filter(pk__in=orig_ids, invoice__retailer_id=retailer.id)
         .select_related('invoice__customer', 'invoice__store', 'product', 'barcode', 'variant')
     )
     if len(orig_items) != len(set(orig_ids)):
@@ -1273,7 +1298,7 @@ def replacement_pos_create(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     derived_store_id = next(iter(store_ids))
-    store = get_object_or_404(Store, pk=derived_store_id)
+    store = get_object_or_404(Store, pk=derived_store_id, retailer_id=retailer.id)
     body_store = request.data.get('store')
     if body_store not in (None, ''):
         try:
@@ -1318,7 +1343,7 @@ def replacement_pos_create(request):
     customer_warning = len(distinct_customers) > 1
     resolved_customer = None
     if customer_id:
-        resolved_customer = get_object_or_404(Customer, pk=customer_id)
+        resolved_customer = get_object_or_404(Customer, pk=customer_id, retailer_id=retailer.id)
     else:
         first = ordered_orig[0].invoice.customer
         resolved_customer = first
@@ -1326,10 +1351,11 @@ def replacement_pos_create(request):
     try:
         with transaction.atomic():
             invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-            while Invoice.objects.filter(invoice_number=invoice_number).exists():
+            while Invoice.objects.filter(invoice_number=invoice_number, retailer_id=retailer.id).exists():
                 invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
             invoice = Invoice.objects.create(
+                retailer_id=retailer.id,
                 invoice_number=invoice_number,
                 store=store,
                 customer=resolved_customer,
@@ -1425,7 +1451,10 @@ def pos_session_list_create(request):
 @permission_classes([IsAuthenticated])
 def pos_session_detail(request, pk):
     """Retrieve, update or delete a POS session"""
-    session = get_object_or_404(POSSession, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    session = get_object_or_404(POSSession, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = POSSessionSerializer(session)
@@ -1451,7 +1480,10 @@ def pos_session_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def pos_session_close(request, pk):
     """Close a POS session"""
-    session = get_object_or_404(POSSession, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    session = get_object_or_404(POSSession, pk=pk, retailer_id=retailer.id)
     session.status = 'closed'
     session.closing_cash = request.data.get('closing_cash', session.opening_cash)
     session.closed_at = timezone.now()
@@ -1501,9 +1533,7 @@ def active_carts_overview(request):
 
 def _can_resume_pos_cart_to_self(user):
     """Allow taking another user’s active/held cart into your session (overview handoff)."""
-    if getattr(user, 'is_superuser', False) or getattr(user, 'is_staff', False):
-        return True
-    return user.groups.filter(name__in=['Super', 'Admin']).exists()
+    return _has_access_permission(user, 'nav.active_carts')
 
 
 @api_view(['POST'])
@@ -1522,7 +1552,10 @@ def cart_resume_to_me(request, pk):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    source = get_object_or_404(Cart.objects.select_for_update(), pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    source = get_object_or_404(Cart.objects.select_for_update(), pk=pk, retailer_id=retailer.id)
 
     if source.created_by_id == request.user.id:
         return Response(
@@ -1549,6 +1582,7 @@ def cart_resume_to_me(request, pk):
             created_by=request.user,
             customer_id=source.customer_id,
             status='active',
+            retailer_id=retailer.id,
         ).exclude(cart_number__istartswith='edit-').first()
         if existing:
             return Response(
@@ -1561,10 +1595,11 @@ def cart_resume_to_me(request, pk):
             )
 
     cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-    while Cart.objects.filter(cart_number=cart_number).exists():
+    while Cart.objects.filter(cart_number=cart_number, retailer_id=retailer.id).exists():
         cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
     new_cart = Cart.objects.create(
+        retailer_id=retailer.id,
         cart_number=cart_number,
         store=source.store,
         customer=source.customer,
@@ -1607,13 +1642,17 @@ def cart_resume_to_me(request, pk):
 @permission_classes([IsAuthenticated])
 def cart_list_create(request):
     """List all carts or create a new cart"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
         # If active parameter is provided, return active carts for current user
         if request.query_params.get('active') == 'true':
             # Return all active carts for the user, excluding invoice-edit carts (EDIT-* / edit-*)
             active_carts = Cart.objects.filter(
                 created_by=request.user,
-                status='active'
+                status='active',
+                retailer_id=retailer.id,
             ).exclude(cart_number__istartswith='edit-').order_by('-updated_at')
             
             # If 'single' parameter is true, return only the most recent one (backward compatibility)
@@ -1628,7 +1667,7 @@ def cart_list_create(request):
             serializer = CartSerializer(active_carts, many=True)
             return Response(serializer.data)
         
-        carts = Cart.objects.all()
+        carts = Cart.objects.filter(retailer_id=retailer.id)
         serializer = CartSerializer(carts, many=True)
         return Response(serializer.data)
     else:  # POST
@@ -1638,7 +1677,8 @@ def cart_list_create(request):
             existing_cart = Cart.objects.filter(
                 customer_id=customer_id,
                 status='active',
-                created_by=request.user
+                created_by=request.user,
+                retailer_id=retailer.id,
             ).exclude(cart_number__istartswith='edit-').first()
             
             if existing_cart:
@@ -1650,7 +1690,7 @@ def cart_list_create(request):
         
         # Default invoice_type to 'pending' for Wholesale users if not provided
         if 'invoice_type' not in data:
-            is_wholesale = request.user.groups.filter(name__in=['Wholesale', 'WholesaleAdmin']).exists()
+            is_wholesale = _has_access_permission(request.user, 'feature.invoice_hide_cash_checkout')
             if is_wholesale:
                 data['invoice_type'] = 'pending'
         
@@ -1661,10 +1701,10 @@ def cart_list_create(request):
             if not validated_data.get('cart_number'):
                 cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
                 # Ensure uniqueness
-                while Cart.objects.filter(cart_number=cart_number).exists():
+                while Cart.objects.filter(cart_number=cart_number, retailer_id=retailer.id).exists():
                     cart_number = f"CART-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
                 validated_data['cart_number'] = cart_number
-            cart = serializer.save(created_by=request.user, **validated_data)
+            cart = serializer.save(created_by=request.user, retailer_id=retailer.id, **validated_data)
             return Response(CartSerializer(cart).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1673,8 +1713,11 @@ def cart_list_create(request):
 @permission_classes([IsAuthenticated])
 def cart_detail(request, pk):
     """Retrieve, update or delete a cart"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     try:
-        cart = Cart.objects.get(pk=pk)
+        cart = Cart.objects.get(pk=pk, retailer_id=retailer.id)
     except Cart.DoesNotExist:
         return Response(
             {'error': 'Cart not found', 'detail': f'Cart with id {pk} does not exist'},
@@ -1683,7 +1726,7 @@ def cart_detail(request, pk):
     
     # For DELETE: allow if user owns the cart or is in Super group
     if request.method == 'DELETE':
-        is_super = request.user.groups.filter(name='Super').exists()
+        is_super = _has_access_permission(request.user, 'feature.discard_invoice_edit_carts')
         if cart.created_by != request.user and not is_super:
             return Response(
                 {'error': 'Permission denied', 'detail': 'You can only delete your own carts'},
@@ -1787,7 +1830,8 @@ def cart_detail(request, pk):
             existing_cart = Cart.objects.filter(
                 customer_id=new_customer_id,
                 status='active',
-                created_by=request.user
+                created_by=request.user,
+                retailer_id=retailer.id,
             ).exclude(pk=cart.pk).exclude(cart_number__istartswith='edit-').first()
             if existing_cart:
                 return Response(
@@ -1809,7 +1853,10 @@ def cart_detail(request, pk):
 @transaction.atomic
 def cart_items(request, pk):
     """Add item to cart - prevents duplicate items"""
-    cart = get_object_or_404(Cart.objects.select_for_update(), pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    cart = get_object_or_404(Cart.objects.select_for_update(), pk=pk, retailer_id=retailer.id)
     if getattr(cart, 'locked', False):
         return Response(
             {'error': 'Cart is locked.', 'detail': 'Unlock the cart to add items.'},
@@ -1844,10 +1891,11 @@ def cart_items(request, pk):
 
         # Check if product already exists
         try:
-            product = Product.objects.get(name=product_name)
+            product = Product.objects.get(name=product_name, retailer_id=retailer.id)
         except Product.DoesNotExist:
             # Create new custom product
             product = Product.objects.create(
+                retailer_id=retailer.id,
                 name=product_name,
                 sku=generate_unique_sku(product_name),
                 track_inventory=False,  # No inventory tracking for custom products
@@ -2116,7 +2164,7 @@ def cart_items(request, pk):
                 }, status=status.HTTP_400_BAD_REQUEST)
         
         # Strict validation: only 'new' tag barcodes can be added to POS
-        is_valid, error_msg = validate_barcode_for_pos(product_barcode)
+        is_valid, error_msg = validate_barcode_for_pos(product_barcode, cart.store)
         if not is_valid:
             return Response({
                 'error': 'Product not available',
@@ -2439,7 +2487,7 @@ def cart_items(request, pk):
             # Use barcode_obj.barcode (full barcode) for the check so short_code requests still match
             # (cart stores full barcode in scanned_barcodes)
             full_barcode = barcode_obj.barcode
-            all_active_carts = Cart.objects.filter(status='active')
+            all_active_carts = Cart.objects.filter(status='active', retailer_id=retailer.id)
             all_cart_items = CartItem.objects.filter(cart__in=all_active_carts).select_related('cart')
             for item in all_cart_items:
                 if item.scanned_barcodes and (full_barcode in item.scanned_barcodes or scanned_value_str in item.scanned_barcodes):
@@ -2460,7 +2508,7 @@ def cart_items(request, pk):
                     }, status=status.HTTP_400_BAD_REQUEST)
             
             # Strict validation: only 'new' or 'returned' tag barcodes can be added to POS
-            is_valid, error_msg = validate_barcode_for_pos(barcode_obj)
+            is_valid, error_msg = validate_barcode_for_pos(barcode_obj, cart.store)
             if not is_valid:
                 return Response({
                     'error': 'Barcode is not available',
@@ -2705,7 +2753,10 @@ def cart_items(request, pk):
 @permission_classes([IsAuthenticated])
 def cart_item_update(request, pk, item_id):
     """Update or delete a cart item"""
-    cart = get_object_or_404(Cart, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    cart = get_object_or_404(Cart, pk=pk, retailer_id=retailer.id)
     if getattr(cart, 'locked', False):
         return Response(
             {'error': 'Cart is locked.', 'detail': 'Unlock the cart to edit items.'},
@@ -2759,10 +2810,11 @@ def cart_item_update(request, pk, item_id):
                     continue
                 b_upper = str(barcode_value).strip().upper()
                 try:
+                    barcode_qs = Barcode.objects.filter(retailer_id=cart.retailer_id)
                     try:
-                        barcode_obj = Barcode.objects.get(barcode=b_upper)
+                        barcode_obj = barcode_qs.get(barcode=b_upper)
                     except Barcode.DoesNotExist:
-                        barcode_obj = Barcode.objects.get(short_code=b_upper)
+                        barcode_obj = barcode_qs.get(short_code=b_upper)
                     linked = barcode_obj.id in sold_barcode_ids_item
                     restore_barcode_tag_when_removed_from_cart(
                         barcode_obj,
@@ -3058,7 +3110,10 @@ def cart_item_update(request, pk, item_id):
 @permission_classes([IsAuthenticated])
 def cart_item_remove_sku(request, pk, item_id):
     """Remove a specific SKU/barcode from a cart item"""
-    cart = get_object_or_404(Cart, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    cart = get_object_or_404(Cart, pk=pk, retailer_id=retailer.id)
     if getattr(cart, 'locked', False):
         return Response(
             {'error': 'Cart is locked.', 'detail': 'Unlock the cart to edit items.'},
@@ -3098,10 +3153,11 @@ def cart_item_remove_sku(request, pk, item_id):
 
     # Release the removed barcode back to available inventory (restore tag to 'new') only if not on paid/credit invoice
     try:
+        barcode_qs = Barcode.objects.filter(retailer_id=cart.retailer_id)
         try:
-            barcode_obj = Barcode.objects.get(barcode=b_upper)
+            barcode_obj = barcode_qs.get(barcode=b_upper)
         except Barcode.DoesNotExist:
-            barcode_obj = Barcode.objects.get(short_code=b_upper)
+            barcode_obj = barcode_qs.get(short_code=b_upper)
         on_completed_sale = InvoiceItem.objects.filter(
             invoice__status__in=['paid', 'partial', 'credit'],
             barcode_id=barcode_obj.id,
@@ -3131,7 +3187,10 @@ def cart_item_remove_sku(request, pk, item_id):
 @permission_classes([IsAuthenticated])
 def cart_hold(request, pk):
     """Hold a cart"""
-    cart = get_object_or_404(Cart, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    cart = get_object_or_404(Cart, pk=pk, retailer_id=retailer.id)
     cart.status = 'held'
     cart.save()
     return Response({'status': 'held'})
@@ -3141,7 +3200,10 @@ def cart_hold(request, pk):
 @permission_classes([IsAuthenticated])
 def cart_unhold(request, pk):
     """Unhold a cart"""
-    cart = get_object_or_404(Cart, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    cart = get_object_or_404(Cart, pk=pk, retailer_id=retailer.id)
     cart.status = 'active'
     cart.save()
     return Response({'status': 'active'})
@@ -3155,12 +3217,18 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, s
     """
     if return_tag not in ('returned', 'defective', 'unknown'):
         raise ValueError(f'Invalid return_tag: {return_tag}')
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        raise ValueError('Active retailer is required for trade-in processing')
 
     try:
-        invoice_item = InvoiceItem.objects.select_for_update().get(pk=invoice_item_id)
+        invoice_item = InvoiceItem.objects.select_for_update().get(
+            pk=invoice_item_id,
+            invoice__retailer_id=retailer.id,
+        )
     except ObjectDoesNotExist:
         raise ValueError('Trade-in invoice line no longer exists (it may have already been returned).') from None
-    invoice = Invoice.objects.select_for_update().get(pk=invoice_item.invoice_id)
+    invoice = Invoice.objects.select_for_update().get(pk=invoice_item.invoice_id, retailer_id=retailer.id)
     product = invoice_item.product
     variant = invoice_item.variant
     barcode_obj = resolve_invoice_item_barcode(invoice_item, scanned_override=scanned_barcode)
@@ -3493,10 +3561,13 @@ def cart_checkout(request, pk):
     Checkout a cart - create invoice and update stock with row-level locking.
     Uses @transaction.atomic for full integrity.
     """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     try:
         # Use select_for_update() to lock the cart row and prevent concurrent checkouts.
         # This is the PRIMARY protection against race conditions.
-        cart = Cart.objects.select_for_update().get(pk=pk)
+        cart = Cart.objects.select_for_update().get(pk=pk, retailer_id=retailer.id)
     except Cart.DoesNotExist:
         return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
     
@@ -3600,11 +3671,12 @@ def cart_checkout(request, pk):
 
         # 7. Generate Invoice Number (Unique)
         invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        while Invoice.objects.filter(invoice_number=invoice_number).exists():
+        while Invoice.objects.filter(invoice_number=invoice_number, retailer_id=retailer.id).exists():
             invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
         # 8. Create Invoice (created_at from POS when provided, else server now)
         invoice = Invoice.objects.create(
+            retailer_id=retailer.id,
             invoice_number=invoice_number,
             cart=cart, store=cart.store,
             customer_id=customer_id,
@@ -3870,6 +3942,9 @@ def replacement_pos_lookup(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def replacement_pos_create(request):
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     store_id = request.data.get('store')
     items_data = request.data.get('items') or []
     replacement_mode = (request.data.get('replacement_mode') or 'pending').strip().lower()
@@ -3884,10 +3959,10 @@ def replacement_pos_create(request):
     if not items_data:
         return Response({'error': 'At least one scanned item is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    store = get_object_or_404(Store, pk=store_id)
+    store = get_object_or_404(Store, pk=store_id, retailer_id=retailer.id)
     customer = None
     if customer_id not in (None, ''):
-        customer = get_object_or_404(Customer, pk=customer_id)
+        customer = get_object_or_404(Customer, pk=customer_id, retailer_id=retailer.id)
 
     created_at_override = parse_datetime(created_at_raw) if created_at_raw else None
     if created_at_raw and created_at_override is None:
@@ -3896,10 +3971,11 @@ def replacement_pos_create(request):
     try:
         with transaction.atomic():
             invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-            while Invoice.objects.filter(invoice_number=invoice_number).exists():
+            while Invoice.objects.filter(invoice_number=invoice_number, retailer_id=retailer.id).exists():
                 invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
             invoice = Invoice.objects.create(
+                retailer_id=retailer.id,
                 invoice_number=invoice_number,
                 store=store,
                 customer=customer,
@@ -3931,7 +4007,7 @@ def replacement_pos_create(request):
 
                 original_item = InvoiceItem.objects.select_related(
                     'invoice', 'invoice__customer', 'product', 'variant', 'barcode'
-                ).get(pk=invoice_item_id)
+                ).get(pk=invoice_item_id, invoice__retailer_id=retailer.id)
                 barcode_obj = resolve_invoice_item_barcode(original_item, scanned_override=scanned_barcode, relink=False)
                 is_valid, error_message = validate_barcode_for_replacement(barcode_obj)
                 if not is_valid:
@@ -4013,10 +4089,14 @@ def replacement_pos_create(request):
 @permission_classes([IsAuthenticated])
 def invoice_list_create(request):
     """List all invoices or create a new invoice"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
         store = request.query_params.get('store', None)
         if request.query_params.get('counts') == 'replacement_pending':
             qs = Invoice.objects.filter(
+                retailer_id=retailer.id,
                 is_replacement_return=True,
                 status='draft',
                 repair__isnull=True,
@@ -4025,7 +4105,9 @@ def invoice_list_create(request):
                 qs = qs.filter(store_id=store)
             return Response({'replacement_pending_count': qs.count()})
 
-        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').all()
+        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').filter(
+            retailer_id=retailer.id
+        )
         queryset = _with_invoice_list_prefetches(queryset)
         date = request.query_params.get('date', None)
         customer = request.query_params.get('customer', None)
@@ -4140,7 +4222,7 @@ def invoice_list_create(request):
     else:  # POST
         serializer = InvoiceSerializer(data=request.data)
         if serializer.is_valid():
-            invoice = serializer.save(created_by=request.user)
+            invoice = serializer.save(created_by=request.user, retailer_id=retailer.id)
             
             # Audit log: Invoice created
             create_audit_log(
@@ -4169,7 +4251,10 @@ def invoice_list_create(request):
 @permission_classes([IsAuthenticated])
 def invoice_detail(request, pk):
     """Retrieve, update or delete an invoice"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = InvoiceSerializer(invoice)
@@ -4560,7 +4645,10 @@ def invoice_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_payments(request, pk):
     """Add payment to invoice or update an existing payment."""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     if request.method == 'PATCH':
         payment_id = request.data.get('payment_id')
         if not payment_id:
@@ -4714,7 +4802,10 @@ def invoice_payments(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_void(request, pk):
     """Void an invoice"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     invoice.status = 'void'
     invoice.voided_at = timezone.now()
     invoice.voided_by = request.user
@@ -4791,7 +4882,10 @@ def _apply_invoice_checkout_items_payload(invoice, items_data):
 @permission_classes([IsAuthenticated])
 def invoice_checkout(request, pk):
     """Checkout a pending invoice - convert to sale/credit/pending invoice and update stock"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
 
     if invoice.is_replacement_return:
         replacement_mode = (request.data.get('replacement_mode') or request.data.get('invoice_type') or 'pending').strip().lower()
@@ -5317,16 +5411,24 @@ def invoice_checkout(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_edit(request, pk):
     """Create an edit cart from an invoice so user can modify items. All invoice types/statuses allowed except void."""
-    invoice = get_object_or_404(Invoice.objects.select_related('store', 'customer'), pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(
+        Invoice.objects.select_related('store', 'customer'),
+        pk=pk,
+        retailer_id=retailer.id,
+    )
     if invoice.status == 'void':
         return Response(
             {'error': 'Void invoices cannot be edited'},
             status=status.HTTP_400_BAD_REQUEST
         )
     cart_number = f'EDIT-{uuid.uuid4().hex[:8]}'
-    while Cart.objects.filter(cart_number=cart_number).exists():
+    while Cart.objects.filter(cart_number=cart_number, retailer_id=retailer.id).exists():
         cart_number = f'EDIT-{uuid.uuid4().hex[:8]}'
     cart = Cart.objects.create(
+        retailer_id=retailer.id,
         cart_number=cart_number,
         store=invoice.store,
         customer=invoice.customer,
@@ -5365,11 +5467,18 @@ def invoice_edit(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_update(request, pk):
     """Update invoice from an edit cart: replace items and recalc totals."""
-    invoice = get_object_or_404(Invoice.objects.select_related('store'), pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(
+        Invoice.objects.select_related('store'),
+        pk=pk,
+        retailer_id=retailer.id,
+    )
     cart_id = request.data.get('cart_id')
     if not cart_id:
         return Response({'error': 'cart_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-    cart = get_object_or_404(Cart, pk=cart_id)
+    cart = get_object_or_404(Cart, pk=cart_id, retailer_id=retailer.id)
     if invoice.status == 'void':
         return Response(
             {'error': 'Void invoices cannot be updated'},
@@ -5878,7 +5987,10 @@ def invoice_mark_credit(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_return(request, pk):
     """Create return for an invoice"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     # Create return
     return Response({'message': 'Return functionality to be implemented'})
 
@@ -5887,7 +5999,10 @@ def invoice_return(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_exchange(request, pk):
     """Create exchange for an invoice"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     # Create exchange
     return Response({'message': 'Exchange functionality to be implemented'})
 
@@ -5896,7 +6011,10 @@ def invoice_exchange(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_items(request, pk):
     """Add item to invoice"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     
     # Only restrict for void invoices - allow adding items to non-void
     # (pending/credit/other) invoices so they can be edited.
@@ -5912,9 +6030,10 @@ def invoice_items(request, pk):
         from backend.catalog.utils import generate_unique_sku
         product_name = f"Other - {custom_product_name.strip()}"
         try:
-            product = Product.objects.get(name=product_name)
+            product = Product.objects.get(name=product_name, retailer_id=invoice.retailer_id)
         except Product.DoesNotExist:
             product = Product.objects.create(
+                retailer_id=invoice.retailer_id,
                 name=product_name,
                 sku=generate_unique_sku(product_name),
                 track_inventory=False,
@@ -5985,6 +6104,17 @@ def invoice_items(request, pk):
                 {'error': 'This barcode is not available (already sold or in use).'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        if invoice.store_id:
+            if resolved_barcode_obj.current_warehouse_id:
+                return Response(
+                    {'error': 'This barcode belongs to warehouse stock. Transfer it to this shop before sale.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if resolved_barcode_obj.current_store_id and resolved_barcode_obj.current_store_id != invoice.store_id:
+                return Response(
+                    {'error': 'This barcode belongs to another shop. Transfer it to this shop first.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         if invoice.items.filter(barcode=resolved_barcode_obj).exists():
             return Response(
                 {'error': 'This barcode is already on this invoice.'},
@@ -6032,6 +6162,11 @@ def invoice_items(request, pk):
             ).exclude(
                 barcode__in=invoice_barcodes
             )
+            if invoice.store_id:
+                available_barcodes = available_barcodes.filter(
+                    current_store_id=invoice.store_id,
+                    current_warehouse__isnull=True,
+                )
             
             # Exclude barcodes that are already sold
             sold_barcode_ids = InvoiceItem.objects.filter(
@@ -6142,7 +6277,10 @@ def invoice_items(request, pk):
 @permission_classes([IsAuthenticated])
 def invoice_item_detail(request, pk, item_id):
     """Update or delete invoice item"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     
     # Only allow editing items in draft invoices (credit or pending)
     if invoice.status != 'draft' or invoice.invoice_type not in ['pending', 'credit']:
@@ -6227,11 +6365,14 @@ def invoice_item_detail(request, pk, item_id):
 @permission_classes([IsAuthenticated])
 def invoice_item_restore_barcode(request, pk, item_id):
     """Re-link a paid invoice line to its catalog Barcode using the scanned sticker (when FK was cleared)."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     scanned = request.data.get('scanned_barcode')
     if scanned is None or str(scanned).strip() == '':
         return Response({'error': 'scanned_barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    invoice = get_object_or_404(Invoice, pk=pk)
+    invoice = get_object_or_404(Invoice, pk=pk, retailer_id=retailer.id)
     item = get_object_or_404(InvoiceItem, pk=item_id, invoice=invoice)
 
     resolved = resolve_invoice_item_barcode(item, scanned_override=scanned, relink=True)
@@ -6309,8 +6450,13 @@ def sync_invoice_payments_to_total(invoice):
 @permission_classes([IsAuthenticated])
 def credit_note_list(request):
     """List all credit notes"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     credit_notes = CreditNote.objects.select_related(
         'return_obj', 'return_obj__invoice', 'return_obj__invoice__customer', 'created_by'
+    ).filter(
+        return_obj__invoice__retailer_id=retailer.id
     ).order_by('-created_at')
     
     # Optional filtering
@@ -6331,6 +6477,9 @@ def credit_note_list(request):
 def credit_note_detail(request, pk):
     """Retrieve a credit note with nested return and items."""
     from django.db.models import Prefetch
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     credit_note = get_object_or_404(
         CreditNote.objects.select_related(
             'return_obj', 'return_obj__invoice', 'return_obj__invoice__customer', 'created_by'
@@ -6343,7 +6492,8 @@ def credit_note_detail(request, pk):
                 )
             )
         ),
-        pk=pk
+        pk=pk,
+        return_obj__invoice__retailer_id=retailer.id,
     )
     serializer = CreditNoteDetailSerializer(credit_note)
     return Response(serializer.data)
@@ -6354,14 +6504,17 @@ def credit_note_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def return_list_create(request):
     """List all returns or create a new return"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        returns = Return.objects.all()
+        returns = Return.objects.filter(retailer_id=retailer.id)
         serializer = ReturnSerializer(returns, many=True)
         return Response(serializer.data)
     else:  # POST
         serializer = ReturnSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(created_by=request.user)
+            serializer.save(created_by=request.user, retailer_id=retailer.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -6370,7 +6523,10 @@ def return_list_create(request):
 @permission_classes([IsAuthenticated])
 def return_detail(request, pk):
     """Retrieve, update or delete a return"""
-    return_obj = get_object_or_404(Return, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    return_obj = get_object_or_404(Return, pk=pk, retailer_id=retailer.id)
     
     if request.method == 'GET':
         serializer = ReturnSerializer(return_obj)
@@ -6396,11 +6552,16 @@ def return_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def expense_list_create(request):
     """List all expenses or create a new expense."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     if request.method == 'GET':
-        if not request.user.groups.filter(name='Super').exists():
+        if not _has_access_permission(request.user, 'feature.super_metrics'):
             return Response({'error': 'Only Super group can view expense listings.'}, status=status.HTTP_403_FORBIDDEN)
 
-        queryset = Expenses.objects.select_related('created_by', 'last_updated_by').order_by('-expense_date', '-created_on')
+        queryset = Expenses.objects.select_related('created_by', 'last_updated_by').filter(
+            retailer_id=retailer.id
+        ).order_by('-expense_date', '-created_on')
         search = (request.query_params.get('search') or '').strip()
         payment_type = (request.query_params.get('payment_type') or '').strip().upper()
         date_from = request.query_params.get('date_from')
@@ -6424,7 +6585,7 @@ def expense_list_create(request):
 
     serializer = ExpenseSerializer(data=request.data)
     if serializer.is_valid():
-        expense = serializer.save(created_by=request.user, last_updated_by=request.user)
+        expense = serializer.save(created_by=request.user, last_updated_by=request.user, retailer_id=retailer.id)
         return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -6433,8 +6594,11 @@ def expense_list_create(request):
 @permission_classes([IsAuthenticated])
 def expense_type_suggestions(request):
     """Return distinct expense types for autocomplete suggestions."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     q = (request.query_params.get('q') or '').strip()
-    queryset = Expenses.objects.exclude(expense_type__isnull=True).exclude(expense_type__exact='')
+    queryset = Expenses.objects.filter(retailer_id=retailer.id).exclude(expense_type__isnull=True).exclude(expense_type__exact='')
     if q:
         queryset = queryset.filter(expense_type__icontains=q)
 
@@ -6448,8 +6612,11 @@ def expense_type_suggestions(request):
 @permission_classes([IsAuthenticated])
 def expense_borrower_suggestions(request):
     """Return distinct borrower names for autocomplete suggestions."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
     q = (request.query_params.get('q') or '').strip()
-    queryset = Expenses.objects.exclude(borrower_name__isnull=True).exclude(borrower_name__exact='')
+    queryset = Expenses.objects.filter(retailer_id=retailer.id).exclude(borrower_name__isnull=True).exclude(borrower_name__exact='')
     if q:
         queryset = queryset.filter(borrower_name__icontains=q)
 
@@ -6463,10 +6630,17 @@ def expense_borrower_suggestions(request):
 @permission_classes([IsAuthenticated])
 def expense_detail(request, pk):
     """Retrieve, update, or delete an expense."""
-    if request.method == 'GET' and not request.user.groups.filter(name='Super').exists():
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    if request.method == 'GET' and not _has_access_permission(request.user, 'feature.super_metrics'):
         return Response({'error': 'Only Super group can view expense listings.'}, status=status.HTTP_403_FORBIDDEN)
 
-    expense = get_object_or_404(Expenses.objects.select_related('created_by', 'last_updated_by'), pk=pk)
+    expense = get_object_or_404(
+        Expenses.objects.select_related('created_by', 'last_updated_by'),
+        pk=pk,
+        retailer_id=retailer.id,
+    )
 
     if request.method == 'GET':
         serializer = ExpenseSerializer(expense)
@@ -6488,9 +6662,13 @@ def expense_detail(request, pk):
 @permission_classes([IsAuthenticated])
 def return_credit_note(request, pk):
     """Create credit note for a return"""
-    return_obj = get_object_or_404(Return, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    return_obj = get_object_or_404(Return, pk=pk, retailer_id=retailer.id)
     amount = request.data.get('amount', 0)
     credit_note = CreditNote.objects.create(
+        retailer_id=retailer.id,
         return_obj=return_obj,
         amount=amount,
         created_by=request.user
@@ -6502,7 +6680,10 @@ def return_credit_note(request, pk):
 @permission_classes([IsAuthenticated])
 def return_refund(request, pk):
     """Process refund for a return"""
-    return_obj = get_object_or_404(Return, pk=pk)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    return_obj = get_object_or_404(Return, pk=pk, retailer_id=retailer.id)
     # Process refund
     return Response({'message': 'Refund functionality to be implemented'})
 
@@ -6794,7 +6975,10 @@ def replacement_create(request):
 @permission_classes([IsAuthenticated])
 def replacement_update_tag(request, barcode_id):
     """Update barcode tag (RETURNED/DEFECTIVE) and handle inventory accordingly"""
-    barcode_obj = get_object_or_404(Barcode, pk=barcode_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    barcode_obj = get_object_or_404(Barcode, pk=barcode_id, retailer_id=retailer.id)
     new_tag = request.data.get('tag')
     store_id = request.data.get('store_id')
     
@@ -8227,7 +8411,10 @@ def bulk_barcodes_check_pos(request):
 @permission_classes([IsAuthenticated])
 def process_replacement(request, invoice_id):
     """Process replacement - mark items as unknown and remove/reduce items from invoice"""
-    invoice = get_object_or_404(Invoice, pk=invoice_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=invoice_id, retailer_id=retailer.id)
     
     if invoice.status == 'void':
         return Response({
@@ -8505,7 +8692,10 @@ def process_replacement(request, invoice_id):
 @permission_classes([IsAuthenticated])
 def replacement_credit_note(request, invoice_id):
     """Process replacement with credit note - remove items from invoice, add to stock, create credit note"""
-    invoice = get_object_or_404(Invoice, pk=invoice_id)
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    invoice = get_object_or_404(Invoice, pk=invoice_id, retailer_id=retailer.id)
     
     if invoice.status == 'void':
         return Response({
