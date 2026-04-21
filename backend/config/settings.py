@@ -40,9 +40,9 @@ DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 if DEBUG:
     ALLOWED_HOSTS = ['*']
 else:
-    ALLOWED_HOSTS = ['ec2-13-127-116-174.ap-south-1.compute.amazonaws.com','127.0.0.1','13.127.116.174', 'localhost', 'mtpos-api.intratechnosolutions.com', 'mtims-api.intratechnosolutions.com', 'pos-api.intratechno.com']
+    ALLOWED_HOSTS = ['ec2-13-127-116-174.ap-south-1.compute.amazonaws.com','127.0.0.1','13.127.116.174', 'localhost', 'mtpos-api.intratechnosolutions.com', 'mtims-api.intratechnosolutions.com','pos.intratechno.com', 'pos-api.intratechno.com']
 
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = False
     USE_X_FORWARDED_HOST = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
@@ -227,6 +227,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000","http://13.127.116.174:8000",
     "http://mtpos.intratechnosolutions.com","http://13.127.116.174",
     "https://mtpos.intratechnosolutions.com",
+    'https://pos.intratechno.com',"https://pos-api.intratechno.com",
     "https://pos-api.intratechno.com",
     "http://localhost","http://localhost:8765",
     "http://127.0.0.1","http://127.0.0.1:8765",
