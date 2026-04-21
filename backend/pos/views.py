@@ -3766,7 +3766,8 @@ def cart_checkout(request, pk):
                     line_total=line_total,
                     purchase_price=ci.purchase_price,
                 )
-                subtotal += line_total
+                # subtotal = pre-tax, net-of-discount base (up * qty - discount)
+                subtotal += (up - pd) * ci.quantity
                 discount_total += ci.discount_amount
                 tax_total += ci.tax_amount
                 items_added += 1
@@ -3802,8 +3803,8 @@ def cart_checkout(request, pk):
                         b_obj.tag = 'sold'
                     b_obj.save(update_fields=['tag'])
                     invalidate_barcode_cache(b_obj)
-                    
-                    subtotal += line_unit_total
+                    # subtotal = pre-tax, net-of-discount base (up - pd per unit)
+                    subtotal += (up - pd)
                     discount_total += pd
                     tax_total += pt
                     items_added += 1
@@ -3819,7 +3820,8 @@ def cart_checkout(request, pk):
         invoice.subtotal = subtotal
         invoice.discount_amount = discount_total
         invoice.tax_amount = tax_total
-        gross_total = subtotal - discount_total + tax_total
+        # subtotal = pre-tax net base (discount already applied); add tax_total to get gross
+        gross_total = subtotal + tax_total
 
         trade_ins_raw = request.data.get('pos_trade_ins') or []
         trade_credit = Decimal('0.00')
@@ -5608,7 +5610,8 @@ def invoice_update(request, pk):
                     'quantity': str(cart_item.quantity),
                     'unit_price': str(cart_item.manual_unit_price or cart_item.unit_price or '0'),
                 })
-                subtotal += line_total
+                # subtotal = pre-tax, net-of-discount base (up * qty - discount)
+                subtotal += (effective_price - per_unit_discount) * cart_item.quantity
                 discount_total += cart_item.discount_amount
                 tax_total += cart_item.tax_amount
                 continue
@@ -5657,7 +5660,8 @@ def invoice_update(request, pk):
                 else:
                     barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
-                subtotal += line_total
+                # subtotal = pre-tax, net-of-discount base (up - discount per unit)
+                subtotal += (effective_price - per_unit_discount)
                 discount_total += inv_item.discount_amount
                 tax_total += inv_item.tax_amount
             # One audit entry per product line (tracked: multiple barcode rows = one line)
@@ -5670,7 +5674,8 @@ def invoice_update(request, pk):
         invoice.subtotal = subtotal
         invoice.discount_amount = discount_total
         invoice.tax_amount = tax_total
-        invoice.total = subtotal - discount_total + tax_total
+        # subtotal = pre-tax net base (discount already applied); add tax_total to get gross
+        invoice.total = subtotal + tax_total
 
         # Keep payment rows and invoice summary in sync after item edits.
         if invoice.invoice_type in ('cash', 'upi', 'mixed') and invoice.status in ('paid', 'partial'):
@@ -6436,14 +6441,19 @@ def invoice_item_restore_barcode(request, pk, item_id):
 
 
 def update_invoice_totals(invoice):
-    """Helper function to recalculate invoice totals"""
-    items = invoice.items.all()
-    
-    subtotal = sum(item.line_total for item in items)
+    """Helper function to recalculate invoice totals from item data."""
+    items = list(invoice.items.all())
+    # subtotal = pre-tax net base = sum(line_total - tax_amount) per item
+    subtotal = sum(item.line_total - item.tax_amount for item in items)
+    tax_total = sum(item.tax_amount for item in items)
+    discount_total = sum(item.discount_amount for item in items)
     invoice.subtotal = subtotal
-    invoice.total = subtotal - invoice.discount_amount + invoice.tax_amount
+    invoice.tax_amount = tax_total
+    invoice.discount_amount = discount_total
+    # total = pre-tax base + tax (discount already factored into subtotal)
+    invoice.total = subtotal + tax_total
     invoice.due_amount = invoice.total - invoice.paid_amount
-    
+
     invoice.save()
 
 
