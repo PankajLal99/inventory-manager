@@ -115,6 +115,7 @@ class StockTransferLineSerializer(serializers.ModelSerializer):
 
 
 class StockTransferReadSerializer(serializers.ModelSerializer):
+    """Response-only payload for stock transfers (list/detail/complete). Not used for POST bodies."""
     items = StockTransferItemSerializer(many=True, read_only=True)
 
     class Meta:
@@ -133,6 +134,22 @@ class StockTransferReadSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'items',
+        ]
+        # Mark model fields read-only so DRF does not attach UniqueTogetherValidator for
+        # (retailer, transfer_number) on a serializer that is never meant to validate creates.
+        read_only_fields = [
+            'id',
+            'retailer',
+            'transfer_number',
+            'from_store',
+            'from_warehouse',
+            'to_store',
+            'to_warehouse',
+            'status',
+            'notes',
+            'created_by',
+            'created_at',
+            'updated_at',
         ]
 
 

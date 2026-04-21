@@ -107,14 +107,127 @@ class PurchaseAPITests(TestCase):
                 {
                     'product': self.product.id,
                     'quantity': '10.00',
-                    'unit_price': '100.00'
+                    'unit_price': '100.00',
+                    'selling_price': '110.00',
+                    'gst_percent': '18.00',
+                    'gst_inclusive': True,
                 }
             ]
         }
         response = self.client.post('/api/v1/purchases/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIn('purchase_number', response.data)
+        self.assertEqual(response.data.get('retailer'), self.user.retailer_id)
         self.assertEqual(len(response.data['items']), 1)
+        self.assertEqual(str(response.data['items'][0]['gst_percent']), '18.00')
+        self.assertTrue(response.data['items'][0]['gst_inclusive'])
+
+    def test_vendor_create_purchase_omits_purchase_number(self):
+        """Vendor POST uses same serializer; omitted purchase_number must not fail UniqueTogether validation."""
+        url = f'/api/v1/vendor-purchases/?supplier={self.supplier.id}'
+        data = {
+            'purchase_date': timezone.now().date().isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '1.000',
+                    'unit_price': '10.00',
+                }
+            ],
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data.get('status'), 'draft')
+        self.assertIn('purchase_number', response.data)
+        self.assertTrue(response.data.get('purchase_number'))
+        self.assertEqual(response.data.get('retailer'), self.user.retailer_id)
+
+    def test_purchase_serializer_skips_drf_unique_together_validator(self):
+        """Regression: auto UniqueTogetherValidator + create()-time number conflicts; DB still enforces uniqueness."""
+        from backend.purchasing.serializers import PurchaseSerializer
+
+        self.assertEqual(PurchaseSerializer.Meta.validators, [])
+
+    def test_create_purchase_uses_product_tax_rate_when_gst_not_sent(self):
+        """If line gst_percent is omitted, purchase item should inherit product.tax_rate.rate."""
+        tax_rate = TestDataFactory.create_tax_rate(rate=Decimal('12.00'))
+        self.product.tax_rate = tax_rate
+        self.product.save(update_fields=['tax_rate'])
+
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': timezone.now().date().isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '2.00',
+                    'unit_price': '50.00',
+                    # no gst_percent here on purpose
+                    'gst_inclusive': False,
+                }
+            ]
+        }
+        response = self.client.post('/api/v1/purchases/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(response.data['items'][0]['gst_percent']), '12.00')
+        self.assertEqual(response.data['items'][0]['tax_rate'], tax_rate.id)
+
+    def test_create_purchase_allows_explicit_gst_override_over_tax_rate(self):
+        """Explicit gst_percent should override product tax rate while keeping tax_rate relation."""
+        tax_rate = TestDataFactory.create_tax_rate(rate=Decimal('18.00'))
+        self.product.tax_rate = tax_rate
+        self.product.save(update_fields=['tax_rate'])
+
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': timezone.now().date().isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '1.00',
+                    'unit_price': '100.00',
+                    'gst_percent': '5.00',
+                    'gst_inclusive': True,
+                }
+            ]
+        }
+        response = self.client.post('/api/v1/purchases/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(response.data['items'][0]['gst_percent']), '5.00')
+        self.assertTrue(response.data['items'][0]['gst_inclusive'])
+        self.assertEqual(response.data['items'][0]['tax_rate'], tax_rate.id)
+
+    def test_update_purchase_updates_gst_fields(self):
+        """PUT should persist gst_percent and gst_inclusive on existing items."""
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, store=self.store)
+        TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('2.00'),
+            unit_price=Decimal('50.00'),
+        )
+
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': purchase.purchase_date.isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '2.00',
+                    'unit_price': '50.00',
+                    'gst_percent': '28.00',
+                    'gst_inclusive': True,
+                }
+            ]
+        }
+        response = self.client.put(f'/api/v1/purchases/{purchase.id}/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['items'][0]['gst_percent']), '28.00')
+        self.assertTrue(response.data['items'][0]['gst_inclusive'])
     
     def test_create_purchase_without_items(self):
         """Test creating a purchase without items should fail"""
@@ -149,6 +262,7 @@ class PurchaseAPITests(TestCase):
         response = self.client.get(f'/api/v1/purchases/{purchase.id}/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], purchase.id)
+        self.assertEqual(response.data.get('retailer'), purchase.retailer_id)
         self.assertIn('items', response.data)
     
     def test_update_purchase(self):

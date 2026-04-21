@@ -3,7 +3,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -14,6 +14,19 @@ from backend.locations.models import Store, Warehouse
 from backend.tenants.models import Retailer
 
 User = get_user_model()
+
+
+class StockTransferReadSerializerValidatorTests(SimpleTestCase):
+    """DRF attaches UniqueTogetherValidator only when constraint fields are writable; read serializers should not."""
+
+    def test_read_serializer_has_no_auto_unique_together_validator(self):
+        from rest_framework.validators import UniqueTogetherValidator
+
+        from backend.inventory.serializers import StockTransferReadSerializer
+
+        ser = StockTransferReadSerializer()
+        utv = [v for v in (ser.validators or []) if isinstance(v, UniqueTogetherValidator)]
+        self.assertEqual(utv, [])
 
 
 class StockTransferRetailerAPITests(TestCase):

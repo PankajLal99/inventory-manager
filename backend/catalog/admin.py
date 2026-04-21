@@ -173,7 +173,13 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
         barcodes_data = []
         processed_count = 0
         
-        for label_obj in queryset.select_related('barcode', 'barcode__product', 'barcode__purchase', 'barcode__purchase__supplier'):
+        for label_obj in queryset.select_related(
+            'barcode',
+            'barcode__product',
+            'barcode__purchase',
+            'barcode__purchase__supplier',
+            'barcode__purchase_item',
+        ):
             if not label_obj.barcode:
                 continue
             
@@ -190,6 +196,24 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
                 if barcode.purchase.supplier:
                     vendor_name = barcode.purchase.supplier.name
                 purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
+            retailer_code = (getattr(getattr(product, 'retailer', None), 'code', '') or '').strip().upper()
+            if retailer_code != 'MT':
+                def _format_price(value):
+                    try:
+                        from decimal import Decimal
+                        return f"₹{Decimal(str(value)).quantize(Decimal('0.00'))}"
+                    except Exception:
+                        return f"₹{value}"
+
+                purchase_item = getattr(barcode, 'purchase_item', None)
+                if purchase_item is not None:
+                    selling_price = getattr(purchase_item, 'selling_price', None)
+                    if selling_price not in (None, 0, 0.0, '0', '0.0', '0.00'):
+                        purchase_date = _format_price(selling_price)
+                    else:
+                        unit_price = getattr(purchase_item, 'unit_price', None)
+                        if unit_price is not None:
+                            purchase_date = _format_price(unit_price)
             
             # Extract serial number from barcode
             # For barcodes like "FALC-20260101-0022-1", extract "0022-1" (last two parts)
@@ -220,7 +244,20 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
         
         # Queue regeneration via Azure API
         try:
-            blob_urls = queue_bulk_label_generation_via_azure(barcodes_data)
+            retailer_blob_folder = ''
+            first_label = queryset.select_related('barcode__product__retailer').first()
+            if (
+                first_label
+                and getattr(first_label, 'barcode', None)
+                and getattr(first_label.barcode, 'product', None)
+                and getattr(first_label.barcode.product, 'retailer', None)
+                and hasattr(first_label.barcode.product.retailer, 'get_effective_blob_folder')
+            ):
+                retailer_blob_folder = first_label.barcode.product.retailer.get_effective_blob_folder()
+            blob_urls = queue_bulk_label_generation_via_azure(
+                barcodes_data,
+                blob_folder=retailer_blob_folder or None,
+            )
             
             # Update label_image with blob URLs
             updated_count = 0

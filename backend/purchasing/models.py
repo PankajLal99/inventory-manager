@@ -89,6 +89,15 @@ class PurchaseItem(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     selling_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Selling price for this item. If null/0, falls back to purchase price for validation.')
+    tax_rate = models.ForeignKey(
+        'catalog.TaxRate',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='purchase_items',
+    )
+    gst_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    gst_inclusive = models.BooleanField(default=False)
     # Quantity distribution
     shop_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     warehouse_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))

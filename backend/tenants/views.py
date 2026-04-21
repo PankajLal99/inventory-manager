@@ -32,6 +32,7 @@ def platform_retailer_list(request):
             'name': r.name,
             'is_active': r.is_active,
             'primary_store_id': r.primary_store_id,
+            'azure_blob_folder': r.get_effective_blob_folder(),
         }
         for r in rows
     ]
@@ -47,6 +48,7 @@ def platform_retailer_create(request):
     name = (request.data.get('name') or '').strip()
     store_name = (request.data.get('primary_store_name') or name or code).strip()
     store_code = (request.data.get('primary_store_code') or code).strip().upper()
+    azure_blob_folder = (request.data.get('azure_blob_folder') or '').strip()
     if not code or not name:
         return Response({'detail': 'code and name are required.'}, status=status.HTTP_400_BAD_REQUEST)
     if Retailer.objects.filter(code__iexact=code).exists():
@@ -55,7 +57,12 @@ def platform_retailer_create(request):
     admin_password = request.data.get('admin_password') or ''
     admin_email = (request.data.get('admin_email') or '').strip() or None
     with transaction.atomic():
-        r = Retailer.objects.create(code=code, name=name, is_active=True)
+        r = Retailer.objects.create(
+            code=code,
+            name=name,
+            is_active=True,
+            azure_blob_folder=azure_blob_folder,
+        )
         if Store.objects.filter(retailer=r, code=store_code).exists():
             store_code = f'{store_code}-1'
         store = Store.objects.create(
@@ -82,7 +89,12 @@ def platform_retailer_create(request):
             ag, _ = Group.objects.get_or_create(name='Admin')
             user_created.groups.add(ag)
     out = {
-        'retailer': {'id': r.id, 'code': r.code, 'name': r.name},
+        'retailer': {
+            'id': r.id,
+            'code': r.code,
+            'name': r.name,
+            'azure_blob_folder': r.get_effective_blob_folder(),
+        },
         'primary_store': {'id': store.id, 'code': store.code, 'name': store.name},
     }
     if user_created:

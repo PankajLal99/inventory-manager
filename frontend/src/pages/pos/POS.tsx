@@ -370,6 +370,36 @@ export default function POS() {
   // Wholesale shop: selected store is wholesale → only pending or credit, default pending
   const isWholesaleShop = !hasAdminBypass && defaultStore?.shop_type === 'wholesale';
 
+  const shouldAutoPopulatePrice = !!defaultStore?.auto_populate_price;
+
+  const getInitialUnitPrice = useCallback((product: any): number => {
+    if (!shouldAutoPopulatePrice || !product) return 0;
+
+    const toPositiveNumber = (value: unknown): number | null => {
+      const n = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+
+    const direct = [
+      product.selling_price,
+      product.product_selling_price,
+      product.manual_unit_price,
+    ];
+    for (const candidate of direct) {
+      const n = toPositiveNumber(candidate);
+      if (n !== null) return n;
+    }
+
+    if (Array.isArray(product.barcodes)) {
+      for (const b of product.barcodes) {
+        const n = toPositiveNumber(b?.selling_price);
+        if (n !== null) return n;
+      }
+    }
+
+    return 0;
+  }, [shouldAutoPopulatePrice]);
+
   // Update selectedStoreId when stores load and Admin/Retail/WholesaleAdmin hasn't selected one yet
   useEffect(() => {
     if ((isAdmin || isRetailGroup || isWholesaleAdmin) && !selectedStoreId && filteredStores.length > 0) {
@@ -795,7 +825,7 @@ export default function POS() {
         const result = await processItemMutation.mutateAsync({
           product: productData.id,
           quantity: 1,
-          unit_price: 0,
+          unit_price: getInitialUnitPrice(productData),
           barcode: scannedBarcodeForAdd
         });
 
@@ -2607,14 +2637,14 @@ export default function POS() {
         throw new Error(`Product "${product.name}" is not in stock. The purchase order may not be finalized yet, or the product has not been purchased.`);
       }
 
-      // Do NOT auto-populate price - it must be entered manually
+      // Auto-populate selling price only when enabled on the selected store.
       // Use a promise-based approach for the mutation
       // Use canonical_barcode from API when present so cart stores the same value backend uses (no scan vs stored mismatch)
       return new Promise<void>((resolve, reject) => {
         const mutationData: any = {
           product: product.id,
           quantity: 1,
-          unit_price: 0, // Price must be entered manually, start with 0
+          unit_price: getInitialUnitPrice(product),
         };
 
         // Use canonical_barcode from API so what we send is exactly what gets stored in cart (concrete logic)
@@ -3700,7 +3730,7 @@ export default function POS() {
                                   addItemMutation.mutate({
                                     product: product.id,
                                     quantity: 1,
-                                    unit_price: 0, // Price must be entered manually
+                                    unit_price: getInitialUnitPrice(product),
                                     barcode: barcodeCheck.data.matched_barcode || searchValue,
                                   });
                                   setBarcodeInput('');
@@ -3727,7 +3757,7 @@ export default function POS() {
                             addItemMutation.mutate({
                               product: product.id,
                               quantity: 1,
-                              unit_price: 0, // Price must be entered manually
+                              unit_price: getInitialUnitPrice(product),
                             });
                             setBarcodeInput('');
                             setProductSearchSelectedIndex(-1);
@@ -4166,7 +4196,7 @@ export default function POS() {
                                       addItemMutation.mutate({
                                         product: product.id,
                                         quantity: 1,
-                                        unit_price: 0, // Price must be entered manually
+                                        unit_price: getInitialUnitPrice(product),
                                         barcode: barcodeCheck.data.matched_barcode || searchValue,
                                       });
                                       setBarcodeInput('');
@@ -4197,7 +4227,7 @@ export default function POS() {
                                 addItemMutation.mutate({
                                   product: product.id,
                                   quantity: 1,
-                                  unit_price: 0, // Price must be entered manually
+                                  unit_price: getInitialUnitPrice(product),
                                   // Don't pass barcode - backend will find available barcode automatically
                                 });
                                 setBarcodeInput('');
@@ -4348,7 +4378,7 @@ export default function POS() {
                 <button
                   type="button"
                   onClick={() => setShowPurchasePrice((p) => !p)}
-                  title={showPurchasePrice ? 'Hide prices' : 'Show prices'}
+                  title={showPurchasePrice ? 'Hide prices in cart and summary' : 'Show prices in cart and summary'}
                   className={`flex items-center justify-center p-2 rounded-md border transition-colors ${showPurchasePrice
                     ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
                     : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
@@ -4500,6 +4530,16 @@ export default function POS() {
                                     </div>
                                   );
                                 }
+                                // Store has "auto populate price" — line price comes from product/barcode; hide Sell/Cost hints here
+                                if (shouldAutoPopulatePrice) {
+                                  return (
+                                    <div
+                                      className="px-2 py-1 min-h-[1.75rem] min-w-[2.5rem] bg-gray-50 rounded-md border border-gray-200"
+                                      title="Price is set automatically for this store"
+                                      aria-hidden
+                                    />
+                                  );
+                                }
                                 return (
                                   <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={hasValidSellingPrice ? (hasValidPurchasePriceFromApi ? 'Selling & cost' : 'Selling Price') : 'Purchase Price (cost)'}>
                                     <div className="flex flex-col gap-0.5">
@@ -4589,10 +4629,10 @@ export default function POS() {
                                 step="0.01"
                                 min="0"
                                 placeholder="0.00"
-                                readOnly={isCartLocked}
+                                readOnly={isCartLocked || shouldAutoPopulatePrice}
                                 value={editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null && item.manual_unit_price !== '' ? parseFloat(String(item.manual_unit_price)).toString() : '')}
                                 onChange={(e) => {
-                                  if (isCartLocked) return;
+                                  if (isCartLocked || shouldAutoPopulatePrice) return;
                                   // Mark that user is typing in price input
                                   isTypingInPriceInput.current = true;
 
@@ -4643,6 +4683,7 @@ export default function POS() {
                                   }
                                 }}
                                 onBlur={() => {
+                                  if (shouldAutoPopulatePrice) return;
                                   // Reset typing flag after a short delay to allow state updates
                                   // BUT check if focus moved to another price input
                                   setTimeout(() => {
@@ -4722,21 +4763,24 @@ export default function POS() {
                                   }
                                 }}
                                 onKeyPress={(e) => {
+                                  if (shouldAutoPopulatePrice) return;
                                   if (e.key === 'Enter') {
                                     e.currentTarget.blur();
                                   }
                                 }}
                                 onFocus={(e) => {
+                                  if (shouldAutoPopulatePrice) return;
                                   // Mark that user is focusing on price input
                                   isTypingInPriceInput.current = true;
                                   // Prevent auto-focus to barcode input when user clicks on price input
                                   e.stopPropagation();
                                 }}
                                 onKeyDown={() => {
+                                  if (shouldAutoPopulatePrice) return;
                                   // Mark that user is typing in price input
                                   isTypingInPriceInput.current = true;
                                 }}
-                                className={`w-full pl-6 pr-2 py-1.5 text-xs font-semibold border rounded-md transition-all price-input ${isCartLocked ? 'bg-gray-50 cursor-not-allowed' : ''} ${priceErrors[item.id]
+                                className={`w-full pl-6 pr-2 py-1.5 text-xs font-semibold border rounded-md transition-all price-input ${isCartLocked || shouldAutoPopulatePrice ? 'bg-gray-50 cursor-not-allowed' : ''} ${priceErrors[item.id]
                                   ? 'border-red-400 focus:border-red-500 focus:ring-1 focus:ring-red-200 bg-red-50'
                                   : 'border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white'
                                   }`}
@@ -4870,9 +4914,22 @@ export default function POS() {
 
           {/* Order Summary */}
           <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 sticky top-4">
-            <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-200">
-              <FileText className="h-5 w-5 text-blue-600" />
-              <h2 className="text-xl font-bold text-gray-900">Order Summary</h2>
+            <div className="flex items-center justify-between gap-2 mb-6 pb-4 border-b border-gray-200">
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                <h2 className="text-xl font-bold text-gray-900 truncate">Order Summary</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPurchasePrice((p) => !p)}
+                title={showPurchasePrice ? 'Hide prices in cart and summary' : 'Show prices in cart and summary'}
+                className={`flex items-center justify-center p-2 rounded-md border transition-colors flex-shrink-0 ${showPurchasePrice
+                  ? 'text-blue-600 border-blue-300 bg-blue-50 hover:bg-blue-100'
+                  : 'text-gray-400 border-gray-300 bg-gray-50 hover:bg-gray-100'
+                  }`}
+              >
+                {showPurchasePrice ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </button>
             </div>
 
             <div className="space-y-3 mb-6">

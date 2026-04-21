@@ -65,6 +65,7 @@ def cache_store_data(store_obj, ttl: int = None):
         'address': store_obj.address,
         'phone': store_obj.phone,
         'email': store_obj.email,
+        'auto_populate_price': getattr(store_obj, 'auto_populate_price', False),
         'is_active': store_obj.is_active,
     }
     

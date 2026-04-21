@@ -124,7 +124,11 @@ def construct_blob_url(barcode_id: int, **kwargs) -> Optional[str]:
     # Default prefix is 'barcode-', but can be overridden (e.g., 'barcode-repair-')
     prefix = kwargs.get('prefix', 'barcode')
     filename = f"{prefix}-{barcode_id}.png"
-    blob_name = f"{AZURE_BLOB_FOLDER}{filename}"
+    folder_override = (kwargs.get('blob_folder') or kwargs.get('azure_blob_folder') or '').strip()
+    blob_folder = folder_override or AZURE_BLOB_FOLDER
+    if blob_folder and not blob_folder.endswith('/'):
+        blob_folder += '/'
+    blob_name = f"{blob_folder}{filename}"
     
     # URL encode the blob name, but keep forward slashes (they're path separators in Azure)
     # Only encode special characters, not the folder structure
@@ -288,7 +292,7 @@ def format_date_dd_mm_yyyy(date_value: Optional[str]) -> Optional[str]:
         return str(date_value)
 
 
-def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Optional[str]]:
+def queue_bulk_label_generation_via_azure(barcodes_data: list, blob_folder: Optional[str] = None) -> Dict[int, Optional[str]]:
     """
     Queue multiple label generations via Azure Function in a single request (bulk).
     This function sends all barcodes in one HTTP request and returns immediately.
@@ -317,13 +321,22 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
     # Construct blob URLs for all barcodes and format dates to dd-mm-yyyy
     blob_urls = {}
     formatted_barcodes_data = []
+    default_blob_folder = (blob_folder or '').strip()
     
     for item in barcodes_data:
         barcode_id = item['barcode_id']
+        item_blob_folder = (item.get('blob_folder') or item.get('azure_blob_folder') or '').strip()
+        effective_blob_folder = item_blob_folder or default_blob_folder
+        if not default_blob_folder and effective_blob_folder:
+            default_blob_folder = effective_blob_folder
         barcode_type = item.get('barcode_type', 'product')
         prefix = 'barcode-repair' if barcode_type == 'repair' else 'barcode'
         
-        blob_url = construct_blob_url(barcode_id, prefix=prefix)
+        blob_url = construct_blob_url(
+            barcode_id,
+            prefix=prefix,
+            blob_folder=effective_blob_folder or None,
+        )
         blob_urls[barcode_id] = blob_url
         
         # Normalize payload: always prefer short_code over full barcode when available.
@@ -338,6 +351,9 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
         # Format purchase_date to dd-mm-yyyy if present
         if 'purchase_date' in formatted_item:
             formatted_item['purchase_date'] = format_date_dd_mm_yyyy(formatted_item['purchase_date'])
+        if effective_blob_folder:
+            formatted_item['blob_folder'] = effective_blob_folder
+            formatted_item['azure_blob_folder'] = effective_blob_folder
         
         formatted_barcodes_data.append(formatted_item)
     
@@ -345,6 +361,9 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
     payload = {
         'barcodes': formatted_barcodes_data  # Send array of barcode data with dates formatted as dd-mm-yyyy
     }
+    if default_blob_folder:
+        payload['blob_folder'] = default_blob_folder
+        payload['azure_blob_folder'] = default_blob_folder
     
     # Prepare headers
     headers = {

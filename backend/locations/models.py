@@ -24,6 +24,7 @@ class Store(models.Model):
     address = models.TextField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
     email = models.EmailField(blank=True)
+    auto_populate_price = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

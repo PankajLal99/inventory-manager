@@ -1063,7 +1063,7 @@ def product_generate_labels(request, pk):
 
     # Filter barcodes by product and optionally by purchase
     # OPTIMIZATION: Prefetch all related data upfront to avoid N+1 queries
-    barcodes_query = product.barcodes.select_related('purchase', 'purchase__supplier').all()
+    barcodes_query = product.barcodes.select_related('purchase', 'purchase__supplier', 'purchase_item').all()
     if purchase_id:
         try:
             purchase_id_int = int(purchase_id)
@@ -1084,61 +1084,6 @@ def product_generate_labels(request, pk):
         ).select_related('barcode')
     }
     
-    # Generate ZPL code helper
-    def escape_zpl(text: str) -> str:
-        return text.replace('\\', '\\\\').replace('^', '\\^').replace('~', '\\~').replace('\n', ' ').replace('\r', '')
-    
-    def create_zpl(barcode_obj: Barcode, product_name: str) -> str:
-        max_name_length = 30
-        truncated_name = product_name[:max_name_length] + '...' if len(product_name) > max_name_length else product_name
-        safe_name = escape_zpl(truncated_name)
-        safe_barcode = escape_zpl(barcode_obj.barcode)
-        
-        # Get vendor name and purchase date
-        vendor_name = ""
-        purchase_date = ""
-        if barcode_obj.purchase:
-            if barcode_obj.purchase.supplier:
-                vendor_name = barcode_obj.purchase.supplier.name[:20] if len(barcode_obj.purchase.supplier.name) > 20 else barcode_obj.purchase.supplier.name
-            purchase_date = barcode_obj.purchase.purchase_date.strftime('%Y-%m-%d')
-        
-        safe_vendor = escape_zpl(vendor_name)
-        safe_date = escape_zpl(purchase_date)
-        
-        # Extract serial number from barcode
-        # For barcodes like "FALC-20260101-0022-1", extract "0022-1" (last two parts)
-        serial_number = ""
-        if barcode_obj.barcode:
-            parts = barcode_obj.barcode.split('-')
-            if len(parts) >= 4:
-                # If 4+ parts, take last two parts (e.g., "0022-1")
-                serial_number = '-'.join(parts[-2:])
-            elif len(parts) >= 3:
-                # If 3 parts, take last part
-                serial_number = parts[-1]
-        
-        safe_serial = escape_zpl(serial_number)
-        
-        # First line: Vendor Name + Purchase Date
-        first_line = f"{safe_vendor} {safe_date}".strip()
-        if not first_line:
-            first_line = safe_name  # Fallback to product name
-        
-        # Last line: Product Name + Serial Number
-        last_line = safe_name
-        if serial_number:
-            last_line += f" #{safe_serial}"
-        
-        return f"""^XA
-^CF0,18
-^FO50,20^FD{first_line}^FS
-^BY2,3,80
-^FO50,50^BCN,80,Y,N,N
-^FD{safe_barcode}^FS
-^CF0,18
-^FO50,140^FD{last_line}^FS
-^XZ"""
-    
     # Storage for results (sequential processing, no threading needed)
     generated_labels = []
     newly_generated = []
@@ -1146,6 +1091,30 @@ def product_generate_labels(request, pk):
     barcodes_to_queue = []  # Collect barcodes for bulk Azure queue
     
     # OPTIMIZATION: Prepare data for all barcodes upfront (avoid queries in loop)
+    retailer_code = (getattr(retailer, 'code', '') or '').strip().upper()
+
+    def _label_purchase_value(barcode_obj, fallback_date):
+        """For non-MT retailers, send price value in purchase_date field."""
+        def _format_price(value):
+            try:
+                from decimal import Decimal
+                return f"₹{Decimal(str(value)).quantize(Decimal('0.00'))}"
+            except Exception:
+                return f"₹{value}"
+
+        if retailer_code == 'MT':
+            return fallback_date
+        purchase_item = getattr(barcode_obj, 'purchase_item', None)
+        if not purchase_item:
+            return fallback_date
+        selling_price = getattr(purchase_item, 'selling_price', None)
+        if selling_price not in (None, 0, 0.0, '0', '0.0', '0.00'):
+            return _format_price(selling_price)
+        unit_price = getattr(purchase_item, 'unit_price', None)
+        if unit_price is not None:
+            return _format_price(unit_price)
+        return fallback_date
+
     barcode_data = {}
     for barcode in barcodes:
         vendor_name = None
@@ -1154,6 +1123,7 @@ def product_generate_labels(request, pk):
             if barcode.purchase.supplier:
                 vendor_name = barcode.purchase.supplier.name
             purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
+        purchase_date = _label_purchase_value(barcode, purchase_date)
         
         # Extract serial number from barcode
         # For barcodes like "FALC-20260101-0022-1", extract "0022-1" (last two parts)
@@ -1255,7 +1225,13 @@ def product_generate_labels(request, pk):
                 })
             
             # Queue all barcodes in one request
-            blob_urls = queue_bulk_label_generation_via_azure(bulk_data)
+            retailer_blob_folder = ''
+            if retailer and hasattr(retailer, 'get_effective_blob_folder'):
+                retailer_blob_folder = retailer.get_effective_blob_folder()
+            blob_urls = queue_bulk_label_generation_via_azure(
+                bulk_data,
+                blob_folder=retailer_blob_folder or None,
+            )
             
             # Save blob URLs to database
             for item in barcodes_to_queue:
@@ -1490,7 +1466,7 @@ def product_regenerate_labels(request, pk):
     _ensure_purchase_barcodes_for_product(product, purchase_id)
 
     # Filter barcodes by product and optionally by purchase
-    barcodes_query = product.barcodes.select_related('product', 'purchase', 'purchase__supplier').all()
+    barcodes_query = product.barcodes.select_related('product', 'purchase', 'purchase__supplier', 'purchase_item').all()
     if purchase_id:
         try:
             purchase_id_int = int(purchase_id)
@@ -1506,6 +1482,29 @@ def product_regenerate_labels(request, pk):
             'message': 'The product has no barcodes to regenerate labels for.'
         }, status=status.HTTP_400_BAD_REQUEST)
     
+    retailer_code = (getattr(retailer, 'code', '') or '').strip().upper()
+
+    def _label_purchase_value(barcode_obj, fallback_date):
+        def _format_price(value):
+            try:
+                from decimal import Decimal
+                return f"₹{Decimal(str(value)).quantize(Decimal('0.00'))}"
+            except Exception:
+                return f"₹{value}"
+
+        if retailer_code == 'MT':
+            return fallback_date
+        purchase_item = getattr(barcode_obj, 'purchase_item', None)
+        if not purchase_item:
+            return fallback_date
+        selling_price = getattr(purchase_item, 'selling_price', None)
+        if selling_price not in (None, 0, 0.0, '0', '0.0', '0.00'):
+            return _format_price(selling_price)
+        unit_price = getattr(purchase_item, 'unit_price', None)
+        if unit_price is not None:
+            return _format_price(unit_price)
+        return fallback_date
+
     # Prepare barcode data for Azure API
     barcodes_data = []
     for barcode in barcodes:
@@ -1516,6 +1515,7 @@ def product_regenerate_labels(request, pk):
             if barcode.purchase.supplier:
                 vendor_name = barcode.purchase.supplier.name
             purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
+        purchase_date = _label_purchase_value(barcode, purchase_date)
         
         # Extract serial number from barcode
         serial_number = None
@@ -1538,7 +1538,13 @@ def product_regenerate_labels(request, pk):
     
     # Queue regeneration via Azure API
     try:
-        blob_urls = queue_bulk_label_generation_via_azure(barcodes_data)
+        retailer_blob_folder = ''
+        if retailer and hasattr(retailer, 'get_effective_blob_folder'):
+            retailer_blob_folder = retailer.get_effective_blob_folder()
+        blob_urls = queue_bulk_label_generation_via_azure(
+            barcodes_data,
+            blob_folder=retailer_blob_folder or None,
+        )
         
         # Update label_image with blob URLs
         updated_count = 0

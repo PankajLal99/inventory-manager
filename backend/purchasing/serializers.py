@@ -105,6 +105,7 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
                     
                     # Create barcode linked to this purchase
                     barcode = Barcode.objects.create(
+                        retailer_id=purchase_item.purchase.retailer_id or product.retailer_id,
                         product=product,
                         variant=purchase_item.variant,
                         barcode=barcode_value,
@@ -165,6 +166,7 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
             short_code = generate_category_based_short_code(product)
             
             barcode = Barcode.objects.create(
+                retailer_id=purchase_item.purchase.retailer_id or product.retailer_id,
                 product=product,
                 variant=purchase_item.variant,
                 barcode=barcode_value,
@@ -203,7 +205,7 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
             
             # Re-fetch barcodes to avoid detached instance issues in thread
             barcode_ids = [b.id for b in barcodes_list]
-            barcodes = Barcode.objects.filter(id__in=barcode_ids)
+            barcodes = Barcode.objects.select_related('product__retailer', 'purchase_item').filter(id__in=barcode_ids)
             
             # Collect barcodes that need generation for bulk processing
             barcodes_to_queue = []
@@ -227,7 +229,7 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                                       len(label_obj.label_image.strip()) > 0 and
                                       (label_obj.label_image.startswith('data:image') or 
                                        label_obj.label_image.startswith('https://'))):
-                        # Get vendor name and purchase date from purchase
+                        # Get vendor name and purchase date/price from purchase
                         vendor_name = None
                         purchase_date = None
                         if barcode.purchase_id:
@@ -240,6 +242,29 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                                     purchase_date = barcode_with_purchase.purchase.purchase_date.strftime('%d-%m-%Y')
                             except Exception:
                                 pass
+
+                        retailer_code = (
+                            (getattr(getattr(barcode, 'product', None), 'retailer', None).code or '')
+                            if getattr(getattr(barcode, 'product', None), 'retailer', None)
+                            else ''
+                        ).strip().upper()
+                        if retailer_code != 'MT':
+                            def _format_price(value):
+                                try:
+                                    from decimal import Decimal
+                                    return f"₹{Decimal(str(value)).quantize(Decimal('0.00'))}"
+                                except Exception:
+                                    return f"₹{value}"
+
+                            purchase_item = getattr(barcode, 'purchase_item', None)
+                            if purchase_item is not None:
+                                selling_price = getattr(purchase_item, 'selling_price', None)
+                                if selling_price not in (None, 0, 0.0, '0', '0.0', '0.00'):
+                                    purchase_date = _format_price(selling_price)
+                                else:
+                                    unit_price = getattr(purchase_item, 'unit_price', None)
+                                    if unit_price is not None:
+                                        purchase_date = _format_price(unit_price)
                         
                         # Extract serial number from barcode
                         # For barcodes like "FALC-20260101-0022-1", extract "0022-1" (last two parts)
@@ -278,8 +303,20 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
             if barcodes_to_queue:
                 try:
                     from backend.catalog.azure_label_service import queue_bulk_label_generation_via_azure
+                    retailer_blob_folder = ''
+                    first_barcode = next(iter(barcodes), None)
+                    if (
+                        first_barcode
+                        and getattr(first_barcode, 'product', None)
+                        and getattr(first_barcode.product, 'retailer', None)
+                        and hasattr(first_barcode.product.retailer, 'get_effective_blob_folder')
+                    ):
+                        retailer_blob_folder = first_barcode.product.retailer.get_effective_blob_folder()
                     # Queue all barcodes in one request
-                    blob_urls = queue_bulk_label_generation_via_azure(barcodes_to_queue)
+                    blob_urls = queue_bulk_label_generation_via_azure(
+                        barcodes_to_queue,
+                        blob_folder=retailer_blob_folder or None,
+                    )
                     
                     # Save blob URLs to database
                     for item in barcodes_to_queue:
@@ -348,13 +385,14 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     product_track_inventory = serializers.BooleanField(source='product.track_inventory', read_only=True)
     variant_name = serializers.CharField(source='variant.name', read_only=True)
     variant_sku = serializers.CharField(source='variant.sku', read_only=True)
+    tax_rate_name = serializers.CharField(source='tax_rate.name', read_only=True)
     line_total = serializers.SerializerMethodField()
     sold_count = serializers.SerializerMethodField()
     printed = serializers.BooleanField(source='is_printed', read_only=True)
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_track_inventory', 'variant', 'variant_name', 'variant_sku', 'quantity', 'shop_quantity', 'warehouse_quantity', 'unit_price', 'selling_price', 'line_total', 'sold_count', 'printed', 'printed_at']
+        fields = ['id', 'product', 'product_name', 'product_sku', 'product_track_inventory', 'variant', 'variant_name', 'variant_sku', 'quantity', 'shop_quantity', 'warehouse_quantity', 'unit_price', 'selling_price', 'tax_rate', 'tax_rate_name', 'gst_percent', 'gst_inclusive', 'line_total', 'sold_count', 'printed', 'printed_at']
     
     def get_line_total(self, obj):
         return float(obj.get_line_total())
@@ -429,9 +467,14 @@ class PurchaseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Purchase
+        # purchase_number is generated in create() when omitted. DRF's auto UniqueTogetherValidator
+        # for (retailer, purchase_number) would otherwise treat omitted purchase_number as missing
+        # and fail with "required" before create() runs. Uniqueness is still enforced by the DB
+        # constraint (partial unique on non-empty purchase_number).
+        validators = []
         fields = [
-            'id', 'purchase_number', 'supplier', 'supplier_name', 'purchase_date', 
-            'bill_number', 'status', 'store', 'warehouse', 'notes', 'created_by', 'created_at', 'updated_at', 
+            'id', 'retailer', 'purchase_number', 'supplier', 'supplier_name', 'purchase_date',
+            'bill_number', 'status', 'store', 'warehouse', 'notes', 'created_by', 'created_at', 'updated_at',
             'items', 'subtotal', 'total'
         ]
     
@@ -474,6 +517,21 @@ class PurchaseSerializer(serializers.ModelSerializer):
         # Use suspended cache signals to prevent mass invalidation during loop
         # Use suspended cache signals to prevent mass invalidation during loop
         purchase = super().create(validated_data)
+
+        if not purchase.retailer_id:
+            rid = None
+            if purchase.supplier_id:
+                from backend.parties.models import Supplier
+                sup = Supplier.objects.filter(pk=purchase.supplier_id).only('retailer_id').first()
+                if sup:
+                    rid = sup.retailer_id
+            if not rid:
+                request = self.context.get('request')
+                if request and request.user.is_authenticated:
+                    rid = getattr(request.user, 'retailer_id', None)
+            if rid:
+                purchase.retailer_id = rid
+                purchase.save(update_fields=['retailer_id'])
         
         # Safety check: Only enforce draft for vendor purchases
         if is_vendor_purchase and purchase.status != 'draft':
@@ -516,6 +574,10 @@ class PurchaseSerializer(serializers.ModelSerializer):
                         raise serializers.ValidationError(f'ProductVariant with id {variant_id} does not exist')
                 
                 # Create purchase item with model instances
+                tax_rate_obj = product.tax_rate
+                gst_percent = item_data.get('gst_percent', None)
+                if gst_percent in (None, ''):
+                    gst_percent = getattr(tax_rate_obj, 'rate', 0) or 0
                 purchase_item = PurchaseItem.objects.create(
                     purchase=purchase,
                     product=product,
@@ -524,7 +586,10 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     shop_quantity=quantity,  # 0 for draft placeholders
                     warehouse_quantity=Decimal('0.000'),
                     unit_price=item_data.get('unit_price', 0) or 0,
-                    selling_price=item_data.get('selling_price', None)
+                    selling_price=item_data.get('selling_price', None),
+                    tax_rate=tax_rate_obj,
+                    gst_percent=gst_percent or 0,
+                    gst_inclusive=bool(item_data.get('gst_inclusive', False)),
                 )
                 # Generate barcodes only when quantity > 0 (no-op for 0)
                 generate_barcodes_for_purchase_item(purchase_item, quantity)
@@ -758,9 +823,26 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     old_quantity = old_item.quantity
                     new_price = Decimal(str(matching_new_item.get('unit_price', old_item.unit_price)))
                     old_price = old_item.unit_price
-                    
-                    # Check if quantity or price changed
-                    if new_quantity != old_quantity or new_price != old_price:
+
+                    incoming_sell = matching_new_item.get('selling_price', old_item.selling_price)
+                    old_sell = old_item.selling_price
+                    incoming_gst = matching_new_item.get('gst_percent', None)
+                    if incoming_gst in (None, ''):
+                        expected_gst = getattr(old_item.product.tax_rate, 'rate', old_item.gst_percent) if old_item.product else old_item.gst_percent
+                    else:
+                        expected_gst = Decimal(str(incoming_gst))
+                    old_gst = Decimal(str(old_item.gst_percent or 0))
+                    incoming_inclusive = bool(matching_new_item.get('gst_inclusive', old_item.gst_inclusive))
+                    old_inclusive = bool(old_item.gst_inclusive)
+
+                    # Check if any editable field changed
+                    if (
+                        new_quantity != old_quantity
+                        or new_price != old_price
+                        or incoming_sell != old_sell
+                        or Decimal(str(expected_gst)) != old_gst
+                        or incoming_inclusive != old_inclusive
+                    ):
                         items_to_update.append((old_item, matching_new_item))
                     else:
                         # Nothing changed, preserve the item and its barcodes
@@ -840,6 +922,14 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 old_item.quantity = new_quantity
                 old_item.unit_price = new_price
                 old_item.selling_price = item_data.get('selling_price', old_item.selling_price)
+                # Keep item linked to product tax rate unless explicitly overridden via gst_percent.
+                old_item.tax_rate = old_item.product.tax_rate if old_item.product else old_item.tax_rate
+                incoming_gst = item_data.get('gst_percent', None)
+                if incoming_gst in (None, ''):
+                    old_item.gst_percent = getattr(old_item.tax_rate, 'rate', old_item.gst_percent) or old_item.gst_percent
+                else:
+                    old_item.gst_percent = incoming_gst
+                old_item.gst_inclusive = bool(item_data.get('gst_inclusive', old_item.gst_inclusive))
                 old_item.save()
                 
                 # Handle barcodes if quantity changed
@@ -959,6 +1049,10 @@ class PurchaseSerializer(serializers.ModelSerializer):
                         raise serializers.ValidationError(f'ProductVariant with id {variant_id} does not exist')
                 
                 # Create purchase item with model instances
+                tax_rate_obj = product.tax_rate
+                gst_percent = item_data.get('gst_percent', None)
+                if gst_percent in (None, ''):
+                    gst_percent = getattr(tax_rate_obj, 'rate', 0) or 0
                 purchase_item = PurchaseItem.objects.create(
                     purchase=instance,
                     product=product,
@@ -967,7 +1061,10 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     shop_quantity=quantity,
                     warehouse_quantity=Decimal('0.000'),
                     unit_price=item_data.get('unit_price', 0),
-                    selling_price=item_data.get('selling_price', None)
+                    selling_price=item_data.get('selling_price', None),
+                    tax_rate=tax_rate_obj,
+                    gst_percent=gst_percent or 0,
+                    gst_inclusive=bool(item_data.get('gst_inclusive', False)),
                 )
                 
                 # Generate barcodes ONLY if they don't exist yet

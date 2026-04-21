@@ -4,6 +4,45 @@ from django.db.models import Q, F, Value, Case, When, Sum, DecimalField, Express
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair, Expenses
 
 
+def _cart_item_sync_manual_from_unit_if_auto_store(validated_data, cart, instance=None):
+    """When cart store has auto_populate_price, copy unit_price -> manual_unit_price if manual not set."""
+    if not cart or not getattr(cart, 'store_id', None):
+        return validated_data
+    try:
+        from backend.locations.models import Store
+        if not Store.objects.filter(pk=cart.store_id, auto_populate_price=True).exists():
+            return validated_data
+    except Exception:
+        return validated_data
+
+    if instance is not None and instance.manual_unit_price is not None:
+        return validated_data
+
+    unit = validated_data.get('unit_price')
+    if unit is None and instance is not None:
+        unit = instance.unit_price
+    if unit is None:
+        return validated_data
+    try:
+        u = unit if isinstance(unit, Decimal) else Decimal(str(unit))
+    except Exception:
+        return validated_data
+    if u <= 0:
+        return validated_data
+
+    manual = validated_data.get('manual_unit_price')
+    if manual is not None:
+        try:
+            m = manual if isinstance(manual, Decimal) else Decimal(str(manual))
+            if m > 0:
+                return validated_data
+        except Exception:
+            pass
+
+    validated_data['manual_unit_price'] = u
+    return validated_data
+
+
 class CartItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_sku = serializers.CharField(source='product.sku', read_only=True)
@@ -166,7 +205,6 @@ class CartItemSerializer(serializers.ModelSerializer):
         return None
 
     def create(self, validated_data):
-        # Do NOT auto-populate unit_price - it must be entered manually
         # Ensure cart is set - prefer from context (cart object) over validated_data (cart ID)
         cart = self.context.get('cart')
         if cart:
@@ -174,8 +212,14 @@ class CartItemSerializer(serializers.ModelSerializer):
         elif 'cart' not in validated_data:
             # If neither context nor validated_data has cart, this is an error
             raise serializers.ValidationError({'cart': 'Cart is required'})
-        
+
+        validated_data = _cart_item_sync_manual_from_unit_if_auto_store(validated_data, cart, instance=None)
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        cart = self.context.get('cart') or instance.cart
+        validated_data = _cart_item_sync_manual_from_unit_if_auto_store(validated_data, cart, instance=instance)
+        return super().update(instance, validated_data)
 
 
 class CartSerializer(serializers.ModelSerializer):

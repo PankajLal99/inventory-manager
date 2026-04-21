@@ -644,7 +644,13 @@ def generate_repair_label(request, pk):
         }]
         
         # Queue via Azure Function (returns blob URLs immediately)
-        blob_urls = queue_bulk_label_generation_via_azure(repair_data)
+        retailer_blob_folder = ''
+        if getattr(invoice, 'retailer', None) and hasattr(invoice.retailer, 'get_effective_blob_folder'):
+            retailer_blob_folder = invoice.retailer.get_effective_blob_folder()
+        blob_urls = queue_bulk_label_generation_via_azure(
+            repair_data,
+            blob_folder=retailer_blob_folder or None,
+        )
         blob_url = blob_urls.get(repair.id)
         
         if blob_url:

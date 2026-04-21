@@ -30,11 +30,34 @@ interface PurchaseItem {
   quantity: string;
   unit_price: string;
   selling_price?: string | null;
+  margin_percent?: string;
+  gst_percent?: string;
+  gst_inclusive?: boolean;
   line_total?: number;
   sold_count?: number; // Number of items already sold (for validation)
   printed?: boolean;
   printed_at?: string | null;
 }
+
+const parseNumber = (value: string | number | null | undefined): number => {
+  if (value === '' || value == null) return 0;
+  const n = typeof value === 'number' ? value : parseFloat(String(value));
+  return Number.isFinite(n) ? n : 0;
+};
+
+const computeSellingPriceFromMargin = (unitPrice: string, marginPercent: string): string => {
+  const base = parseNumber(unitPrice);
+  const margin = parseNumber(marginPercent);
+  if (!base || !margin) return '';
+  return ((base * (100 + margin)) / 100).toFixed(2);
+};
+
+const computeMarginFromSellingPrice = (unitPrice: string, sellingPrice?: string | null): string => {
+  const base = parseNumber(unitPrice);
+  const sell = parseNumber(sellingPrice ?? '');
+  if (!base || !sell) return '';
+  return (((sell - base) / base) * 100).toFixed(2);
+};
 
 const PURCHASES_PAGE_LIMIT = 15;
 
@@ -351,6 +374,9 @@ export default function Purchases() {
             quantity: '',
             unit_price: '',
             selling_price: '',
+            margin_percent: '',
+            gst_percent: '',
+            gst_inclusive: false,
           };
           setPurchaseItems((prev) => [...prev, newItem]);
           setProductSearch('');
@@ -545,6 +571,9 @@ export default function Purchases() {
         quantity: '',
         unit_price: '',
         selling_price: '',
+        margin_percent: '',
+        gst_percent: '',
+        gst_inclusive: false,
       };
 
       // Return new array with the item added
@@ -641,6 +670,12 @@ export default function Purchases() {
           quantity: formatNumber(item.quantity, 3, false),
           unit_price: formatNumber(item.unit_price, 2, false),
           selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
+          margin_percent: computeMarginFromSellingPrice(
+            formatNumber(item.unit_price, 2, false),
+            item.selling_price ? formatNumber(item.selling_price, 2, false) : ''
+          ),
+          gst_percent: item.gst_percent != null ? formatNumber(item.gst_percent, 2, false) : '',
+          gst_inclusive: !!item.gst_inclusive,
           line_total: item.line_total,
           sold_count: item.sold_count || 0,
         }));
@@ -793,6 +828,12 @@ export default function Purchases() {
           quantity: isDraft && qty === 0 ? '' : formatNumber(item.quantity, 3, false),
           unit_price: isDraft && price === 0 ? '' : formatNumber(item.unit_price, 2, false),
           selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
+          margin_percent: computeMarginFromSellingPrice(
+            isDraft && price === 0 ? '' : formatNumber(item.unit_price, 2, false),
+            item.selling_price ? formatNumber(item.selling_price, 2, false) : ''
+          ),
+          gst_percent: item.gst_percent != null ? formatNumber(item.gst_percent, 2, false) : '',
+          gst_inclusive: !!item.gst_inclusive,
           line_total: item.line_total,
           sold_count: item.sold_count || 0,
         };
@@ -846,6 +887,9 @@ export default function Purchases() {
       quantity: '',
       unit_price: '',
       selling_price: '',
+      margin_percent: '',
+      gst_percent: '',
+      gst_inclusive: false,
       sold_count: 0, // New items have no sold count
     };
     setPurchaseItems([...purchaseItems, newItem]);
@@ -881,15 +925,33 @@ export default function Purchases() {
     setPurchaseItems(purchaseItems.filter((_, i) => i !== index));
   };
 
-  const handleItemChange = (index: number, field: keyof PurchaseItem, value: string) => {
+  const handleItemChange = (index: number, field: keyof PurchaseItem, value: string | boolean) => {
     const updated = [...purchaseItems];
     updated[index] = { ...updated[index], [field]: value };
+
+    if (field === 'margin_percent') {
+      const marginVal = String(value ?? '');
+      updated[index].margin_percent = marginVal;
+      updated[index].selling_price = computeSellingPriceFromMargin(updated[index].unit_price, marginVal);
+    }
+
+    if (field === 'selling_price') {
+      const sellingVal = String(value ?? '');
+      updated[index].selling_price = sellingVal;
+      updated[index].margin_percent = computeMarginFromSellingPrice(updated[index].unit_price, sellingVal);
+    }
     // Calculate line_total when quantity or unit_price changes
     if (field === 'quantity' || field === 'unit_price') {
       // Parse quantity as integer (positive only), but preserve empty string
       const qty = updated[index].quantity === '' ? 0 : Math.max(0, parseInt(updated[index].quantity) || 0);
       const price = updated[index].unit_price === '' ? 0 : parseFloat(updated[index].unit_price) || 0;
       updated[index].line_total = qty * price;
+      if (field === 'unit_price') {
+        updated[index].margin_percent = computeMarginFromSellingPrice(
+          updated[index].unit_price,
+          updated[index].selling_price || ''
+        );
+      }
       // Don't update quantity to number if it's empty - let user type or blur handler set it
     }
 
@@ -897,7 +959,7 @@ export default function Purchases() {
     if (field === 'quantity' && editingPurchase) {
       const soldCount = (updated[index] as any).sold_count || 0;
       // Parse as integer and ensure positive
-      const newQuantity = Math.max(0, parseInt(value) || 0);
+      const newQuantity = Math.max(0, parseInt(String(value)) || 0);
       if (newQuantity < soldCount) {
         // Show error but don't prevent typing - validation will happen on submit
         console.warn(`Cannot reduce quantity below ${soldCount} (${soldCount} items already sold)`);
@@ -1003,6 +1065,8 @@ export default function Purchases() {
           product: item.product,
           quantity: parseInt(item.quantity) || 0,
           unit_price: parseFloat(item.unit_price) || 0,
+          gst_percent: parseFloat(item.gst_percent || '0') || 0,
+          gst_inclusive: !!item.gst_inclusive,
         };
 
         // Include selling_price if provided
@@ -1081,6 +1145,8 @@ export default function Purchases() {
           product: item.product,
           quantity: parseInt(item.quantity) || 0,
           unit_price: parseFloat(String(item.unit_price).trim() || '0') || 0,
+          gst_percent: parseFloat(item.gst_percent || '0') || 0,
+          gst_inclusive: !!item.gst_inclusive,
         };
         if (item.selling_price && String(item.selling_price).trim() !== '') {
           itemData.selling_price = parseFloat(item.selling_price) || null;
@@ -2489,6 +2555,9 @@ export default function Purchases() {
               {/* Purchase Items - Desktop Table View */}
               {purchaseItems.length > 0 && (
                 <>
+                  <div className="mb-2 text-xs text-gray-600">
+                    Tip: Enter either <span className="font-medium">Selling Price</span> or <span className="font-medium">Margin %</span>. The other value is auto-calculated.
+                  </div>
                   {/* Desktop Table View */}
                   <div className="hidden md:block border border-gray-300 rounded-lg overflow-hidden">
                     <table className="min-w-full divide-y divide-gray-200">
@@ -2498,6 +2567,9 @@ export default function Purchases() {
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Qty</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Purchase Price</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Selling Price</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Margin %</th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">GST %</th>
+                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">GST Incl</th>
                           <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
                           <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
                         </tr>
@@ -2586,6 +2658,44 @@ export default function Purchases() {
                                   className="w-24 text-sm"
                                 />
                               </td>
+                              <td className="px-3 py-2">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={item.margin_percent || ''}
+                                  placeholder="Optional"
+                                  onChange={(e) => handleItemChange(index, 'margin_percent', e.target.value)}
+                                  onBlur={(e) => {
+                                    const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
+                                    handleItemChange(index, 'margin_percent', val === '' ? '' : val.toString());
+                                  }}
+                                  className="w-24 text-sm"
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={item.gst_percent || ''}
+                                  placeholder="0"
+                                  onChange={(e) => handleItemChange(index, 'gst_percent', e.target.value)}
+                                  onBlur={(e) => {
+                                    const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
+                                    handleItemChange(index, 'gst_percent', val === '' ? '' : val.toString());
+                                  }}
+                                  className="w-20 text-sm"
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={!!item.gst_inclusive}
+                                  onChange={(e) => handleItemChange(index, 'gst_inclusive', e.target.checked)}
+                                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
+                              </td>
                               <td className="px-3 py-2 text-right">
                                 <span className="text-sm font-medium text-gray-900">
                                   ₹{formatNumber(item.line_total || 0)}
@@ -2606,7 +2716,7 @@ export default function Purchases() {
                       </tbody>
                       <tfoot className="bg-gray-50">
                         <tr>
-                          <td colSpan={4} className="px-3 py-2 text-right text-sm font-medium text-gray-700">
+                          <td colSpan={7} className="px-3 py-2 text-right text-sm font-medium text-gray-700">
                             Total qty: {formatNumber(calculateTotalQty())} · Total:
                           </td>
                           <td colSpan={2} className="px-3 py-2 text-right text-sm font-bold text-gray-900">
@@ -2720,6 +2830,52 @@ export default function Purchases() {
                                 className="w-full text-sm"
                               />
                             </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">Margin %</label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.margin_percent || ''}
+                                placeholder="Optional"
+                                onChange={(e) => handleItemChange(index, 'margin_percent', e.target.value)}
+                                onBlur={(e) => {
+                                  const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
+                                  handleItemChange(index, 'margin_percent', val === '' ? '' : val.toString());
+                                }}
+                                className="w-full text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700 mb-1">GST %</label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.gst_percent || ''}
+                                placeholder="0"
+                                onChange={(e) => handleItemChange(index, 'gst_percent', e.target.value)}
+                                onBlur={(e) => {
+                                  const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
+                                  handleItemChange(index, 'gst_percent', val === '' ? '' : val.toString());
+                                }}
+                                className="w-full text-sm"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              id={`gst-inclusive-${index}`}
+                              type="checkbox"
+                              checked={!!item.gst_inclusive}
+                              onChange={(e) => handleItemChange(index, 'gst_inclusive', e.target.checked)}
+                              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <label htmlFor={`gst-inclusive-${index}`} className="text-xs font-medium text-gray-700">
+                              GST Inclusive
+                            </label>
                           </div>
                         </div>
                       );
