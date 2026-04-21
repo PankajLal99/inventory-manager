@@ -188,6 +188,8 @@ class Invoice(models.Model):
     # POS checkout: returns/trade-ins applied against prior invoices (same customer), netted on this invoice
     trade_in_credit = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     pos_trade_ins = models.JSONField(null=True, blank=True)
+    round_off = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'),
+        help_text='Rounding adjustment applied to total (positive = rounded up, negative = rounded down)')
     # Replace Product: list of {invoice_item_id, old_product_name, charge_unit_price, ...} for invoice / print UI
     exchange_snapshots = models.JSONField(null=True, blank=True)
     # Replacement POS: return-invoice for already-sold barcodes (separate from Replace Product exchange flow)

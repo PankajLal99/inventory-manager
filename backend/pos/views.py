@@ -3845,7 +3845,12 @@ def cart_checkout(request, pk):
 
         invoice.trade_in_credit = trade_credit
         invoice.pos_trade_ins = trade_details if trade_details else None
-        invoice.total = gross_total - trade_credit
+
+        # Apply round-off: round to nearest rupee (≥0.50 rounds up, <0.50 rounds down)
+        pre_round_total = gross_total - trade_credit
+        rounded_total = pre_round_total.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        invoice.round_off = rounded_total - pre_round_total
+        invoice.total = rounded_total
 
         if invoice_type == 'pending':
             invoice.status = 'draft'
@@ -3857,7 +3862,7 @@ def cart_checkout(request, pk):
             invoice.paid_amount = Decimal('0.00')
             invoice.due_amount = invoice.total
         elif invoice_type == 'mixed':
-            if (cash_amount + upi_amount) != invoice.total:
+            if abs(cash_amount + upi_amount - invoice.total) > Decimal('0.01'):
                 transaction.set_rollback(True)
                 return Response({
                     'error': 'Payment mismatch',

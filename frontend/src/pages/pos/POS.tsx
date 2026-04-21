@@ -2315,7 +2315,7 @@ export default function POS() {
 
     // Validate split payments for mixed type
     if (finalInvoiceType === 'mixed') {
-      const total = calculateTotal();
+      const total = calculateRoundedTotal();
       const cash = parseFloat(cashAmount) || 0;
       const upi = parseFloat(upiAmount) || 0;
 
@@ -2658,7 +2658,7 @@ export default function POS() {
 
     // Validate split payments for mixed type
     if (invoiceType === 'mixed') {
-      const total = calculateTotal();
+      const total = calculateRoundedTotal();
       const cash = parseFloat(cashAmount) || 0;
       const upi = parseFloat(upiAmount) || 0;
 
@@ -3002,6 +3002,8 @@ export default function POS() {
   }, [cart?.data?.tax_bifurcation]);
 
   const calculateTotal = () => cartGrossSubtotal - tradeInCredit + cartTaxTotal;
+  const calculateRoundedTotal = () => Math.round(calculateTotal());
+  const calculateRoundOff = () => calculateRoundedTotal() - calculateTotal();
 
   const calculateTotalQuantity = () => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
@@ -3683,7 +3685,7 @@ export default function POS() {
                             setCashAmount(value);
                             // Auto-calculate UPI amount if total is known
                             if (cart?.data && value) {
-                              const total = calculateTotal();
+                              const total = calculateRoundedTotal();
                               const cash = parseFloat(value) || 0;
                               const remaining = Math.max(0, total - cash);
                               // Keep number inputs valid: no comma separators in controlled value.
@@ -3707,7 +3709,7 @@ export default function POS() {
                             setUpiAmount(value);
                             // Auto-calculate Cash amount if total is known
                             if (cart?.data && value) {
-                              const total = calculateTotal();
+                              const total = calculateRoundedTotal();
                               const upi = parseFloat(value) || 0;
                               const remaining = Math.max(0, total - upi);
                               // Keep number inputs valid: no comma separators in controlled value.
@@ -3726,10 +3728,10 @@ export default function POS() {
                         {cashAmount && upiAmount && (
                           <div>
                             <span className="text-gray-600">Total: </span>
-                            <span className={`font-semibold ${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount)) === formatNumber(calculateTotal()) ? 'text-green-600' : 'text-red-600'}`}>
+                            <span className={`font-semibold ${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount)) === formatNumber(calculateRoundedTotal()) ? 'text-green-600' : 'text-red-600'}`}>
                               {showPurchasePrice ? `₹${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount))}` : '•••'}
                             </span>
-                            <span className="text-gray-600"> / Invoice Total: {showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
+                            <span className="text-gray-600"> / Invoice Total: {showPurchasePrice ? `₹${formatNumber(calculateRoundedTotal())}` : '•••'}</span>
                           </div>
                         )}
                       </div>
@@ -5165,9 +5167,15 @@ export default function POS() {
                     </div>
                   )}
 
+                  {Math.abs(calculateRoundOff()) >= 0.005 && (
+                    <div className="flex justify-between items-center py-1 text-gray-500">
+                      <span className="text-sm">Round off</span>
+                      <span className="text-sm">{showPurchasePrice ? `${calculateRoundOff() > 0 ? '+' : ''}₹${formatNumber(calculateRoundOff())}` : '•••'}</span>
+                    </div>
+                  )}
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
+                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateRoundedTotal())}` : '•••'}</span>
                   </div>
                 </>
               ) : (
@@ -5190,9 +5198,15 @@ export default function POS() {
                     </div>
                   )}
 
+                  {Math.abs(calculateRoundOff()) >= 0.005 && (
+                    <div className="flex justify-between items-center py-1 text-gray-500">
+                      <span className="text-sm">Round off</span>
+                      <span className="text-sm">{showPurchasePrice ? `${calculateRoundOff() > 0 ? '+' : ''}₹${formatNumber(calculateRoundOff())}` : '•••'}</span>
+                    </div>
+                  )}
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
+                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateRoundedTotal())}` : '•••'}</span>
                   </div>
                 </>
               )}
