@@ -40,6 +40,7 @@ export default function Customers() {
     address: '',
     customer_group: '',
     credit_limit: '',
+    gst_number: '',
     is_active: true,
   });
   const [nameSearchQuery, setNameSearchQuery] = useState('');
@@ -222,6 +223,7 @@ export default function Customers() {
       address: '',
       customer_group: '',
       credit_limit: '',
+      gst_number: '',
       is_active: true,
     });
     setEditingCustomer(null);
@@ -242,6 +244,7 @@ export default function Customers() {
       address: customer.address || '',
       customer_group: customer.customer_group?.toString() || '',
       credit_limit: customer.credit_limit?.toString() || '',
+      gst_number: customer.gst_number || '',
       is_active: customer.is_active !== false,
     });
     setShowForm(true);
@@ -269,6 +272,8 @@ export default function Customers() {
     if (formData.address?.trim()) submitData.address = formData.address.trim();
     if (formData.customer_group) submitData.customer_group = parseInt(formData.customer_group);
     if (formData.credit_limit) submitData.credit_limit = parseFloat(formData.credit_limit);
+    if (formData.gst_number?.trim()) submitData.gst_number = formData.gst_number.trim();
+    else submitData.gst_number = '';
 
     if (editingCustomer) {
       updateMutation.mutate({ id: editingCustomer, data: submitData });
@@ -752,6 +757,13 @@ export default function Customers() {
                 placeholder="0.00"
               />
             </div>
+            <Input
+              label="GST Number"
+              type="text"
+              value={formData.gst_number}
+              onChange={(e) => setFormData({ ...formData, gst_number: e.target.value })}
+              placeholder="Enter GST number (optional)"
+            />
             <div className="flex items-center">
               <input
                 type="checkbox"

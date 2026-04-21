@@ -62,6 +62,7 @@ export default function POS() {
   const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerGstNumber, setNewCustomerGstNumber] = useState('');
   const [productSearchSelectedIndex, setProductSearchSelectedIndex] = useState(-1);
   const [customerSearchSelectedIndex, setCustomerSearchSelectedIndex] = useState(-1);
   const [editingManualPrice, setEditingManualPrice] = useState<Record<number, string>>({});
@@ -1939,7 +1940,7 @@ export default function POS() {
   }, [username, cartId, cart?.data?.items, defaultStore, queryClient, syncCartsWithBackend, loadCartsFromStorage, removeCartTab, cartTabs.length, isWholesaleGroup, isWholesaleAdmin]);
 
   const createCustomerMutation = useMutation({
-    mutationFn: (data: { name: string; phone?: string }) => customersApi.create(data),
+    mutationFn: (data: { name: string; phone?: string; gst_number?: string }) => customersApi.create(data),
     onSuccess: (data) => {
       const newCustomer = data.data;
       setSelectedCustomer(newCustomer);
@@ -5427,6 +5428,7 @@ export default function POS() {
           setShowCreateCustomerModal(false);
           setNewCustomerName('');
           setNewCustomerPhone('');
+          setNewCustomerGstNumber('');
         }}
         title="Create New Customer"
         size="md"
@@ -5447,6 +5449,7 @@ export default function POS() {
                   createCustomerMutation.mutate({
                     name: newCustomerName.trim(),
                     phone: newCustomerPhone.trim() || undefined,
+                    gst_number: newCustomerGstNumber.trim() || undefined,
                   });
                 }
               }}
@@ -5466,9 +5469,21 @@ export default function POS() {
                   createCustomerMutation.mutate({
                     name: newCustomerName.trim(),
                     phone: newCustomerPhone.trim() || undefined,
+                    gst_number: newCustomerGstNumber.trim() || undefined,
                   });
                 }
               }}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              GST Number
+            </label>
+            <Input
+              type="text"
+              placeholder="Enter GST number (optional)"
+              value={newCustomerGstNumber}
+              onChange={(e) => setNewCustomerGstNumber(e.target.value)}
             />
           </div>
           <div className="flex gap-3 pt-2">
@@ -5481,6 +5496,7 @@ export default function POS() {
                 createCustomerMutation.mutate({
                   name: newCustomerName.trim(),
                   phone: newCustomerPhone.trim() || undefined,
+                  gst_number: newCustomerGstNumber.trim() || undefined,
                 });
               }}
               disabled={createCustomerMutation.isPending || !newCustomerName.trim()}
@@ -5494,6 +5510,7 @@ export default function POS() {
                 setShowCreateCustomerModal(false);
                 setNewCustomerName('');
                 setNewCustomerPhone('');
+                setNewCustomerGstNumber('');
               }}
               disabled={createCustomerMutation.isPending}
             >

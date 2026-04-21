@@ -46,21 +46,23 @@ class ProductVariantAdmin(admin.ModelAdmin):
 
 @admin.register(Barcode)
 class BarcodeAdmin(admin.ModelAdmin):
-    list_display = ['retailer', 'barcode', 'short_code', 'product', 'variant', 'tag', 'is_primary', 'created_at']
-    list_filter = ['retailer', 'is_primary', 'tag', 'created_at']
+    list_display = ['retailer', 'barcode', 'short_code', 'product', 'variant', 'tag', 'current_store', 'is_primary', 'created_at']
+    list_filter = ['retailer', 'current_store', 'is_primary', 'tag', 'created_at']
     search_fields = ['barcode', 'short_code', 'product__name']
     ordering = ['retailer', '-created_at']
     readonly_fields = ['short_code']  # Make short_code read-only in admin (auto-generated)
+    list_select_related = ['retailer', 'product', 'variant', 'current_store']
 
 
 @admin.register(BarcodeLabel)
 class BarcodeLabelAdmin(admin.ModelAdmin):
-    list_display = ['retailer', 'barcode', 'product_name', 'barcode_value', 'short_code', 'has_label_image', 'generated_at', 'updated_at']
-    list_filter = ['retailer', 'generated_at', 'updated_at']
+    list_display = ['retailer', 'barcode', 'product_name', 'barcode_value', 'short_code', 'current_store_display', 'has_label_image', 'generated_at', 'updated_at']
+    list_filter = ['retailer', 'barcode__current_store', 'generated_at', 'updated_at']
     search_fields = ['barcode__barcode', 'barcode__short_code', 'barcode__product__name']
     ordering = ['retailer', '-generated_at']
     readonly_fields = ['barcode', 'label_image_url', 'label_image_preview', 'generated_at', 'updated_at']
     actions = ['regenerate_labels']
+    list_select_related = ['retailer', 'barcode__product', 'barcode__current_store']
     
     fieldsets = (
         ('Barcode Information', {
@@ -91,6 +93,13 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
         return obj.barcode.short_code if obj.barcode and obj.barcode.short_code else '-'
     short_code.short_description = 'Short Code'
     short_code.admin_order_field = 'barcode__short_code'
+
+    def current_store_display(self, obj):
+        """Display current store from barcode"""
+        store = obj.barcode.current_store if obj.barcode else None
+        return store.name if store else '—'
+    current_store_display.short_description = 'Current Store'
+    current_store_display.admin_order_field = 'barcode__current_store__name'
     
     def has_label_image(self, obj):
         """Check if label image exists"""
