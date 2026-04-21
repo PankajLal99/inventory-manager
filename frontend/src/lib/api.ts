@@ -430,7 +430,7 @@ export const catalogApi = {
     create: (data: any) => api.post('/tax-rates/', data),
   },
   stores: {
-    list: () => api.get('/stores/'),
+    list: (params?: Record<string, unknown>) => api.get('/stores/', { params }),
     get: (id: number) => api.get(`/stores/${id}/`),
     create: (data: any) => api.post('/stores/', data),
     update: (id: number, data: any) => api.patch(`/stores/${id}/`, data),

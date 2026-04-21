@@ -164,6 +164,38 @@ const statusTextClass: Record<string, string> = {
 const getStatusTextClass = (status: string) =>
   statusTextClass[String(status || '').toLowerCase()] || 'text-gray-600';
 
+const toFiniteId = (value: unknown): number | null => {
+  const id = Number(value);
+  return Number.isFinite(id) ? id : null;
+};
+
+const pickPreferredStoreId = (invoicingUser: any, stores: any[]): number | null => {
+  const availableStoreIds = new Set(
+    stores
+      .map((s: any) => toFiniteId(s?.id))
+      .filter((id: number | null): id is number => id !== null)
+  );
+  if (availableStoreIds.size === 0) return null;
+
+  const candidates: number[] = [];
+  const defaultStoreId = toFiniteId(invoicingUser?.default_store?.id);
+  const userStoreId = toFiniteId(invoicingUser?.store?.id);
+  if (defaultStoreId !== null) candidates.push(defaultStoreId);
+  if (userStoreId !== null) candidates.push(userStoreId);
+  if (Array.isArray(invoicingUser?.assigned_stores)) {
+    for (const assigned of invoicingUser.assigned_stores) {
+      const assignedId = toFiniteId(assigned?.id);
+      if (assignedId !== null) candidates.push(assignedId);
+    }
+  }
+
+  const preferred = candidates.find((id) => availableStoreIds.has(id));
+  if (preferred !== undefined) return preferred;
+
+  const firstActive = stores.find((s: any) => Boolean(s?.is_active));
+  return toFiniteId(firstActive?.id) ?? toFiniteId(stores[0]?.id);
+};
+
 export default function Invoices() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -247,6 +279,18 @@ export default function Invoices() {
 
   const canSeeKPIStats = canSeeSuperMetrics(invoicingUser);
   const canSeeTotalColumn = canSeeSuperMetrics(invoicingUser);
+
+  // Non-admin users should always be scoped to one of their available stores.
+  useEffect(() => {
+    if (stores.length === 0 || groupContainsAdmin) return;
+    const availableStoreIds = new Set(stores.map((s: any) => s.id));
+    if (selectedStoreId !== null && availableStoreIds.has(selectedStoreId)) return;
+    const preferredStoreId = pickPreferredStoreId(invoicingUser, stores);
+    if (preferredStoreId !== null && preferredStoreId !== selectedStoreId) {
+      setCurrentPage(1);
+      setSelectedStoreId(preferredStoreId);
+    }
+  }, [stores, groupContainsAdmin, selectedStoreId, invoicingUser]);
 
   // Use selected store or null (ALL) — all users default to "All".
   const defaultStore = selectedStoreId === null ? null : stores.find((s: any) => s.id === selectedStoreId) ?? null;
@@ -510,7 +554,7 @@ export default function Invoices() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-sm sm:text-base font-semibold text-gray-900 truncate block">
-                      {selectedStoreId === null ? 'All' : (currentStore?.name || 'Select Store')}
+                      {selectedStoreId === null && groupContainsAdmin ? 'All' : (currentStore?.name || 'Select Store')}
                     </span>
                   </div>
                   <ChevronDown className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400 group-hover:text-blue-600 transition-colors flex-shrink-0" />
@@ -520,12 +564,13 @@ export default function Invoices() {
                 value={selectedStoreId === null ? '' : selectedStoreId.toString()}
                 onChange={(e) => {
                   const val = e.target.value;
+                  if (val === '' && !groupContainsAdmin) return;
                   setCurrentPage(1);
                   setSelectedStoreId(val === '' ? null : parseInt(val, 10));
                 }}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
               >
-                <option value="">All</option>
+                {groupContainsAdmin && <option value="">All</option>}
                 {stores.map((store: any) => (
                   <option key={store.id} value={store.id.toString()}>
                     {store.name}

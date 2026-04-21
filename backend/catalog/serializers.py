@@ -41,6 +41,8 @@ class BarcodeSerializer(serializers.ModelSerializer):
     invoice_type_display = serializers.SerializerMethodField()
     sold_price = serializers.SerializerMethodField()
     sold_quantity = serializers.SerializerMethodField()
+    gst_percent = serializers.SerializerMethodField()
+    gst_inclusive = serializers.SerializerMethodField()
     
     class Meta:
         model = Barcode
@@ -48,7 +50,7 @@ class BarcodeSerializer(serializers.ModelSerializer):
             'id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 
             'tag', 'tag_display', 'purchase_price', 'selling_price', 'supplier_name', 'purchase_date', 
             'invoice_number', 'invoice_id', 'invoice_date', 'customer_name', 'invoice_type_display',
-            'sold_price', 'sold_quantity', 'created_at'
+            'sold_price', 'sold_quantity', 'gst_percent', 'gst_inclusive', 'created_at'
         ]
     
     def _get_active_invoice_item(self, obj):
@@ -145,6 +147,24 @@ class BarcodeSerializer(serializers.ModelSerializer):
         """Get the quantity sold (usually 1 for barcodes)"""
         item = self._get_active_invoice_item(obj)
         return float(item.quantity) if item else None
+
+    def get_gst_percent(self, obj):
+        """GST percent sourced from purchase item when available."""
+        try:
+            if obj.purchase_item and obj.purchase_item.gst_percent is not None:
+                return float(obj.purchase_item.gst_percent)
+        except Exception:
+            pass
+        return None
+
+    def get_gst_inclusive(self, obj):
+        """Whether selling price on this purchase item is GST inclusive."""
+        try:
+            if obj.purchase_item is not None:
+                return bool(obj.purchase_item.gst_inclusive)
+        except Exception:
+            pass
+        return None
 
 
 class ProductComponentSerializer(serializers.ModelSerializer):
@@ -433,6 +453,31 @@ class ProductListSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         return request.query_params.get('tag', None) if request else None
 
+    def _get_selected_store_id(self):
+        sid = self.context.get('selected_store_id')
+        if sid in (None, ''):
+            request = self.context.get('request')
+            if request:
+                raw = request.query_params.get('store')
+                if raw not in (None, ''):
+                    try:
+                        sid = int(raw)
+                    except (TypeError, ValueError):
+                        sid = None
+        if sid in (None, ''):
+            return None
+        try:
+            return int(sid)
+        except (TypeError, ValueError):
+            return None
+
+    def _barcode_qs(self, obj):
+        qs = obj.barcodes.all()
+        selected_store_id = self._get_selected_store_id()
+        if selected_store_id is not None:
+            qs = qs.filter(current_store_id=selected_store_id)
+        return qs
+
     def _needs_barcode_details(self):
         """Whether this tag filter requires individual barcode objects in the list.
         'sold' only needs an aggregate count; individual barcodes are fetched
@@ -500,7 +545,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
         # Process barcodes in Python
         filtered_barcodes = []
-        all_barcodes = obj.barcodes.all() # Uses prefetch cache
+        all_barcodes = self._barcode_qs(obj)  # Uses prefetch cache when store-scoped prefetch is active
         
         # Special handling for non-tracked inventory
         if not obj.track_inventory:
@@ -532,7 +577,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def _get_new_returned_count(self, obj):
         """Count of barcodes with tag 'new' or 'returned' (available to sell)."""
-        return float(obj.barcodes.filter(tag__in=['new', 'returned']).count())
+        return float(self._barcode_qs(obj).filter(tag__in=['new', 'returned']).count())
 
     def _get_shop_from_purchase(self, obj):
         """Shop qty from purchase only: sum of PurchaseItem.shop_quantity (no addition/subtraction)."""
@@ -582,7 +627,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             
         # Fallback for other views
         # Count ALL barcodes, excluding sold
-        barcode_count = obj.barcodes.exclude(tag='sold').count()
+        barcode_count = self._barcode_qs(obj).exclude(tag='sold').count()
         return float(barcode_count)
 
     def get_sold_quantity(self, obj):
@@ -609,7 +654,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             return float(total_sold)
         
         # For tracked inventory products, count barcodes with 'sold' tag
-        sold_barcodes = obj.barcodes.filter(tag='sold')
+        sold_barcodes = self._barcode_qs(obj).filter(tag='sold')
         return sold_barcodes.count()
 
     def get_purchase_price(self, obj):
@@ -645,7 +690,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             return ""
 
         supplier_counts = {}
-        all_barcodes = obj.barcodes.all()
+        all_barcodes = self._barcode_qs(obj)
         for barcode in all_barcodes:
             if barcode.tag in ['new', 'returned']:
                 supplier_name = "Unknown"
@@ -668,7 +713,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             return ""
 
         supplier_prices = {}
-        all_barcodes = obj.barcodes.all()
+        all_barcodes = self._barcode_qs(obj)
         for barcode in all_barcodes:
             # Only include AVAILABLE (new+returned)
             if barcode.tag in ['new', 'returned']:

@@ -24,7 +24,7 @@ from backend.catalog.models import Product, Barcode
 from backend.catalog.serializers import ProductListSerializer
 from backend.catalog.filters import ProductFilter
 from backend.pos.models import CartItem, InvoiceItem
-from backend.core.tenant_api import require_active_retailer
+from backend.core.tenant_api import require_active_retailer, get_user_allowed_store_ids
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,28 @@ def _optimized_product_list_internal(request):
     retailer, tenant_err = require_active_retailer(request)
     if tenant_err:
         return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    should_scope_to_allowed = bool(
+        request.user.assigned_stores.filter(retailer_id=retailer.id, is_active=True).exists()
+        or getattr(request.user, 'default_store_id', None)
+    )
+    requested_store = request.query_params.get('store', '')
+    effective_store_id = None
+    if requested_store:
+        try:
+            effective_store_id = int(requested_store)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+        if effective_store_id not in allowed_store_ids:
+            return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    elif should_scope_to_allowed:
+        if not allowed_store_ids:
+            # No assigned/default shop: allow product catalog rows but return zero stock/barcode visibility.
+            effective_store_id = -1
+        else:
+            effective_store_id = int(allowed_store_ids[0])
+
     # Build cache key from query parameters
     filters_dict = {
         'retailer_id': retailer.id,
@@ -69,6 +91,7 @@ def _optimized_product_list_internal(request):
         'out_of_stock': request.query_params.get('out_of_stock', ''),
         'exclude_other_custom': request.query_params.get('exclude_other_custom', ''),
         'warehouse_qty_gt_zero': request.query_params.get('warehouse_qty_gt_zero', ''),
+        'store': effective_store_id or '',
         'page': request.query_params.get('page', 1),
         'limit': request.query_params.get('limit', 50),
     }
@@ -93,6 +116,10 @@ def _optimized_product_list_internal(request):
         'category',
         'tax_rate',
     )
+
+    barcode_location_filter = Q()
+    if effective_store_id is not None:
+        barcode_location_filter = Q(barcodes__current_store_id=effective_store_id)
     
     # OPTIMIZATION 2: Only fetch barcodes when needed
     # Check if we need barcode data based on filters AND frontend request
@@ -126,6 +153,8 @@ def _optimized_product_list_internal(request):
         annotated_barcode_count=Count(
             'barcodes',
             filter=(
+                barcode_location_filter
+                &
                 Q(barcodes__tag__in=barcode_tags)
                 & ~Q(barcodes__purchase__status='draft')
                 & Q(barcodes__purchase__deleted_at__isnull=True)
@@ -141,6 +170,7 @@ def _optimized_product_list_internal(request):
                 queryset=Barcode.objects.filter(
                     tag__in=barcode_tags,
                     retailer_id=retailer.id,
+                    **({'current_store_id': effective_store_id} if effective_store_id is not None else {}),
                 ).exclude(
                     purchase__status='draft'
                 ).filter(
@@ -183,6 +213,7 @@ def _optimized_product_list_internal(request):
         cart_items = CartItem.objects.filter(
             cart__status='active',
             cart__retailer_id=retailer.id,
+            **({'cart__store_id': effective_store_id} if effective_store_id is not None else {}),
         ).exclude(
             scanned_barcodes__isnull=True
         ).exclude(
@@ -204,6 +235,7 @@ def _optimized_product_list_internal(request):
                 product_id__in=all_product_ids,
                 tag__in=['new', 'returned'],
                 retailer_id=retailer.id,
+                **({'current_store_id': effective_store_id} if effective_store_id is not None else {}),
             ).exclude(
                 purchase__status='draft'
             ).filter(
@@ -224,6 +256,7 @@ def _optimized_product_list_internal(request):
                 product_id__in=all_product_ids,
                 tag__in=['new', 'returned'],
                 retailer_id=retailer.id,
+                **({'current_store_id': effective_store_id} if effective_store_id is not None else {}),
             ).exclude(
                 purchase__status='draft'
             ).filter(
@@ -281,6 +314,7 @@ def _optimized_product_list_internal(request):
             cart_items = CartItem.objects.filter(
                 cart__status='active',
                 cart__retailer_id=retailer.id,
+                **({'cart__store_id': effective_store_id} if effective_store_id is not None else {}),
             ).exclude(
                 scanned_barcodes__isnull=True
             ).exclude(
@@ -310,6 +344,7 @@ def _optimized_product_list_internal(request):
     
     context = {
         'request': request,
+        'selected_store_id': effective_store_id,
         'active_cart_barcodes': active_cart_barcodes,
         'active_cart_product_quantities': active_cart_product_quantities
     }

@@ -175,7 +175,7 @@ class PurchaseAPITests(TestCase):
         self.assertEqual(response.data['items'][0]['tax_rate'], tax_rate.id)
 
     def test_create_purchase_allows_explicit_gst_override_over_tax_rate(self):
-        """Explicit gst_percent should override product tax rate while keeping tax_rate relation."""
+        """Explicit gst_percent should override and sync product tax rate to the entered GST slab."""
         tax_rate = TestDataFactory.create_tax_rate(rate=Decimal('18.00'))
         self.product.tax_rate = tax_rate
         self.product.save(update_fields=['tax_rate'])
@@ -198,7 +198,10 @@ class PurchaseAPITests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(str(response.data['items'][0]['gst_percent']), '5.00')
         self.assertTrue(response.data['items'][0]['gst_inclusive'])
-        self.assertEqual(response.data['items'][0]['tax_rate'], tax_rate.id)
+        self.product.refresh_from_db()
+        self.assertIsNotNone(self.product.tax_rate)
+        self.assertEqual(self.product.tax_rate.rate, Decimal('5.00'))
+        self.assertEqual(response.data['items'][0]['tax_rate'], self.product.tax_rate_id)
 
     def test_update_purchase_updates_gst_fields(self):
         """PUT should persist gst_percent and gst_inclusive on existing items."""
@@ -228,6 +231,108 @@ class PurchaseAPITests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(str(response.data['items'][0]['gst_percent']), '28.00')
         self.assertTrue(response.data['items'][0]['gst_inclusive'])
+
+    def test_create_purchase_syncs_product_tax_rate_from_gst_percent(self):
+        """Creating purchase with GST should sync product.tax_rate to that GST slab."""
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': timezone.now().date().isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '2.00',
+                    'unit_price': '100.00',
+                    'gst_percent': '18.00',
+                    'gst_inclusive': True,
+                }
+            ]
+        }
+
+        response = self.client.post('/api/v1/purchases/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        self.product.refresh_from_db()
+        self.assertIsNotNone(self.product.tax_rate)
+        self.assertEqual(self.product.tax_rate.rate, Decimal('18.00'))
+        self.assertEqual(response.data['items'][0]['tax_rate'], self.product.tax_rate_id)
+
+    def test_update_purchase_resyncs_product_tax_rate_when_gst_changes(self):
+        """Updating purchase GST should update product.tax_rate to new GST slab."""
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, store=self.store)
+        TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('1.00'),
+            unit_price=Decimal('100.00'),
+        )
+
+        create_data = {
+            'supplier': self.supplier.id,
+            'purchase_date': purchase.purchase_date.isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '1.00',
+                    'unit_price': '100.00',
+                    'gst_percent': '5.00',
+                    'gst_inclusive': False,
+                }
+            ]
+        }
+        create_response = self.client.put(f'/api/v1/purchases/{purchase.id}/', create_data, format='json')
+        self.assertEqual(create_response.status_code, status.HTTP_200_OK)
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.tax_rate.rate, Decimal('5.00'))
+
+        update_data = {
+            'supplier': self.supplier.id,
+            'purchase_date': purchase.purchase_date.isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '1.00',
+                    'unit_price': '100.00',
+                    'gst_percent': '28.00',
+                    'gst_inclusive': True,
+                }
+            ]
+        }
+        update_response = self.client.put(f'/api/v1/purchases/{purchase.id}/', update_data, format='json')
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.tax_rate.rate, Decimal('28.00'))
+
+    def test_create_purchase_zero_gst_does_not_override_existing_product_tax_rate(self):
+        """Zero GST line should not clear or replace an existing product tax slab."""
+        tax_rate = TestDataFactory.create_tax_rate(rate=Decimal('12.00'))
+        self.product.tax_rate = tax_rate
+        self.product.save(update_fields=['tax_rate'])
+
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': timezone.now().date().isoformat(),
+            'store': self.store.id,
+            'items': [
+                {
+                    'product': self.product.id,
+                    'quantity': '2.00',
+                    'unit_price': '100.00',
+                    'gst_percent': '0.00',
+                    'gst_inclusive': False,
+                }
+            ]
+        }
+
+        response = self.client.post('/api/v1/purchases/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.tax_rate_id, tax_rate.id)
     
     def test_create_purchase_without_items(self):
         """Test creating a purchase without items should fail"""

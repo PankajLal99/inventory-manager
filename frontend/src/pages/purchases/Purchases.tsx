@@ -166,6 +166,16 @@ export default function Purchases() {
   const user = auth.getUser();
   const isAdminUser = isStoreManagementAdmin(user);
   const [searchParams, setSearchParams] = useSearchParams();
+  const prefilledStoreParam = searchParams.get('store') || '';
+  const resolvedUserStoreId = useMemo(() => {
+    if (isAdminUser) return null;
+    const defaultStoreId = Number(user?.default_store?.id);
+    if (Number.isFinite(defaultStoreId) && defaultStoreId > 0) return defaultStoreId;
+    const assigned = Array.isArray(user?.assigned_stores) ? user.assigned_stores : [];
+    const firstAssigned = Number(assigned[0]?.id);
+    if (Number.isFinite(firstAssigned) && firstAssigned > 0) return firstAssigned;
+    return null;
+  }, [isAdminUser, user]);
   const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
   const [supplierFilterSearch, setSupplierFilterSearch] = useState(''); // For typable filter dropdown
   const [showSupplierFilterDropdown, setShowSupplierFilterDropdown] = useState(false);
@@ -282,14 +292,18 @@ export default function Purchases() {
     hasNextPage: hasNextProductsPage,
     isFetchingNextPage: isFetchingNextProductsPage,
   } = useInfiniteQuery({
-    queryKey: ['products', 'purchase-search', debouncedProductSearch],
+    queryKey: ['products', 'purchase-search', debouncedProductSearch, formData.store || autoResolvedLocation?.id || resolvedUserStoreId || 'all'],
     queryFn: async ({ pageParam = 1, signal }) => {
       if (!debouncedProductSearch) return { results: [], next: null };
+      const effectiveStore = formData.store
+        || (autoResolvedLocation?.type === 'store' ? autoResolvedLocation.id : '')
+        || (resolvedUserStoreId ? String(resolvedUserStoreId) : '');
       const response = await productsApi.list({
         search: debouncedProductSearch,
         tag: 'new',
         search_mode: 'name_only',
         exclude_other_custom: 'true',
+        ...(effectiveStore ? { store: effectiveStore } : {}),
         page: pageParam,
       }, { signal });
       return response.data;
@@ -440,9 +454,10 @@ export default function Purchases() {
     if (productFilter) params.set('product_filter', productFilter);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
+    if (prefilledStoreParam) params.set('store', prefilledStoreParam);
     setSearchParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supplierFilter, productFilter, dateFrom, dateTo]);
+  }, [supplierFilter, productFilter, dateFrom, dateTo, prefilledStoreParam]);
 
   const {
     data: purchasesInfiniteData,
@@ -452,7 +467,7 @@ export default function Purchases() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: purchasesInfiniteQueryKey,
+    queryKey: [...purchasesInfiniteQueryKey, resolvedUserStoreId ?? 'all'],
     queryFn: async ({ pageParam }) => {
       const params: Record<string, string | number> = {
         page: pageParam,
@@ -462,6 +477,7 @@ export default function Purchases() {
       if (productFilter) params.product = productFilter;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
+      if (resolvedUserStoreId) params.store = resolvedUserStoreId;
       const response = await purchasingApi.purchases.list(params);
       return response.data;
     },
@@ -991,6 +1007,14 @@ export default function Purchases() {
       setFormData((prev) => ({ ...prev, warehouse: autoResolvedLocation.id, store: '' }));
     }
   }, [showForm, editingPurchase, autoResolvedLocation, formData.store, formData.warehouse]);
+
+  useEffect(() => {
+    if (!showForm || editingPurchase) return;
+    if (!prefilledStoreParam || formData.store) return;
+    const exists = visibleStores.some((s: any) => String(s.id) === prefilledStoreParam);
+    if (!exists) return;
+    setFormData((prev) => ({ ...prev, store: prefilledStoreParam, warehouse: '' }));
+  }, [showForm, editingPurchase, prefilledStoreParam, visibleStores, formData.store]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

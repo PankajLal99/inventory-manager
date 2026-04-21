@@ -168,6 +168,179 @@ export default function POS() {
 
   const queryClient = useQueryClient();
 
+  const toFiniteNumber = useCallback((value: unknown): number => {
+    const n = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+    return Number.isFinite(n) ? n : 0;
+  }, []);
+
+  const getTaxRatesList = useCallback((data: any): any[] => {
+    if (!data) return [];
+    if (Array.isArray(data?.results)) return data.results;
+    if (Array.isArray(data?.data)) return data.data;
+    if (Array.isArray(data)) return data;
+    return [];
+  }, []);
+
+  const { data: taxRatesResponse } = useQuery({
+    queryKey: ['tax-rates'],
+    queryFn: async () => {
+      const response = await catalogApi.taxRates.list();
+      return response.data;
+    },
+    retry: false,
+  });
+
+  const taxRateById = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const taxRate of getTaxRatesList(taxRatesResponse)) {
+      const id = toFiniteNumber((taxRate as any)?.id);
+      const rate = toFiniteNumber((taxRate as any)?.rate);
+      if (id > 0 && rate >= 0) {
+        map.set(id, rate);
+      }
+    }
+    return map;
+  }, [taxRatesResponse, getTaxRatesList, toFiniteNumber]);
+
+  const getProductTaxRatePercent = useCallback((product: any): number => {
+    if (!product) return 0;
+
+    const directCandidates = [
+      product?.tax_rate?.rate,
+      product?.tax_rate_rate,
+      product?.tax_rate_percent,
+      product?.gst_percent,
+      product?.tax_percentage,
+    ];
+
+    for (const candidate of directCandidates) {
+      const rate = toFiniteNumber(candidate);
+      if (rate > 0) return rate;
+    }
+
+    const taxRateRef = product?.tax_rate;
+    if (taxRateRef !== undefined && taxRateRef !== null) {
+      const taxRateId = toFiniteNumber(typeof taxRateRef === 'object' ? taxRateRef.id : taxRateRef);
+      if (taxRateId > 0) {
+        return taxRateById.get(taxRateId) || 0;
+      }
+    }
+
+    return 0;
+  }, [taxRateById, toFiniteNumber]);
+
+  const getProductTaxInclusive = useCallback((product: any): boolean => {
+    if (!product) return false;
+
+    if (typeof product?.gst_inclusive === 'boolean') {
+      return product.gst_inclusive;
+    }
+
+    if (Array.isArray(product?.barcodes) && product.barcodes.length > 0) {
+      const preferred = product.barcodes.find((b: any) => b?.tag === 'new' || b?.tag === 'returned') || product.barcodes[0];
+      if (preferred && typeof preferred.gst_inclusive === 'boolean') {
+        return preferred.gst_inclusive;
+      }
+    }
+
+    return false;
+  }, []);
+
+  const calculateTaxDetails = useCallback(({
+    unitPrice,
+    quantity,
+    discountAmount,
+    taxRatePercent,
+    isInclusive,
+    priceMode,
+  }: {
+    unitPrice: number;
+    quantity: number;
+    discountAmount?: number;
+    taxRatePercent?: number;
+    isInclusive?: boolean;
+    priceMode?: 'gross' | 'base';
+  }): { taxAmount: number; unitPriceForStorage: number } => {
+    const safeUnitPrice = Math.max(0, toFiniteNumber(unitPrice));
+    const safeQuantity = Math.max(0, toFiniteNumber(quantity));
+    const safeDiscount = Math.max(0, toFiniteNumber(discountAmount ?? 0));
+    const safeRate = Math.max(0, toFiniteNumber(taxRatePercent ?? 0));
+    const inclusive = !!isInclusive;
+    const mode = priceMode || 'base';
+
+    if (safeQuantity <= 0 || safeRate <= 0) {
+      return { taxAmount: 0, unitPriceForStorage: safeUnitPrice };
+    }
+
+    if (!inclusive) {
+      const taxableBase = Math.max(0, (safeUnitPrice * safeQuantity) - safeDiscount);
+      const taxAmount = Number(((taxableBase * safeRate) / 100).toFixed(2));
+      return { taxAmount, unitPriceForStorage: safeUnitPrice };
+    }
+
+    if (mode === 'gross') {
+      const grossTotal = Math.max(0, (safeUnitPrice * safeQuantity) - safeDiscount);
+      const baseTotal = Number((grossTotal * 100 / (100 + safeRate)).toFixed(2));
+      const taxAmount = Number((grossTotal - baseTotal).toFixed(2));
+      const unitPriceForStorage = safeQuantity > 0 ? Number((baseTotal / safeQuantity).toFixed(2)) : safeUnitPrice;
+      return { taxAmount, unitPriceForStorage };
+    }
+
+    const taxableBase = Math.max(0, (safeUnitPrice * safeQuantity) - safeDiscount);
+    const taxAmount = Number(((taxableBase * safeRate) / 100).toFixed(2));
+    return { taxAmount, unitPriceForStorage: safeUnitPrice };
+  }, [toFiniteNumber]);
+
+  const deriveItemTaxRatePercent = useCallback((item: any): number => {
+    if (item?.tax_percent !== undefined && item?.tax_percent !== null) {
+      const explicitRate = Math.max(0, toFiniteNumber(item.tax_percent));
+      if (explicitRate > 0) return explicitRate;
+    }
+
+    const currentTax = Math.max(0, toFiniteNumber(item?.tax_amount));
+    const quantity = Math.max(0, toFiniteNumber(item?.quantity));
+    const unitPrice = Math.max(0, toFiniteNumber(item?.manual_unit_price ?? item?.unit_price));
+    const discount = Math.max(0, toFiniteNumber(item?.discount_amount));
+    const taxableBase = Math.max(0, (unitPrice * quantity) - discount);
+
+    if (taxableBase > 0 && currentTax > 0) {
+      return (currentTax / taxableBase) * 100;
+    }
+
+    return getProductTaxRatePercent(item);
+  }, [getProductTaxRatePercent, toFiniteNumber]);
+
+  const deriveItemTaxInclusive = useCallback((item: any): boolean => {
+    if (typeof item?.tax_is_inclusive === 'boolean') {
+      return item.tax_is_inclusive;
+    }
+    return false;
+  }, []);
+
+  const buildAddItemPayload = useCallback((product: any, basePayload: any) => {
+    const quantity = Math.max(0, toFiniteNumber(basePayload?.quantity ?? 1));
+    const unitPrice = Math.max(0, toFiniteNumber(basePayload?.unit_price ?? 0));
+    const discountAmount = Math.max(0, toFiniteNumber(basePayload?.discount_amount ?? 0));
+    const taxRatePercent = getProductTaxRatePercent(product);
+    const taxIsInclusive = getProductTaxInclusive(product);
+    const taxDetails = calculateTaxDetails({
+      unitPrice,
+      quantity,
+      discountAmount,
+      taxRatePercent,
+      isInclusive: taxIsInclusive,
+      priceMode: taxIsInclusive ? 'gross' : 'base',
+    });
+
+    return {
+      ...basePayload,
+      unit_price: taxDetails.unitPriceForStorage,
+      tax_amount: taxDetails.taxAmount,
+      gst_percent: taxRatePercent,
+      gst_inclusive: taxIsInclusive,
+    };
+  }, [calculateTaxDetails, getProductTaxInclusive, getProductTaxRatePercent, toFiniteNumber]);
+
   // Bulk add: parse barcodes (line or space separated)
   const parseBulkBarcodes = useCallback((text: string): string[] => {
     const raw = text.replace(/\r\n/g, '\n').split(/[\n\s]+/).map((s) => s.trim()).filter(Boolean);
@@ -227,6 +400,7 @@ export default function POS() {
           product: item.product_id,
           quantity: 1,
           unit_price: 0,
+          tax_amount: 0,
           barcode: item.barcode,
         });
       }
@@ -298,6 +472,7 @@ export default function POS() {
       return response.data;
     },
     retry: false,
+    staleTime: 0, // Always treat as stale so store config changes are picked up immediately
   });
 
   // Handle different response formats for stores
@@ -822,12 +997,14 @@ export default function POS() {
         // Add to cart
         // IMPORTANT: Pass the scannedBarcode to ensure backend uses THIS specific barcode
         // and doesn't auto-assign a new one if it's a serialized product
-        const result = await processItemMutation.mutateAsync({
-          product: productData.id,
-          quantity: 1,
-          unit_price: getInitialUnitPrice(productData),
-          barcode: scannedBarcodeForAdd
-        });
+        const result = await processItemMutation.mutateAsync(
+          buildAddItemPayload(productData, {
+            product: productData.id,
+            quantity: 1,
+            unit_price: getInitialUnitPrice(productData),
+            barcode: scannedBarcodeForAdd,
+          })
+        );
 
         const msg = result?.data?.message || 'Added';
 
@@ -2012,38 +2189,28 @@ export default function POS() {
       return;
     }
 
-    if (delta > 0) {
-      // Increment quantity
-      updateItemMutation.mutate(
-        {
-          itemId: item.id,
-          data: { action: 'increment' },
-        },
-        {
-          onError: (error: any) => {
-            let errorMessage = 'Unable to update item quantity';
+    const currentQty = Math.max(0, toFiniteNumber(item.quantity));
+    const nextQty = delta > 0 ? currentQty + 1 : Math.max(1, currentQty - 1);
+    const unitPrice = Math.max(0, toFiniteNumber(item.manual_unit_price ?? item.unit_price));
+    const discountAmount = Math.max(0, toFiniteNumber(item.discount_amount));
+    const taxRatePercent = deriveItemTaxRatePercent(item);
+    const taxIsInclusive = deriveItemTaxInclusive(item);
+    const nextTaxAmount = calculateTaxDetails({
+      unitPrice,
+      quantity: nextQty,
+      discountAmount,
+      taxRatePercent,
+      isInclusive: taxIsInclusive,
+      priceMode: 'base',
+    }).taxAmount;
 
-            if (error?.response?.data) {
-              const errorData = error.response.data;
-              errorMessage = errorData.message ||
-                errorData.error ||
-                errorData.detail ||
-                (typeof errorData === 'string' ? errorData : errorMessage);
-            } else if (error?.message) {
-              errorMessage = error.message;
-            }
-
-            showToast(errorMessage, 'error');
-          },
-        }
-      );
-    } else {
-      // Decrement quantity
-      updateItemMutation.mutate({
-        itemId: item.id,
-        data: { action: 'decrement' },
-      });
-    }
+    updateItemMutation.mutate({
+      itemId: item.id,
+      data: {
+        quantity: nextQty,
+        tax_amount: nextTaxAmount,
+      },
+    });
   };
 
   const handleCheckout = () => {
@@ -2641,11 +2808,11 @@ export default function POS() {
       // Use a promise-based approach for the mutation
       // Use canonical_barcode from API when present so cart stores the same value backend uses (no scan vs stored mismatch)
       return new Promise<void>((resolve, reject) => {
-        const mutationData: any = {
+        const mutationData: any = buildAddItemPayload(product, {
           product: product.id,
           quantity: 1,
           unit_price: getInitialUnitPrice(product),
-        };
+        });
 
         // Use canonical_barcode from API so what we send is exactly what gets stored in cart (concrete logic)
         const barcodeToSend = (product as any).canonical_barcode ?? matchedBarcode ?? trimmedBarcode;
@@ -2715,7 +2882,7 @@ export default function POS() {
       // Wholesale (non-admin) users must always use 'pending' — enforce and persist to backend
       if (isWholesaleGroup && !isWholesaleAdmin) {
         setInvoiceType('pending');
-        if (cart.data.invoice_type !== 'pending') {
+        if (cart.data.invoice_type !== 'pending' && cartId) {
           updateCartMutation.mutate({ invoice_type: 'pending' });
         }
         setCashAmount('');
@@ -2801,12 +2968,14 @@ export default function POS() {
       if (invoiceType !== 'pending') {
         setInvoiceType('pending');
       }
-    } else if (defaultStore?.shop_type !== 'repair' && defaultStore?.shop_type !== 'wholesale' && invoiceType === 'pending') {
-      // If switching from repair to retail shop, reset to 'cash' if currently 'pending'
-      // (Wholesale shop keeps pending/credit only; do not set cash)
-      if (!cartId || !cart?.data) {
+    } else if (defaultStore?.shop_type === 'retail') {
+      // Retail shop: always default to cash; reset if stuck on pending from a prior shop switch
+      if (invoiceType === 'pending') {
         setInvoiceType('cash');
       }
+    } else if (defaultStore?.shop_type !== 'repair' && defaultStore?.shop_type !== 'wholesale' && invoiceType === 'pending') {
+      // Non-repair, non-wholesale, non-retail shop: reset pending → cash
+      setInvoiceType('cash');
     }
   }, [defaultStore?.shop_type, invoiceType, cartId, cart?.data?.invoice_type, isWholesaleGroup, isWholesaleAdmin]);
 
@@ -3391,7 +3560,9 @@ export default function POS() {
                       setCashAmount('');
                       setUpiAmount('');
                     }
-                    updateCartMutation.mutate({ invoice_type: frontendToBackendInvoiceType(newType) });
+                    if (cartId) {
+                      updateCartMutation.mutate({ invoice_type: frontendToBackendInvoiceType(newType) });
+                    }
                   }}
                   className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg hover:border-gray-400 cursor-pointer transition-all"
                   disabled={isWholesaleGroup || isCartLocked}
@@ -3732,12 +3903,12 @@ export default function POS() {
                                     }, 5000);
                                     return;
                                   }
-                                  addItemMutation.mutate({
+                                  addItemMutation.mutate(buildAddItemPayload(product, {
                                     product: product.id,
                                     quantity: 1,
                                     unit_price: getInitialUnitPrice(product),
                                     barcode: barcodeCheck.data.matched_barcode || searchValue,
-                                  });
+                                  }));
                                   setBarcodeInput('');
                                   setProductSearchSelectedIndex(-1);
                                   return;
@@ -3759,11 +3930,11 @@ export default function POS() {
                               }
                             }
                             // Default: add product without barcode (backend will pick available one)
-                            addItemMutation.mutate({
+                            addItemMutation.mutate(buildAddItemPayload(product, {
                               product: product.id,
                               quantity: 1,
                               unit_price: getInitialUnitPrice(product),
-                            });
+                            }));
                             setBarcodeInput('');
                             setProductSearchSelectedIndex(-1);
                           };
@@ -4198,12 +4369,12 @@ export default function POS() {
                                         return; // Don't add to cart
                                       }
                                       // If barcode is available, use it
-                                      addItemMutation.mutate({
+                                      addItemMutation.mutate(buildAddItemPayload(product, {
                                         product: product.id,
                                         quantity: 1,
                                         unit_price: getInitialUnitPrice(product),
                                         barcode: barcodeCheck.data.matched_barcode || searchValue,
-                                      });
+                                      }));
                                       setBarcodeInput('');
                                       return;
                                     }
@@ -4229,12 +4400,12 @@ export default function POS() {
 
                                 // When clicking from search dropdown, it's a name search
                                 // Don't check for barcode - let backend pick random available SKU
-                                addItemMutation.mutate({
+                                addItemMutation.mutate(buildAddItemPayload(product, {
                                   product: product.id,
                                   quantity: 1,
                                   unit_price: getInitialUnitPrice(product),
                                   // Don't pass barcode - backend will find available barcode automatically
-                                });
+                                }));
                                 setBarcodeInput('');
                                 setProductSearchSelectedIndex(-1);
                               }}
@@ -4746,9 +4917,25 @@ export default function POS() {
                                       }
                                       // Save price for all invoice types (including pending)
                                       // Backend will validate even if frontend couldn't (e.g., when minPrice is 0)
+                                      const qty = Math.max(0, toFiniteNumber(item.quantity));
+                                      const discountAmount = Math.max(0, toFiniteNumber(item.discount_amount));
+                                      const taxRatePercent = deriveItemTaxRatePercent(item);
+                                      const taxIsInclusive = deriveItemTaxInclusive(item);
+                                      const nextTaxAmount = calculateTaxDetails({
+                                        unitPrice: price,
+                                        quantity: qty,
+                                        discountAmount,
+                                        taxRatePercent,
+                                        isInclusive: taxIsInclusive,
+                                        priceMode: 'base',
+                                      }).taxAmount;
+
                                       updateItemMutation.mutate({
                                         itemId: item.id,
-                                        data: { manual_unit_price: price },
+                                        data: {
+                                          manual_unit_price: price,
+                                          tax_amount: nextTaxAmount,
+                                        },
                                       });
                                       // Note: Editing state will be cleared in onSuccess handler of the mutation
                                       // If mutation fails, editing state is kept so user can see the error
@@ -4756,7 +4943,10 @@ export default function POS() {
                                       // Clear price if empty or 0
                                       updateItemMutation.mutate({
                                         itemId: item.id,
-                                        data: { manual_unit_price: null },
+                                        data: {
+                                          manual_unit_price: null,
+                                          tax_amount: 0,
+                                        },
                                       });
                                       // Clear editing state
                                       setEditingManualPrice((prev) => {
@@ -4973,39 +5163,6 @@ export default function POS() {
                       <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartTaxTotal)}` : '•••'}</span>
                     </div>
                   )}
-                  
-                  {cart?.data?.tax_bifurcation && Array.isArray(cart.data.tax_bifurcation) && cart.data.tax_bifurcation.length > 0 && showPurchasePrice && (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <div className="flex items-center gap-2 mb-2">
-                        <FileText className="h-4 w-4 text-indigo-500" />
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
-                      </div>
-                      <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-100/80">
-                            <tr>
-                              <th className="px-2 py-1 text-left text-[9px] font-bold text-gray-600 uppercase">Slab</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Base</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">CGST</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">SGST</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Tax</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200 bg-white">
-                            {cart.data.tax_bifurcation.map((slab: any, idx: number) => (
-                              <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-2 py-1 text-[10px] font-medium text-gray-900">{slab.rate}%</td>
-                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
-                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
-                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
-                                <td className="px-2 py-1 text-right text-[10px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
 
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
@@ -5031,39 +5188,6 @@ export default function POS() {
                       <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartTaxTotal)}` : '•••'}</span>
                     </div>
                   )}
-                  
-                  {cart?.data?.tax_bifurcation && Array.isArray(cart.data.tax_bifurcation) && cart.data.tax_bifurcation.length > 0 && showPurchasePrice && (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <div className="flex items-center gap-2 mb-2">
-                        <FileText className="h-4 w-4 text-indigo-500" />
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
-                      </div>
-                      <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-100/80">
-                            <tr>
-                              <th className="px-2 py-1 text-left text-[9px] font-bold text-gray-600 uppercase">Slab</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Base</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">CGST</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">SGST</th>
-                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Tax</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200 bg-white">
-                            {cart.data.tax_bifurcation.map((slab: any, idx: number) => (
-                              <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-2 py-1 text-[10px] font-medium text-gray-900">{slab.rate}%</td>
-                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
-                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
-                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
-                                <td className="px-2 py-1 text-right text-[10px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
 
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
@@ -5078,6 +5202,7 @@ export default function POS() {
                 className="w-full mb-2 shadow-md hover:shadow-lg transition-shadow"
                 size="lg"
                 onClick={handleCheckout}
+
                 disabled={
                   isCartLocked ||
                   checkoutMutation.isPending ||
@@ -5135,6 +5260,59 @@ export default function POS() {
               </Button>
             </div>
           </div>
+
+          {/* Tax Slabs block — separate from Order Summary */}
+          {cart?.data?.tax_bifurcation && Array.isArray(cart.data.tax_bifurcation) && cart.data.tax_bifurcation.length > 0 && showPurchasePrice && (
+            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 sticky top-4">
+              <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-200">
+                <FileText className="h-5 w-5 text-indigo-600 flex-shrink-0" />
+                <h2 className="text-xl font-bold text-gray-900">Tax Slabs</h2>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-gray-200">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-indigo-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Slab</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Taxable</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-bold text-indigo-700 uppercase tracking-wider">CGST</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-bold text-indigo-700 uppercase tracking-wider">SGST</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Total Tax</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 bg-white">
+                    {cart.data.tax_bifurcation.map((slab: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-indigo-50/40 transition-colors">
+                        <td className="px-3 py-2 text-[11px] font-semibold text-gray-900">{slab.rate}%</td>
+                        <td className="px-3 py-2 text-right text-[11px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
+                        <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
+                        <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
+                        <td className="px-3 py-2 text-right text-[11px] font-bold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {cart.data.tax_bifurcation.length > 1 && (
+                    <tfoot className="bg-indigo-50/60 border-t border-indigo-200">
+                      <tr>
+                        <td className="px-3 py-2 text-[10px] font-bold text-gray-700 uppercase">Total</td>
+                        <td className="px-3 py-2 text-right text-[11px] font-bold tabular-nums text-gray-800">
+                          ₹{formatNumber(cart.data.tax_bifurcation.reduce((s: number, sl: any) => s + parseFloat(sl.base_amount || '0'), 0))}
+                        </td>
+                        <td className="px-3 py-2 text-right text-[11px] font-bold tabular-nums text-indigo-700">
+                          ₹{formatNumber(cart.data.tax_bifurcation.reduce((s: number, sl: any) => s + parseFloat(sl.cgst || '0'), 0))}
+                        </td>
+                        <td className="px-3 py-2 text-right text-[11px] font-bold tabular-nums text-indigo-700">
+                          ₹{formatNumber(cart.data.tax_bifurcation.reduce((s: number, sl: any) => s + parseFloat(sl.sgst || '0'), 0))}
+                        </td>
+                        <td className="px-3 py-2 text-right text-[11px] font-bold tabular-nums text-gray-900">
+                          ₹{formatNumber(cartTaxTotal)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -5352,6 +5530,7 @@ export default function POS() {
                     custom_product_name: customProductName.trim(),
                     quantity: 1,
                     unit_price: 0,
+                    tax_amount: 0,
                   });
                   setShowCustomProductModal(false);
                   setCustomProductName('');
@@ -5373,6 +5552,7 @@ export default function POS() {
                   custom_product_name: customProductName.trim(),
                   quantity: 1,
                   unit_price: 0,
+                  tax_amount: 0,
                 });
                 setShowCustomProductModal(false);
                 setCustomProductName('');

@@ -167,8 +167,8 @@ export default function StockTransfers() {
   );
 
   const { data: storesRaw } = useQuery({
-    queryKey: ['stores', 'stock-transfers'],
-    queryFn: async () => (await catalogApi.stores.list()).data,
+    queryKey: ['stores', 'stock-transfers', 'all'],
+    queryFn: async () => (await catalogApi.stores.list({ all_stores: 1 })).data,
     retry: false,
   });
 

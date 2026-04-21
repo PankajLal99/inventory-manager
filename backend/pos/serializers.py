@@ -58,6 +58,56 @@ class CartItemSerializer(serializers.ModelSerializer):
     scanned_barcodes = serializers.JSONField(required=False, allow_null=True)
     scanned_barcodes_display = serializers.SerializerMethodField()
     tax_bifurcation = serializers.SerializerMethodField()
+    tax_percent = serializers.SerializerMethodField()
+    tax_is_inclusive = serializers.SerializerMethodField()
+
+    def _resolve_first_barcode(self, obj):
+        from backend.catalog.models import Barcode
+
+        if not obj.scanned_barcodes or len(obj.scanned_barcodes) == 0:
+            return None
+
+        first_val = str(obj.scanned_barcodes[0] or '').strip().upper()
+        if not first_val:
+            return None
+
+        retailer_id = getattr(getattr(obj, 'cart', None), 'retailer_id', None)
+        barcode_qs = Barcode.objects.all()
+        if retailer_id:
+            barcode_qs = barcode_qs.filter(retailer_id=retailer_id)
+
+        try:
+            return barcode_qs.get(barcode=first_val)
+        except Barcode.DoesNotExist:
+            try:
+                return barcode_qs.get(short_code=first_val)
+            except Barcode.DoesNotExist:
+                return None
+
+    def get_tax_percent(self, obj):
+        try:
+            barcode_obj = self._resolve_first_barcode(obj)
+            if barcode_obj and barcode_obj.purchase_item and barcode_obj.purchase_item.gst_percent is not None:
+                return float(barcode_obj.purchase_item.gst_percent)
+        except Exception:
+            pass
+
+        try:
+            if obj.product and obj.product.tax_rate and obj.product.tax_rate.rate is not None:
+                return float(obj.product.tax_rate.rate)
+        except Exception:
+            pass
+
+        return 0.0
+
+    def get_tax_is_inclusive(self, obj):
+        try:
+            barcode_obj = self._resolve_first_barcode(obj)
+            if barcode_obj and barcode_obj.purchase_item is not None:
+                return bool(barcode_obj.purchase_item.gst_inclusive)
+        except Exception:
+            pass
+        return False
     
     def get_tax_bifurcation(self, obj):
         try:
@@ -125,7 +175,7 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CartItem
-        fields = ['id', 'retailer', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display', 'tax_bifurcation']
+        fields = ['id', 'retailer', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'tax_percent', 'tax_is_inclusive', 'scanned_barcodes', 'scanned_barcodes_display', 'tax_bifurcation']
 
     def get_scanned_barcodes_display(self, obj):
         """Return display labels (short_code or barcode) for each scanned barcode for UI.

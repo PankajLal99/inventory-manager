@@ -10,6 +10,7 @@ from backend.core.cache_signals import (
 )
 from backend.core.utils import create_audit_log
 import uuid
+from decimal import Decimal, InvalidOperation
 
 
 def _get_purchase_location_or_raise(purchase):
@@ -20,6 +21,48 @@ def _get_purchase_location_or_raise(purchase):
     raise serializers.ValidationError(
         {'detail': 'Purchase location is required. Set either store or warehouse.'}
     )
+
+
+def _sync_product_tax_rate_from_purchase_gst(product, gst_percent, retailer_id=None):
+    """Ensure product.tax_rate matches non-zero GST entered on purchase items."""
+    if not product:
+        return
+
+    try:
+        gst = Decimal(str(gst_percent or 0)).quantize(Decimal('0.01'))
+    except (InvalidOperation, TypeError, ValueError):
+        return
+
+    if gst <= 0:
+        return
+
+    from backend.catalog.models import TaxRate
+
+    current_rate = getattr(getattr(product, 'tax_rate', None), 'rate', None)
+    if current_rate is not None:
+        try:
+            if Decimal(str(current_rate)).quantize(Decimal('0.01')) == gst:
+                return
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+
+    scoped_retailer_id = retailer_id or getattr(product, 'retailer_id', None)
+    qs = TaxRate.objects.filter(rate=gst)
+    if scoped_retailer_id:
+        qs = qs.filter(retailer_id=scoped_retailer_id)
+    tax_rate_obj = qs.order_by('-is_active', 'id').first()
+
+    if not tax_rate_obj:
+        tax_rate_obj = TaxRate.objects.create(
+            retailer_id=scoped_retailer_id,
+            name=f'GST {gst}%',
+            rate=gst,
+            is_active=True,
+        )
+
+    if product.tax_rate_id != tax_rate_obj.id:
+        product.tax_rate = tax_rate_obj
+        product.save(update_fields=['tax_rate'])
 
 
 def generate_barcodes_for_purchase_item(purchase_item, quantity):
@@ -578,6 +621,8 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 gst_percent = item_data.get('gst_percent', None)
                 if gst_percent in (None, ''):
                     gst_percent = getattr(tax_rate_obj, 'rate', 0) or 0
+                _sync_product_tax_rate_from_purchase_gst(product, gst_percent, purchase.retailer_id)
+                tax_rate_obj = product.tax_rate
                 purchase_item = PurchaseItem.objects.create(
                     purchase=purchase,
                     product=product,
@@ -922,13 +967,16 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 old_item.quantity = new_quantity
                 old_item.unit_price = new_price
                 old_item.selling_price = item_data.get('selling_price', old_item.selling_price)
-                # Keep item linked to product tax rate unless explicitly overridden via gst_percent.
-                old_item.tax_rate = old_item.product.tax_rate if old_item.product else old_item.tax_rate
                 incoming_gst = item_data.get('gst_percent', None)
                 if incoming_gst in (None, ''):
-                    old_item.gst_percent = getattr(old_item.tax_rate, 'rate', old_item.gst_percent) or old_item.gst_percent
+                    resolved_gst = getattr(old_item.product.tax_rate, 'rate', old_item.gst_percent) if old_item.product else old_item.gst_percent
                 else:
-                    old_item.gst_percent = incoming_gst
+                    resolved_gst = Decimal(str(incoming_gst))
+
+                _sync_product_tax_rate_from_purchase_gst(old_item.product, resolved_gst, instance.retailer_id)
+                # Keep item linked to (possibly updated) product tax rate.
+                old_item.tax_rate = old_item.product.tax_rate if old_item.product else old_item.tax_rate
+                old_item.gst_percent = resolved_gst or 0
                 old_item.gst_inclusive = bool(item_data.get('gst_inclusive', old_item.gst_inclusive))
                 old_item.save()
                 
@@ -1053,6 +1101,8 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 gst_percent = item_data.get('gst_percent', None)
                 if gst_percent in (None, ''):
                     gst_percent = getattr(tax_rate_obj, 'rate', 0) or 0
+                _sync_product_tax_rate_from_purchase_gst(product, gst_percent, instance.retailer_id)
+                tax_rate_obj = product.tax_rate
                 purchase_item = PurchaseItem.objects.create(
                     purchase=instance,
                     product=product,

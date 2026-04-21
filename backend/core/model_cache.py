@@ -87,13 +87,24 @@ def invalidate_store_cache(store_obj):
     """Invalidate all cache entries for a store"""
     if not store_obj:
         return
-    
-    # Invalidate by ID
+
+    # Invalidate individual store key
     store_key = get_store_cache_key(store_obj.id)
     cache.delete(store_key)
-    
-    # Invalidate all store lists (they might include this store)
-    # Use pattern deletion if available, otherwise rely on TTL
+
+    # Invalidate all store list cache keys by pattern
+    try:
+        con = cache.client.get_client()  # django-redis
+        pattern = f"*{STORE_LIST_KEY_PREFIX}*"
+        keys = con.keys(pattern)
+        if keys:
+            con.delete(*keys)
+            logger.debug(f"Deleted {len(keys)} store list cache keys for store {store_obj.id}")
+    except Exception:
+        # Fallback: delete the most common 'all' list keys directly
+        for suffix in ['all:all', 'all:aall']:
+            cache.delete(f"{STORE_LIST_KEY_PREFIX}r{getattr(store_obj, 'retailer_id', 'na')}:{suffix}")
+
     logger.debug(f"Invalidated cache for store: {store_obj.name} (ID: {store_obj.id})")
 
 

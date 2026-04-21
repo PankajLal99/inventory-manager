@@ -3,7 +3,7 @@ import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } f
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { isRetailCatalogRestricted } from '../../lib/access';
+import { isRetailCatalogRestricted, isStoreManagementAdmin } from '../../lib/access';
 import { getStockInfo, getProductNameColor } from '../../lib/utils';
 import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, ChevronDown, ChevronRight, Coins, FileText, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
@@ -21,6 +21,18 @@ export default function Products() {
   const navigate = useNavigate();
   const user = auth.getUser();
   const isRetailUser = isRetailCatalogRestricted(user);
+  const isAdminUser = isStoreManagementAdmin(user);
+  const userScopedStoreId = useMemo(() => {
+    if (isAdminUser) return null;
+    const defaultStoreId = Number(user?.default_store?.id);
+    if (Number.isFinite(defaultStoreId) && defaultStoreId > 0) return defaultStoreId;
+    const directStoreId = Number(user?.store?.id);
+    if (Number.isFinite(directStoreId) && directStoreId > 0) return directStoreId;
+    const assigned = Array.isArray(user?.assigned_stores) ? user.assigned_stores : [];
+    const firstAssigned = Number(assigned[0]?.id);
+    if (Number.isFinite(firstAssigned) && firstAssigned > 0) return firstAssigned;
+    return null;
+  }, [isAdminUser, user]);
   const [searchParams, setSearchParams] = useSearchParams();
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<number | undefined>();
@@ -143,6 +155,8 @@ export default function Products() {
     params.tag = tagFilter || 'new';
     // Exclude Other/Custom products (name starts with "Other -") from Products page list
     params.exclude_other_custom = 'true';
+    // Non-admin users must be scoped to their assigned/default shop inventory.
+    if (userScopedStoreId) params.store = userScopedStoreId;
     // Pagination
     params.page = currentPage;
     params.limit = 50;
@@ -151,7 +165,7 @@ export default function Products() {
 
   // Fetch products
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['products', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
+    queryKey: ['products', userScopedStoreId ?? 'all', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
     queryFn: async () => {
       const response = await productsApi.list(buildQueryParams());
       return response.data;
@@ -164,7 +178,7 @@ export default function Products() {
   useEffect(() => {
     setCurrentPage(1);
     setLoadedProducts([]);
-  }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
+  }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, userScopedStoreId]);
 
   useEffect(() => {
     if (!data) return;
@@ -360,6 +374,12 @@ export default function Products() {
     if (Array.isArray(storesResponse)) return storesResponse;
     return [];
   })();
+
+  const resolvedActionStoreId = useMemo(() => {
+    if (userScopedStoreId) return userScopedStoreId;
+    const firstStoreId = Number(stores[0]?.id);
+    return Number.isFinite(firstStoreId) && firstStoreId > 0 ? firstStoreId : null;
+  }, [userScopedStoreId, stores]);
 
   // const _warehouses = (() => {
   //   if (!warehousesResponse) return [];
@@ -829,15 +849,14 @@ export default function Products() {
   // Move out defective products - create move-out record with invoice
   const moveOutDefectiveMutation = useMutation({
     mutationFn: async (data: { productIds: number[]; barcodeIds: number[]; reason: string; notes: string }) => {
-      // Get first store for move-out
-      const store = stores.length > 0 ? stores[0] : null;
-      if (!store) {
+      const storeId = resolvedActionStoreId;
+      if (!storeId) {
         throw new Error('No store available. Please create a store first.');
       }
 
       // Call the new API endpoint
       const response = await catalogApi.defectiveProducts.moveOut({
-        store: store.id,
+        store: storeId,
         product_ids: data.productIds,
         barcode_ids: data.barcodeIds,
         reason: data.reason,
@@ -1136,9 +1155,8 @@ export default function Products() {
       notes: adjustmentData.notes || '',
     };
 
-    // Auto-select first store if available (backend will handle this)
-    if (stores.length > 0) {
-      submitData.store = stores[0].id;
+    if (resolvedActionStoreId) {
+      submitData.store = resolvedActionStoreId;
     }
 
     adjustmentMutation.mutate(submitData);
@@ -1728,6 +1746,7 @@ export default function Products() {
                                         onClick={() => {
                                           const params = new URLSearchParams();
                                           params.set('product', product.id.toString());
+                                          if (resolvedActionStoreId) params.set('store', String(resolvedActionStoreId));
                                           navigate(`/purchases?${params.toString()}`);
                                         }}
                                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
@@ -2304,6 +2323,7 @@ export default function Products() {
                                       onClick={() => {
                                         const params = new URLSearchParams();
                                         params.set('product', product.id.toString());
+                                        if (resolvedActionStoreId) params.set('store', String(resolvedActionStoreId));
                                         navigate(`/purchases?${params.toString()}`);
                                       }}
                                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
@@ -2616,6 +2636,7 @@ export default function Products() {
                             onClick={() => {
                               const params = new URLSearchParams();
                               params.set('product', product.id.toString());
+                              if (resolvedActionStoreId) params.set('store', String(resolvedActionStoreId));
                               navigate(`/purchases?${params.toString()}`);
                             }}
                             className="flex items-center justify-center w-7 h-7 text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"

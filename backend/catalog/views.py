@@ -1683,6 +1683,14 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
     status_message, barcode_status = get_barcode_status_message(barcode_obj, sold_invoice)
     response_data['barcode_status'] = barcode_status
     response_data['barcode_status_message'] = status_message
+
+    purchase_item = getattr(barcode_obj, 'purchase_item', None)
+    if purchase_item is not None:
+        response_data['gst_percent'] = float(getattr(purchase_item, 'gst_percent', 0) or 0)
+        response_data['gst_inclusive'] = bool(getattr(purchase_item, 'gst_inclusive', False))
+    else:
+        response_data['gst_percent'] = float(getattr(getattr(product, 'tax_rate', None), 'rate', 0) or 0)
+        response_data['gst_inclusive'] = False
     
     if is_sold and sold_invoice:
         response_data['sold_invoice'] = sold_invoice
@@ -1883,6 +1891,10 @@ def barcode_by_barcode(request, barcode=None):
                     response_data['barcode_id'] = product_barcode.id
                     response_data['barcode_tag'] = product_barcode.tag
                     response_data['barcode_available'] = product_barcode.tag in ['new', 'returned']
+                    purchase_item = getattr(product_barcode, 'purchase_item', None)
+                    if purchase_item is not None:
+                        response_data['gst_percent'] = float(getattr(purchase_item, 'gst_percent', 0) or 0)
+                        response_data['gst_inclusive'] = bool(getattr(purchase_item, 'gst_inclusive', False))
                     
                     # Get status message based on tag
                     status_message, barcode_status = get_barcode_status_message(product_barcode, sold_invoice)
@@ -1946,6 +1958,10 @@ def barcode_by_barcode(request, barcode=None):
                     response_data['canonical_barcode'] = product_barcode.barcode
                     response_data['barcode_tag'] = product_barcode.tag
                     response_data['barcode_available'] = product_barcode.tag in ['new', 'returned']
+                    purchase_item = getattr(product_barcode, 'purchase_item', None)
+                    if purchase_item is not None:
+                        response_data['gst_percent'] = float(getattr(purchase_item, 'gst_percent', 0) or 0)
+                        response_data['gst_inclusive'] = bool(getattr(purchase_item, 'gst_inclusive', False))
                     
                     # Get status message based on tag
                     status_message, barcode_status = get_barcode_status_message(product_barcode, sold_invoice)
@@ -2019,6 +2035,10 @@ def barcode_by_barcode(request, barcode=None):
                 response_data['barcode_id'] = searched_barcode_obj.id
                 response_data['barcode_tag'] = searched_barcode_obj.tag
                 response_data['barcode_available'] = searched_barcode_obj.tag in ['new', 'returned']
+                purchase_item = getattr(searched_barcode_obj, 'purchase_item', None)
+                if purchase_item is not None:
+                    response_data['gst_percent'] = float(getattr(purchase_item, 'gst_percent', 0) or 0)
+                    response_data['gst_inclusive'] = bool(getattr(purchase_item, 'gst_inclusive', False))
                 
                 # Get status message based on tag
                 status_message, barcode_status = get_barcode_status_message(searched_barcode_obj, sold_invoice)

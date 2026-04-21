@@ -48,6 +48,8 @@ def store_list_create(request):
             # Filter stores based on user groups
             shop_types = get_shop_types_for_user(request.user)
 
+            all_stores_requested = request.query_params.get('all_stores') == '1'
+
             # Create cache key based on user groups and explicit store assignments
             user_groups_key = 'all' if shop_types is None else '-'.join(sorted(shop_types))
             assigned_ids = list(
@@ -55,7 +57,7 @@ def store_list_create(request):
             )
             assignment_key = (
                 'all'
-                if not assigned_ids
+                if (not assigned_ids or all_stores_requested)
                 else 'as-' + '-'.join(str(i) for i in sorted(assigned_ids))
             )
             from backend.core.model_cache import get_store_list_cache_key, STORE_LIST_CACHE_TTL
@@ -78,9 +80,12 @@ def store_list_create(request):
                 stores = base.filter(shop_type__in=shop_types)
                 logger.debug(f"Filtering stores by shop_types: {shop_types}")
 
-            if assigned_ids:
+            all_stores_requested = request.query_params.get('all_stores') == '1'
+            if assigned_ids and not all_stores_requested:
                 stores = stores.filter(id__in=assigned_ids)
                 logger.debug(f"Filtering stores by user assignment: {assigned_ids}")
+            elif all_stores_requested:
+                logger.debug(f"all_stores=1 requested by {request.user.username} — returning all retailer stores")
             
             serializer = StoreSerializer(stores, many=True)
             response_data = serializer.data
@@ -155,7 +160,9 @@ def store_detail(request, pk):
             logger.info(f"User {request.user.username} updating store {pk} with data: {request.data}")
             serializer = StoreSerializer(store, data=request.data)
             if serializer.is_valid():
-                serializer.save()
+                updated_store = serializer.save()
+                from backend.core.model_cache import invalidate_store_cache
+                invalidate_store_cache(updated_store)
                 logger.info(f"Store {pk} updated successfully")
                 return Response(serializer.data)
             logger.warning(f"Store update validation failed: {serializer.errors}")
@@ -164,13 +171,17 @@ def store_detail(request, pk):
             logger.info(f"User {request.user.username} patching store {pk} with data: {request.data}")
             serializer = StoreSerializer(store, data=request.data, partial=True)
             if serializer.is_valid():
-                serializer.save()
+                updated_store = serializer.save()
+                from backend.core.model_cache import invalidate_store_cache
+                invalidate_store_cache(updated_store)
                 logger.info(f"Store {pk} patched successfully")
                 return Response(serializer.data)
             logger.warning(f"Store patch validation failed: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         else:  # DELETE
             logger.info(f"User {request.user.username} deleting store {pk} ({store.name})")
+            from backend.core.model_cache import invalidate_store_cache
+            invalidate_store_cache(store)
             store.delete()
             logger.info(f"Store {pk} deleted successfully")
             return Response(status=status.HTTP_204_NO_CONTENT)

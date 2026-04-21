@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from .models import Purchase, PurchaseItem, PurchaseStockMovement
 from .serializers import PurchaseSerializer, PurchaseItemSerializer
 from backend.core.utils import create_audit_log
-from backend.core.tenant_api import require_active_retailer
+from backend.core.tenant_api import require_active_retailer, get_user_allowed_store_ids
 from backend.inventory.models import Stock
 from decimal import Decimal
 
@@ -42,6 +42,11 @@ def purchase_list_create(request):
         queryset = Purchase.objects.prefetch_related('items', 'items__product').all()
         if retailer:
             queryset = queryset.filter(retailer_id=retailer.id)
+        allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+        should_scope_to_allowed = bool(
+            request.user.assigned_stores.filter(retailer_id=retailer.id, is_active=True).exists()
+            or getattr(request.user, 'default_store_id', None)
+        )
         
         # Filters
         supplier = request.query_params.get('supplier', None)
@@ -49,6 +54,7 @@ def purchase_list_create(request):
         date_from = request.query_params.get('date_from', None)
         date_to = request.query_params.get('date_to', None)
         status_filter = request.query_params.get('status', None)
+        store_id = request.query_params.get('store', None)
 
         if supplier:
             queryset = queryset.filter(supplier_id=supplier)
@@ -60,6 +66,19 @@ def purchase_list_create(request):
             queryset = queryset.filter(purchase_date__lte=date_to)
         if status_filter:
             queryset = queryset.filter(status=status_filter)
+        if store_id:
+            try:
+                sid = int(store_id)
+            except (TypeError, ValueError):
+                return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+            if sid not in allowed_store_ids:
+                return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
+            queryset = queryset.filter(store_id=sid)
+        elif should_scope_to_allowed:
+            if not allowed_store_ids:
+                queryset = queryset.none()
+            else:
+                queryset = queryset.filter(store_id__in=allowed_store_ids)
 
         # Order by latest purchase creation (most recently created first)
         queryset = queryset.order_by('-id', '-created_at')
@@ -94,10 +113,18 @@ def purchase_list_create(request):
     else:  # POST
         data = request.data.copy()
         items_data = data.pop('items', [])
+        allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
         if retailer and not data.get('store') and not data.get('warehouse'):
             location_defaults = _resolve_default_purchase_location(request, retailer)
             for key, value in location_defaults.items():
                 data[key] = value
+        if data.get('store'):
+            try:
+                sid = int(data.get('store'))
+            except (TypeError, ValueError):
+                return Response({'detail': 'Invalid store.'}, status=status.HTTP_400_BAD_REQUEST)
+            if sid not in allowed_store_ids:
+                return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
         
         serializer = PurchaseSerializer(
             data=data,
@@ -122,6 +149,13 @@ def purchase_detail(request, pk):
     purchase_qs = Purchase.objects.prefetch_related('items', 'items__product').all()
     if retailer:
         purchase_qs = purchase_qs.filter(retailer_id=retailer.id)
+        allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+        should_scope_to_allowed = bool(
+            request.user.assigned_stores.filter(retailer_id=retailer.id, is_active=True).exists()
+            or getattr(request.user, 'default_store_id', None)
+        )
+        if should_scope_to_allowed:
+            purchase_qs = purchase_qs.filter(store_id__in=allowed_store_ids)
     purchase = get_object_or_404(purchase_qs, pk=pk)
     
     if request.method == 'GET':
@@ -130,6 +164,14 @@ def purchase_detail(request, pk):
     elif request.method == 'PUT':
         data = request.data.copy()
         items_data = data.pop('items', None)
+        if retailer and data.get('store'):
+            allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+            try:
+                sid = int(data.get('store'))
+            except (TypeError, ValueError):
+                return Response({'detail': 'Invalid store.'}, status=status.HTTP_400_BAD_REQUEST)
+            if sid not in allowed_store_ids:
+                return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
         
         serializer = PurchaseSerializer(
             purchase, 
@@ -145,6 +187,14 @@ def purchase_detail(request, pk):
     elif request.method == 'PATCH':
         data = request.data.copy()
         items_data = data.pop('items', None)
+        if retailer and data.get('store'):
+            allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+            try:
+                sid = int(data.get('store'))
+            except (TypeError, ValueError):
+                return Response({'detail': 'Invalid store.'}, status=status.HTTP_400_BAD_REQUEST)
+            if sid not in allowed_store_ids:
+                return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
         
         serializer = PurchaseSerializer(
             purchase, 

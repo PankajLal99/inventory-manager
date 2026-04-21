@@ -1960,7 +1960,7 @@ export default function InvoiceDetail() {
                 ${inv.tax_bifurcation && Array.isArray(inv.tax_bifurcation) && inv.tax_bifurcation.length > 0 ? `
                 <tr>
                   <td colspan="5" style="border-top: 1px solid #000; padding: 10px 0 5px 0;">
-                    <p style="font-size: 11px; font-weight: bold; margin-bottom: 5px; text-decoration: underline;">GST ANALYSIS</p>
+                    <p style="font-size: 11px; font-weight: bold; margin-bottom: 5px; text-decoration:;">GST BREAKDOWN</p>
                     <table style="width: 100%; border: 1px solid #000; margin-bottom: 0;">
                       <thead>
                         <tr>
@@ -2278,8 +2278,7 @@ export default function InvoiceDetail() {
           const productDisplay = group.brand
             ? `${group.name} (${group.brand})`
             : group.name;
-          // Truncate for thermal printer (max 20 chars)
-          const displayText = productDisplay.substring(0, 20);
+          const displayText = productDisplay;
           const productColor = getProductNameColor(group.name);
           const productColorStyle = productColor ? ` style="color: ${productColor};"` : '';
 
@@ -2293,7 +2292,7 @@ export default function InvoiceDetail() {
 
           return `
                     <tr>
-                      <td${productColorStyle}>${displayText}</td>
+                      <td${productColorStyle} style="word-break:break-word;white-space:normal;">${displayText}</td>
                       <td class="text-right">${group.totalQuantity}</td>
                       <td class="text-right">₹${formatNumber(group.avgPrice)}</td>
                       <td class="text-right">₹${formatNumber(group.totalAmount)}</td>

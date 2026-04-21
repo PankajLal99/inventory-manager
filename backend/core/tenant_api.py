@@ -84,14 +84,13 @@ def get_user_allowed_store_ids(user, retailer):
     """
     from backend.locations.models import Store
 
-    if user.is_superuser or user.is_staff:
-        return list(Store.objects.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True))
-
     assigned_ids = list(
         user.assigned_stores.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True)
     )
     if assigned_ids:
         return assigned_ids
+    if user.is_superuser or user.is_staff:
+        return list(Store.objects.filter(retailer_id=retailer.id, is_active=True).values_list('id', flat=True))
     if getattr(user, 'default_store_id', None):
         return [user.default_store_id]
     if getattr(retailer, 'primary_store_id', None):
