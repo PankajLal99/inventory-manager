@@ -227,6 +227,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000","http://13.127.116.174:8000",
     "http://mtpos.intratechnosolutions.com","http://13.127.116.174",
     "https://mtpos.intratechnosolutions.com",
+    "https://pos-api.intratechno.com",
     "http://localhost","http://localhost:8765",
     "http://127.0.0.1","http://127.0.0.1:8765",
 ]
