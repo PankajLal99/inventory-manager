@@ -1955,6 +1955,44 @@ export default function InvoiceDetail() {
                   <td></td>
                   <td style="text-align: right;"><strong>${formatNumber(totalAmount, 2)}</strong></td>
                 </tr>
+
+                <!-- GST Analysis Section -->
+                ${inv.tax_bifurcation && Array.isArray(inv.tax_bifurcation) && inv.tax_bifurcation.length > 0 ? `
+                <tr>
+                  <td colspan="5" style="border-top: 1px solid #000; padding: 10px 0 5px 0;">
+                    <p style="font-size: 11px; font-weight: bold; margin-bottom: 5px; text-decoration: underline;">GST ANALYSIS</p>
+                    <table style="width: 100%; border: 1px solid #000; margin-bottom: 0;">
+                      <thead>
+                        <tr>
+                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000;">Tax Slab</th>
+                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">Taxable Val</th>
+                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">CGST</th>
+                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">SGST</th>
+                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">Total Tax</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${inv.tax_bifurcation.map((slab: any) => `
+                        <tr>
+                          <td style="font-size: 10px; border: 1px solid #000;">GST ${slab.rate}%</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.base_amount, 2)}</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.cgst, 2)}</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.sgst, 2)}</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.total_tax, 2)}</td>
+                        </tr>
+                        `).join('')}
+                        <tr style="background: #f9f9f9; font-weight: bold;">
+                          <td style="font-size: 10px; border: 1px solid #000;">Total</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_bifurcation.reduce((s: number, b: any) => s + b.base_amount, 0), 2)}</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_bifurcation.reduce((s: number, b: any) => s + b.cgst, 0), 2)}</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_bifurcation.reduce((s: number, b: any) => s + b.sgst, 0), 2)}</td>
+                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_amount, 2)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </td>
+                </tr>
+                ` : ''}
                 ${inv.customer && customerHasCreditInvoice && inv.status !== 'paid' ? `
                 <tr style="border-top: 1px dashed #000;">
                   <td style="padding-top: 8px;">Old Balance</td>
@@ -1998,6 +2036,7 @@ export default function InvoiceDetail() {
 
             <!-- Footer -->
             <div class="footer">
+              <p>Thank you for shopping with us!</p>
               <p>This is a Computer Generated Invoice</p>
             </div>
           </div>
@@ -2276,9 +2315,26 @@ export default function InvoiceDetail() {
             </div>
             ` : ''}
           ${parseFloat(invoice.tax_amount || '0') > 0 ? `
-            <div class="summary-row">
-              <span>Tax:</span>
-              <span>₹${formatNumber(invoice.tax_amount || '0')}</span>
+            <div class="summary-row" style="margin-top:2px; border-top: 1px dotted #ccc; padding-top:2px;">
+              <span style="font-weight:bold;">GST Breakdown:</span>
+            </div>
+            ${(invoice.tax_bifurcation || []).map((slab: any) => `
+              <div class="summary-row" style="padding-left: 5px;">
+                <span>GST ${slab.rate}%</span>
+                <span>₹${formatNumber(slab.total_tax)}</span>
+              </div>
+              <div class="summary-row" style="padding-left: 10px; font-size: 8px; color: #555;">
+                <span>CGST (${(slab.rate / 2).toFixed(1)}%)</span>
+                <span>₹${formatNumber(slab.cgst)}</span>
+              </div>
+              <div class="summary-row" style="padding-left: 10px; font-size: 8px; color: #555;">
+                <span>SGST (${(slab.rate / 2).toFixed(1)}%)</span>
+                <span>₹${formatNumber(slab.sgst)}</span>
+              </div>
+            `).join('')}
+            <div class="summary-row" style="border-top: 1px dotted #ccc; padding-top:2px; margin-top:2px;">
+              <span style="font-weight:bold;">Total GST:</span>
+              <span style="font-weight:bold;">₹${formatNumber(invoice.tax_amount)}</span>
             </div>
             ` : ''}
           ${parseFloat(invoice.trade_in_credit || '0') > 0 ? `
@@ -2320,7 +2376,7 @@ export default function InvoiceDetail() {
             ` : ''}
         </div>
         <div class="footer">
-          <p>Thank you for your business!</p>
+          <p style="font-weight: bold; font-size: 10px;">Thank you for shopping with us!</p>
         </div>
       </body>
     </html>
@@ -2855,8 +2911,42 @@ export default function InvoiceDetail() {
                 )}
                 {parseFloat(inv.tax_amount || '0') > 0 && (
                   <div className="flex justify-between items-center py-2">
-                    <span className="text-sm text-gray-600">Tax</span>
-                    <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.tax_amount || '0')}</span>
+                    <span className="text-sm text-gray-600">GST Total</span>
+                    <span className="text-sm font-medium text-gray-900">₹{formatNumber(inv.tax_amount)}</span>
+                  </div>
+                )}
+
+                {/* GST Bifurcation Table */}
+                {inv.tax_bifurcation && Array.isArray(inv.tax_bifurcation) && inv.tax_bifurcation.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <div className="flex items-center gap-2 mb-2">
+                      <FileText className="h-4 w-4 text-indigo-500" />
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
+                    </div>
+                    <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-100/80">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-600 uppercase">Slab</th>
+                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">Base</th>
+                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">CGST</th>
+                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">SGST</th>
+                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">Tax</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 bg-white">
+                          {inv.tax_bifurcation.map((slab: any, idx: number) => (
+                            <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-3 py-2 text-[11px] font-medium text-gray-900">{slab.rate}%</td>
+                              <td className="px-3 py-2 text-right text-[11px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
+                              <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
+                              <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
+                              <td className="px-3 py-2 text-right text-[11px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
                 <div className="flex justify-between items-center py-2">

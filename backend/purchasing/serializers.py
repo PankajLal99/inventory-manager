@@ -392,7 +392,7 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_track_inventory', 'variant', 'variant_name', 'variant_sku', 'quantity', 'shop_quantity', 'warehouse_quantity', 'unit_price', 'selling_price', 'tax_rate', 'tax_rate_name', 'gst_percent', 'gst_inclusive', 'line_total', 'sold_count', 'printed', 'printed_at']
+        fields = ['id', 'retailer', 'product', 'product_name', 'product_sku', 'product_track_inventory', 'variant', 'variant_name', 'variant_sku', 'quantity', 'shop_quantity', 'warehouse_quantity', 'unit_price', 'selling_price', 'tax_rate', 'tax_rate_name', 'gst_percent', 'gst_inclusive', 'line_total', 'sold_count', 'printed', 'printed_at']
     
     def get_line_total(self, obj):
         return float(obj.get_line_total())

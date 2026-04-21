@@ -130,11 +130,11 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME', 'posdb'),
-            'USER': os.getenv('DB_USER', 'posuser'),
-            'PASSWORD': os.getenv('DB_PASSWORD', ''),
-            'HOST': os.getenv('DB_HOST', '127.0.0.1'),
-            'PORT': os.getenv('DB_PORT', '5432'),
+            'NAME': os.environ.get('POSTGRES_DB', 'multiposdb'),
+            'USER': os.environ.get('POSTGRES_USER', 'multiposdb_user'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('POSTGRES_HOST', '172.18.0.1'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
             'OPTIONS': {
                 # Try without SSL first, or set to 'require' if SSL is required
                 'sslmode': os.getenv('DB_SSLMODE', 'disable'),

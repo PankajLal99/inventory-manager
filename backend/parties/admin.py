@@ -8,32 +8,32 @@ from .models import (
 
 @admin.register(CustomerGroup)
 class CustomerGroupAdmin(admin.ModelAdmin):
-    list_display = ['name', 'discount_percentage', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'discount_percentage', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(Customer)
 class CustomerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'phone', 'email', 'customer_group', 'credit_balance', 'is_active', 'created_at']
-    list_filter = ['is_active', 'customer_group', 'created_at']
+    list_display = ['retailer', 'name', 'phone', 'email', 'customer_group', 'credit_balance', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'customer_group', 'created_at']
     search_fields = ['name', 'phone', 'email']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ['name', 'code', 'phone', 'email', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'code', 'phone', 'email', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name', 'code', 'email']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(LedgerEntry)
 class LedgerEntryAdmin(admin.ModelAdmin):
-    list_display = ['id', 'customer', 'entry_type', 'amount', 'description', 'invoice', 'created_by', 'created_at']
-    list_filter = ['entry_type', 'created_at', 'created_by']
+    list_display = ['id', 'retailer', 'customer', 'entry_type', 'amount', 'description', 'invoice', 'created_by', 'created_at']
+    list_filter = ['retailer', 'entry_type', 'created_at', 'created_by']
     search_fields = ['customer__name', 'customer__phone', 'description', 'invoice__invoice_number']
     readonly_fields = ['created_at']
     ordering = ['-created_at']
@@ -42,16 +42,16 @@ class LedgerEntryAdmin(admin.ModelAdmin):
 
 @admin.register(PersonalCustomer)
 class PersonalCustomerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'phone', 'email', 'credit_balance', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'phone', 'email', 'credit_balance', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name', 'phone', 'email']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(PersonalLedgerEntry)
 class PersonalLedgerEntryAdmin(admin.ModelAdmin):
-    list_display = ['id', 'customer', 'entry_type', 'amount', 'description', 'created_by', 'created_at']
-    list_filter = ['entry_type', 'created_at', 'created_by']
+    list_display = ['id', 'retailer', 'customer', 'entry_type', 'amount', 'description', 'created_by', 'created_at']
+    list_filter = ['retailer', 'entry_type', 'created_at', 'created_by']
     search_fields = ['customer__name', 'customer__phone', 'description']
     readonly_fields = ['created_at']
     ordering = ['-created_at']
@@ -60,16 +60,16 @@ class PersonalLedgerEntryAdmin(admin.ModelAdmin):
 
 @admin.register(InternalCustomer)
 class InternalCustomerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'phone', 'email', 'credit_balance', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'phone', 'email', 'credit_balance', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name', 'phone', 'email']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(InternalLedgerEntry)
 class InternalLedgerEntryAdmin(admin.ModelAdmin):
-    list_display = ['id', 'customer', 'entry_type', 'amount', 'description', 'created_by', 'created_at']
-    list_filter = ['entry_type', 'created_at', 'created_by']
+    list_display = ['id', 'retailer', 'customer', 'entry_type', 'amount', 'description', 'created_by', 'created_at']
+    list_filter = ['retailer', 'entry_type', 'created_at', 'created_by']
     search_fields = ['customer__name', 'customer__phone', 'description']
     readonly_fields = ['created_at']
     ordering = ['-created_at']
@@ -78,7 +78,7 @@ class InternalLedgerEntryAdmin(admin.ModelAdmin):
 
 @admin.register(PaymentReminder)
 class PaymentReminderAdmin(admin.ModelAdmin):
-    list_display = ['id', 'customer', 'due_date', 'due_amount', 'is_settled', 'settled_payment', 'settled_at', 'created_at']
-    list_filter = ['is_settled', 'due_date', 'customer__customer_group', 'created_at']
+    list_display = ['id', 'retailer', 'customer', 'due_date', 'due_amount', 'is_settled', 'settled_payment', 'settled_at', 'created_at']
+    list_filter = ['retailer', 'is_settled', 'due_date', 'customer__customer_group', 'created_at']
     search_fields = ['customer__name', 'customer__phone']
     ordering = ['due_date', 'customer__name']

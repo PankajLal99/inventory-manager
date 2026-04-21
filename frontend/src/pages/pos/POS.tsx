@@ -2826,7 +2826,12 @@ export default function POS() {
     }, 0);
   }, [cart?.data?.items, editingManualPrice]);
 
-  const calculateTotal = () => cartGrossSubtotal - tradeInCredit;
+  const cartTaxTotal = useMemo(() => {
+    if (!cart?.data?.tax_bifurcation || !Array.isArray(cart.data.tax_bifurcation)) return 0;
+    return cart.data.tax_bifurcation.reduce((sum: number, slab: any) => sum + parseFloat(slab.total_tax || '0'), 0);
+  }, [cart?.data?.tax_bifurcation]);
+
+  const calculateTotal = () => cartGrossSubtotal - tradeInCredit + cartTaxTotal;
 
   const calculateTotalQuantity = () => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
@@ -4962,6 +4967,46 @@ export default function POS() {
                       <span className="text-sm font-semibold">{showPurchasePrice ? `−₹${formatNumber(tradeInCredit)}` : '•••'}</span>
                     </div>
                   )}
+                  {cartTaxTotal > 0 && (
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-sm font-medium text-gray-600">GST Total</span>
+                      <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartTaxTotal)}` : '•••'}</span>
+                    </div>
+                  )}
+                  
+                  {cart?.data?.tax_bifurcation && Array.isArray(cart.data.tax_bifurcation) && cart.data.tax_bifurcation.length > 0 && showPurchasePrice && (
+                    <div className="mt-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className="h-4 w-4 text-indigo-500" />
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
+                      </div>
+                      <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-100/80">
+                            <tr>
+                              <th className="px-2 py-1 text-left text-[9px] font-bold text-gray-600 uppercase">Slab</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Base</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">CGST</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">SGST</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Tax</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200 bg-white">
+                            {cart.data.tax_bifurcation.map((slab: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-2 py-1 text-[10px] font-medium text-gray-900">{slab.rate}%</td>
+                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
+                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
+                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
+                                <td className="px-2 py-1 text-right text-[10px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
                     <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
@@ -4980,10 +5025,46 @@ export default function POS() {
                       <span className="text-sm font-semibold">{showPurchasePrice ? `−₹${formatNumber(tradeInCredit)}` : '•••'}</span>
                     </div>
                   )}
-                  <div className="flex justify-between items-center py-2">
-                    <span className="text-sm font-medium text-gray-600">Tax</span>
-                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(0)}` : '•••'}</span>
-                  </div>
+                  {cartTaxTotal > 0 && (
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-sm font-medium text-gray-600">GST Total</span>
+                      <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartTaxTotal)}` : '•••'}</span>
+                    </div>
+                  )}
+                  
+                  {cart?.data?.tax_bifurcation && Array.isArray(cart.data.tax_bifurcation) && cart.data.tax_bifurcation.length > 0 && showPurchasePrice && (
+                    <div className="mt-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className="h-4 w-4 text-indigo-500" />
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
+                      </div>
+                      <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-100/80">
+                            <tr>
+                              <th className="px-2 py-1 text-left text-[9px] font-bold text-gray-600 uppercase">Slab</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Base</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">CGST</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">SGST</th>
+                              <th className="px-2 py-1 text-right text-[9px] font-bold text-gray-600 uppercase">Tax</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200 bg-white">
+                            {cart.data.tax_bifurcation.map((slab: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-2 py-1 text-[10px] font-medium text-gray-900">{slab.rate}%</td>
+                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
+                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
+                                <td className="px-2 py-1 text-right text-[10px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
+                                <td className="px-2 py-1 text-right text-[10px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
                     <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>

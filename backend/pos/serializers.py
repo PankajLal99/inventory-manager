@@ -57,6 +57,38 @@ class CartItemSerializer(serializers.ModelSerializer):
     cart = serializers.PrimaryKeyRelatedField(read_only=True)
     scanned_barcodes = serializers.JSONField(required=False, allow_null=True)
     scanned_barcodes_display = serializers.SerializerMethodField()
+    tax_bifurcation = serializers.SerializerMethodField()
+    
+    def get_tax_bifurcation(self, obj):
+        try:
+            from backend.core.gst_utils import calculate_gst_bifurcation
+            
+            tax_amt = Decimal(str(obj.tax_amount or '0'))
+            if tax_amt <= 0:
+                return None
+                
+            qty = Decimal(str(obj.quantity or '0'))
+            if qty <= 0:
+                return None
+                
+            # Deriving effective base since it's not explicitly stored line_total
+            unit_price = Decimal(str(obj.manual_unit_price if obj.manual_unit_price is not None else obj.unit_price) or '0')
+            line_total = unit_price * qty - Decimal(str(obj.discount_amount or '0')) + tax_amt
+            
+            base = line_total - tax_amt
+            if base <= 0:
+                return None
+                
+            rate = (tax_amt / base) * Decimal('100')
+            
+            return calculate_gst_bifurcation(
+                unit_price=base/qty,
+                quantity=qty,
+                tax_rate=rate,
+                is_inclusive=False
+            )
+        except Exception:
+            return None
 
     def get_product_brand_name(self, obj):
         """Get product brand name"""
@@ -93,7 +125,7 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CartItem
-        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
+        fields = ['id', 'retailer', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display', 'tax_bifurcation']
 
     def get_scanned_barcodes_display(self, obj):
         """Return display labels (short_code or barcode) for each scanned barcode for UI.
@@ -233,10 +265,72 @@ class CartSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
+    tax_bifurcation = serializers.SerializerMethodField()
+
+    def get_tax_bifurcation(self, obj):
+        items = obj.items.all()
+        slabs = {}
+        
+        for item in items:
+            item_tax = Decimal(str(item.tax_amount or '0'))
+            if item_tax <= 0:
+                continue
+                
+            qty = Decimal(str(item.quantity or '0'))
+            if qty <= 0:
+                continue
+                
+            unit_price = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
+            line_total = unit_price * qty - Decimal(str(item.discount_amount or '0')) + item_tax
+            
+            base = line_total - item_tax
+            if base <= 0:
+                continue
+                
+            rate = (item_tax / base) * Decimal('100')
+            rate_key = float(rate.quantize(Decimal('0.01')))
+            
+            if rate_key not in slabs:
+                slabs[rate_key] = {
+                    'rate': rate_key,
+                    'base_amount': Decimal('0.00'),
+                    'total_tax': Decimal('0.00'),
+                    'cgst': Decimal('0.00'),
+                    'sgst': Decimal('0.00'),
+                    'igst': Decimal('0.00'),
+                }
+            
+            from backend.core.gst_utils import calculate_gst_bifurcation
+            bif = calculate_gst_bifurcation(
+                unit_price=base/qty,
+                quantity=qty,
+                tax_rate=rate,
+                is_inclusive=False
+            )
+            
+            slabs[rate_key]['base_amount'] += Decimal(str(bif['base_amount']))
+            slabs[rate_key]['total_tax'] += Decimal(str(bif['total_tax']))
+            slabs[rate_key]['cgst'] += Decimal(str(bif['cgst']))
+            slabs[rate_key]['sgst'] += Decimal(str(bif['sgst']))
+            slabs[rate_key]['igst'] += Decimal(str(bif['igst']))
+            
+        result = []
+        ordered_rates = sorted(slabs.keys())
+        for r in ordered_rates:
+            s = slabs[r]
+            result.append({
+                'rate': s['rate'],
+                'base_amount': float(s['base_amount']),
+                'total_tax': float(s['total_tax']),
+                'cgst': float(s['cgst']),
+                'sgst': float(s['sgst']),
+                'igst': float(s['igst']),
+            })
+        return result if result else None
 
     class Meta:
         model = Cart
-        fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'locked', 'items']
+        fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'locked', 'items', 'tax_bifurcation']
 
 
 class CartOverviewSerializer(serializers.ModelSerializer):
@@ -314,23 +408,68 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
             return float(selling_price) if selling_price else None
         return None
 
+    original_sold_unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    original_customer_name = serializers.CharField(read_only=True)
+    tax_bifurcation = serializers.SerializerMethodField()
+
+    def get_tax_bifurcation(self, obj):
+        """Calculate GST split for this item row."""
+        try:
+            from backend.core.gst_utils import calculate_gst_bifurcation
+            
+            tax_amt = Decimal(str(obj.tax_amount or '0'))
+            if tax_amt <= 0:
+                return None
+                
+            qty = Decimal(str(obj.quantity or '0'))
+            if qty <= 0:
+                return None
+                
+            # Deriving effective rate since it's not stored
+            # Total = Base + Tax
+            # Tax = TaxAmount
+            # Base = LineTotal - TaxAmount
+            line_total = Decimal(str(obj.line_total or '0'))
+            base = line_total - tax_amt
+            if base <= 0:
+                return None
+                
+            rate = (tax_amt / base) * Decimal('100')
+            
+            # Get states for bifurcation logic
+            store_state = obj.invoice.store.state if obj.invoice.store else None
+            customer_state = obj.invoice.customer.state if obj.invoice.customer else None
+            
+            # Using inclusive=False because we already have base and tax_amt
+            # But calculate_gst_bifurcation expects unit_price. 
+            # We'll leverage it by passing unit_price=base/qty.
+            return calculate_gst_bifurcation(
+                unit_price=base/qty,
+                quantity=qty,
+                tax_rate=rate,
+                is_inclusive=False
+            )
+        except Exception:
+            return None
+
     class Meta:
         model = InvoiceItem
         fields = [
-            'id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price',
+            'id', 'retailer', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price',
             'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant',
             'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price',
             'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity',
             'replaced_at', 'replaced_by', 'available_quantity',
             'original_invoice', 'original_invoice_item', 'replacement_return_tag', 'accepted_return_price',
             'original_sold_unit_price', 'original_sold_line_total', 'original_invoice_number', 'original_customer_name',
+            'tax_bifurcation',
         ]
 
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
-        fields = ['id', 'invoice', 'payment_method', 'amount', 'reference', 'notes', 'created_by', 'created_at']
+        fields = ['id', 'retailer', 'invoice', 'payment_method', 'amount', 'reference', 'notes', 'created_by', 'created_at']
 
 
 class ExpenseSerializer(serializers.ModelSerializer):
@@ -365,7 +504,7 @@ class RepairSerializer(serializers.ModelSerializer):
     class Meta:
         model = Repair
         fields = [
-            'id', 'invoice', 'invoice_number', 'customer_name', 'store_name',
+            'id', 'retailer', 'invoice', 'invoice_number', 'customer_name', 'store_name',
             'contact_no', 'model_name', 'description', 'booking_amount', 'status', 'barcode',
             'delivery_date', 'created_at', 'updated_at', 'updated_by'
         ]
@@ -383,6 +522,75 @@ class InvoiceSerializer(serializers.ModelSerializer):
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
     replacement_ledger_entries = serializers.SerializerMethodField()
+    tax_bifurcation = serializers.SerializerMethodField()
+
+    def get_tax_bifurcation(self, obj):
+        """Consolidate tax bifurcation from all items."""
+        items = obj.items.all()
+        slabs = {}
+        
+        for item in items:
+            # We reuse the logic from InvoiceItemSerializer.tax_bifurcation
+            # but ideally we'd want to avoid redundant calculations.
+            # However, for simplicity in the serializer, we'll re-calculate or 
+            # better, use a cached property if we were to optimize.
+            
+            # For now, let's just use the item's tax_bifurcation if available
+            # Note: SerializerMethodField isn't easily accessible from another serializer method
+            # so we'll just do the calculation here.
+            
+            item_tax = Decimal(str(item.tax_amount or '0'))
+            if item_tax <= 0:
+                continue
+                
+            qty = Decimal(str(item.quantity or '0'))
+            line_total = Decimal(str(item.line_total or '0'))
+            base = line_total - item_tax
+            if base <= 0:
+                continue
+                
+            rate = (item_tax / base) * Decimal('100')
+            # Round rate to avoid floating point issues in slab keys (e.g. 18.0)
+            rate_key = float(rate.quantize(Decimal('0.01')))
+            
+            if rate_key not in slabs:
+                slabs[rate_key] = {
+                    'rate': rate_key,
+                    'base_amount': Decimal('0.00'),
+                    'total_tax': Decimal('0.00'),
+                    'cgst': Decimal('0.00'),
+                    'sgst': Decimal('0.00'),
+                    'igst': Decimal('0.00'),
+                }
+            
+            from backend.core.gst_utils import calculate_gst_bifurcation
+            bif = calculate_gst_bifurcation(
+                unit_price=base/qty,
+                quantity=qty,
+                tax_rate=rate,
+                is_inclusive=False
+            )
+            
+            slabs[rate_key]['base_amount'] += Decimal(str(bif['base_amount']))
+            slabs[rate_key]['total_tax'] += Decimal(str(bif['total_tax']))
+            slabs[rate_key]['cgst'] += Decimal(str(bif['cgst']))
+            slabs[rate_key]['sgst'] += Decimal(str(bif['sgst']))
+            slabs[rate_key]['igst'] += Decimal(str(bif['igst']))
+            
+        # Convert Decimals to floats for JSON
+        result = []
+        ordered_rates = sorted(slabs.keys())
+        for r in ordered_rates:
+            s = slabs[r]
+            result.append({
+                'rate': s['rate'],
+                'base_amount': float(s['base_amount']),
+                'total_tax': float(s['total_tax']),
+                'cgst': float(s['cgst']),
+                'sgst': float(s['sgst']),
+                'igst': float(s['igst']),
+            })
+        return result if result else None
 
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Invoice._meta.get_field('customer').related_model.objects.all(),
@@ -397,7 +605,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
             'trade_in_credit', 'pos_trade_ins', 'exchange_snapshots',
             'is_replacement_return', 'replacement_mode', 'replacement_customer_warning', 'replacement_source_customers',
-            'replacement_ledger_entries',
+            'replacement_ledger_entries', 'tax_bifurcation',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
             'is_edited', 'edited_on', 'items', 'payments'
         ]
@@ -528,7 +736,7 @@ class ReturnItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ReturnItem
-        fields = ['id', 'invoice_item', 'product', 'product_name', 'product_sku', 'product_brand_name', 'barcode_value', 'quantity', 'condition', 'refund_amount']
+        fields = ['id', 'retailer', 'invoice_item', 'product', 'product_name', 'product_sku', 'product_brand_name', 'barcode_value', 'quantity', 'condition', 'refund_amount']
 
     def get_product_name(self, obj):
         if obj.product_name:

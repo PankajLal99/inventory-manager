@@ -35,6 +35,13 @@ class PriceList(models.Model):
 
 class PriceListItem(models.Model):
     """Price list items"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='price_list_items_explicit',
+    )
     price_list = models.ForeignKey(PriceList, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(
         Product,
@@ -52,9 +59,14 @@ class PriceListItem(models.Model):
     )
     price = models.DecimalField(max_digits=10, decimal_places=2)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.price_list_id:
+            self.retailer = self.price_list.retailer
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'price_list_items'
-        unique_together = [['price_list', 'product', 'variant']]
+        unique_together = [['retailer', 'price_list', 'product', 'variant']]
 
 
 class BulkPriceUpdateLog(models.Model):
@@ -67,12 +79,24 @@ class BulkPriceUpdateLog(models.Model):
         ('set_price', 'Set Price'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='bulk_price_updates',
+    )
     update_type = models.CharField(max_length=20, choices=UPDATE_TYPE_CHOICES)
     value = models.DecimalField(max_digits=10, decimal_places=2)
     filters = models.JSONField(default=dict)  # category, brand, supplier filters
     affected_count = models.IntegerField(default=0)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='bulk_price_updates')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.created_by_id:
+            self.retailer = self.created_by.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'bulk_price_update_logs'

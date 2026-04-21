@@ -43,6 +43,7 @@ class Customer(models.Model):
     phone = models.CharField(max_length=20, blank=True, null=True, db_index=True)
     email = models.EmailField(blank=True)
     address = models.TextField(blank=True)
+    state = models.CharField(max_length=100, blank=True, help_text='Customer state for GST bifurcation')
     customer_group = models.ForeignKey(CustomerGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='customers')
     credit_limit = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     credit_balance = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
@@ -67,6 +68,13 @@ class Customer(models.Model):
 
 class PaymentReminder(models.Model):
     """Payment reminders linked to customers."""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payment_reminders',
+    )
     customer = models.ForeignKey(
         Customer,
         on_delete=models.SET_NULL,
@@ -81,6 +89,11 @@ class PaymentReminder(models.Model):
     settled_payment = models.ForeignKey('pos.Payment', on_delete=models.SET_NULL, null=True, blank=True, related_name='settled_payment_reminders')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.customer_id:
+            self.retailer = self.customer.retailer
+        super().save(*args, **kwargs)
 
     def __str__(self):
         cname = self.customer.name if self.customer else 'Unknown customer'
@@ -137,6 +150,13 @@ class LedgerEntry(models.Model):
         ('other', 'Other'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='ledger_entries',
+    )
     customer = models.ForeignKey(
         Customer,
         on_delete=models.SET_NULL,
@@ -155,6 +175,14 @@ class LedgerEntry(models.Model):
     is_sent = models.BooleanField(default=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='ledger_entries')
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id:
+            if self.customer_id:
+                self.retailer = self.customer.retailer
+            elif self.invoice_id:
+                self.retailer = self.invoice.retailer
+        super().save(*args, **kwargs)
 
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'
@@ -198,6 +226,13 @@ class PersonalLedgerEntry(models.Model):
         ('debit', 'Debit'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='personal_ledger_entries',
+    )
     customer = models.ForeignKey(
         PersonalCustomer,
         on_delete=models.SET_NULL,
@@ -210,6 +245,11 @@ class PersonalLedgerEntry(models.Model):
     description = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='personal_ledger_entries')
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.customer_id:
+            self.retailer = self.customer.retailer
+        super().save(*args, **kwargs)
 
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'
@@ -258,6 +298,13 @@ class InternalLedgerEntry(models.Model):
         ('debit', 'Debit'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='internal_ledger_entries',
+    )
     customer = models.ForeignKey(
         Customer,
         on_delete=models.SET_NULL,
@@ -272,6 +319,11 @@ class InternalLedgerEntry(models.Model):
     created_at = models.DateTimeField(auto_now_add=False, null=True, blank=True)  # Allow custom dates
     # Set when created by backfill from main LedgerEntry; null when created from POS mirroring
     source_ledger_entry_id = models.PositiveIntegerField(null=True, blank=True, unique=True, db_index=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.customer_id:
+            self.retailer = self.customer.retailer
+        super().save(*args, **kwargs)
 
     def __str__(self):
         customer_name = self.customer.name if self.customer else 'Anonymous'

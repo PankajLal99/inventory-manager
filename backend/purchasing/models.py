@@ -71,6 +71,13 @@ class Purchase(SoftDeleteModel):
 
 class PurchaseItem(models.Model):
     """Purchase line items"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='purchase_items_explicit',
+    )
     purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(
         Product,
@@ -104,6 +111,11 @@ class PurchaseItem(models.Model):
     is_printed = models.BooleanField(default=False)
     printed_at = models.DateTimeField(null=True, blank=True)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.purchase_id:
+            self.retailer = self.purchase.retailer
+        super().save(*args, **kwargs)
+
 
     def get_line_total(self):
         """Calculate line total"""
@@ -124,6 +136,13 @@ class PurchaseStockMovement(models.Model):
         ('shop_to_warehouse', 'Shop to warehouse'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='purchase_stock_movements',
+    )
     purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, related_name='stock_movements')
     purchase_item = models.ForeignKey(PurchaseItem, on_delete=models.CASCADE, related_name='stock_movements')
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
@@ -134,6 +153,11 @@ class PurchaseStockMovement(models.Model):
     warehouse_quantity_after = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='purchase_stock_movements')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.purchase_id:
+            self.retailer = self.purchase.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'purchase_stock_movements'

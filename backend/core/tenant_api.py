@@ -27,6 +27,9 @@ def require_active_retailer(request):
     if r is not None:
         return r, None
     user = getattr(request, 'user', None)
+    if user and user.is_authenticated and user.is_superuser:
+        return None, None  # Signals "platform" access for superusers
+
     available_retailers = list(
         Retailer.objects.filter(is_active=True)
         .order_by('name')
@@ -56,6 +59,10 @@ def filter_for_retailer(qs, retailer, field_name='retailer_id'):
     """Filter queryset by tenant when the model has a retailer FK."""
     model = qs.model
     if not hasattr(model, field_name):
+        return qs
+    # Superuser bypass: if retailer is None (resolved for superuser in require_active_retailer)
+    # or if we explicitly want to see everything as a superuser.
+    if retailer is None:
         return qs
     return qs.filter(**{field_name: retailer.id})
 

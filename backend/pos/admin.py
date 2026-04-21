@@ -11,8 +11,8 @@ from .models import (
 
 @admin.register(POSSession)
 class POSSessionAdmin(admin.ModelAdmin):
-    list_display = ['session_number', 'store', 'user', 'status', 'opening_cash', 'closing_cash', 'opened_at', 'closed_at']
-    list_filter = ['status', 'store', 'opened_at']
+    list_display = ['retailer', 'session_number', 'store', 'user', 'status', 'opening_cash', 'closing_cash', 'opened_at', 'closed_at']
+    list_filter = ['retailer', 'status', 'store', 'opened_at']
     search_fields = ['session_number']
     ordering = ['-opened_at']
     readonly_fields = ['opened_at', 'closed_at']
@@ -20,24 +20,26 @@ class POSSessionAdmin(admin.ModelAdmin):
 
 class CartItemInline(admin.TabularInline):
     model = CartItem
+    fields = ['retailer', 'product', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount']
     extra = 0
-    readonly_fields = ['product', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount']
+    readonly_fields = ['retailer', 'product', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount']
 
 
 @admin.register(Cart)
 class CartAdmin(admin.ModelAdmin):
-    list_display = ['cart_number', 'store', 'customer', 'status', 'created_by', 'created_at']
-    list_filter = ['status', 'store', 'created_at']
+    list_display = ['retailer', 'cart_number', 'store', 'customer', 'status', 'created_by', 'created_at']
+    list_filter = ['retailer', 'status', 'store', 'created_at']
     search_fields = ['cart_number']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     inlines = [CartItemInline]
     readonly_fields = ['created_at', 'updated_at']
 
 
 class PaymentInline(admin.TabularInline):
     model = Payment
+    fields = ['retailer', 'payment_method', 'amount', 'reference', 'created_by', 'created_at']
     extra = 0
-    readonly_fields = ['payment_method', 'amount', 'reference', 'created_by', 'created_at']
+    readonly_fields = ['retailer', 'payment_method', 'amount', 'reference', 'created_by', 'created_at']
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -46,10 +48,10 @@ class PaymentInline(admin.TabularInline):
 
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
-    list_display = ['id', 'invoice', 'payment_method', 'amount', 'reference', 'created_by', 'created_at']
-    list_filter = ['payment_method', 'created_at']
+    list_display = ['id', 'retailer', 'invoice', 'payment_method', 'amount', 'reference', 'created_by', 'created_at']
+    list_filter = ['retailer', 'payment_method', 'created_at']
     search_fields = ['invoice__invoice_number', 'reference', 'notes']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     readonly_fields = ['created_at']
     
     fieldsets = (
@@ -68,6 +70,7 @@ class InvoiceItemAdmin(admin.ModelAdmin):
 
     list_display = [
         'id',
+        'retailer',
         'invoice',
         'product',
         'variant',
@@ -76,6 +79,7 @@ class InvoiceItemAdmin(admin.ModelAdmin):
         'sold_barcode_value',
         'barcode',
     ]
+    list_filter = ['retailer', 'invoice__status', 'invoice__invoice_type']
     search_fields = [
         'invoice__invoice_number',
         'product__name',
@@ -83,11 +87,12 @@ class InvoiceItemAdmin(admin.ModelAdmin):
         'sold_barcode_value',
         'barcode__barcode',
     ]
-    autocomplete_fields = ['invoice', 'product', 'variant', 'barcode']
-    ordering = ['invoice_id', 'id']
-    list_select_related = ('invoice', 'product', 'variant', 'barcode')
+    autocomplete_fields = ['retailer', 'invoice', 'product', 'variant', 'barcode']
+    ordering = ['retailer', 'invoice_id', 'id']
+    list_select_related = ('retailer', 'invoice', 'product', 'variant', 'barcode')
     show_full_result_count = False
     readonly_fields = [
+        'retailer',
         'invoice',
         'product',
         'variant',
@@ -119,6 +124,7 @@ class InvoiceItemAdmin(admin.ModelAdmin):
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
     list_display = [
+        'retailer',
         'invoice_number',
         'store',
         'customer',
@@ -132,6 +138,7 @@ class InvoiceAdmin(admin.ModelAdmin):
         'created_at',
     ]
     list_filter = [
+        'retailer',
         'status',
         'invoice_type',
         'store',
@@ -139,7 +146,7 @@ class InvoiceAdmin(admin.ModelAdmin):
         ('pending_cleared_at', DateFieldListFilter),
     ]
     search_fields = ['invoice_number', 'customer__name', 'customer__phone']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     list_select_related = ('store', 'customer', 'created_by')
     show_full_result_count = False
     autocomplete_fields = ['cart', 'store', 'customer', 'created_by', 'voided_by', 'applied_promotions']
@@ -251,36 +258,36 @@ class ReturnItemInline(admin.TabularInline):
 
 @admin.register(Return)
 class ReturnAdmin(admin.ModelAdmin):
-    list_display = ['return_number', 'invoice', 'status', 'created_by', 'created_at']
-    list_filter = ['status', 'created_at']
+    list_display = ['retailer', 'return_number', 'invoice', 'status', 'created_by', 'created_at']
+    list_filter = ['retailer', 'status', 'created_at']
     search_fields = ['return_number']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     inlines = [ReturnItemInline]
     readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(CreditNote)
 class CreditNoteAdmin(admin.ModelAdmin):
-    list_display = ['credit_note_number', 'return_obj', 'amount', 'created_by', 'created_at']
-    list_filter = ['created_at']
+    list_display = ['retailer', 'credit_note_number', 'return_obj', 'amount', 'created_by', 'created_at']
+    list_filter = ['retailer', 'created_at']
     search_fields = ['credit_note_number']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     readonly_fields = ['created_at']
 
 
 @admin.register(Exchange)
 class ExchangeAdmin(admin.ModelAdmin):
-    list_display = ['exchange_number', 'invoice', 'return_obj', 'created_by', 'created_at']
-    list_filter = ['created_at']
+    list_display = ['retailer', 'exchange_number', 'invoice', 'return_obj', 'created_by', 'created_at']
+    list_filter = ['retailer', 'created_at']
     search_fields = ['exchange_number']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     readonly_fields = ['created_at']
 
 
 @admin.register(Repair)
 class RepairAdmin(admin.ModelAdmin):
-    list_display = ['barcode', 'customer_name', 'invoice', 'contact_no', 'model_name', 'status', 'booking_amount', 'has_label_image', 'delivery_date','created_at', 'updated_at']
-    list_filter = ['status', 'created_at', 'updated_at']
+    list_display = ['retailer', 'barcode', 'customer_name', 'invoice', 'contact_no', 'model_name', 'status', 'booking_amount', 'has_label_image', 'delivery_date','created_at', 'updated_at']
+    list_filter = ['retailer', 'status', 'created_at', 'updated_at']
     search_fields = ['barcode', 'invoice__invoice_number', 'invoice__customer__name', 'contact_no', 'model_name']
     readonly_fields = ['barcode', 'label_image_url', 'label_image_preview', 'created_at', 'updated_at']
     

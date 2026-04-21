@@ -54,7 +54,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'password_confirm', 'first_name', 'last_name', 'phone']
+        fields = ['username', 'email', 'password', 'password_confirm', 'retailer', 'first_name', 'last_name', 'phone']
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
@@ -74,7 +74,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 class SettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Setting
-        fields = ['id', 'key', 'value', 'description', 'updated_at']
+        fields = ['id', 'retailer', 'key', 'value', 'description', 'updated_at']
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -82,7 +82,7 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AuditLog
-        fields = ['id', 'user', 'action', 'model_name', 'object_id', 'object_name', 
+        fields = ['id', 'retailer', 'user', 'action', 'model_name', 'object_id', 'object_name', 
                   'object_reference', 'barcode', 'changes', 'ip_address', 'created_at']
 
 

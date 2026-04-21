@@ -20,7 +20,7 @@ class StockSerializer(serializers.ModelSerializer):
 class StockBatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockBatch
-        fields = ['id', 'product', 'variant', 'store', 'warehouse', 'batch_number', 'expiry_date', 'quantity', 'created_at']
+        fields = ['id', 'retailer', 'product', 'variant', 'store', 'warehouse', 'batch_number', 'expiry_date', 'quantity', 'created_at']
 
 
 class StockAdjustmentSerializer(serializers.ModelSerializer):
@@ -28,7 +28,7 @@ class StockAdjustmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StockAdjustment
-        fields = ['id', 'adjustment_type', 'product', 'product_name', 'variant', 'store', 'warehouse', 'quantity', 'reason', 'notes', 'created_by', 'created_at']
+        fields = ['id', 'retailer', 'adjustment_type', 'product', 'product_name', 'variant', 'store', 'warehouse', 'quantity', 'reason', 'notes', 'created_by', 'created_at']
 
 
 class StockTransferItemSerializer(serializers.ModelSerializer):

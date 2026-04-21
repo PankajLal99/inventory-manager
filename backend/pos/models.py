@@ -89,6 +89,13 @@ class Cart(models.Model):
 
 class CartItem(models.Model):
     """Cart items"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='cart_items_explicit',
+    )
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(
         Product,
@@ -114,10 +121,16 @@ class CartItem(models.Model):
     # For custom/other products: cost entered at POS (item not from a real purchase; we still store it in DB)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.cart_id:
+            self.retailer = self.cart.retailer
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'cart_items'
         ordering = ['id']
         indexes = [
+            models.Index(fields=['retailer', 'cart', 'product'], name='idx_cartitem_ret_cart_prod'),
             models.Index(fields=['cart', 'product'], name='idx_cartitem_cart_product'),
         ]
 
@@ -244,6 +257,13 @@ class Repair(models.Model):
 
 class InvoiceItem(models.Model):
     """Invoice items"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='invoice_items_explicit',
+    )
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(
         Product,
@@ -309,9 +329,15 @@ class InvoiceItem(models.Model):
     original_invoice_number = models.CharField(max_length=100, blank=True, null=True)
     original_customer_name = models.CharField(max_length=255, blank=True, null=True)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.invoice_id:
+            self.retailer = self.invoice.retailer
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'invoice_items'
         indexes = [
+            models.Index(fields=['retailer', 'barcode'], name='idx_invitem_retailer_barcode'),
             models.Index(fields=['barcode'], name='idx_invitem_barcode'),
             models.Index(fields=['invoice', 'barcode'], name='idx_invitem_inv_barcode'),
             models.Index(fields=['invoice', 'product'], name='idx_invitem_inv_product'),
@@ -330,6 +356,13 @@ class Payment(models.Model):
         ('other', 'Other'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='payments_explicit',
+    )
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='payments')
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -337,6 +370,11 @@ class Payment(models.Model):
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='payments')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.invoice_id:
+            self.retailer = self.invoice.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'payments'
@@ -379,6 +417,13 @@ class Return(models.Model):
 
 class ReturnItem(models.Model):
     """Return items"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='return_items_explicit',
+    )
     return_obj = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='items')
     invoice_item = models.ForeignKey(InvoiceItem, on_delete=models.SET_NULL, null=True, blank=True, related_name='return_items')
     product = models.ForeignKey(
@@ -395,6 +440,11 @@ class ReturnItem(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     condition = models.CharField(max_length=50)  # e.g., 'saleable', 'damaged', 'expired'
     refund_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.return_obj_id:
+            self.retailer = self.return_obj.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'return_items'

@@ -156,6 +156,7 @@ class ProductComponentSerializer(serializers.ModelSerializer):
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    variants = ProductVariantSerializer(many=True, read_only=True)
     barcodes = serializers.SerializerMethodField()
     components = ProductComponentSerializer(many=True, read_only=True)
     
@@ -341,7 +342,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'id', 'name', 'sku', 'product_type', 'category', 'category_id', 'category_name', 
             'brand', 'brand_id', 'brand_name',
             'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
-            'low_stock_threshold', 'image', 'is_active', 'barcodes', 'components',
+            'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
             'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'shop_stock', 'warehouse_stock',
             'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown'
         ]

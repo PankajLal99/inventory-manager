@@ -343,6 +343,13 @@ class Barcode(SoftDeleteModel):
 
 class ProductComponent(models.Model):
     """Components for composite/bundle products"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='product_components',
+    )
     product = models.ForeignKey(
         Product,
         on_delete=models.SET_NULL,
@@ -360,6 +367,11 @@ class ProductComponent(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('1.000'))
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.product_id:
+            self.retailer = self.product.retailer
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'product_components'
         unique_together = [['product', 'component_product']]
@@ -367,10 +379,22 @@ class ProductComponent(models.Model):
 
 class BarcodeLabel(models.Model):
     """Cached barcode label images"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='barcode_labels',
+    )
     barcode = models.OneToOneField(Barcode, on_delete=models.CASCADE, related_name='label')
     label_image = models.TextField()  # Base64 encoded image
     generated_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.barcode_id:
+            self.retailer = self.barcode.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'barcode_labels'
@@ -422,6 +446,13 @@ class DefectiveProductMoveOut(models.Model):
 
 class DefectiveProductItem(models.Model):
     """Individual items in a defective product move-out"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='defective_items',
+    )
     move_out = models.ForeignKey(DefectiveProductMoveOut, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(
         Product,
@@ -434,6 +465,11 @@ class DefectiveProductItem(models.Model):
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.move_out_id:
+            self.retailer = self.move_out.retailer
+        super().save(*args, **kwargs)
 
     def __str__(self):
         pname = self.product.name if self.product else 'Unknown product'

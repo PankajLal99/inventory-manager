@@ -22,6 +22,7 @@ class Store(models.Model):
     code = models.CharField(max_length=50, db_index=True)
     shop_type = models.CharField(max_length=20, choices=SHOP_TYPE_CHOICES, default='retail')
     address = models.TextField(blank=True)
+    state = models.CharField(max_length=100, blank=True, help_text='State for GST billing (e.g., Delhi, Maharashtra)')
     phone = models.CharField(max_length=20, blank=True)
     email = models.EmailField(blank=True)
     auto_populate_price = models.BooleanField(default=False)

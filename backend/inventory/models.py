@@ -6,6 +6,13 @@ from backend.locations.models import Store, Warehouse
 
 class Stock(models.Model):
     """Stock entries per product/variant/location"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='stock_entries',
+    )
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='stock_entries')
     variant = models.ForeignKey(
         ProductVariant,
@@ -25,6 +32,15 @@ class Stock(models.Model):
         from django.core.exceptions import ValidationError
         if not self.store and not self.warehouse:
             raise ValidationError('Stock entry must have either a store or warehouse')
+        
+        # Ensure retailer consistency
+        if not self.retailer_id:
+            if self.store_id:
+                self.retailer = self.store.retailer
+            elif self.warehouse_id:
+                self.retailer = self.warehouse.retailer
+            elif self.product_id:
+                self.retailer = self.product.retailer
     
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -35,8 +51,8 @@ class Stock(models.Model):
         # UniqueConstraint handles nullable fields better than unique_together
         constraints = [
             models.UniqueConstraint(
-                fields=['product', 'variant', 'store', 'warehouse'],
-                name='unique_stock_product_variant_store_warehouse',
+                fields=['retailer', 'product', 'variant', 'store', 'warehouse'],
+                name='unique_stock_retailer_product_variant_store_warehouse',
             ),
         ]
         indexes = [
@@ -48,6 +64,13 @@ class Stock(models.Model):
 
 class StockBatch(models.Model):
     """Batches for products with expiry tracking"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='batches',
+    )
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='batches')
     variant = models.ForeignKey(
         ProductVariant,
@@ -63,9 +86,19 @@ class StockBatch(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id:
+            if self.store_id:
+                self.retailer = self.store.retailer
+            elif self.warehouse_id:
+                self.retailer = self.warehouse.retailer
+            elif self.product_id:
+                self.retailer = self.product.retailer
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'stock_batches'
-        unique_together = [['product', 'variant', 'store', 'warehouse', 'batch_number']]
+        unique_together = [['retailer', 'product', 'variant', 'store', 'warehouse', 'batch_number']]
 
 
 class StockAdjustment(models.Model):
@@ -84,6 +117,13 @@ class StockAdjustment(models.Model):
         ('other', 'Other'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='stock_adjustments',
+    )
     adjustment_type = models.CharField(max_length=10, choices=ADJUSTMENT_TYPE_CHOICES)
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='adjustments')
     variant = models.ForeignKey(
@@ -100,6 +140,16 @@ class StockAdjustment(models.Model):
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey('core.User', on_delete=models.SET_NULL, null=True, related_name='stock_adjustments')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id:
+            if self.store_id:
+                self.retailer = self.store.retailer
+            elif self.warehouse_id:
+                self.retailer = self.warehouse.retailer
+            elif self.product_id:
+                self.retailer = self.product.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'stock_adjustments'
@@ -174,6 +224,13 @@ class StockTransfer(models.Model):
 
 class StockTransferItem(models.Model):
     """Items in a stock transfer"""
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='stock_transfer_items',
+    )
     transfer = models.ForeignKey(StockTransfer, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='transfer_items')
     variant = models.ForeignKey(
@@ -186,6 +243,11 @@ class StockTransferItem(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=3)
     received_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0.000'))
     selected_barcodes = models.JSONField(default=list, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.transfer_id:
+            self.retailer = self.transfer.retailer
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'stock_transfer_items'

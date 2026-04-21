@@ -414,8 +414,11 @@ def repair_status_choices(request):
 @permission_classes([IsAuthenticated])
 def repair_device_models(request):
     """Return distinct device model names from Repair records, optionally filtered by search."""
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
     search = (request.query_params.get('search') or '').strip()
-    qs = Repair.objects.all().order_by('model_name')
+    qs = Repair.objects.filter(retailer_id=retailer.id).order_by('model_name')
     if search:
         qs = qs.filter(model_name__icontains=search)
     models = list(qs.values_list('model_name', flat=True).distinct()[:50])
@@ -426,6 +429,9 @@ def repair_device_models(request):
 @permission_classes([IsAuthenticated])
 def find_repair_invoice_by_barcode(request):
     """Find repair invoice by repair barcode"""
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
     repair_barcode = request.query_params.get('repair_barcode', '').strip()
     
     if not repair_barcode:
@@ -433,7 +439,8 @@ def find_repair_invoice_by_barcode(request):
     
     try:
         repair = Repair.objects.select_related('invoice', 'invoice__customer', 'invoice__store', 'invoice__created_by').prefetch_related('invoice__items', 'invoice__payments').get(
-            barcode=repair_barcode
+            barcode=repair_barcode,
+            retailer_id=retailer.id
         )
         serializer = InvoiceSerializer(repair.invoice)
         return Response(serializer.data)
@@ -445,7 +452,10 @@ def find_repair_invoice_by_barcode(request):
 @permission_classes([IsAuthenticated])
 def update_repair_status(request, pk):
     """Update repair status"""
-    repair = get_object_or_404(Repair, invoice_id=pk)
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    repair = get_object_or_404(Repair, invoice_id=pk, retailer_id=retailer.id)
     
     new_status = request.data.get('repair_status', None)
     if not new_status:
@@ -492,7 +502,10 @@ def update_repair_status(request, pk):
 @permission_classes([IsAuthenticated])
 def update_repair(request, pk):
     """Update repair registration details (contact_no, model_name, description, booking_amount, delivery_date)."""
-    repair = get_object_or_404(Repair, invoice_id=pk)
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    repair = get_object_or_404(Repair, invoice_id=pk, retailer_id=retailer.id)
     invoice = repair.invoice
     allowed = ('contact_no', 'model_name', 'description', 'booking_amount', 'delivery_date')
     old_values = {k: getattr(repair, k, None) for k in allowed}
@@ -554,7 +567,10 @@ def generate_repair_label(request, pk):
     
     logger = logging.getLogger(__name__)
     
-    repair = get_object_or_404(Repair, invoice_id=pk)
+    retailer, err = require_active_retailer(request)
+    if err:
+        return err
+    repair = get_object_or_404(Repair, invoice_id=pk, retailer_id=retailer.id)
     invoice = repair.invoice
     force_regenerate = str(request.query_params.get('force', '')).strip().lower() in {'1', 'true', 'yes'}
     
@@ -3952,7 +3968,7 @@ def replacement_pos_lookup(request):
         return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({
-        'item': _serialize_replacement_pos_line(invoice_item, scanned_barcode=barcode),
+        'item': _serialize_replacement_pos_lookup_line(invoice_item),
         'source_customer': _replacement_pos_source_customer_summary(invoice_item),
         'invoice': {
             'id': invoice_item.invoice_id,

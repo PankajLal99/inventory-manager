@@ -92,17 +92,19 @@ class RoleAdmin(admin.ModelAdmin):
 
 @admin.register(UserStoreRole)
 class UserStoreRoleAdmin(admin.ModelAdmin):
-    list_display = ['user', 'store', 'role']
-    list_filter = ['role__retailer']
+    list_display = ['retailer', 'user', 'store', 'role']
+    list_filter = ['retailer', 'role__retailer']
     search_fields = ['user__username', 'store__name', 'role__name']
-    autocomplete_fields = ['user', 'store', 'role']
+    autocomplete_fields = ['retailer', 'user', 'store', 'role']
 
 
 @admin.register(Setting)
 class SettingAdmin(admin.ModelAdmin):
-    list_display = ['key', 'value', 'updated_at']
+    list_display = ['retailer', 'key', 'value', 'updated_at']
+    list_filter = ['retailer']
     search_fields = ['key', 'description']
-    ordering = ['key']
+    autocomplete_fields = ['retailer']
+    ordering = ['retailer', 'key']
     readonly_fields = ['updated_at']
 
 
@@ -117,6 +119,7 @@ class RetailerDashboardViewConfigAdmin(admin.ModelAdmin):
 @admin.register(AuditLog)
 class AuditLogAdmin(admin.ModelAdmin):
     list_display = [
+        'retailer',
         'created_at',
         'action',
         'model_name',
@@ -128,7 +131,7 @@ class AuditLogAdmin(admin.ModelAdmin):
         'user',
         'ip_address',
     ]
-    list_filter = ['action', 'model_name', 'created_at']
+    list_filter = ['retailer', 'action', 'model_name', 'created_at']
     date_hierarchy = 'created_at'
     list_per_page = 50
     show_full_result_count = False

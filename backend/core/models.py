@@ -139,6 +139,13 @@ class Role(models.Model):
 class UserStoreRole(models.Model):
     """Which role this user has at a specific shop (additive with Django group permissions)."""
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='user_store_roles',
+    )
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='store_roles')
     store = models.ForeignKey('locations.Store', on_delete=models.CASCADE, related_name='user_store_roles')
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='user_store_assignments')
@@ -146,7 +153,7 @@ class UserStoreRole(models.Model):
     class Meta:
         db_table = 'user_store_roles'
         constraints = [
-            models.UniqueConstraint(fields=['user', 'store'], name='uniq_user_store_role'),
+            models.UniqueConstraint(fields=['retailer', 'user', 'store'], name='uniq_retailer_user_store_role'),
         ]
 
     def clean(self):
@@ -155,6 +162,14 @@ class UserStoreRole(models.Model):
             return
         if self.store.retailer_id != self.role.retailer_id:
             raise ValidationError('Store and role must belong to the same retailer.')
+        
+        # Consistent retailer assignment
+        if not self.retailer_id:
+            self.retailer = self.store.retailer
+        
+        if self.retailer_id != self.store.retailer_id:
+             raise ValidationError('Retailer must match the store\'s retailer.')
+
         uid = getattr(self.user, 'retailer_id', None)
         if uid and self.store.retailer_id != uid:
             raise ValidationError('Store must belong to the user\'s retailer.')
@@ -166,16 +181,26 @@ class UserStoreRole(models.Model):
 
 class Setting(models.Model):
     """System settings"""
-    key = models.CharField(max_length=100, unique=True)
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='settings',
+    )
+    key = models.CharField(max_length=100)
     value = models.TextField()
     description = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.key
+        return f"{self.retailer_id}:{self.key}"
 
     class Meta:
         db_table = 'settings'
+        constraints = [
+            models.UniqueConstraint(fields=['retailer', 'key'], name='uniq_retailer_setting_key'),
+        ]
 
 
 class RetailerDashboardViewConfig(models.Model):
@@ -229,6 +254,13 @@ class AuditLog(models.Model):
         ('replacement_pos_checkout', 'Replacement POS Checkout'),
     ]
 
+    retailer = models.ForeignKey(
+        'tenants.Retailer',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='audit_logs',
+    )
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='audit_logs')
     action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     model_name = models.CharField(max_length=100)
@@ -240,11 +272,16 @@ class AuditLog(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        if not self.retailer_id and self.user_id:
+            self.retailer = self.user.retailer
+        super().save(*args, **kwargs)
+
     class Meta:
         db_table = 'audit_logs'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['-created_at']),
+            models.Index(fields=['retailer', '-created_at'], name='idx_audit_retailer_date'),
             models.Index(fields=['action']),
             models.Index(fields=['model_name']),
             models.Index(fields=['barcode']),

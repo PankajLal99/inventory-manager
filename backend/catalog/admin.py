@@ -5,60 +5,60 @@ from .models import Category, Brand, TaxRate, Product, ProductVariant, Barcode, 
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ['name', 'parent', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'parent', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(Brand)
 class BrandAdmin(admin.ModelAdmin):
-    list_display = ['name', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(TaxRate)
 class TaxRateAdmin(admin.ModelAdmin):
-    list_display = ['name', 'rate', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['retailer', 'name', 'rate', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'created_at']
     search_fields = ['name']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
 
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ['name', 'sku', 'category', 'brand', 'is_active', 'created_at']
-    list_filter = ['is_active', 'product_type', 'category', 'brand', 'created_at']
+    list_display = ['retailer', 'name', 'sku', 'category', 'brand', 'is_active', 'created_at']
+    list_filter = ['retailer', 'is_active', 'product_type', 'category', 'brand', 'created_at']
     search_fields = ['name', 'sku', 'description']
-    ordering = ['name']
+    ordering = ['retailer', 'name']
     readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(ProductVariant)
 class ProductVariantAdmin(admin.ModelAdmin):
-    list_display = ['product', 'name', 'sku', 'is_active']
-    list_filter = ['is_active', 'product']
+    list_display = ['retailer', 'product', 'name', 'sku', 'is_active']
+    list_filter = ['retailer', 'is_active', 'product']
     search_fields = ['name', 'sku', 'product__name']
-    ordering = ['product', 'name']
+    ordering = ['retailer', 'product', 'name']
 
 
 @admin.register(Barcode)
 class BarcodeAdmin(admin.ModelAdmin):
-    list_display = ['barcode', 'short_code', 'product', 'variant', 'tag', 'is_primary', 'created_at']
-    list_filter = ['is_primary', 'tag', 'created_at']
+    list_display = ['retailer', 'barcode', 'short_code', 'product', 'variant', 'tag', 'is_primary', 'created_at']
+    list_filter = ['retailer', 'is_primary', 'tag', 'created_at']
     search_fields = ['barcode', 'short_code', 'product__name']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     readonly_fields = ['short_code']  # Make short_code read-only in admin (auto-generated)
 
 
 @admin.register(BarcodeLabel)
 class BarcodeLabelAdmin(admin.ModelAdmin):
-    list_display = ['barcode', 'product_name', 'barcode_value', 'short_code', 'has_label_image', 'generated_at', 'updated_at']
-    list_filter = ['generated_at', 'updated_at']
+    list_display = ['retailer', 'barcode', 'product_name', 'barcode_value', 'short_code', 'has_label_image', 'generated_at', 'updated_at']
+    list_filter = ['retailer', 'generated_at', 'updated_at']
     search_fields = ['barcode__barcode', 'barcode__short_code', 'barcode__product__name']
-    ordering = ['-generated_at']
+    ordering = ['retailer', '-generated_at']
     readonly_fields = ['barcode', 'label_image_url', 'label_image_preview', 'generated_at', 'updated_at']
     actions = ['regenerate_labels']
     
@@ -293,24 +293,24 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
 
 @admin.register(ProductComponent)
 class ProductComponentAdmin(admin.ModelAdmin):
-    list_display = ['product', 'component_product', 'quantity', 'created_at']
-    list_filter = ['product']
+    list_display = ['retailer', 'product', 'component_product', 'quantity', 'created_at']
+    list_filter = ['retailer', 'product']
     search_fields = ['product__name', 'component_product__name']
-    ordering = ['product']
+    ordering = ['retailer', 'product']
 
 
 @admin.register(DefectiveProductMoveOut)
 class DefectiveProductMoveOutAdmin(admin.ModelAdmin):
-    list_display = ['move_out_number', 'store', 'invoice', 'reason', 'total_loss', 'total_items', 'created_by', 'created_at']
-    list_filter = ['reason', 'created_at', 'store']
+    list_display = ['retailer', 'move_out_number', 'store', 'invoice', 'reason', 'total_loss', 'total_items', 'created_by', 'created_at']
+    list_filter = ['retailer', 'reason', 'created_at', 'store']
     search_fields = ['move_out_number', 'store__name', 'invoice__invoice_number']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']
     readonly_fields = ['move_out_number', 'total_loss', 'total_items', 'created_at', 'updated_at']
 
 
 @admin.register(DefectiveProductItem)
 class DefectiveProductItemAdmin(admin.ModelAdmin):
-    list_display = ['move_out', 'product', 'barcode', 'purchase_price', 'created_at']
-    list_filter = ['move_out', 'created_at']
+    list_display = ['retailer', 'move_out', 'product', 'barcode', 'purchase_price', 'created_at']
+    list_filter = ['retailer', 'move_out', 'created_at']
     search_fields = ['product__name', 'barcode__barcode', 'move_out__move_out_number']
-    ordering = ['-created_at']
+    ordering = ['retailer', '-created_at']

@@ -7,7 +7,7 @@ from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCust
 class CustomerGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerGroup
-        fields = ['id', 'name', 'description', 'discount_percentage', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'retailer', 'name', 'description', 'discount_percentage', 'is_active', 'created_at', 'updated_at']
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -16,7 +16,7 @@ class CustomerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Customer
         fields = [
-            'id', 'name', 'phone', 'email', 'address', 'customer_group', 'customer_group_name',
+            'id', 'retailer', 'name', 'phone', 'email', 'address', 'customer_group', 'customer_group_name',
             'credit_limit', 'credit_balance', 'is_active', 'created_at', 'updated_at'
         ]
 
@@ -36,7 +36,7 @@ class SupplierSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Supplier
-        fields = ['id', 'name', 'code', 'phone', 'email', 'address', 'contact_person', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'retailer', 'name', 'code', 'phone', 'email', 'address', 'contact_person', 'is_active', 'created_at', 'updated_at']
 
 
 class LedgerEntrySerializer(serializers.ModelSerializer):
@@ -49,7 +49,7 @@ class LedgerEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = LedgerEntry
         fields = [
-            'id', 'customer', 'customer_name', 'customer_group_name', 'invoice', 'invoice_number',
+            'id', 'retailer', 'customer', 'customer_name', 'customer_group_name', 'invoice', 'invoice_number',
             'entry_type', 'payment_mode', 'cash_amount', 'upi_amount', 'amount', 'quantity', 'description', 'is_sent', 'created_by', 'created_by_username', 'created_at'
         ]
 
@@ -82,7 +82,7 @@ class PersonalCustomerSerializer(serializers.ModelSerializer):
     class Meta:
         model = PersonalCustomer
         fields = [
-            'id', 'name', 'phone', 'email', 'address',
+            'id', 'retailer', 'name', 'phone', 'email', 'address',
             'credit_balance', 'is_active', 'created_at', 'updated_at'
         ]
 
@@ -95,7 +95,7 @@ class PersonalLedgerEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = PersonalLedgerEntry
         fields = [
-            'id', 'customer', 'customer_name',
+            'id', 'retailer', 'customer', 'customer_name',
             'entry_type', 'amount', 'description', 'created_by', 'created_by_username', 'created_at'
         ]
 
@@ -106,7 +106,7 @@ class InternalCustomerSerializer(serializers.ModelSerializer):
     class Meta:
         model = InternalCustomer
         fields = [
-            'id', 'name', 'phone', 'email', 'address',
+            'id', 'retailer', 'name', 'phone', 'email', 'address',
             'customer_group', 'customer_group_name',
             'credit_balance', 'is_active', 'created_at', 'updated_at'
         ]
@@ -120,7 +120,7 @@ class InternalLedgerEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = InternalLedgerEntry
         fields = [
-            'id', 'customer', 'customer_name',
+            'id', 'retailer', 'customer', 'customer_name',
             'entry_type', 'amount', 'description', 'created_by', 'created_by_username', 'created_at'
         ]
 
@@ -136,7 +136,7 @@ class PaymentReminderSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentReminder
         fields = [
-            'id', 'customer', 'customer_name', 'customer_group', 'customer_group_name',
+            'id', 'retailer', 'customer', 'customer_name', 'customer_group', 'customer_group_name',
             'due_date', 'due_amount', 'is_settled', 'settled_at',
             'settled_payment', 'settled_payment_amount', 'settled_payment_method',
             'created_at', 'updated_at'

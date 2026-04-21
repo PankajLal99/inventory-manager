@@ -7,7 +7,7 @@ class PriceListItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PriceListItem
-        fields = ['id', 'product', 'product_name', 'variant', 'price']
+        fields = ['id', 'retailer', 'product', 'product_name', 'variant', 'price']
 
 
 class PriceListSerializer(serializers.ModelSerializer):
@@ -17,7 +17,7 @@ class PriceListSerializer(serializers.ModelSerializer):
     class Meta:
         model = PriceList
         fields = [
-            'id', 'name', 'description', 'customer_group', 'customer_group_name', 'is_active',
+            'id', 'retailer', 'name', 'description', 'customer_group', 'customer_group_name', 'is_active',
             'valid_from', 'valid_to', 'created_at', 'updated_at', 'items'
         ]
 
@@ -27,14 +27,14 @@ class BulkPriceUpdateLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BulkPriceUpdateLog
-        fields = ['id', 'update_type', 'value', 'filters', 'affected_count', 'created_by', 'created_by_name', 'created_at']
+        fields = ['id', 'retailer', 'update_type', 'value', 'filters', 'affected_count', 'created_by', 'created_by_name', 'created_at']
 
 
 class PromotionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Promotion
         fields = [
-            'id', 'name', 'promotion_type', 'discount_type', 'discount_value', 'conditions',
+            'id', 'retailer', 'name', 'promotion_type', 'discount_type', 'discount_value', 'conditions',
             'applicable_products', 'applicable_categories', 'applicable_brands',
             'valid_from', 'valid_to', 'is_active', 'created_at', 'updated_at'
         ]
