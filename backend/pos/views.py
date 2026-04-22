@@ -1891,6 +1891,17 @@ def cart_detail(request, pk):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+        # Validate discount_amount is non-negative
+        if 'discount_amount' in request.data:
+            try:
+                disc = Decimal(str(request.data['discount_amount'] or '0'))
+            except Exception:
+                disc = Decimal('0')
+            if disc < Decimal('0'):
+                return Response(
+                    {'error': 'discount_amount cannot be negative'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         serializer = CartSerializer(cart, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -3760,12 +3771,43 @@ def cart_checkout(request, pk):
         tax_total = Decimal('0.00')
         items_added = 0
 
+        # Cart-level discount: distribute proportionally across items by their pre-tax base.
+        cart_discount = Decimal(str(cart.discount_amount or '0'))
+        item_adj_discount = {}  # ci.id -> total discount (item-level + proportional cart share)
+        item_adj_tax = {}       # ci.id -> recomputed tax after discount
+
+        if cart_discount > 0:
+            all_items_list = [ci for ci in cart.items.all() if ci.quantity > 0]
+            total_base = sum(
+                (ci.manual_unit_price or ci.unit_price or Decimal('0')) * ci.quantity
+                - ci.discount_amount
+                for ci in all_items_list
+            ) or Decimal('1')
+            for ci in all_items_list:
+                up_ci = ci.manual_unit_price or ci.unit_price or Decimal('0')
+                item_base = max(up_ci * ci.quantity - ci.discount_amount, Decimal('0'))
+                prop = cart_discount * (item_base / total_base)
+                adj_disc = ci.discount_amount + prop
+                # Recompute tax on reduced base at same back-computed rate
+                original_base = max(up_ci * ci.quantity - ci.discount_amount, Decimal('0'))
+                if original_base > 0 and ci.tax_amount > 0:
+                    rate = ci.tax_amount / original_base
+                    adj_base = max(up_ci * ci.quantity - adj_disc, Decimal('0'))
+                    adj_tax = (adj_base * rate).quantize(Decimal('0.01'))
+                else:
+                    adj_tax = ci.tax_amount
+                item_adj_discount[ci.id] = adj_disc
+                item_adj_tax[ci.id] = adj_tax
+
         for ci in cart.items.all():
             if ci.quantity <= 0: continue
-            
+
             up = ci.manual_unit_price or ci.unit_price or Decimal('0.00')
-            pd = ci.discount_amount / ci.quantity if ci.quantity > 0 else Decimal('0.00')
-            pt = ci.tax_amount / ci.quantity if ci.quantity > 0 else Decimal('0.00')
+            # Use adjusted discount/tax when cart-level discount is active
+            adj_discount = item_adj_discount.get(ci.id, ci.discount_amount)
+            adj_tax = item_adj_tax.get(ci.id, ci.tax_amount)
+            pd = adj_discount / ci.quantity if ci.quantity > 0 else Decimal('0.00')
+            pt = adj_tax / ci.quantity if ci.quantity > 0 else Decimal('0.00')
             line_unit_total = up - pd + pt
 
             if not ci.product.track_inventory:
@@ -3774,14 +3816,14 @@ def cart_checkout(request, pk):
                     invoice=invoice, product=ci.product, variant=ci.variant,
                     quantity=ci.quantity, unit_price=ci.unit_price,
                     manual_unit_price=ci.manual_unit_price,
-                    discount_amount=ci.discount_amount, tax_amount=ci.tax_amount,
+                    discount_amount=adj_discount, tax_amount=adj_tax,
                     line_total=line_total,
                     purchase_price=ci.purchase_price,
                 )
                 # subtotal = pre-tax, net-of-discount base (up * qty - discount)
                 subtotal += (up - pd) * ci.quantity
-                discount_total += ci.discount_amount
-                tax_total += ci.tax_amount
+                discount_total += adj_discount
+                tax_total += adj_tax
                 items_added += 1
             else:
                 scanned = ci.scanned_barcodes or []
@@ -3830,7 +3872,8 @@ def cart_checkout(request, pk):
 
         # 10. Finalize Totals & Payments
         invoice.subtotal = subtotal
-        invoice.discount_amount = discount_total
+        # Store the clean cart-level discount on the invoice (not the sum of per-item allocated discounts)
+        invoice.discount_amount = cart_discount if cart_discount > 0 else discount_total
         invoice.tax_amount = tax_total
         # subtotal = pre-tax net base (discount already applied); add tax_total to get gross
         gross_total = subtotal + tax_total

@@ -356,6 +356,24 @@ class CartSerializer(serializers.ModelSerializer):
         # are shown as separate slabs in the GST bifurcation table.
         slabs = {}
 
+        # --- Cart-level discount: distribute proportionally across taxable item bases ---
+        cart_discount = Decimal(str(obj.discount_amount or '0'))
+
+        # First pass: collect per-item (item_id -> base) to compute total taxable base
+        item_bases = {}
+        for item in items:
+            if Decimal(str(item.tax_amount or '0')) <= 0:
+                continue
+            qty = Decimal(str(item.quantity or '0'))
+            if qty <= 0:
+                continue
+            unit_price = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
+            base = unit_price * qty - Decimal(str(item.discount_amount or '0'))
+            if base > 0:
+                item_bases[item.id] = base
+
+        total_taxable_base = sum(item_bases.values()) or Decimal('1')
+
         for item in items:
             item_tax = Decimal(str(item.tax_amount or '0'))
             if item_tax <= 0:
@@ -371,7 +389,20 @@ class CartSerializer(serializers.ModelSerializer):
             if base <= 0:
                 continue
 
-            rate = (item_tax / base) * Decimal('100')
+            # Apply proportional share of the cart-level discount to this item's base.
+            if cart_discount > 0:
+                prop_discount = cart_discount * (base / total_taxable_base)
+                adjusted_base = max(base - prop_discount, Decimal('0'))
+                # Recompute tax proportionally on the reduced base (same GST rate)
+                rate = (item_tax / base) * Decimal('100')
+                item_tax = (adjusted_base * rate / Decimal('100')).quantize(Decimal('0.01'))
+                base = adjusted_base
+            else:
+                rate = (item_tax / base) * Decimal('100')
+
+            if base <= 0 or item_tax <= 0:
+                continue
+
             rate_rounded = float(rate.quantize(Decimal('0.01')))
 
             is_inclusive = self._resolve_item_gst_inclusive(item)
@@ -418,7 +449,7 @@ class CartSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Cart
-        fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'locked', 'items', 'tax_bifurcation']
+        fields = ['id', 'cart_number', 'store', 'customer', 'customer_name', 'customer_phone', 'status', 'invoice_type', 'session', 'created_by', 'created_at', 'updated_at', 'locked', 'discount_amount', 'items', 'tax_bifurcation']
 
 
 class CartOverviewSerializer(serializers.ModelSerializer):

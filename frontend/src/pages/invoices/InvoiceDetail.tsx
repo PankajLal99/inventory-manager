@@ -1940,6 +1940,11 @@ export default function InvoiceDetail() {
                   <td></td>
                   <td style="text-align: right;">${formatNumber(0, 2)}</td>
                 </tr>
+                ${parseFloat(inv.discount_amount || '0') > 0 ? `
+                <tr>
+                  <td colspan="4" style="text-align: right; font-size: 12px; padding-top: 6px;">Discount</td>
+                  <td style="text-align: right; font-size: 12px; padding-top: 6px; color: #16a34a;">-₹${formatNumber(parseFloat(inv.discount_amount || '0'), 2)}</td>
+                </tr>` : ''}
                 ${tradeInCreditAmount > 0 ? `
                 <tr>
                   <td colspan="4" style="text-align: right; font-size: 12px; padding-top: 6px;">Trade-in credit (prior sale)</td>
@@ -2323,12 +2328,6 @@ export default function InvoiceDetail() {
             <span>Subtotal:</span>
             <span>₹${formatNumber(invoice.subtotal || '0')}</span>
           </div>
-          ${parseFloat(invoice.discount_amount || '0') > 0 ? `
-            <div class="summary-row">
-              <span>Discount:</span>
-              <span>-₹${formatNumber(invoice.discount_amount || '0')}</span>
-            </div>
-            ` : ''}
           ${(() => {
             const taxAmt = parseFloat(invoice.tax_amount || '0');
             if (taxAmt <= 0) return '';
@@ -2358,6 +2357,11 @@ export default function InvoiceDetail() {
               <span style="font-weight:bold;">₹${formatNumber(taxAmt)}</span>
             </div>`;
           })()}
+          ${parseFloat(invoice.discount_amount || '0') > 0 ? `
+            <div class="summary-row" style="color:#16a34a;">
+              <span>Discount:</span>
+              <span>-₹${formatNumber(invoice.discount_amount || '0')}</span>
+            </div>` : ''}
           ${parseFloat(invoice.trade_in_credit || '0') > 0 ? `
             <div class="summary-row">
               <span>Trade-in:</span>

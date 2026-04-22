@@ -90,6 +90,9 @@ export default function POS() {
   const [bulkAddLoading, setBulkAddLoading] = useState(false);
   const [showTradeInModal, setShowTradeInModal] = useState(false);
   const [tradeInLines, setTradeInLines] = useState<PosTradeInLine[]>([]);
+  // Cart-level discount
+  const [discountInput, setDiscountInput] = useState('');
+  const discountDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
   // Live date/time for header (updates every second)
@@ -2247,9 +2250,9 @@ export default function POS() {
         );
         return;
       }
-      if (tradeInCredit > cartGrossSubtotal + 0.01) {
+      if (tradeInCredit > cartGrossSubtotal - cartDiscount + 0.01) {
         alert(
-          `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal)}).`
+          `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal - cartDiscount)}).`
         );
         return;
       }
@@ -2628,9 +2631,9 @@ export default function POS() {
         );
         return;
       }
-      if (tradeInCredit > cartGrossSubtotal + 0.01) {
+      if (tradeInCredit > cartGrossSubtotal - cartDiscount + 0.01) {
         alert(
-          `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal)}).`
+          `Trade-in credit (₹${formatNumber(tradeInCredit)}) cannot exceed the sale total (₹${formatNumber(cartGrossSubtotal - cartDiscount)}).`
         );
         return;
       }
@@ -2965,6 +2968,22 @@ export default function POS() {
     }
   }, [invoiceType]);
 
+  // Sync discount input from backend cart data
+  useEffect(() => {
+    const backendDiscount = parseFloat(cart?.data?.discount_amount || '0') || 0;
+    setDiscountInput(backendDiscount > 0 ? String(backendDiscount) : '');
+  }, [cart?.data?.discount_amount]);
+
+  const handleDiscountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    setDiscountInput(raw);
+    if (discountDebounceRef.current) clearTimeout(discountDebounceRef.current);
+    discountDebounceRef.current = setTimeout(() => {
+      const val = Math.max(0, parseFloat(raw) || 0);
+      if (cartId) updateCartMutation.mutate({ discount_amount: val });
+    }, 600);
+  };
+
   // Auto-set invoice type when store is repair or wholesale; only reset to cash for retail
   useEffect(() => {
     // Wholesale shop: only pending or credit; always enforce (even if cart had cash/upi/mixed)
@@ -3006,6 +3025,11 @@ export default function POS() {
 
   const tradeInCredit = useMemo(() => posTradeInCreditTotal(tradeInLines), [tradeInLines]);
 
+  const cartDiscount = useMemo(
+    () => Math.max(0, parseFloat(cart?.data?.discount_amount || '0') || 0),
+    [cart?.data?.discount_amount]
+  );
+
   const cartGrossSubtotal = useMemo(() => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
     return cart.data.items.reduce((sum: number, item: any) => {
@@ -3025,7 +3049,7 @@ export default function POS() {
     return cart.data.tax_bifurcation.reduce((sum: number, slab: any) => sum + parseFloat(slab.total_tax || '0'), 0);
   }, [cart?.data?.tax_bifurcation]);
 
-  const calculateTotal = () => cartGrossSubtotal - tradeInCredit + cartTaxTotal;
+  const calculateTotal = () => cartGrossSubtotal - cartDiscount - tradeInCredit + cartTaxTotal;
   const calculateRoundedTotal = () => Math.round(calculateTotal());
   const calculateRoundOff = () => calculateRoundedTotal() - calculateTotal();
 
@@ -5178,6 +5202,23 @@ export default function POS() {
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
                     <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartGrossSubtotal)}` : '•••'}</span>
                   </div>
+                  {/* Invoice-level discount */}
+                  <div className="flex justify-between items-center py-1.5">
+                    <span className="text-sm font-medium text-gray-600">Discount</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm text-gray-400">-₹</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0"
+                        className="w-24 text-right text-sm border border-dashed border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50 hover:bg-white"
+                        value={discountInput}
+                        onChange={handleDiscountChange}
+                        disabled={cart?.data?.locked}
+                      />
+                    </div>
+                  </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
@@ -5208,6 +5249,23 @@ export default function POS() {
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
                     <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartGrossSubtotal)}` : '•••'}</span>
+                  </div>
+                  {/* Invoice-level discount */}
+                  <div className="flex justify-between items-center py-1.5">
+                    <span className="text-sm font-medium text-gray-600">Discount</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm text-gray-400">-₹</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0"
+                        className="w-24 text-right text-sm border border-dashed border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50 hover:bg-white"
+                        value={discountInput}
+                        onChange={handleDiscountChange}
+                        disabled={cart?.data?.locked}
+                      />
+                    </div>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
