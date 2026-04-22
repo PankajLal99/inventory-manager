@@ -2968,19 +2968,39 @@ export default function POS() {
     }
   }, [invoiceType]);
 
+  const cartGrossSubtotal = useMemo(() => {
+    if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
+    return cart.data.items.reduce((sum: number, item: any) => {
+      const quantity = parseInt(item.quantity || '0') || 0;
+      const editingPrice = editingManualPrice[item.id];
+      const price =
+        editingPrice !== undefined && editingPrice !== ''
+          ? parseFloat(editingPrice) || 0
+          : parseFloat(item.manual_unit_price) || 0;
+      const discount = parseFloat(item.discount_amount || 0);
+      return sum + (quantity * price - discount);
+    }, 0);
+  }, [cart?.data?.items, editingManualPrice]);
+
   // Sync discount input from backend cart data
   useEffect(() => {
     const backendDiscount = parseFloat(cart?.data?.discount_amount || '0') || 0;
-    setDiscountInput(backendDiscount > 0 ? String(backendDiscount) : '');
-  }, [cart?.data?.discount_amount]);
+    if (backendDiscount > 0 && cartGrossSubtotal > 0) {
+      const pct = (backendDiscount / cartGrossSubtotal) * 100;
+      setDiscountInput(String(parseFloat(pct.toFixed(4))));
+    } else {
+      setDiscountInput('');
+    }
+  }, [cart?.data?.discount_amount, cartGrossSubtotal]);
 
   const handleDiscountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
     setDiscountInput(raw);
     if (discountDebounceRef.current) clearTimeout(discountDebounceRef.current);
     discountDebounceRef.current = setTimeout(() => {
-      const val = Math.max(0, parseFloat(raw) || 0);
-      if (cartId) updateCartMutation.mutate({ discount_amount: val });
+      const pct = Math.max(0, Math.min(100, parseFloat(raw) || 0));
+      const amount = parseFloat((cartGrossSubtotal * pct / 100).toFixed(2));
+      if (cartId) updateCartMutation.mutate({ discount_amount: amount });
     }, 600);
   };
 
@@ -3008,17 +3028,14 @@ export default function POS() {
     }
 
     if (defaultStore?.shop_type === 'repair') {
-      // Only change if not already pending (to avoid unnecessary updates)
       if (invoiceType !== 'pending') {
         setInvoiceType('pending');
       }
     } else if (defaultStore?.shop_type === 'retail') {
-      // Retail shop: always default to cash; reset if stuck on pending from a prior shop switch
       if (invoiceType === 'pending') {
         setInvoiceType('cash');
       }
     } else if (defaultStore?.shop_type !== 'repair' && defaultStore?.shop_type !== 'wholesale' && invoiceType === 'pending') {
-      // Non-repair, non-wholesale, non-retail shop: reset pending → cash
       setInvoiceType('cash');
     }
   }, [defaultStore?.shop_type, invoiceType, cartId, cart?.data?.invoice_type, isWholesaleGroup, isWholesaleAdmin]);
@@ -3030,19 +3047,10 @@ export default function POS() {
     [cart?.data?.discount_amount]
   );
 
-  const cartGrossSubtotal = useMemo(() => {
-    if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
-    return cart.data.items.reduce((sum: number, item: any) => {
-      const quantity = parseInt(item.quantity || '0') || 0;
-      const editingPrice = editingManualPrice[item.id];
-      const price =
-        editingPrice !== undefined && editingPrice !== ''
-          ? parseFloat(editingPrice) || 0
-          : parseFloat(item.manual_unit_price) || 0;
-      const discount = parseFloat(item.discount_amount || 0);
-      return sum + (quantity * price - discount);
-    }, 0);
-  }, [cart?.data?.items, editingManualPrice]);
+  const discountPreviewAmount = useMemo(() => {
+    const pct = Math.max(0, Math.min(100, parseFloat(discountInput) || 0));
+    return parseFloat((cartGrossSubtotal * pct / 100).toFixed(2));
+  }, [discountInput, cartGrossSubtotal]);
 
   const cartTaxTotal = useMemo(() => {
     if (!cart?.data?.tax_bifurcation || !Array.isArray(cart.data.tax_bifurcation)) return 0;
@@ -5206,19 +5214,25 @@ export default function POS() {
                   <div className="flex justify-between items-center py-1.5">
                     <span className="text-sm font-medium text-gray-600">Discount</span>
                     <div className="flex items-center gap-1">
-                      <span className="text-sm text-gray-400">-₹</span>
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
+                        max="100"
+                        step="0.1"
                         placeholder="0"
-                        className="w-24 text-right text-sm border border-dashed border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50 hover:bg-white"
+                        className="w-20 text-right text-sm border border-dashed border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50 hover:bg-white"
                         value={discountInput}
                         onChange={handleDiscountChange}
                         disabled={cart?.data?.locked}
                       />
+                      <span className="text-sm text-gray-500">%</span>
                     </div>
                   </div>
+                  {discountPreviewAmount > 0 && (
+                    <div className="flex justify-end pb-1">
+                      <span className="text-xs text-green-600">-₹{formatNumber(discountPreviewAmount)}</span>
+                    </div>
+                  )}
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
@@ -5254,19 +5268,25 @@ export default function POS() {
                   <div className="flex justify-between items-center py-1.5">
                     <span className="text-sm font-medium text-gray-600">Discount</span>
                     <div className="flex items-center gap-1">
-                      <span className="text-sm text-gray-400">-₹</span>
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
+                        max="100"
+                        step="0.1"
                         placeholder="0"
-                        className="w-24 text-right text-sm border border-dashed border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50 hover:bg-white"
+                        className="w-20 text-right text-sm border border-dashed border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50 hover:bg-white"
                         value={discountInput}
                         onChange={handleDiscountChange}
                         disabled={cart?.data?.locked}
                       />
+                      <span className="text-sm text-gray-500">%</span>
                     </div>
                   </div>
+                  {discountPreviewAmount > 0 && (
+                    <div className="flex justify-end pb-1">
+                      <span className="text-xs text-green-600">-₹{formatNumber(discountPreviewAmount)}</span>
+                    </div>
+                  )}
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
