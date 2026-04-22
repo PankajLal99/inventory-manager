@@ -6,6 +6,19 @@ class Retailer(models.Model):
 
     code = models.CharField(max_length=50, unique=True, db_index=True)
     name = models.CharField(max_length=200)
+    # Extra trade / display name shown on A4 invoices (e.g. "Manish Traders").
+    retailer_name_extra = models.CharField(
+        max_length=200,
+        blank=True,
+        default='',
+        help_text='Secondary / trade name printed on invoices (e.g. "Manish Traders").',
+    )
+    # Full shop address printed on invoices.  Use newlines for multi-line layout.
+    shop_address = models.TextField(
+        blank=True,
+        default='',
+        help_text='Shop address printed on A4 invoices. Separate lines with newline.',
+    )
     # Per-tenant Azure blob folder for barcode labels (e.g. "mt-labels").
     azure_blob_folder = models.CharField(max_length=120, blank=True, default='')
     is_active = models.BooleanField(default=True)

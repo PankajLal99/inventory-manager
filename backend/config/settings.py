@@ -42,9 +42,25 @@ if DEBUG:
 else:
     ALLOWED_HOSTS = ['ec2-13-127-116-174.ap-south-1.compute.amazonaws.com','127.0.0.1','13.127.116.174', 'localhost', 'mtpos-api.intratechnosolutions.com', 'mtims-api.intratechnosolutions.com','pos.intratechno.com', 'pos-api.intratechno.com']
 
-    SECURE_SSL_REDIRECT = False
+    SECURE_SSL_REDIRECT = True
     USE_X_FORWARDED_HOST = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+    # Required in Django 4.0+ when behind a proxy or using HTTPS.
+    # Without this, the CSRF middleware rejects admin logins with "CSRF token
+    # missing or incorrect / expired" because the Origin header doesn't match.
+    CSRF_TRUSTED_ORIGINS = [
+        'https://mtpos-api.intratechnosolutions.com',
+        'https://mtims-api.intratechnosolutions.com',
+        'https://pos.intratechno.com',
+        'https://pos-api.intratechno.com',
+        'http://ec2-13-127-116-174.ap-south-1.compute.amazonaws.com',
+        'http://13.127.116.174',
+    ]
+
+    # Secure cookies over HTTPS
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # Application definition
 

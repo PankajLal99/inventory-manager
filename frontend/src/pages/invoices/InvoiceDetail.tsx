@@ -1700,10 +1700,10 @@ export default function InvoiceDetail() {
     // Get reference number (using invoice_number as ref)
     const refNo = inv.invoice_number || `#${inv.id} `;
 
-    // Company details - using store info or default
-    const companyName = 'Manish Traders';
-    const companyAddress = 'Shop Number124-A Ground Floor\nChaitaniya Market Ghoda Nikkas Bhopal';
-    const companyPhone1 = ''; // Can be populated from store.phone if needed
+    // Company details - populated from Retailer model fields
+    const companyName = (inv.retailer_name_extra || '').trim() || (inv.store_name || '').trim();
+    const companyAddress = (inv.shop_address || '').trim();
+    const companyPhone1 = '';
     const companyPhone2 = '';
 
     return `
@@ -1957,42 +1957,56 @@ export default function InvoiceDetail() {
                 </tr>
 
                 <!-- GST Analysis Section -->
-                ${inv.tax_bifurcation && Array.isArray(inv.tax_bifurcation) && inv.tax_bifurcation.length > 0 ? `
-                <tr>
-                  <td colspan="5" style="border-top: 1px solid #000; padding: 10px 0 5px 0;">
-                    <p style="font-size: 11px; font-weight: bold; margin-bottom: 5px; text-decoration:;">GST BREAKDOWN</p>
-                    <table style="width: 100%; border: 1px solid #000; margin-bottom: 0;">
-                      <thead>
-                        <tr>
-                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000;">Tax Slab</th>
-                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">Taxable Val</th>
-                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">CGST</th>
-                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">SGST</th>
-                          <th style="width: 20%; background: #f9f9f9; font-size: 10px; border: 1px solid #000; text-align: right;">Total Tax</th>
-                        </tr>
-                      </thead>
+                ${(() => {
+                  const taxAmt = parseFloat(inv.tax_amount || '0');
+                  if (taxAmt <= 0) return '';
+                  const fmtRate = (r: number) => { const s = parseFloat(r.toFixed(4)); return Number.isInteger(s) ? String(s) : String(parseFloat(s.toFixed(2))); };
+                  const slabs = Array.isArray(inv.tax_bifurcation) ? inv.tax_bifurcation.filter((s: any) => (s.total_tax || 0) > 0) : [];
+                  if (slabs.length === 0) {
+                    // Fallback: bifurcation unavailable, show simple totals line
+                    return `<tr><td colspan="5" style="border-top:1px solid #000;padding:6px 8px;font-size:11px;"><strong>GST:</strong> ₹${formatNumber(taxAmt, 2)}</td></tr>`;
+                  }
+                  const totalBase = parseFloat(slabs.reduce((s: number, b: any) => s + (b.base_amount || 0), 0).toFixed(2));
+                  const totalCgst = parseFloat(slabs.reduce((s: number, b: any) => s + (b.cgst || 0), 0).toFixed(2));
+                  const totalSgst = parseFloat(slabs.reduce((s: number, b: any) => s + (b.sgst || 0), 0).toFixed(2));
+                  const td = (content: string, extra = '') => `<td style="font-size:10px;border:1px solid #000;padding:4px 6px;${extra}">${content}</td>`;
+                  const tdR = (content: string) => td(content, 'text-align:right;');
+                  return `<tr>
+                  <td colspan="5" style="border-top:1px solid #000;padding:8px 0 5px 0;">
+                    <p style="font-size:11px;font-weight:bold;margin-bottom:5px;">GST BREAKDOWN</p>
+                    <table style="width:100%;border:1px solid #000;border-collapse:collapse;margin-bottom:0;">
+                      <thead><tr>
+                        <th style="background:#f0f0f0;font-size:10px;border:1px solid #000;padding:4px 6px;text-align:left;">Tax Slab</th>
+                        <th style="background:#f0f0f0;font-size:10px;border:1px solid #000;padding:4px 6px;text-align:right;">Taxable Value</th>
+                        <th style="background:#f0f0f0;font-size:10px;border:1px solid #000;padding:4px 6px;text-align:right;">CGST Amt</th>
+                        <th style="background:#f0f0f0;font-size:10px;border:1px solid #000;padding:4px 6px;text-align:right;">SGST Amt</th>
+                        <th style="background:#f0f0f0;font-size:10px;border:1px solid #000;padding:4px 6px;text-align:right;">Total GST</th>
+                      </tr></thead>
                       <tbody>
-                        ${inv.tax_bifurcation.map((slab: any) => `
-                        <tr>
-                          <td style="font-size: 10px; border: 1px solid #000;">GST ${slab.rate}%</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.base_amount, 2)}</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.cgst, 2)}</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.sgst, 2)}</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(slab.total_tax, 2)}</td>
-                        </tr>
-                        `).join('')}
-                        <tr style="background: #f9f9f9; font-weight: bold;">
-                          <td style="font-size: 10px; border: 1px solid #000;">Total</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_bifurcation.reduce((s: number, b: any) => s + b.base_amount, 0), 2)}</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_bifurcation.reduce((s: number, b: any) => s + b.cgst, 0), 2)}</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_bifurcation.reduce((s: number, b: any) => s + b.sgst, 0), 2)}</td>
-                          <td style="font-size: 10px; border: 1px solid #000; text-align: right;">${formatNumber(inv.tax_amount, 2)}</td>
-                        </tr>
+                        ${slabs.map((slab: any) => {
+                          const rate = fmtRate(slab.rate);
+                          const half = fmtRate(slab.rate / 2);
+                          const incl = slab.is_inclusive != null ? (slab.is_inclusive ? ' (Incl.)' : ' (Excl.)') : '';
+                          return `<tr>
+                            ${td(`GST @${rate}%${incl}<br/><span style="font-size:9px;color:#555;">CGST @${half}% + SGST @${half}%</span>`)}
+                            ${tdR('₹' + formatNumber(slab.base_amount, 2))}
+                            ${tdR('₹' + formatNumber(slab.cgst, 2))}
+                            ${tdR('₹' + formatNumber(slab.sgst, 2))}
+                            ${tdR('₹' + formatNumber(slab.total_tax, 2))}
+                          </tr>`;
+                        }).join('')}
+                        ${slabs.length > 1 ? `<tr style="background:#f0f0f0;font-weight:bold;">
+                          ${td('Total')}
+                          ${tdR('₹' + formatNumber(totalBase, 2))}
+                          ${tdR('₹' + formatNumber(totalCgst, 2))}
+                          ${tdR('₹' + formatNumber(totalSgst, 2))}
+                          ${tdR('₹' + formatNumber(taxAmt, 2))}
+                        </tr>` : ''}
                       </tbody>
                     </table>
                   </td>
-                </tr>
-                ` : ''}
+                </tr>`;
+                })()}
                 ${inv.customer && customerHasCreditInvoice && inv.status !== 'paid' ? `
                 <tr style="border-top: 1px dashed #000;">
                   <td style="padding-top: 8px;">Old Balance</td>
@@ -2214,6 +2228,8 @@ export default function InvoiceDetail() {
         <div class="watermark">${(invoice.invoice_type || 'sale').toUpperCase()}</div>
 
         <div class="header">
+          ${(invoice.retailer_name_extra || '').trim() ? `<div style="font-size:13px;font-weight:bold;margin-bottom:2px;">${escapeHtml((invoice.retailer_name_extra || '').trim())}</div>` : ''}
+          ${(invoice.shop_address || '').trim() ? `<div style="font-size:9px;white-space:pre-line;margin-bottom:3px;">${escapeHtml((invoice.shop_address || '').trim())}</div>` : ''}
           <h1>INVOICE</h1>
           <p>${invoice.invoice_number || `#${invoice.id}`}</p>
           <p>${formatDate(invoice.created_at)}</p>
@@ -2313,29 +2329,35 @@ export default function InvoiceDetail() {
               <span>-₹${formatNumber(invoice.discount_amount || '0')}</span>
             </div>
             ` : ''}
-          ${parseFloat(invoice.tax_amount || '0') > 0 ? `
-            <div class="summary-row" style="margin-top:2px; border-top: 1px dotted #ccc; padding-top:2px;">
+          ${(() => {
+            const taxAmt = parseFloat(invoice.tax_amount || '0');
+            if (taxAmt <= 0) return '';
+            const fmtRate = (r: number) => { const s = parseFloat(r.toFixed(4)); return Number.isInteger(s) ? String(s) : String(parseFloat(s.toFixed(2))); };
+            const slabs = Array.isArray(invoice.tax_bifurcation) ? invoice.tax_bifurcation.filter((s: any) => (s.total_tax || 0) > 0) : [];
+            const divRow = (left: string, right: string, style = '') => `<div class="summary-row" style="${style}"><span>${left}</span><span>${right}</span></div>`;
+            if (slabs.length === 0) {
+              // No bifurcation detail — show simple total
+              return `<div class="summary-row" style="margin-top:2px;border-top:1px dotted #ccc;padding-top:2px;"><span style="font-weight:bold;">Total GST:</span><span style="font-weight:bold;">₹${formatNumber(taxAmt)}</span></div>`;
+            }
+            return `
+            <div class="summary-row" style="margin-top:2px;border-top:1px dotted #ccc;padding-top:2px;">
               <span style="font-weight:bold;">GST Breakdown:</span>
             </div>
-            ${(invoice.tax_bifurcation || []).map((slab: any) => `
-              <div class="summary-row" style="padding-left: 5px;">
-                <span>GST ${slab.rate}%</span>
-                <span>₹${formatNumber(slab.total_tax)}</span>
-              </div>
-              <div class="summary-row" style="padding-left: 10px; font-size: 8px; color: #555;">
-                <span>CGST (${(slab.rate / 2).toFixed(1)}%)</span>
-                <span>₹${formatNumber(slab.cgst)}</span>
-              </div>
-              <div class="summary-row" style="padding-left: 10px; font-size: 8px; color: #555;">
-                <span>SGST (${(slab.rate / 2).toFixed(1)}%)</span>
-                <span>₹${formatNumber(slab.sgst)}</span>
-              </div>
-            `).join('')}
-            <div class="summary-row" style="border-top: 1px dotted #ccc; padding-top:2px; margin-top:2px;">
+            ${slabs.map((slab: any) => {
+              const rate = fmtRate(slab.rate);
+              const half = fmtRate(slab.rate / 2);
+              const incl = slab.is_inclusive != null ? (slab.is_inclusive ? ' Incl.' : ' Excl.') : '';
+              return `
+              ${divRow(`GST @${rate}%${incl}`, '₹' + formatNumber(slab.total_tax), 'padding-left:5px;')}
+              ${divRow('Taxable: ₹' + formatNumber(slab.base_amount, 2), '', 'padding-left:10px;font-size:8px;color:#555;')}
+              ${divRow('CGST @' + half + '%', '₹' + formatNumber(slab.cgst), 'padding-left:10px;font-size:8px;color:#555;')}
+              ${divRow('SGST @' + half + '%', '₹' + formatNumber(slab.sgst), 'padding-left:10px;font-size:8px;color:#555;')}`;
+            }).join('')}
+            <div class="summary-row" style="border-top:1px dotted #ccc;padding-top:2px;margin-top:2px;">
               <span style="font-weight:bold;">Total GST:</span>
-              <span style="font-weight:bold;">₹${formatNumber(invoice.tax_amount)}</span>
-            </div>
-            ` : ''}
+              <span style="font-weight:bold;">₹${formatNumber(taxAmt)}</span>
+            </div>`;
+          })()}
           ${parseFloat(invoice.trade_in_credit || '0') > 0 ? `
             <div class="summary-row">
               <span>Trade-in:</span>
@@ -2916,38 +2938,74 @@ export default function InvoiceDetail() {
                 )}
 
                 {/* GST Bifurcation Table */}
-                {inv.tax_bifurcation && Array.isArray(inv.tax_bifurcation) && inv.tax_bifurcation.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
-                    <div className="flex items-center gap-2 mb-2">
-                      <FileText className="h-4 w-4 text-indigo-500" />
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
+                {parseFloat(inv.tax_amount || '0') > 0 && (() => {
+                  const fmtRate = (r: number) => { const s = parseFloat(r.toFixed(4)); return Number.isInteger(s) ? String(s) : String(parseFloat(s.toFixed(2))); };
+                  const slabs = Array.isArray(inv.tax_bifurcation) ? inv.tax_bifurcation.filter((s: any) => (s.total_tax || 0) > 0) : [];
+                  const totalBase = parseFloat(slabs.reduce((s: number, b: any) => s + (b.base_amount || 0), 0).toFixed(2));
+                  const totalCgst = parseFloat(slabs.reduce((s: number, b: any) => s + (b.cgst || 0), 0).toFixed(2));
+                  const totalSgst = parseFloat(slabs.reduce((s: number, b: any) => s + (b.sgst || 0), 0).toFixed(2));
+                  const totalTax = parseFloat(inv.tax_amount || '0');
+                  return (
+                    <div className="mt-4 pt-4 border-t border-gray-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className="h-4 w-4 text-indigo-500" />
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500">GST Analysis</h4>
+                      </div>
+                      {slabs.length === 0 ? (
+                        // Fallback when bifurcation detail unavailable
+                        <div className="text-[11px] text-gray-600 px-1">
+                          Total GST: <span className="font-semibold text-gray-900">₹{formatNumber(inv.tax_amount, 2)}</span>
+                        </div>
+                      ) : (
+                        <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-100/80">
+                              <tr>
+                                <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-600 uppercase">Slab</th>
+                                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">Taxable</th>
+                                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">CGST</th>
+                                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">SGST</th>
+                                <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 bg-white">
+                              {slabs.map((slab: any, idx: number) => {
+                                const rate = fmtRate(slab.rate);
+                                const half = fmtRate(slab.rate / 2);
+                                return (
+                                  <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-3 py-2 text-[11px] font-medium text-gray-900">
+                                      GST @{rate}%
+                                      {slab.is_inclusive != null && (
+                                        <span className={`ml-1 text-[9px] font-normal px-1 py-0.5 rounded ${slab.is_inclusive ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                                          {slab.is_inclusive ? 'Incl.' : 'Excl.'}
+                                        </span>
+                                      )}
+                                      <div className="text-[9px] text-gray-400 font-normal">CGST @{half}% + SGST @{half}%</div>
+                                    </td>
+                                    <td className="px-3 py-2 text-right text-[11px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount, 2)}</td>
+                                    <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst, 2)}</td>
+                                    <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst, 2)}</td>
+                                    <td className="px-3 py-2 text-right text-[11px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax, 2)}</td>
+                                  </tr>
+                                );
+                              })}
+                              {slabs.length > 1 && (
+                                <tr className="bg-gray-100 font-semibold">
+                                  <td className="px-3 py-2 text-[11px] text-gray-900">Total</td>
+                                  <td className="px-3 py-2 text-right text-[11px] tabular-nums text-gray-700">₹{formatNumber(totalBase, 2)}</td>
+                                  <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-700">₹{formatNumber(totalCgst, 2)}</td>
+                                  <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-700">₹{formatNumber(totalSgst, 2)}</td>
+                                  <td className="px-3 py-2 text-right text-[11px] tabular-nums text-gray-900">₹{formatNumber(totalTax, 2)}</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
-                    <div className="overflow-hidden rounded-lg border border-gray-200 bg-gray-50/50">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-100/80">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-600 uppercase">Slab</th>
-                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">Base</th>
-                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">CGST</th>
-                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">SGST</th>
-                            <th className="px-3 py-2 text-right text-[10px] font-bold text-gray-600 uppercase">Tax</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 bg-white">
-                          {inv.tax_bifurcation.map((slab: any, idx: number) => (
-                            <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                              <td className="px-3 py-2 text-[11px] font-medium text-gray-900">{slab.rate}%</td>
-                              <td className="px-3 py-2 text-right text-[11px] tabular-nums text-gray-700">₹{formatNumber(slab.base_amount)}</td>
-                              <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.cgst)}</td>
-                              <td className="px-3 py-2 text-right text-[11px] tabular-nums text-indigo-600">₹{formatNumber(slab.sgst)}</td>
-                              <td className="px-3 py-2 text-right text-[11px] font-semibold tabular-nums text-gray-900">₹{formatNumber(slab.total_tax)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-gray-600">Transport Charge</span>
                   <span className="text-sm font-medium text-gray-900">₹{formatNumber(0)}</span>

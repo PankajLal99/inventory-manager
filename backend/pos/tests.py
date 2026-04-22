@@ -1,14 +1,20 @@
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from django.test import TestCase
 from django.utils import timezone
 from decimal import Decimal
+import logging
 import uuid
 from backend.catalog.models import Product, Barcode, Category
+from backend.catalog.views import build_barcode_response
+from backend.core.gst_utils import calculate_gst_bifurcation
+from backend.core.test_utils import TestDataFactory
 from backend.locations.models import Store
 from backend.parties.models import Supplier, Customer
 from backend.purchasing.models import Purchase, PurchaseItem
 from backend.pos.models import Cart, CartItem, Invoice, InvoiceItem
+from backend.pos.serializers import CartItemSerializer, CartSerializer, InvoiceSerializer
 from backend.core.models import AuditLog
 from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
@@ -20,12 +26,13 @@ User = get_user_model()
 
 class CheckoutTests(APITestCase):
     def setUp(self):
-        # Use a unique username for each test or rely on setUp running before each
-        self.user = User.objects.create_user(username=f'testuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Test Store', shop_type='retail')
-        self.category = Category.objects.create(name='Test Category')
+        self.store = TestDataFactory.create_store(name='Test Store')
+        self.category = TestDataFactory.create_category(name='Test Category')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='Test Product',
             category=self.category,
             product_type='simple'
@@ -33,6 +40,7 @@ class CheckoutTests(APITestCase):
         # Create 10 barcodes
         for i in range(10):
             Barcode.objects.create(
+                retailer=self.retailer,
                 product=self.product,
                 barcode=f'BC-{uuid.uuid4().hex[:8]}',
                 tag='new'
@@ -41,6 +49,7 @@ class CheckoutTests(APITestCase):
     def test_successful_cart_checkout_with_scans(self):
         """Test that checkout succeeds when barcodes are correctly scanned"""
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -71,6 +80,7 @@ class CheckoutTests(APITestCase):
     def test_duplicate_checkout_prevention(self):
         """Test that a consecutive second checkout request for the same cart is blocked"""
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -102,6 +112,7 @@ class CheckoutTests(APITestCase):
     def test_insufficient_scans_fail_fast(self):
         """Test that checkout fails if not enough barcodes are scanned for a tracked product"""
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -131,6 +142,7 @@ class CheckoutTests(APITestCase):
     def test_invoice_checkout_duplicate_prevention(self):
         """Test that a pending invoice cannot be checked out twice"""
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -166,6 +178,7 @@ class CheckoutTests(APITestCase):
     def test_duplicate_checkout_records_audit_log(self):
         """Test that blocked duplicate checkout returns 400 and error; optionally an audit log is created."""
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-AUDIT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -200,6 +213,7 @@ class CheckoutTests(APITestCase):
         bc_new = Barcode.objects.filter(product=self.product, tag='new').exclude(pk=bc_old.pk).first()
 
         cart1 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -227,6 +241,7 @@ class CheckoutTests(APITestCase):
         trade_item_id = old_item.id
 
         cart2 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -274,6 +289,7 @@ class CheckoutTests(APITestCase):
         bc_new = Barcode.objects.filter(product=self.product, tag='new').exclude(pk=bc_old.pk).first()
 
         cart1 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -297,6 +313,7 @@ class CheckoutTests(APITestCase):
         trade_item_id = Invoice.objects.get(id=r1.data['id']).items.first().id
 
         cart2 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -344,6 +361,7 @@ class CheckoutTests(APITestCase):
         bc_new = Barcode.objects.filter(product=self.product, tag='new').exclude(pk=bc_old.pk).first()
 
         cart1 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -367,6 +385,7 @@ class CheckoutTests(APITestCase):
         trade_item_id = Invoice.objects.get(id=r1.data['id']).items.first().id
 
         cart2 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -407,6 +426,7 @@ class CheckoutTests(APITestCase):
         bc_new = Barcode.objects.filter(product=self.product, tag='new').exclude(pk=bc_old.pk).first()
 
         cart1 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=c1,
@@ -430,6 +450,7 @@ class CheckoutTests(APITestCase):
         trade_item_id = Invoice.objects.get(id=r1.data['id']).items.first().id
 
         cart2 = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=c2,
@@ -465,45 +486,47 @@ class InvoiceEditTests(APITestCase):
     def setUp(self):
         """Set up test data for invoice editing tests"""
         from backend.parties.models import Customer, LedgerEntry
-        
-        self.user = User.objects.create_user(username=f'edituser_{uuid.uuid4().hex[:6]}', password='password')
+
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Edit Test Store', shop_type='retail')
-        self.category = Category.objects.create(name='Edit Test Category')
-        
+        self.store = TestDataFactory.create_store(name='Edit Test Store')
+        self.category = TestDataFactory.create_category(name='Edit Test Category')
+
         # Create customer for ledger testing
-        self.customer = Customer.objects.create(
-            name='Test Customer',
-            phone='9999999999'
-        )
-        
+        self.customer = TestDataFactory.create_customer(name='Test Customer', phone='9999999999')
+
         # Create products
         self.product1 = Product.objects.create(
+            retailer=self.retailer,
             name='Product One',
             category=self.category,
             product_type='simple',
             track_inventory=True
         )
         self.product2 = Product.objects.create(
+            retailer=self.retailer,
             name='Product Two',
             category=self.category,
             product_type='simple',
             track_inventory=True
         )
-        
+
         # Create barcodes for tracked products
         self.barcodes1 = []
         for i in range(5):
             bc = Barcode.objects.create(
+                retailer=self.retailer,
                 product=self.product1,
                 barcode=f'P1-BC-{uuid.uuid4().hex[:8]}',
                 tag='new'
             )
             self.barcodes1.append(bc)
-        
+
         self.barcodes2 = []
         for i in range(5):
             bc = Barcode.objects.create(
+                retailer=self.retailer,
                 product=self.product2,
                 barcode=f'P2-BC-{uuid.uuid4().hex[:8]}',
                 tag='new'
@@ -516,6 +539,7 @@ class InvoiceEditTests(APITestCase):
         
         # 1. Create initial draft invoice via cart (pending so invoice stays draft and editable)
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'EDIT-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -586,6 +610,7 @@ class InvoiceEditTests(APITestCase):
         """Test removing items from invoice during edit"""
         # 1. Create draft invoice with 3 items (pending so editable)
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'REMOVE-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -641,6 +666,7 @@ class InvoiceEditTests(APITestCase):
         
         # 1. Create pending invoice
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'PENDING-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -715,6 +741,7 @@ class InvoiceEditTests(APITestCase):
         
         # 1. Create cash invoice (no ledger entry for cash)
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'LEDGER-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -777,6 +804,7 @@ class InvoiceEditTests(APITestCase):
         """Test editing invoice from zero price to non-zero (edge case)"""
         # 1. Create invoice with zero prices (edge case)
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'ZERO-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -826,6 +854,7 @@ class InvoiceEditTests(APITestCase):
         """Test multiple consecutive edits to same invoice"""
         # 1. Create initial draft invoice (pending so editable)
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'MULTI-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -889,6 +918,7 @@ class InvoiceEditTests(APITestCase):
         """Test that barcode statuses are correctly managed during edits"""
         # 1. Create draft invoice (pending so editable)
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'BARCODE-CART-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -948,21 +978,25 @@ class InvoiceEditTests(APITestCase):
 class BarcodeStrictnessTests(APITestCase):
     """New tests to enforce strict barcode scanning behavior"""
     def setUp(self):
-        self.user = User.objects.create_user(username=f'strictuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Strict Store', shop_type='retail')
-        self.category = Category.objects.create(name='Strict Category')
+        self.store = TestDataFactory.create_store(name='Strict Store')
+        self.category = TestDataFactory.create_category(name='Strict Category')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='Strict Tracked Product',
             category=self.category,
             track_inventory=True
         )
         self.barcode = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'STRICT-{uuid.uuid4().hex[:8]}',
             tag='new'
         )
         self.cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'STRICT-CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -1014,6 +1048,7 @@ class BarcodeStrictnessTests(APITestCase):
     def test_increment_untracked_product_succeeds(self):
         """Test that manually incrementing a non-tracked product succeeds"""
         untracked_product = Product.objects.create(
+            retailer=self.retailer,
             name='Untracked Product',
             category=self.category,
             track_inventory=False
@@ -1036,6 +1071,7 @@ class BarcodeStrictnessTests(APITestCase):
     def test_untracked_product_checkout_succeeds(self):
         """Test that checkout succeeds for non-tracked products without barcodes"""
         untracked_product = Product.objects.create(
+            retailer=self.retailer,
             name='Service Item',
             category=self.category,
             track_inventory=False
@@ -1100,17 +1136,25 @@ class BarcodeStrictnessTests(APITestCase):
 class RaceConditionTests(APITestCase):
     """Tests for concurrent requests and integrity"""
     def setUp(self):
-        self.user = User.objects.create_user(username=f'raceuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Race Store', shop_type='retail')
-        self.category = Category.objects.create(name='Race Category')
+        self.store = TestDataFactory.create_store(name='Race Store')
+        self.category = TestDataFactory.create_category(name='Race Category')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='Race Product',
             category=self.category,
             track_inventory=True
         )
-        self.barcode = Barcode.objects.create(product=self.product, barcode='RACE-001', tag='new')
+        self.barcode = Barcode.objects.create(
+            retailer=self.retailer,
+            product=self.product,
+            barcode='RACE-001',
+            tag='new'
+        )
         self.cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number='RACE-CART',
             store=self.store,
             created_by=self.user,
@@ -1138,11 +1182,12 @@ class RaceConditionTests(APITestCase):
         self.assertIn('already checked out', response2.data.get('error', ''))
 class WholesaleCartTests(APITestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username='wholesale_user', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.wholesale_group, _ = Group.objects.get_or_create(name='Wholesale')
         self.user.groups.add(self.wholesale_group)
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Wholesale Store', shop_type='retail')
+        self.store = TestDataFactory.create_store(name='Wholesale Store')
 
     def test_wholesale_cart_default_invoice_type(self):
         """Test that carts created by wholesale users default to 'pending' invoice type"""
@@ -1165,12 +1210,14 @@ class CartBarcodeConsistencyTests(APITestCase):
     """Ensure the barcode scanned and the barcode stored in cart are consistent (concrete logic)."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username=f'barcodeuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Barcode Store', shop_type='retail')
-        self.category = Category.objects.create(name='Barcode Category')
-        self.supplier = Supplier.objects.create(name='Test Supplier', code='SUP1')
+        self.store = TestDataFactory.create_store(name='Barcode Store')
+        self.category = TestDataFactory.create_category(name='Barcode Category')
+        self.supplier = TestDataFactory.create_supplier(name='Test Supplier')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='Barcode Test Product',
             category=self.category,
             product_type='simple',
@@ -1178,6 +1225,7 @@ class CartBarcodeConsistencyTests(APITestCase):
         )
         # Create a finalized purchase and purchase item so barcode can be added to cart
         self.purchase = Purchase.objects.create(
+            retailer=self.retailer,
             purchase_number=f'PUR-{uuid.uuid4().hex[:8]}',
             supplier=self.supplier,
             purchase_date=timezone.now().date(),
@@ -1196,6 +1244,7 @@ class CartBarcodeConsistencyTests(APITestCase):
         # Full barcode (canonical) - uppercase so it matches API's standardized .upper() lookup
         self.full_barcode = f'BC-FULL-{uuid.uuid4().hex[:8]}'.upper()
         self.barcode = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=self.full_barcode,
             short_code=None,
@@ -1203,6 +1252,7 @@ class CartBarcodeConsistencyTests(APITestCase):
             purchase_item=self.purchase_item,
         )
         self.cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -1293,6 +1343,7 @@ class CartBarcodeConsistencyTests(APITestCase):
         self.barcode.save(update_fields=['short_code'])
         customer = Customer.objects.create(name='Cust Display', phone='9999999999')
         inv = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number='INV-DISP',
             store=self.store,
             customer=customer,
@@ -1323,6 +1374,7 @@ class CartBarcodeConsistencyTests(APITestCase):
         """Returned unit (still on paid invoice line) goes in-cart in POS; deleting cart row must return to returned, not stay in-cart."""
         customer = Customer.objects.create(name='Cart Return Cust', phone='9888888888')
         inv = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-RTN-{uuid.uuid4().hex[:6]}',
             store=self.store,
             customer=customer,
@@ -1367,28 +1419,32 @@ class BulkBarcodesCheckTests(APITestCase):
     """Tests for bulk barcodes check (replacement credit note): all barcode types and skip cases."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username=f'bulkuser_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Bulk Store', shop_type='retail')
-        self.category = Category.objects.create(name='Bulk Category')
+        self.store = TestDataFactory.create_store(name='Bulk Store')
+        self.category = TestDataFactory.create_category(name='Bulk Category')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='Bulk Product',
             category=self.category,
             product_type='simple',
             track_inventory=True,
         )
-        self.customer_a = Customer.objects.create(name='Customer A', phone='1111111111')
-        self.customer_b = Customer.objects.create(name='Customer B', phone='2222222222')
+        self.customer_a = TestDataFactory.create_customer(name='Customer A', phone='1111111111')
+        self.customer_b = TestDataFactory.create_customer(name='Customer B', phone='2222222222')
 
         # Helper to create a completed invoice (paid, cash) with one item for a barcode (uppercase for .upper() lookup)
         def make_invoice(inv_number, customer, barcode, barcode_tag='sold'):
             b = Barcode.objects.create(
+                retailer=self.retailer,
                 product=self.product,
                 barcode=f'BC-{inv_number}-{uuid.uuid4().hex[:6]}'.upper(),
                 short_code=f'SC-{inv_number}'.upper() if inv_number else None,
                 tag=barcode_tag,
             )
             inv = Invoice.objects.create(
+                retailer=self.retailer,
                 invoice_number=inv_number or f'INV-{uuid.uuid4().hex[:8]}',
                 store=self.store,
                 customer=customer,
@@ -1424,12 +1480,14 @@ class BulkBarcodesCheckTests(APITestCase):
 
         # One with short_code for lookup test
         self.barcode_sold_short = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode='LONG-BARCODE-WITH-SHORT',
             short_code='SHORT-001',
             tag='sold',
         )
         inv_short = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number='INV-BULK-SHORT',
             store=self.store,
             customer=self.customer_a,
@@ -1516,6 +1574,7 @@ class BulkBarcodesCheckTests(APITestCase):
     def test_fresh_without_invoice_item_is_processable(self):
         """Fresh barcode without invoice item is still processable in replacement bulk flow."""
         fresh_only = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'BC-FRESH-ONLY-{uuid.uuid4().hex[:6]}'.upper(),
             tag='new',
@@ -1566,11 +1625,13 @@ class BulkBarcodesCheckTests(APITestCase):
     def test_sold_two_customers_tie_picks_one_group(self):
         """When two customers have same count, one group is chosen (deterministic by id)."""
         sold_b2 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'BC-B2-{uuid.uuid4().hex[:6]}'.upper(),
             tag='sold',
         )
         inv_b2 = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-B2-{uuid.uuid4().hex[:6]}',
             store=self.store,
             customer=self.customer_b,
@@ -1639,11 +1700,13 @@ class BulkBarcodesCheckTests(APITestCase):
     def test_draft_invoice_excluded(self):
         """Barcodes on draft or pending invoice are not found (excluded from qs)."""
         b_draft = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'BC-DRAFT-{uuid.uuid4().hex[:6]}',
             tag='sold',
         )
         inv_draft = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-DRAFT-{uuid.uuid4().hex[:6]}',
             store=self.store,
             customer=self.customer_a,
@@ -1677,11 +1740,13 @@ class BulkBarcodesCheckTests(APITestCase):
     def test_void_invoice_excluded(self):
         """Barcodes on void invoice are not found."""
         b_void = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'BC-VOID-{uuid.uuid4().hex[:6]}',
             tag='sold',
         )
         inv_void = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-VOID-{uuid.uuid4().hex[:6]}',
             store=self.store,
             customer=self.customer_a,
@@ -1716,11 +1781,13 @@ class CustomProductAndPurchasePriceTests(APITestCase):
     """Tests for custom/other product, CartItem/InvoiceItem purchase_price, and manual_unit_price vs purchase_price validation (can_go_below_purchase_price)."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username=f'custom_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Custom Test Store', shop_type='retail')
-        self.category = Category.objects.create(name='Custom Category')
+        self.store = TestDataFactory.create_store(name='Custom Test Store')
+        self.category = TestDataFactory.create_category(name='Custom Category')
         self.cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-CUST-{uuid.uuid4().hex[:8]}',
             store=self.store,
             created_by=self.user,
@@ -1784,6 +1851,7 @@ class CustomProductAndPurchasePriceTests(APITestCase):
     def test_patch_cart_item_purchase_price_succeeds(self):
         """Updating cart item purchase_price via PATCH (e.g. inline cost entry) succeeds."""
         prod = Product.objects.create(
+            retailer=self.retailer,
             name='Other - Inline Cost',
             sku=f'SKU-{uuid.uuid4().hex[:8]}',
             category=self.category,
@@ -1806,6 +1874,7 @@ class CustomProductAndPurchasePriceTests(APITestCase):
     def test_manual_unit_price_below_purchase_price_rejected_when_can_go_below_false(self):
         """When can_go_below_purchase_price is False, manual_unit_price cannot be less than purchase_price."""
         prod = Product.objects.create(
+            retailer=self.retailer,
             name='Other - Strict Product',
             sku=f'SKU-{uuid.uuid4().hex[:8]}',
             category=self.category,
@@ -1827,6 +1896,7 @@ class CustomProductAndPurchasePriceTests(APITestCase):
     def test_manual_unit_price_below_purchase_price_allowed_when_can_go_below_true(self):
         """When can_go_below_purchase_price is True, manual_unit_price can be less than purchase_price."""
         prod = Product.objects.create(
+            retailer=self.retailer,
             name='Other - Flexible',
             sku=f'SKU-{uuid.uuid4().hex[:8]}',
             category=self.category,
@@ -1849,6 +1919,7 @@ class CustomProductAndPurchasePriceTests(APITestCase):
     def test_custom_product_purchase_price_used_in_validation(self):
         """For custom product (Other - X), cart item purchase_price is used when validating manual_unit_price."""
         prod = Product.objects.create(
+            retailer=self.retailer,
             name='Other - Custom Cost',
             sku=f'SKU-{uuid.uuid4().hex[:8]}',
             category=self.category,
@@ -1873,6 +1944,7 @@ class CustomProductAndPurchasePriceTests(APITestCase):
     def test_checkout_copies_purchase_price_to_invoice_item_for_custom(self):
         """Checkout copies CartItem.purchase_price to InvoiceItem for custom/non-tracked items."""
         prod = Product.objects.create(
+            retailer=self.retailer,
             name='Other - For Invoice',
             sku=f'SKU-{uuid.uuid4().hex[:8]}',
             category=self.category,
@@ -1915,6 +1987,7 @@ class CustomProductAndPurchasePriceTests(APITestCase):
         self.cart.invoice_type = 'pending'
         self.cart.save()
         prod = Product.objects.create(
+            retailer=self.retailer,
             name='Other - Pending',
             sku=f'SKU-{uuid.uuid4().hex[:8]}',
             category=self.category,
@@ -1937,23 +2010,27 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
     """Tests for adding items to invoices via barcode string or barcode_id."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username=f'invbc_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='Invoice BC Store', shop_type='retail')
-        self.category = Category.objects.create(name='Invoice BC Category')
-        self.customer = Customer.objects.create(name='Invoice BC Cust', phone='8888888888')
+        self.store = TestDataFactory.create_store(name='Invoice BC Store')
+        self.category = TestDataFactory.create_category(name='Invoice BC Category')
+        self.customer = TestDataFactory.create_customer(name='Invoice BC Cust', phone='8888888888')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='Invoice BC Product',
             category=self.category,
             track_inventory=True,
         )
         self.bc1 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'INVBC-{uuid.uuid4().hex[:8]}'.upper(),
             short_code=f'SC-INVBC-{uuid.uuid4().hex[:4]}'.upper(),
             tag='new',
         )
         self.bc2 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'INVBC2-{uuid.uuid4().hex[:8]}'.upper(),
             tag='new',
@@ -1961,6 +2038,7 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
 
     def _create_draft_pending_invoice(self):
         cart = Cart.objects.create(
+            retailer=self.retailer,
             cart_number=f'CRT-INVBC-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -1970,6 +2048,7 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
         CartItem.objects.create(
             cart=cart,
             product=Product.objects.create(
+                retailer=self.retailer,
                 name=f'Seed-{uuid.uuid4().hex[:6]}',
                 category=self.category,
                 track_inventory=False,
@@ -2137,18 +2216,21 @@ class ReplacementPOSTests(APITestCase):
     """Replacement POS: sold-barcode lookup, draft vs instant create, checkout, validation."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username=f'rpos_{uuid.uuid4().hex[:6]}', password='password')
+        self.retailer = TestDataFactory.get_or_create_default_retailer()
+        self.user = TestDataFactory.create_user()
         self.client.force_authenticate(user=self.user)
-        self.store = Store.objects.create(name='RPos Store', shop_type='retail')
-        self.category = Category.objects.create(name='RPos Cat')
-        self.customer = Customer.objects.create(name='RPos Customer', phone='9999999999')
-        self.customer2 = Customer.objects.create(name='RPos Customer2', phone='9999999998')
+        self.store = TestDataFactory.create_store(name='RPos Store')
+        self.category = TestDataFactory.create_category(name='RPos Cat')
+        self.customer = TestDataFactory.create_customer(name='RPos Customer', phone='9999999999')
+        self.customer2 = TestDataFactory.create_customer(name='RPos Customer2', phone='9999999998')
         self.product = Product.objects.create(
+            retailer=self.retailer,
             name='RPos Product',
             category=self.category,
             track_inventory=True,
         )
         self.bc = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'RPOS-{uuid.uuid4().hex[:10]}'.upper(),
             tag='sold',
@@ -2158,6 +2240,7 @@ class ReplacementPOSTests(APITestCase):
         self.bc.tag = 'sold'
         self.bc.save(update_fields=['tag'])
         inv = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-S-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -2187,6 +2270,7 @@ class ReplacementPOSTests(APITestCase):
         barcode_obj.tag = 'sold'
         barcode_obj.save(update_fields=['tag'])
         inv = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-CC-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=customer,
@@ -2282,6 +2366,7 @@ class ReplacementPOSTests(APITestCase):
     def test_create_rejects_mismatched_store_in_body(self):
         inv, item = self._paid_invoice_with_item(self.customer, Decimal('100.00'))
         other_store = Store.objects.create(
+            retailer=self.retailer,
             name='Other RPos',
             code=f'OR-{uuid.uuid4().hex[:10]}',
             shop_type='retail',
@@ -2301,16 +2386,19 @@ class ReplacementPOSTests(APITestCase):
     def test_create_rejects_lines_from_two_stores(self):
         inv1, item1 = self._paid_invoice_with_item(self.customer, Decimal('10.00'))
         store_b = Store.objects.create(
+            retailer=self.retailer,
             name='RPos Store B',
             code=f'RB-{uuid.uuid4().hex[:10]}',
             shop_type='retail',
         )
         bc_b = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'RPOS-B-{uuid.uuid4().hex[:8]}'.upper(),
             tag='sold',
         )
         inv_b = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-SB-{uuid.uuid4().hex[:8]}',
             store=store_b,
             customer=self.customer,
@@ -2469,11 +2557,13 @@ class ReplacementPOSTests(APITestCase):
     def test_create_instant_two_lines_ledger_matches_invoice_total(self):
         _, item1 = self._paid_invoice_with_item(self.customer, Decimal('40.00'))
         bc2 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'RPOS2L-{uuid.uuid4().hex[:8]}'.upper(),
             tag='sold',
         )
         inv2 = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-S2L-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer,
@@ -2546,11 +2636,13 @@ class ReplacementPOSTests(APITestCase):
     def test_mixed_customers_sets_warning(self):
         inv1, item1 = self._paid_invoice_with_item(self.customer, Decimal('10.00'))
         bc2 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'RPOS2-{uuid.uuid4().hex[:8]}'.upper(),
             tag='sold',
         )
         inv2 = Invoice.objects.create(
+            retailer=self.retailer,
             invoice_number=f'INV-S2-{uuid.uuid4().hex[:8]}',
             store=self.store,
             customer=self.customer2,
@@ -2662,11 +2754,13 @@ class ReplacementPOSTests(APITestCase):
         from backend.parties.models import LedgerEntry
 
         bc1 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'RPOS-CC1-{uuid.uuid4().hex[:8]}'.upper(),
             tag='new',
         )
         bc2 = Barcode.objects.create(
+            retailer=self.retailer,
             product=self.product,
             barcode=f'RPOS-CC2-{uuid.uuid4().hex[:8]}'.upper(),
             tag='new',
@@ -2905,3 +2999,440 @@ class PosTenantIsolationTests(APITestCase):
     def test_return_delete_blocks_other_retailer_return(self):
         response = self.client.delete(reverse('return-detail', args=[self.return_b.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+# ===========================================================================
+# GST Sales Payload — barcode response + inclusive/exclusive bifurcation
+# ===========================================================================
+
+class GSTSalesPayloadTests(TestCase):
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier()
+        self.product = TestDataFactory.create_product(track_inventory=True)
+
+    def _create_purchase_linked_barcode(self, gst_percent, gst_inclusive):
+        purchase = TestDataFactory.create_purchase(
+            user=self.user,
+            supplier=self.supplier,
+            store=self.store,
+            status='finalized',
+        )
+        purchase_item = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('1.00'),
+            unit_price=Decimal('100.00'),
+        )
+        purchase_item.gst_percent = Decimal(str(gst_percent))
+        purchase_item.gst_inclusive = bool(gst_inclusive)
+        purchase_item.save(update_fields=['gst_percent', 'gst_inclusive'])
+        barcode = TestDataFactory.create_barcode(
+            self.product,
+            barcode=f'GST-BC-{gst_percent}-{int(gst_inclusive)}',
+            tag='new',
+            purchase_item=purchase_item,
+        )
+        return barcode
+
+    def test_build_barcode_response_prefers_purchase_item_gst(self):
+        barcode = self._create_purchase_linked_barcode(gst_percent='18.00', gst_inclusive=True)
+        payload = build_barcode_response(barcode, self.product, logging.getLogger('test.gst'))
+        self.assertEqual(payload['gst_percent'], 18.0)
+        self.assertTrue(payload['gst_inclusive'])
+
+    def test_cart_item_serializer_uses_purchase_item_gst_from_scanned_barcode(self):
+        barcode = self._create_purchase_linked_barcode(gst_percent='5.00', gst_inclusive=True)
+        cart = TestDataFactory.create_cart(user=self.user, store=self.store)
+        cart_item = CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            tax_amount=Decimal('4.76'),
+            scanned_barcodes=[barcode.barcode],
+        )
+        data = CartItemSerializer(cart_item).data
+        self.assertEqual(data['tax_percent'], 5.0)
+        self.assertTrue(data['tax_is_inclusive'])
+
+    def test_cart_item_serializer_falls_back_to_product_tax_rate(self):
+        tax_rate = TestDataFactory.create_tax_rate(rate=Decimal('12.00'))
+        self.product.tax_rate = tax_rate
+        self.product.save(update_fields=['tax_rate'])
+        barcode = TestDataFactory.create_barcode(
+            self.product,
+            barcode='GST-BC-FALLBACK-12',
+            tag='new',
+            purchase_item=None,
+        )
+        cart = TestDataFactory.create_cart(user=self.user, store=self.store)
+        cart_item = CartItem.objects.create(
+            cart=cart,
+            product=self.product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('200.00'),
+            tax_amount=Decimal('24.00'),
+            scanned_barcodes=[barcode.barcode],
+        )
+        data = CartItemSerializer(cart_item).data
+        self.assertEqual(data['tax_percent'], 12.0)
+        self.assertFalse(data['tax_is_inclusive'])
+
+
+class CalculateGSTBifurcationExclusiveTests(TestCase):
+    """GST-exclusive formula: GST = base * rate/100, Total = base + GST."""
+
+    def test_5_percent_exclusive_single_unit(self):
+        result = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=5, is_inclusive=False)
+        self.assertAlmostEqual(result['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 5.00, places=2)
+        self.assertAlmostEqual(result['cgst'], 2.50, places=2)
+        self.assertAlmostEqual(result['sgst'], 2.50, places=2)
+        self.assertAlmostEqual(result['igst'], 0.00, places=2)
+        self.assertAlmostEqual(result['total'], 105.00, places=2)
+
+    def test_18_percent_exclusive_single_unit(self):
+        result = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=18, is_inclusive=False)
+        self.assertAlmostEqual(result['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 18.00, places=2)
+        self.assertAlmostEqual(result['cgst'], 9.00, places=2)
+        self.assertAlmostEqual(result['sgst'], 9.00, places=2)
+        self.assertAlmostEqual(result['total'], 118.00, places=2)
+
+    def test_12_percent_exclusive_multiple_units(self):
+        # 50/unit * 3 = 150 base, 12% → GST = 18, Total = 168
+        result = calculate_gst_bifurcation(unit_price=50, quantity=3, tax_rate=12, is_inclusive=False)
+        self.assertAlmostEqual(result['base_amount'], 150.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 18.00, places=2)
+        self.assertAlmostEqual(result['cgst'], 9.00, places=2)
+        self.assertAlmostEqual(result['sgst'], 9.00, places=2)
+        self.assertAlmostEqual(result['total'], 168.00, places=2)
+
+    def test_cgst_and_sgst_sum_equals_total_tax(self):
+        result = calculate_gst_bifurcation(unit_price=99, quantity=1, tax_rate=28, is_inclusive=False)
+        self.assertAlmostEqual(result['cgst'] + result['sgst'], result['total_tax'], places=2)
+
+    def test_zero_tax_rate_exclusive(self):
+        result = calculate_gst_bifurcation(unit_price=200, quantity=2, tax_rate=0, is_inclusive=False)
+        self.assertAlmostEqual(result['base_amount'], 400.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 0.00, places=2)
+        self.assertAlmostEqual(result['total'], 400.00, places=2)
+
+
+class CalculateGSTBifurcationInclusiveTests(TestCase):
+    """GST-inclusive formula: Base = Inclusive*100/(100+Rate), GST = Inclusive - Base."""
+
+    def test_5_percent_inclusive_on_105(self):
+        # Inclusive 105 @ 5% → base=100, tax=5
+        result = calculate_gst_bifurcation(unit_price=105, quantity=1, tax_rate=5, is_inclusive=True)
+        self.assertAlmostEqual(result['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 5.00, places=2)
+        self.assertAlmostEqual(result['cgst'], 2.50, places=2)
+        self.assertAlmostEqual(result['sgst'], 2.50, places=2)
+        self.assertAlmostEqual(result['total'], 105.00, places=2)
+
+    def test_18_percent_inclusive_on_118(self):
+        # Inclusive 118 @ 18% → base=100, tax=18
+        result = calculate_gst_bifurcation(unit_price=118, quantity=1, tax_rate=18, is_inclusive=True)
+        self.assertAlmostEqual(result['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 18.00, places=2)
+        self.assertAlmostEqual(result['total'], 118.00, places=2)
+
+    def test_5_percent_inclusive_on_100(self):
+        # Inclusive 100 @ 5% → base=95.24, tax=4.76
+        result = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=5, is_inclusive=True)
+        self.assertAlmostEqual(result['base_amount'], 95.24, places=2)
+        self.assertAlmostEqual(result['total_tax'], 4.76, places=2)
+        self.assertAlmostEqual(result['cgst'], 2.38, places=2)
+        self.assertAlmostEqual(result['sgst'], 2.38, places=2)
+        self.assertAlmostEqual(result['total'], 100.00, places=2)
+
+    def test_12_percent_inclusive_multiple_units(self):
+        # 56/unit * 3 = 168 inclusive @ 12% → base=150, tax=18
+        result = calculate_gst_bifurcation(unit_price=56, quantity=3, tax_rate=12, is_inclusive=True)
+        self.assertAlmostEqual(result['base_amount'], 150.00, places=2)
+        self.assertAlmostEqual(result['total_tax'], 18.00, places=2)
+        self.assertAlmostEqual(result['total'], 168.00, places=2)
+
+    def test_inclusive_total_equals_base_plus_tax(self):
+        result = calculate_gst_bifurcation(unit_price=200, quantity=2, tax_rate=18, is_inclusive=True)
+        self.assertAlmostEqual(result['base_amount'] + result['total_tax'], result['total'], places=2)
+
+    def test_cgst_and_sgst_sum_equals_total_tax_inclusive(self):
+        result = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=28, is_inclusive=True)
+        self.assertAlmostEqual(result['cgst'] + result['sgst'], result['total_tax'], places=2)
+
+    def test_igst_is_always_zero(self):
+        """IGST is always 0 — only intra-state CGST + SGST."""
+        for rate in [5, 12, 18, 28]:
+            with self.subTest(rate=rate):
+                r = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=rate, is_inclusive=True)
+                self.assertEqual(r['igst'], 0.00)
+
+    def test_same_rate_inclusive_vs_exclusive_different_bases(self):
+        """5% inclusive on 100 gives lower base and tax than 5% exclusive on 100."""
+        incl = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=5, is_inclusive=True)
+        excl = calculate_gst_bifurcation(unit_price=100, quantity=1, tax_rate=5, is_inclusive=False)
+        self.assertLess(incl['base_amount'], excl['base_amount'])
+        self.assertLess(incl['total_tax'], excl['total_tax'])
+        self.assertAlmostEqual(incl['total'], 100.00, places=2)
+        self.assertAlmostEqual(excl['total'], 105.00, places=2)
+
+
+class CartItemTaxBifurcationTests(TestCase):
+    """CartItem serializer must include is_inclusive in tax_bifurcation."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier()
+
+    def _make_cart_item(self, gst_percent, gst_inclusive, unit_price, tax_amount, barcode_suffix=''):
+        product = TestDataFactory.create_product(track_inventory=True)
+        purchase = TestDataFactory.create_purchase(
+            user=self.user, supplier=self.supplier, store=self.store, status='finalized'
+        )
+        pi = TestDataFactory.create_purchase_item(
+            purchase=purchase, product=product,
+            quantity=Decimal('1.00'), unit_price=unit_price,
+        )
+        pi.gst_percent = Decimal(str(gst_percent))
+        pi.gst_inclusive = bool(gst_inclusive)
+        pi.save(update_fields=['gst_percent', 'gst_inclusive'])
+        barcode = TestDataFactory.create_barcode(
+            product, barcode=f'BIFT-{gst_percent}-{int(gst_inclusive)}-{barcode_suffix}',
+            tag='new', purchase_item=pi,
+        )
+        cart = TestDataFactory.create_cart(user=self.user, store=self.store)
+        return CartItem.objects.create(
+            cart=cart, product=product,
+            quantity=Decimal('1.000'),
+            unit_price=unit_price,
+            tax_amount=tax_amount,
+            scanned_barcodes=[barcode.barcode],
+        )
+
+    def test_exclusive_item_bifurcation_not_inclusive(self):
+        item = self._make_cart_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'EX')
+        bif = CartItemSerializer(item).data['tax_bifurcation']
+        self.assertIsNotNone(bif)
+        self.assertFalse(bif['is_inclusive'])
+        self.assertAlmostEqual(bif['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(bif['total_tax'], 5.00, places=2)
+        self.assertAlmostEqual(bif['cgst'], 2.50, places=2)
+        self.assertAlmostEqual(bif['sgst'], 2.50, places=2)
+
+    def test_inclusive_item_bifurcation_is_inclusive(self):
+        # unit_price stored as base after GST extraction: 95.24
+        item = self._make_cart_item('5.00', True, Decimal('95.24'), Decimal('4.76'), 'IN')
+        bif = CartItemSerializer(item).data['tax_bifurcation']
+        self.assertIsNotNone(bif)
+        self.assertTrue(bif['is_inclusive'])
+        self.assertAlmostEqual(bif['base_amount'], 95.24, places=2)
+        self.assertAlmostEqual(bif['total_tax'], 4.76, places=2)
+
+    def test_zero_tax_returns_none(self):
+        item = self._make_cart_item('5.00', False, Decimal('100.00'), Decimal('0.00'), 'ZT')
+        self.assertIsNone(CartItemSerializer(item).data['tax_bifurcation'])
+
+    def test_rate_field_reflects_actual_rate(self):
+        item = self._make_cart_item('18.00', False, Decimal('100.00'), Decimal('18.00'), 'RT18')
+        bif = CartItemSerializer(item).data['tax_bifurcation']
+        self.assertAlmostEqual(bif['rate'], 18.00, places=1)
+
+
+class CartTaxBifurcationSlabTests(TestCase):
+    """Cart-level tax_bifurcation must separate same-rate inclusive vs exclusive items."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier()
+        self.cart = TestDataFactory.create_cart(user=self.user, store=self.store)
+
+    def _add_item(self, gst_percent, gst_inclusive, unit_price, tax_amount, suffix=''):
+        product = TestDataFactory.create_product(track_inventory=True)
+        purchase = TestDataFactory.create_purchase(
+            user=self.user, supplier=self.supplier, store=self.store, status='finalized'
+        )
+        pi = TestDataFactory.create_purchase_item(
+            purchase=purchase, product=product,
+            quantity=Decimal('1.00'), unit_price=unit_price,
+        )
+        pi.gst_percent = Decimal(str(gst_percent))
+        pi.gst_inclusive = bool(gst_inclusive)
+        pi.save(update_fields=['gst_percent', 'gst_inclusive'])
+        barcode = TestDataFactory.create_barcode(
+            product, barcode=f'CART-BIFT-{gst_percent}-{int(gst_inclusive)}-{suffix}',
+            tag='new', purchase_item=pi,
+        )
+        CartItem.objects.create(
+            cart=self.cart, product=product,
+            quantity=Decimal('1.000'),
+            unit_price=unit_price,
+            tax_amount=tax_amount,
+            scanned_barcodes=[barcode.barcode],
+        )
+
+    def test_single_exclusive_item_produces_one_slab(self):
+        self._add_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'S1')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertIsNotNone(slabs)
+        self.assertEqual(len(slabs), 1)
+        self.assertAlmostEqual(slabs[0]['rate'], 5.0, places=1)
+        self.assertFalse(slabs[0]['is_inclusive'])
+        self.assertAlmostEqual(slabs[0]['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(slabs[0]['total_tax'], 5.00, places=2)
+
+    def test_single_inclusive_item_produces_one_slab_marked_inclusive(self):
+        self._add_item('5.00', True, Decimal('95.24'), Decimal('4.76'), 'S2')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertIsNotNone(slabs)
+        self.assertEqual(len(slabs), 1)
+        self.assertTrue(slabs[0]['is_inclusive'])
+        self.assertAlmostEqual(slabs[0]['total_tax'], 4.76, places=2)
+
+    def test_same_rate_inclusive_and_exclusive_produce_two_slabs(self):
+        """Core fix: 5% inclusive and 5% exclusive must appear as TWO rows."""
+        self._add_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'EX')
+        self._add_item('5.00', True, Decimal('95.24'), Decimal('4.76'), 'IN')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertIsNotNone(slabs)
+        self.assertEqual(len(slabs), 2, 'Same rate inclusive+exclusive must produce two slabs')
+        self.assertIn(False, [s['is_inclusive'] for s in slabs])
+        self.assertIn(True, [s['is_inclusive'] for s in slabs])
+
+    def test_different_rates_produce_separate_slabs(self):
+        self._add_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'R1')
+        self._add_item('18.00', False, Decimal('100.00'), Decimal('18.00'), 'R2')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertEqual(len(slabs), 2)
+        self.assertAlmostEqual(sorted(s['rate'] for s in slabs)[0], 5.0, places=1)
+        self.assertAlmostEqual(sorted(s['rate'] for s in slabs)[1], 18.0, places=1)
+
+    def test_totals_aggregated_within_same_slab(self):
+        """Two exclusive 5% items must be summed into one slab."""
+        self._add_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'AGG1')
+        self._add_item('5.00', False, Decimal('200.00'), Decimal('10.00'), 'AGG2')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertEqual(len(slabs), 1)
+        self.assertAlmostEqual(slabs[0]['base_amount'], 300.00, places=2)
+        self.assertAlmostEqual(slabs[0]['total_tax'], 15.00, places=2)
+        self.assertAlmostEqual(slabs[0]['cgst'], 7.50, places=2)
+        self.assertAlmostEqual(slabs[0]['sgst'], 7.50, places=2)
+
+    def test_no_tax_items_returns_none(self):
+        product = TestDataFactory.create_product(track_inventory=True)
+        CartItem.objects.create(
+            cart=self.cart, product=product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            tax_amount=Decimal('0.00'),
+            scanned_barcodes=[],
+        )
+        self.assertIsNone(CartSerializer(self.cart).data['tax_bifurcation'])
+
+    def test_mixed_three_slabs(self):
+        """5% excl + 5% incl + 18% excl must produce three slabs."""
+        self._add_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'M1')
+        self._add_item('5.00', True, Decimal('95.24'), Decimal('4.76'), 'M2')
+        self._add_item('18.00', False, Decimal('100.00'), Decimal('18.00'), 'M3')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertEqual(len(slabs), 3)
+
+    def test_slabs_sorted_by_rate_then_inclusive_flag(self):
+        """Lower rate first; for same rate, exclusive (False) before inclusive (True)."""
+        self._add_item('18.00', False, Decimal('100.00'), Decimal('18.00'), 'ORD1')
+        self._add_item('5.00', True, Decimal('95.24'), Decimal('4.76'), 'ORD2')
+        self._add_item('5.00', False, Decimal('100.00'), Decimal('5.00'), 'ORD3')
+        slabs = CartSerializer(self.cart).data['tax_bifurcation']
+        self.assertEqual(len(slabs), 3)
+        self.assertAlmostEqual(slabs[0]['rate'], 5.0, places=1)
+        self.assertFalse(slabs[0]['is_inclusive'])
+        self.assertAlmostEqual(slabs[1]['rate'], 5.0, places=1)
+        self.assertTrue(slabs[1]['is_inclusive'])
+        self.assertAlmostEqual(slabs[2]['rate'], 18.0, places=1)
+
+
+class InvoiceTaxBifurcationSlabTests(TestCase):
+    """Invoice-level tax_bifurcation must separate same-rate inclusive vs exclusive items."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier()
+        self.invoice = TestDataFactory.create_invoice(self.user, store=self.store, status='paid')
+
+    def _add_invoice_item(self, gst_percent, gst_inclusive, unit_price, tax_amount, line_total, suffix=''):
+        product = TestDataFactory.create_product(track_inventory=True)
+        purchase = TestDataFactory.create_purchase(
+            user=self.user, supplier=self.supplier, store=self.store, status='finalized'
+        )
+        pi = TestDataFactory.create_purchase_item(
+            purchase=purchase, product=product,
+            quantity=Decimal('1.00'), unit_price=unit_price,
+        )
+        pi.gst_percent = Decimal(str(gst_percent))
+        pi.gst_inclusive = bool(gst_inclusive)
+        pi.save(update_fields=['gst_percent', 'gst_inclusive'])
+        barcode = TestDataFactory.create_barcode(
+            product, barcode=f'INV-BIFT-{gst_percent}-{int(gst_inclusive)}-{suffix}',
+            tag='sold', purchase_item=pi,
+        )
+        InvoiceItem.objects.create(
+            invoice=self.invoice,
+            product=product,
+            barcode=barcode,
+            quantity=Decimal('1.000'),
+            unit_price=unit_price,
+            tax_amount=tax_amount,
+            line_total=line_total,
+        )
+
+    def test_exclusive_slab_marked_not_inclusive(self):
+        self._add_invoice_item('5.00', False, Decimal('100.00'), Decimal('5.00'), Decimal('105.00'), 'EX')
+        slabs = InvoiceSerializer(self.invoice).data['tax_bifurcation']
+        self.assertIsNotNone(slabs)
+        self.assertEqual(len(slabs), 1)
+        self.assertFalse(slabs[0]['is_inclusive'])
+        self.assertAlmostEqual(slabs[0]['base_amount'], 100.00, places=2)
+        self.assertAlmostEqual(slabs[0]['total_tax'], 5.00, places=2)
+
+    def test_inclusive_slab_marked_inclusive(self):
+        self._add_invoice_item('5.00', True, Decimal('95.24'), Decimal('4.76'), Decimal('100.00'), 'IN')
+        slabs = InvoiceSerializer(self.invoice).data['tax_bifurcation']
+        self.assertIsNotNone(slabs)
+        self.assertEqual(len(slabs), 1)
+        self.assertTrue(slabs[0]['is_inclusive'])
+        self.assertAlmostEqual(slabs[0]['total_tax'], 4.76, places=2)
+
+    def test_same_rate_inclusive_and_exclusive_produce_two_slabs(self):
+        self._add_invoice_item('5.00', False, Decimal('100.00'), Decimal('5.00'), Decimal('105.00'), 'EX')
+        self._add_invoice_item('5.00', True, Decimal('95.24'), Decimal('4.76'), Decimal('100.00'), 'IN')
+        slabs = InvoiceSerializer(self.invoice).data['tax_bifurcation']
+        self.assertIsNotNone(slabs)
+        self.assertEqual(len(slabs), 2)
+        self.assertIn(False, [s['is_inclusive'] for s in slabs])
+        self.assertIn(True, [s['is_inclusive'] for s in slabs])
+
+    def test_cgst_sgst_sum_matches_total_tax_per_slab(self):
+        self._add_invoice_item('18.00', False, Decimal('100.00'), Decimal('18.00'), Decimal('118.00'), 'CS')
+        slabs = InvoiceSerializer(self.invoice).data['tax_bifurcation']
+        for slab in slabs:
+            self.assertAlmostEqual(slab['cgst'] + slab['sgst'], slab['total_tax'], places=2)
+
+    def test_no_tax_invoice_returns_none(self):
+        product = TestDataFactory.create_product(track_inventory=True)
+        InvoiceItem.objects.create(
+            invoice=self.invoice,
+            product=product,
+            barcode=None,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('100.00'),
+        )
+        self.assertIsNone(InvoiceSerializer(self.invoice).data['tax_bifurcation'])
+

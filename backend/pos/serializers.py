@@ -112,31 +112,36 @@ class CartItemSerializer(serializers.ModelSerializer):
     def get_tax_bifurcation(self, obj):
         try:
             from backend.core.gst_utils import calculate_gst_bifurcation
-            
+
             tax_amt = Decimal(str(obj.tax_amount or '0'))
             if tax_amt <= 0:
                 return None
-                
+
             qty = Decimal(str(obj.quantity or '0'))
             if qty <= 0:
                 return None
-                
-            # Deriving effective base since it's not explicitly stored line_total
+
+            # unit_price stored is always the base (ex-tax) price, regardless of whether
+            # the original purchase was GST-inclusive or exclusive.
             unit_price = Decimal(str(obj.manual_unit_price if obj.manual_unit_price is not None else obj.unit_price) or '0')
-            line_total = unit_price * qty - Decimal(str(obj.discount_amount or '0')) + tax_amt
-            
-            base = line_total - tax_amt
+            base = unit_price * qty - Decimal(str(obj.discount_amount or '0'))
             if base <= 0:
                 return None
-                
+
             rate = (tax_amt / base) * Decimal('100')
-            
-            return calculate_gst_bifurcation(
-                unit_price=base/qty,
+
+            # Resolve whether the original purchase was GST-inclusive
+            is_inclusive = self.get_tax_is_inclusive(obj)
+
+            result = calculate_gst_bifurcation(
+                unit_price=base / qty,
                 quantity=qty,
                 tax_rate=rate,
-                is_inclusive=False
+                is_inclusive=False  # base is already extracted; always compute exclusive from here
             )
+            result['is_inclusive'] = is_inclusive
+            result['rate'] = float(rate.quantize(Decimal('0.01')))
+            return result
         except Exception:
             return None
 
@@ -317,59 +322,92 @@ class CartSerializer(serializers.ModelSerializer):
     )
     tax_bifurcation = serializers.SerializerMethodField()
 
+    def _resolve_item_gst_inclusive(self, item):
+        """Resolve whether a CartItem's original purchase was GST-inclusive."""
+        from backend.catalog.models import Barcode
+        try:
+            if not item.scanned_barcodes:
+                return False
+            first_val = str(item.scanned_barcodes[0] or '').strip().upper()
+            if not first_val:
+                return False
+            retailer_id = getattr(getattr(item, 'cart', None), 'retailer_id', None)
+            barcode_qs = Barcode.objects.all()
+            if retailer_id:
+                barcode_qs = barcode_qs.filter(retailer_id=retailer_id)
+            try:
+                barcode_obj = barcode_qs.get(barcode=first_val)
+            except Barcode.DoesNotExist:
+                try:
+                    barcode_obj = barcode_qs.get(short_code=first_val)
+                except Barcode.DoesNotExist:
+                    return False
+            if barcode_obj.purchase_item is not None:
+                return bool(barcode_obj.purchase_item.gst_inclusive)
+        except Exception:
+            pass
+        return False
+
     def get_tax_bifurcation(self, obj):
+        from backend.core.gst_utils import calculate_gst_bifurcation
+
         items = obj.items.all()
+        # Key: (rounded_rate, is_inclusive) so that same-rate inclusive/exclusive items
+        # are shown as separate slabs in the GST bifurcation table.
         slabs = {}
-        
+
         for item in items:
             item_tax = Decimal(str(item.tax_amount or '0'))
             if item_tax <= 0:
                 continue
-                
+
             qty = Decimal(str(item.quantity or '0'))
             if qty <= 0:
                 continue
-                
+
+            # unit_price stored is always the base (ex-tax) price.
             unit_price = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
-            line_total = unit_price * qty - Decimal(str(item.discount_amount or '0')) + item_tax
-            
-            base = line_total - item_tax
+            base = unit_price * qty - Decimal(str(item.discount_amount or '0'))
             if base <= 0:
                 continue
-                
+
             rate = (item_tax / base) * Decimal('100')
-            rate_key = float(rate.quantize(Decimal('0.01')))
-            
-            if rate_key not in slabs:
-                slabs[rate_key] = {
-                    'rate': rate_key,
+            rate_rounded = float(rate.quantize(Decimal('0.01')))
+
+            is_inclusive = self._resolve_item_gst_inclusive(item)
+            slab_key = (rate_rounded, is_inclusive)
+
+            if slab_key not in slabs:
+                slabs[slab_key] = {
+                    'rate': rate_rounded,
+                    'is_inclusive': is_inclusive,
                     'base_amount': Decimal('0.00'),
                     'total_tax': Decimal('0.00'),
                     'cgst': Decimal('0.00'),
                     'sgst': Decimal('0.00'),
                     'igst': Decimal('0.00'),
                 }
-            
-            from backend.core.gst_utils import calculate_gst_bifurcation
+
             bif = calculate_gst_bifurcation(
-                unit_price=base/qty,
+                unit_price=base / qty,
                 quantity=qty,
                 tax_rate=rate,
-                is_inclusive=False
+                is_inclusive=False  # base already extracted
             )
-            
-            slabs[rate_key]['base_amount'] += Decimal(str(bif['base_amount']))
-            slabs[rate_key]['total_tax'] += Decimal(str(bif['total_tax']))
-            slabs[rate_key]['cgst'] += Decimal(str(bif['cgst']))
-            slabs[rate_key]['sgst'] += Decimal(str(bif['sgst']))
-            slabs[rate_key]['igst'] += Decimal(str(bif['igst']))
-            
+
+            slabs[slab_key]['base_amount'] += Decimal(str(bif['base_amount']))
+            slabs[slab_key]['total_tax'] += Decimal(str(bif['total_tax']))
+            slabs[slab_key]['cgst'] += Decimal(str(bif['cgst']))
+            slabs[slab_key]['sgst'] += Decimal(str(bif['sgst']))
+            slabs[slab_key]['igst'] += Decimal(str(bif['igst']))
+
         result = []
-        ordered_rates = sorted(slabs.keys())
-        for r in ordered_rates:
-            s = slabs[r]
+        # Sort by rate first, then exclusive before inclusive
+        for key in sorted(slabs.keys(), key=lambda k: (k[0], k[1])):
+            s = slabs[key]
             result.append({
                 'rate': s['rate'],
+                'is_inclusive': s['is_inclusive'],
                 'base_amount': float(s['base_amount']),
                 'total_tax': float(s['total_tax']),
                 'cgst': float(s['cgst']),
@@ -567,6 +605,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
+    retailer_name_extra = serializers.CharField(source='retailer.retailer_name_extra', read_only=True, default='')
+    shop_address = serializers.CharField(source='retailer.shop_address', read_only=True, default='')
     repair = RepairSerializer(read_only=True)
     display_total = serializers.SerializerMethodField()
     computed_total = serializers.SerializerMethodField()
@@ -575,65 +615,65 @@ class InvoiceSerializer(serializers.ModelSerializer):
     tax_bifurcation = serializers.SerializerMethodField()
 
     def get_tax_bifurcation(self, obj):
-        """Consolidate tax bifurcation from all items."""
-        items = obj.items.all()
+        """Consolidate tax bifurcation from all items, bifurcated by (rate, gst_inclusive)."""
+        from backend.core.gst_utils import calculate_gst_bifurcation
+
+        items = obj.items.all().select_related('barcode__purchase_item')
         slabs = {}
-        
+
         for item in items:
-            # We reuse the logic from InvoiceItemSerializer.tax_bifurcation
-            # but ideally we'd want to avoid redundant calculations.
-            # However, for simplicity in the serializer, we'll re-calculate or 
-            # better, use a cached property if we were to optimize.
-            
-            # For now, let's just use the item's tax_bifurcation if available
-            # Note: SerializerMethodField isn't easily accessible from another serializer method
-            # so we'll just do the calculation here.
-            
             item_tax = Decimal(str(item.tax_amount or '0'))
             if item_tax <= 0:
                 continue
-                
+
             qty = Decimal(str(item.quantity or '0'))
             line_total = Decimal(str(item.line_total or '0'))
             base = line_total - item_tax
             if base <= 0:
                 continue
-                
+
             rate = (item_tax / base) * Decimal('100')
-            # Round rate to avoid floating point issues in slab keys (e.g. 18.0)
             rate_key = float(rate.quantize(Decimal('0.01')))
-            
-            if rate_key not in slabs:
-                slabs[rate_key] = {
+
+            # Resolve is_inclusive via the linked barcode's purchase_item
+            is_inclusive = False
+            try:
+                if item.barcode and item.barcode.purchase_item is not None:
+                    is_inclusive = bool(item.barcode.purchase_item.gst_inclusive)
+            except Exception:
+                pass
+
+            slab_key = (rate_key, is_inclusive)
+            if slab_key not in slabs:
+                slabs[slab_key] = {
                     'rate': rate_key,
+                    'is_inclusive': is_inclusive,
                     'base_amount': Decimal('0.00'),
                     'total_tax': Decimal('0.00'),
                     'cgst': Decimal('0.00'),
                     'sgst': Decimal('0.00'),
                     'igst': Decimal('0.00'),
                 }
-            
-            from backend.core.gst_utils import calculate_gst_bifurcation
+
             bif = calculate_gst_bifurcation(
-                unit_price=base/qty,
+                unit_price=base / qty,
                 quantity=qty,
                 tax_rate=rate,
                 is_inclusive=False
             )
-            
-            slabs[rate_key]['base_amount'] += Decimal(str(bif['base_amount']))
-            slabs[rate_key]['total_tax'] += Decimal(str(bif['total_tax']))
-            slabs[rate_key]['cgst'] += Decimal(str(bif['cgst']))
-            slabs[rate_key]['sgst'] += Decimal(str(bif['sgst']))
-            slabs[rate_key]['igst'] += Decimal(str(bif['igst']))
-            
-        # Convert Decimals to floats for JSON
+
+            slabs[slab_key]['base_amount'] += Decimal(str(bif['base_amount']))
+            slabs[slab_key]['total_tax'] += Decimal(str(bif['total_tax']))
+            slabs[slab_key]['cgst'] += Decimal(str(bif['cgst']))
+            slabs[slab_key]['sgst'] += Decimal(str(bif['sgst']))
+            slabs[slab_key]['igst'] += Decimal(str(bif['igst']))
+
         result = []
-        ordered_rates = sorted(slabs.keys())
-        for r in ordered_rates:
-            s = slabs[r]
+        for key in sorted(slabs.keys(), key=lambda k: (k[0], k[1])):
+            s = slabs[key]
             result.append({
                 'rate': s['rate'],
+                'is_inclusive': s['is_inclusive'],
                 'base_amount': float(s['base_amount']),
                 'total_tax': float(s['total_tax']),
                 'cgst': float(s['cgst']),
@@ -656,6 +696,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'trade_in_credit', 'pos_trade_ins', 'exchange_snapshots', 'round_off',
             'is_replacement_return', 'replacement_mode', 'replacement_customer_warning', 'replacement_source_customers',
             'replacement_ledger_entries', 'tax_bifurcation',
+            'retailer_name_extra', 'shop_address',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
             'is_edited', 'edited_on', 'items', 'payments'
         ]
