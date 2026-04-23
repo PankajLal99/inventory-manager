@@ -1917,6 +1917,7 @@ export default function Purchases() {
                                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 uppercase">Product</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Quantity</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Unit Price</th>
+                                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Selling Price</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Total</th>
                                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">Labels</th>
                                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">Printed</th>
@@ -1940,6 +1941,13 @@ export default function Purchases() {
                                         </td>
                                         <td className="px-3 py-2 text-right">
                                           <span className="text-sm text-gray-900">₹{formatNumber(item.unit_price || 0)}</span>
+                                        </td>
+                                        <td className="px-3 py-2 text-right">
+                                          <span className="text-sm text-gray-900">
+                                            {item.selling_price != null && item.selling_price !== ''
+                                              ? `₹${formatNumber(item.selling_price)}`
+                                              : '-'}
+                                          </span>
                                         </td>
                                         <td className="px-3 py-2 text-right">
                                           <span className="text-sm font-semibold text-gray-900">₹{formatNumber(item.line_total || 0)}</span>
@@ -2206,9 +2214,19 @@ export default function Purchases() {
                                   <div className="font-semibold text-gray-900">{item.quantity || 0}</div>
                                 </div>
                                 <div>
-                                  <div className="text-gray-500 mb-0.5">Price</div>
+                                  <div className="text-gray-500 mb-0.5">Unit Price</div>
                                   <div className="font-semibold text-gray-900">₹{formatNumber(item.unit_price || 0)}</div>
                                 </div>
+                                <div>
+                                  <div className="text-gray-500 mb-0.5">Selling Price</div>
+                                  <div className="font-semibold text-gray-900">
+                                    {item.selling_price != null && item.selling_price !== ''
+                                      ? `₹${formatNumber(item.selling_price)}`
+                                      : '-'}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-1 gap-2 mt-2 pt-2 border-t border-gray-100 text-xs">
                                 <div>
                                   <div className="text-gray-500 mb-0.5">Total</div>
                                   <div className="font-semibold text-gray-900">₹{formatNumber(item.line_total || 0)}</div>
