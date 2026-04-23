@@ -1289,23 +1289,46 @@ def product_get_labels(request, pk):
     
     Query parameters:
         purchase_id: Optional. Filter barcodes by purchase ID
+        printable_only: Optional. When true, excludes sold/defective tags
+        exclude_tags: Optional CSV list of barcode tags to exclude (e.g. sold,defective)
     """
     product = get_object_or_404(Product, pk=pk)
     
     # Get purchase_id from query parameters if provided
     purchase_id = request.query_params.get('purchase_id', None)
     
-    # Filter barcodes by product and optionally by purchase
-    # Order by short_code so labels print in human-friendly short-code sequence
-    barcodes_query = product.barcodes.all().order_by('short_code', 'id')
+    printable_only = str(request.query_params.get('printable_only', '')).lower() in ('1', 'true', 'yes', 'y')
+    exclude_tags_raw = request.query_params.get('exclude_tags', None)
+
+    # Default printable mode excludes sold/defective labels.
+    if printable_only and not exclude_tags_raw:
+        exclude_tags = ['sold', 'defective']
+    else:
+        exclude_tags = [
+            tag.strip() for tag in (exclude_tags_raw or '').split(',') if tag and tag.strip()
+        ]
+
+    # Filter barcodes by product and optionally by purchase.
+    # Order by short_code so labels print in human-friendly short-code sequence.
+    base_barcodes_query = product.barcodes.all()
+    barcodes_query = base_barcodes_query
     if purchase_id:
         try:
             purchase_id_int = int(purchase_id)
+            base_barcodes_query = base_barcodes_query.filter(purchase_id=purchase_id_int)
             barcodes_query = barcodes_query.filter(purchase_id=purchase_id_int)
         except (ValueError, TypeError):
             pass  # Invalid purchase_id, ignore filter
+
+    if exclude_tags:
+        barcodes_query = barcodes_query.exclude(tag__in=exclude_tags)
+
+    barcodes_query = barcodes_query.order_by('short_code', 'id')
     
     barcodes = barcodes_query
+    excluded_non_printable_count = 0
+    if exclude_tags:
+        excluded_non_printable_count = max(0, base_barcodes_query.count() - barcodes_query.count())
     
     # Get all existing labels for these barcodes
     # Valid labels can be: base64 data URL (data:image/...) or blob URL (https://...)
@@ -1328,6 +1351,7 @@ def product_get_labels(request, pk):
         labels_list.append({
             'barcode_id': label.barcode.id,
             'barcode': label.barcode.barcode,
+            'barcode_tag': label.barcode.tag,
             'image': label.label_image,
             'newly_generated': False  # These are existing labels
         })
@@ -1337,7 +1361,10 @@ def product_get_labels(request, pk):
         'product_name': product.name,
         'total_labels': len(labels_list),
         'labels': labels_list,
-        'purchase_id': purchase_id
+        'purchase_id': purchase_id,
+        'printable_only': printable_only,
+        'exclude_tags': exclude_tags,
+        'excluded_non_printable_count': excluded_non_printable_count,
     }, status=status.HTTP_200_OK)
 
 
@@ -1364,8 +1391,12 @@ def product_labels_status(request, pk):
             pass  # Invalid purchase_id, ignore filter
     
     barcodes = barcodes_query
-    
+    printable_barcodes = barcodes.exclude(tag__in=['sold', 'defective'])
+
     total_barcodes = barcodes.count()
+    total_printable_barcodes = printable_barcodes.count()
+    excluded_non_printable_count = max(0, total_barcodes - total_printable_barcodes)
+
     # Check for valid labels: not empty, not null, and starts with data:image or https:// (blob URL)
     generated_count = BarcodeLabel.objects.filter(
         barcode__in=barcodes
@@ -1376,13 +1407,31 @@ def product_labels_status(request, pk):
     ).filter(
         Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
     ).count()
+
+    generated_printable_count = BarcodeLabel.objects.filter(
+        barcode__in=printable_barcodes
+    ).exclude(
+        label_image=''
+    ).exclude(
+        label_image__isnull=True
+    ).filter(
+        Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
+    ).count()
+
+    printable_all_generated = (
+        generated_printable_count == total_printable_barcodes and total_printable_barcodes > 0
+    )
     
     return Response({
         'product_id': product.id,
         'total_barcodes': total_barcodes,
         'generated_labels': generated_count,
-        'all_generated': generated_count == total_barcodes and total_barcodes > 0,
-        'needs_generation': generated_count < total_barcodes,
+        # Keep all_generated focused on printable labels for print UI behavior.
+        'all_generated': printable_all_generated,
+        'needs_generation': generated_printable_count < total_printable_barcodes,
+        'total_printable_barcodes': total_printable_barcodes,
+        'generated_printable_labels': generated_printable_count,
+        'excluded_non_printable_count': excluded_non_printable_count,
         'purchase_id': purchase_id
     }, status=status.HTTP_200_OK)
 

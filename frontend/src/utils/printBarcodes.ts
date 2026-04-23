@@ -24,9 +24,8 @@ const convertImageToDataURL = async (url: string): Promise<string> => {
 };
 
 export const printLabelsFromResponse = async (responseData: any) => {
-  const rawUrls = responseData.labels
-    .filter((label: any) => label.image)
-    .map((label: any) => appendCacheBust(label.image));
+  const labels = (responseData?.labels || []).filter((label: any) => label?.image);
+  const rawUrls = labels.map((label: any) => appendCacheBust(label.image));
 
   if (rawUrls.length === 0) {
     alert('No labels available to print.');
@@ -48,6 +47,9 @@ export const printLabelsFromResponse = async (responseData: any) => {
   const imageUrls = await Promise.all(
     rawUrls.map((url: string) => convertImageToDataURL(url))
   );
+
+  const normalizedTags = labels.map((label: any) => String(label?.barcode_tag || label?.tag || 'new').toLowerCase());
+  const isBlockedTag = (tag: string) => tag === 'sold' || tag === 'defective';
 
   // Open print preview in one tab with all labels
   const printWindow = window.open('', '_blank');
@@ -84,6 +86,34 @@ export const printLabelsFromResponse = async (responseData: any) => {
               border: 1px dashed #ccc;
               box-sizing: border-box;
               overflow: hidden;
+              position: relative;
+            }
+            .label-container.fresh {
+              border: 2px solid #16a34a;
+              background: #f0fdf4;
+            }
+            .label-container.blocked {
+              border: 2px solid #dc2626;
+              background: #fef2f2;
+            }
+            .status-pill {
+              position: absolute;
+              top: 6px;
+              right: 6px;
+              padding: 1px 6px;
+              border-radius: 999px;
+              font-size: 10px;
+              font-weight: 700;
+              text-transform: uppercase;
+              letter-spacing: 0.02em;
+            }
+            .status-pill.fresh {
+              color: #166534;
+              background: #dcfce7;
+            }
+            .status-pill.blocked {
+              color: #991b1b;
+              background: #fee2e2;
             }
             img {
               display: block;
@@ -136,6 +166,9 @@ export const printLabelsFromResponse = async (responseData: any) => {
                 box-sizing: border-box;
                 position: relative;
               }
+              .status-pill {
+                display: none;
+              }
               .label-container:not(:last-child) {
                 page-break-after: always;
               }
@@ -161,11 +194,18 @@ export const printLabelsFromResponse = async (responseData: any) => {
           </style>
         </head>
         <body>
-          ${imageUrls.map((url: string, index: number) => `
-            <div class="label-container">
+          ${imageUrls.map((url: string, index: number) => {
+            const tag = normalizedTags[index] || 'new';
+            const isBlocked = isBlockedTag(tag);
+            const rowClass = isBlocked ? 'blocked' : 'fresh';
+            const statusText = isBlocked ? tag : 'fresh';
+            return `
+            <div class="label-container ${rowClass}">
+              <span class="status-pill ${rowClass}">${statusText}</span>
               <img src="${url}" alt="Barcode Label ${index + 1}" />
             </div>
-          `).join('')}
+          `;
+          }).join('')}
           <script>
             (function() {
               // Images are already base64, so they should be loaded instantly.

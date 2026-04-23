@@ -132,10 +132,19 @@ export const productsApi = {
     const params = supplierId ? { supplier: supplierId } : {};
     return api.post(`/products/${productId}/generate-labels/`, data, { params });
   },
-  getLabels: (productId: number, purchaseId?: number, supplierId?: string) => {
+  getLabels: (
+    productId: number,
+    purchaseId?: number,
+    supplierId?: string,
+    options?: { printableOnly?: boolean; excludeTags?: string[] }
+  ) => {
     const params: Record<string, number | string> = {};
     if (purchaseId) params.purchase_id = purchaseId;
     if (supplierId) params.supplier = supplierId;
+    if (options?.printableOnly) params.printable_only = 'true';
+    if (options?.excludeTags && options.excludeTags.length > 0) {
+      params.exclude_tags = options.excludeTags.join(',');
+    }
     return api.get(`/products/${productId}/labels/`, { params });
   },
   labelsStatus: (productId: number, purchaseId?: number, supplierId?: string) => {

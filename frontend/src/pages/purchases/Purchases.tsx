@@ -38,6 +38,12 @@ interface PurchaseItem {
   printed_at?: string | null;
 }
 
+interface LabelStatusState {
+  all_generated: boolean;
+  generating: boolean;
+  excluded_non_printable_count: number;
+}
+
 const PURCHASES_PAGE_LIMIT = 15;
 
 function parsePurchasesPageMeta(payload: unknown): {
@@ -103,7 +109,14 @@ function updatePrintedInPurchasesInfiniteCache(old: unknown, itemId: number, pri
   const newPages = o.pages.map((page) => {
     const updated = JSON.parse(JSON.stringify(page));
     const rec = updated as Record<string, unknown>;
-    const results = (rec.data as Record<string, unknown>)?.results ?? rec.results;
+    const dataObj = rec.data as Record<string, unknown> | undefined;
+    let results: unknown = dataObj?.results ?? rec.results;
+    if (!Array.isArray(results) && Array.isArray(rec.data)) {
+      results = rec.data;
+    }
+    if (!Array.isArray(results) && Array.isArray(updated)) {
+      results = updated;
+    }
     if (!Array.isArray(results)) return updated;
     for (const purchase of results as { items?: { id: number; printed?: boolean; printed_at?: string | null }[] }[]) {
       if (purchase.items) {
@@ -126,7 +139,14 @@ function clearPrintedFlagsInPurchasesInfiniteCache(old: unknown, purchaseId: num
   const newPages = o.pages.map((page) => {
     const updated = JSON.parse(JSON.stringify(page));
     const rec = updated as Record<string, unknown>;
-    const results = (rec.data as Record<string, unknown>)?.results ?? rec.results;
+    const dataObj = rec.data as Record<string, unknown> | undefined;
+    let results: unknown = dataObj?.results ?? rec.results;
+    if (!Array.isArray(results) && Array.isArray(rec.data)) {
+      results = rec.data;
+    }
+    if (!Array.isArray(results) && Array.isArray(updated)) {
+      results = updated;
+    }
     if (!Array.isArray(results)) return updated;
     for (const purchase of results as { id?: number; items?: { printed?: boolean; printed_at?: string | null }[] }[]) {
       if (purchase.id === purchaseId && purchase.items) {
@@ -192,7 +212,7 @@ export default function Purchases() {
   const productFilterRef = useRef<HTMLDivElement>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
-  const [labelStatuses, setLabelStatuses] = useState<Record<string, { all_generated: boolean; generating: boolean }>>({});
+  const [labelStatuses, setLabelStatuses] = useState<Record<string, LabelStatusState>>({});
   const [labelScopeFallback, setLabelScopeFallback] = useState<Record<string, boolean>>({});
   const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
 
@@ -1064,9 +1084,15 @@ export default function Purchases() {
     const labelKey = getLabelKey(productId, purchaseId);
     const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
     try {
-      const response = await productsApi.getLabels(productId, effectivePurchaseId);
+      const response = await productsApi.getLabels(productId, effectivePurchaseId, undefined, { printableOnly: true });
+      const excludedCount = Number(response?.data?.excluded_non_printable_count || 0);
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
+      } else if (excludedCount > 0) {
+        toast(
+          `No printable labels left for this item. ${excludedCount} barcode(s) are sold/defective and excluded.`,
+          'info'
+        );
       } else {
         await triggerGenerateAndWait(productId, purchaseId);
       }
@@ -1096,9 +1122,17 @@ export default function Purchases() {
         const response = await productsApi.labelsStatus(productId, purchaseId);
         const data = response.data || {};
         const allGenerated = data.all_generated || false;
+        const excludedCount = Number(data.excluded_non_printable_count || 0);
 
         queryClient.setQueryData(['label-status', productId, purchaseId], { productId, purchaseId, data, error: null });
-        setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: !allGenerated } }));
+        setLabelStatuses(prev => ({
+          ...prev,
+          [labelKey]: {
+            all_generated: allGenerated,
+            generating: !allGenerated,
+            excluded_non_printable_count: excludedCount,
+          },
+        }));
 
         if (allGenerated) return true;
       } catch {
@@ -1112,7 +1146,14 @@ export default function Purchases() {
   const triggerGenerateAndWait = async (productId: number, purchaseId: number) => {
     const labelKey = getLabelKey(productId, purchaseId);
     setGeneratingLabelsFor(productId);
-    setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: true } }));
+    setLabelStatuses(prev => ({
+      ...prev,
+      [labelKey]: {
+        all_generated: false,
+        generating: true,
+        excluded_non_printable_count: prev[labelKey]?.excluded_non_printable_count || 0,
+      },
+    }));
     setLabelScopeFallback(prev => ({ ...prev, [labelKey]: false }));
     try {
       // Prefer generate-labels for missing labels; regenerate-labels is for rebuilding existing ones.
@@ -1134,10 +1175,16 @@ export default function Purchases() {
       if (generated) {
         const generatedPurchaseId = pollPurchaseId ?? purchaseId;
         try {
-          const labelsResponse = await productsApi.getLabels(productId, generatedPurchaseId);
+          const labelsResponse = await productsApi.getLabels(productId, generatedPurchaseId, undefined, { printableOnly: true });
+          const excludedCount = Number(labelsResponse?.data?.excluded_non_printable_count || 0);
           if (labelsResponse.data?.labels?.length > 0) {
             printLabelsFromResponse(labelsResponse.data);
             toast('Labels generated and opened for printing.', 'success');
+          } else if (excludedCount > 0) {
+            toast(
+              `Labels were generated, but only sold/defective barcodes were found for this scope (${excludedCount} excluded).`,
+              'info'
+            );
           } else {
             toast('Labels generated successfully.', 'success');
           }
@@ -1166,22 +1213,39 @@ export default function Purchases() {
       const response = await productsApi.labelsStatus(productId, effectivePurchaseId);
       const data = response.data || {};
       const allGenerated = data.all_generated || false;
-      const total = data.total_barcodes ?? 0;
-      const generated = data.generated_labels ?? 0;
+      const total = data.total_printable_barcodes ?? data.total_barcodes ?? 0;
+      const generated = data.generated_printable_labels ?? data.generated_labels ?? 0;
+      const excludedCount = Number(data.excluded_non_printable_count || 0);
       queryClient.setQueryData(['label-status', productId, effectivePurchaseId], { productId, purchaseId: effectivePurchaseId, data, error: null });
-      setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: allGenerated, generating: false } }));
+      setLabelStatuses(prev => ({
+        ...prev,
+        [labelKey]: {
+          all_generated: allGenerated,
+          generating: false,
+          excluded_non_printable_count: excludedCount,
+        },
+      }));
       if (total > 0) {
         if (allGenerated) {
-          toast(`All labels are ready (${generated} of ${total}). Opening print.`, 'success');
+          const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
+          toast(`All printable labels are ready (${generated} of ${total})${excludedText}. Opening print.`, 'success');
           await handlePrintLabels(productId, purchaseId);
         } else {
-          toast(`Status: ${generated} of ${total} label(s) generated.`, 'info');
+          const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
+          toast(`Status: ${generated} of ${total} printable label(s) generated${excludedText}.`, 'info');
         }
       } else {
         await triggerGenerateAndWait(productId, purchaseId);
       }
     } catch (error: any) {
-      setLabelStatuses(prev => ({ ...prev, [labelKey]: { all_generated: false, generating: false } }));
+      setLabelStatuses(prev => ({
+        ...prev,
+        [labelKey]: {
+          all_generated: false,
+          generating: false,
+          excluded_non_printable_count: prev[labelKey]?.excluded_non_printable_count || 0,
+        },
+      }));
       if (error?.response?.status === 404) {
         await triggerGenerateAndWait(productId, purchaseId);
       } else {
@@ -1407,7 +1471,21 @@ export default function Purchases() {
 
   // Update labelStatuses state from cached queries
   // Use ref to track processed states and prevent infinite loops
-  type LabelStatusQueryData = { productId: number; purchaseId?: number; labelKey: string; data: { all_generated?: boolean }; error: null } | { productId: number; purchaseId?: number; labelKey: string; data: { all_generated: boolean }; error: string };
+  type LabelStatusQueryData =
+    | {
+      productId: number;
+      purchaseId?: number;
+      labelKey: string;
+      data: { all_generated?: boolean; excluded_non_printable_count?: number };
+      error: null;
+    }
+    | {
+      productId: number;
+      purchaseId?: number;
+      labelKey: string;
+      data: { all_generated: boolean; excluded_non_printable_count?: number };
+      error: string;
+    };
 
   const queriesDataRef = useRef<string>('');
 
@@ -1417,7 +1495,9 @@ export default function Purchases() {
       const qData = q.data as LabelStatusQueryData | undefined;
       const isSuccess = q.isSuccess;
       const isFetching = q.isFetching;
-      return qData ? `${qData.labelKey}:${qData.data?.all_generated ?? false}:${isFetching}:${isSuccess} ` : `empty:${idx} `;
+      return qData
+        ? `${qData.labelKey}:${qData.data?.all_generated ?? false}:${qData.data?.excluded_non_printable_count ?? 0}:${isFetching}:${isSuccess} `
+        : `empty:${idx} `;
     }).join('|');
   }, [
     // Use JSON.stringify to create a stable dependency that changes when query data changes
@@ -1438,7 +1518,7 @@ export default function Purchases() {
     queriesDataRef.current = queriesDependencyString;
 
     // Batch all query results into one setState to avoid many re-renders
-    const nextStatuses: Record<string, { all_generated: boolean; generating: boolean }> = {};
+    const nextStatuses: Record<string, LabelStatusState> = {};
     let hasChanges = false;
     labelStatusQueries.forEach((query) => {
       const queryData = query.data as LabelStatusQueryData | undefined;
@@ -1446,7 +1526,8 @@ export default function Purchases() {
         const labelKey = queryData.labelKey;
         const all_generated = queryData.data?.all_generated || false;
         const generating = query.isFetching || false;
-        nextStatuses[labelKey] = { all_generated, generating };
+        const excluded_non_printable_count = Number(queryData.data?.excluded_non_printable_count || 0);
+        nextStatuses[labelKey] = { all_generated, generating, excluded_non_printable_count };
         hasChanges = true;
       }
     });
@@ -1457,7 +1538,11 @@ export default function Purchases() {
         const next = { ...prev };
         for (const [key, val] of Object.entries(nextStatuses)) {
           const current = prev[key];
-          if (current?.all_generated !== val.all_generated || current?.generating !== val.generating) {
+          if (
+            current?.all_generated !== val.all_generated ||
+            current?.generating !== val.generating ||
+            current?.excluded_non_printable_count !== val.excluded_non_printable_count
+          ) {
             next[key] = val;
             changed = true;
           }
@@ -1770,7 +1855,12 @@ export default function Purchases() {
                                     const productId = item.product;
                                     const trackInventory = item.product_track_inventory;
                                     const labelKey = getLabelKey(productId, purchase.id);
-                                    const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
+                                    const labelStatus = labelStatuses[labelKey] || {
+                                      all_generated: false,
+                                      generating: false,
+                                      excluded_non_printable_count: 0,
+                                    };
+                                    const excludedCount = Number(labelStatus.excluded_non_printable_count || 0);
 
                                     return (
                                       <tr key={item.id || `${purchase.id} -item - ${idx} `}>
@@ -1823,7 +1913,7 @@ export default function Purchases() {
 
                                                 if (allGenerated) {
                                                   return (
-                                                    <div className="flex items-center gap-1.5">
+                                                    <div className="flex items-center justify-center flex-wrap gap-1.5">
                                                       <Button
                                                         variant="outline"
                                                         size="sm"
@@ -1843,12 +1933,17 @@ export default function Purchases() {
                                                       >
                                                         <RotateCcw className="h-3.5 w-3.5" />
                                                       </Button>
+                                                      {excludedCount > 0 && (
+                                                        <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
+                                                          {excludedCount} sold/defective
+                                                        </span>
+                                                      )}
                                                     </div>
                                                   );
                                                 }
 
                                                 return (
-                                                  <div className="flex items-center gap-1.5">
+                                                  <div className="flex items-center justify-center flex-wrap gap-1.5">
                                                     <Button
                                                       variant="outline"
                                                       size="sm"
@@ -1875,6 +1970,11 @@ export default function Purchases() {
                                                       <Printer className="h-3.5 w-3.5" />
                                                       <span className="hidden sm:inline">Get barcodes & Print</span>
                                                     </Button>
+                                                    {excludedCount > 0 && (
+                                                      <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
+                                                        {excludedCount} sold/defective
+                                                      </span>
+                                                    )}
                                                   </div>
                                                 );
                                               })()}
@@ -2043,7 +2143,12 @@ export default function Purchases() {
                           const productId = item.product;
                           const trackInventory = item.product_track_inventory;
                           const labelKey = getLabelKey(productId, purchase.id);
-                          const labelStatus = labelStatuses[labelKey] || { all_generated: false, generating: false };
+                          const labelStatus = labelStatuses[labelKey] || {
+                            all_generated: false,
+                            generating: false,
+                            excluded_non_printable_count: 0,
+                          };
+                          const excludedCount = Number(labelStatus.excluded_non_printable_count || 0);
 
                           return (
                             <div key={item.id || `${purchase.id} -item - ${idx} `} className="bg-white rounded-md p-3 border border-gray-200">
@@ -2122,6 +2227,11 @@ export default function Purchases() {
                                               <RotateCcw className="h-3.5 w-3.5" />
                                               <span>Regenerate</span>
                                             </Button>
+                                            {excludedCount > 0 && (
+                                              <div className="text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 text-center">
+                                                {excludedCount} sold/defective excluded
+                                              </div>
+                                            )}
                                           </div>
                                         );
                                       }
@@ -2154,6 +2264,11 @@ export default function Purchases() {
                                             <Printer className="h-3.5 w-3.5" />
                                             <span>Get barcodes & Print</span>
                                           </Button>
+                                          {excludedCount > 0 && (
+                                            <div className="text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 text-center">
+                                              {excludedCount} sold/defective excluded
+                                            </div>
+                                          )}
                                         </div>
                                       );
                                     })()}
