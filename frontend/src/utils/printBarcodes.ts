@@ -149,6 +149,8 @@ export const printLabelsFromResponse = async (responseData: any) => {
               }
               .label-container {
                 box-shadow: none;
+                border: none !important;
+                background: transparent !important;
                 padding: 0;
                 margin: 0;
                 width: ${printableWidth}mm;
