@@ -455,3 +455,8 @@ if USE_LOCAL_CACHE and DEBUG:
         }
     }
     print("⚠️  Using Local Memory Cache (Development only - not shared across workers)")
+
+# Self-Checkout Configuration
+# Base URL for the self-checkout application (frontend)
+# Used to generate self-checkout URLs with retailer code and store ID
+SELF_CHECKOUT_BASE_URL = os.getenv('SELF_CHECKOUT_BASE_URL', 'http://localhost:5173').rstrip('/')
