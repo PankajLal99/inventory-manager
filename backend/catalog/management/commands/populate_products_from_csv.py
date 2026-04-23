@@ -7,7 +7,7 @@ from backend.tenants.models import Retailer
 
 
 class Command(BaseCommand):
-    help = 'Populate products from CSV file (Product Name, Unit, Category, Brand)'
+    help = 'Populate products from CSV file (Product Name, Category, Brand; Unit optional)'
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -60,8 +60,8 @@ class Command(BaseCommand):
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 
-                # Validate required columns
-                required_columns = ['Product Name', 'Unit', 'Category', 'Brand']
+                # Validate required columns. Unit is optional and defaults to EACH.
+                required_columns = ['Product Name', 'Category', 'Brand']
                 if not reader.fieldnames or not all(col in reader.fieldnames for col in required_columns):
                     raise CommandError(f'CSV must contain columns: {", ".join(required_columns)}')
 
@@ -69,7 +69,7 @@ class Command(BaseCommand):
                     for row_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
                         try:
                             product_name = row.get('Product Name', '').strip()
-                            unit = row.get('Unit', '').strip()
+                            unit = (row.get('Unit') or 'EACH').strip() or 'EACH'
                             category_name = row.get('Category', '').strip()
                             brand_name = row.get('Brand', '').strip()
 
