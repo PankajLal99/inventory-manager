@@ -4889,17 +4889,17 @@ export default function POS() {
                   )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartGrossSubtotal)}` : '•••'}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
-                      <span className="text-sm font-semibold">{showPurchasePrice ? `−₹${formatNumber(tradeInCredit)}` : '•••'}</span>
+                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
                     </div>
                   )}
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
+                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
                   </div>
                 </>
               ) : (
@@ -4907,21 +4907,21 @@ export default function POS() {
                 <>
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(cartGrossSubtotal)}` : '•••'}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
-                      <span className="text-sm font-semibold">{showPurchasePrice ? `−₹${formatNumber(tradeInCredit)}` : '•••'}</span>
+                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Tax</span>
-                    <span className="text-sm font-semibold text-gray-900">{showPurchasePrice ? `₹${formatNumber(0)}` : '•••'}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(0)}</span>
                   </div>
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">{showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
+                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
                   </div>
                 </>
               )}

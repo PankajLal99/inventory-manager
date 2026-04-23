@@ -941,7 +941,7 @@ export default function Products() {
       case 'returned':
         return ['Name', 'SKU', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
       case 'defective':
-        return ['Name', 'SKU', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
+        return ['', 'Name', 'Short Code', 'Brand', 'Category', 'Actions'];
       case 'in-cart':
         return ['Name', 'SKU', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
       default:
@@ -1527,553 +1527,138 @@ export default function Products() {
       {/* Desktop Table View */}
       <div className="hidden md:block">
         {tagFilter === 'defective' ? (
-          <div className="flex gap-4">
+          <div className="flex flex-col gap-4">
+            {/* Selected Barcodes panel - sticky at top */}
+            <div className="sticky top-0 z-10 bg-white border border-gray-200 rounded-lg shadow-sm">
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-base font-semibold text-gray-900">
+                    Selected Barcodes
+                    {selectedDefectiveProducts.size > 0 && (
+                      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                        {selectedDefectiveProducts.size}
+                      </span>
+                    )}
+                  </h3>
+                  {selectedDefectiveProducts.size > 0 && (
+                    <Button onClick={handleDeselectAllDefective} variant="outline" size="sm">
+                      Clear All
+                    </Button>
+                  )}
+                </div>
+                {selectedDefectiveProducts.size === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-2">
+                    No barcodes selected. Scan barcodes or tick checkboxes below.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+                    {Array.from(selectedDefectiveProductsData.entries()).map(([barcodeId, row]) => {
+                      const product = row?.product;
+                      const barcode = row?.barcode;
+                      if (!product || !barcode) return null;
+                      return (
+                        <div
+                          key={barcodeId}
+                          className="flex items-center gap-1.5 px-2 py-1 bg-red-50 border border-red-200 rounded-md text-xs"
+                        >
+                          <span className="font-medium text-gray-800" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
+                            {product.name}
+                          </span>
+                          <span className="text-gray-500 font-mono">{barcode.short_code || barcode.barcode || '-'}</span>
+                          <button
+                            onClick={() => handleRemoveFromSelection(barcodeId)}
+                            className="text-gray-400 hover:text-red-600 transition-colors"
+                            title="Remove"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Main content area */}
             <div className="flex-1 min-w-0 overflow-x-auto">
               <Table headers={getTableHeaders(tagFilter)}>
-                {filteredProducts.length > 0 ? filteredProducts.map((product: any) => {
-                  // Store current tagFilter to avoid type narrowing issues - use type assertion
-                  const currentTagFilter = tagFilter as 'new' | 'sold' | 'unknown' | 'returned' | 'defective' | 'in-cart';
-                  // Determine status - show stock/tag status as clickable badge to change barcode tags
-                  let statusBadge;
-                  if (currentTagFilter === 'new') {
-                    // Check if product has no barcodes (not purchased yet)
-                    const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-                    const hasStock = (product.barcodeCount || 0) > 0;
-
-                    if (!hasBarcodes && !hasStock) {
-                      statusBadge = <Badge variant="warning">Not Purchased</Badge>;
-                    } else if (product.isOutOfStock) {
-                      statusBadge = <Badge variant="danger">Out of Stock</Badge>;
-                    } else if (product.isLowStock) {
-                      statusBadge = <Badge variant="warning">Low Stock</Badge>;
-                    } else {
-                      statusBadge = <Badge variant="success">In Stock</Badge>;
-                    }
-                  } else {
-                    // For non-fresh products, show tag badge as clickable to change tag
-                    const tagLabels: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' }> = {
-                      'sold': { label: 'Sold', variant: 'info' },
-                      'unknown': { label: 'Unknown', variant: 'warning' },
-                      'returned': { label: 'Returned', variant: 'info' },
-                      'defective': { label: 'Defective', variant: 'danger' },
-                      'in-cart': { label: 'In Cart', variant: 'warning' },
-                    };
-                    const tagInfo = tagLabels[currentTagFilter] || { label: currentTagFilter, variant: 'info' as const };
-                    statusBadge = (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          setStatusProduct(product);
-                          setNewTag(currentTagFilter); // Set current tag as default
-                          setShowStatusModal(true);
-                        }}
-                        className="cursor-pointer hover:opacity-80 transition-opacity inline-flex items-center"
-                        title="Click to change barcode tag"
-                        style={{ background: 'transparent', border: 'none', padding: 0 }}
-                      >
-                        <Badge variant={tagInfo.variant} className="pointer-events-none">{tagInfo.label}</Badge>
-                      </button>
-                    );
-                  }
-
-                  // Render table cells based on tag
-                  const renderTableCell = (column: string, cellKey: string) => {
-                    switch (column) {
-                      case 'Name':
-                        return (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              {currentTagFilter === 'defective' && (
-                                <input
-                                  type="checkbox"
-                                  checked={(() => {
-                                    const rows = getDefectiveBarcodesForProduct(product);
-                                    return rows.length > 0 && rows.every((b: any) => selectedDefectiveProducts.has(b.id));
-                                  })()}
-                                  onChange={(e) => handleToggleDefectiveProduct(product, e.target.checked)}
-                                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                  title="Select product for move-out"
-                                />
-                              )}
-                              <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
-                              {currentTagFilter !== 'defective' && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditingProduct(product.id);
-                                    setShowForm(true);
-                                  }}
-                                  className="p-1 text-gray-400 hover:text-blue-600 rounded-full hover:bg-gray-100 transition-colors"
-                                  title="Edit Product"
-                                >
-                                  <Edit className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      case 'SKU':
-                        // Show short codes only - limit to 2, show "view more" if more exist
-                        const barcodes = product.barcodes || [];
-                        const barcodeList = Array.isArray(barcodes)
-                          ? barcodes.map((b: any) => b.short_code || b.barcode || b).filter((b: any) => b)
-                          : [];
-
-                        const maxVisible = 2;
-                        const visibleBarcodes = barcodeList.slice(0, maxVisible);
-                        const hasMore = barcodeList.length > maxVisible;
-
-                        return (
-                          <td key={cellKey} className="px-6 py-4 text-sm text-gray-600 font-mono">
-                            <div className="max-w-md">
-                              {barcodeList.length > 0 ? (
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span className="break-words">
-                                    {visibleBarcodes.join(', ')}
-                                  </span>
-                                  {hasMore && (
-                                    <>
-                                      <span className="text-gray-400">...</span>
-                                      <button
-                                        onClick={() => handleViewSKUs(product)}
-                                        className="text-blue-600 hover:text-blue-800 underline font-normal cursor-pointer"
-                                        title="View all barcodes"
-                                      >
-                                        view more
-                                      </button>
-                                    </>
-                                  )}
-                                </div>
-                              ) : (
-                                <span>{product.sku || '-'}</span>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      case 'Brand':
-                        return (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {product.brand_name || '-'}
-                          </td>
-                        );
-                      case 'Category':
-                        return (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {product.category_name || '-'}
-                          </td>
-                        );
-                      case 'Total Stock':
-                        return currentTagFilter === 'new' ? (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <div className="flex flex-col">
-                              {/* For tracked products, show Stock model quantity (from stock_quantity) */}
-                              {/* For non-tracked products, show available_quantity */}
-                              <span className="font-medium">
-                                {product.track_inventory !== false
-                                  ? (product.stock_quantity || 0)  // Show Stock model quantity for tracked products
-                                  : (product.barcodeCount || 0)    // Show barcode count for non-tracked products
-                                }
-                              </span>
-                              {(!product.barcodes || product.barcodes.length === 0) && (product.stock_quantity || 0) === 0 && (
-                                <span className="text-xs text-gray-500 mt-0.5">Not purchased</span>
-                              )}
-                              {/* Show barcode count as additional info for tracked products if different from stock */}
-                              {/* Only show warning if stock is 0 but barcodes exist (indicating draft purchase) */}
-                              {product.track_inventory !== false && product.barcodes && product.barcodes.length > 0 && (product.stock_quantity || 0) === 0 && (
-                                <span className="text-xs text-amber-600 mt-0.5">
-                                  ({product.barcodes.length} barcodes, purchase not finalized)
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                        ) : null;
-                      case 'Quantity Sold':
-                        return currentTagFilter === 'sold' ? (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <span className="font-medium">{product.barcodeCount || 0}</span>
-                          </td>
-                        ) : null;
-                      case 'Quantity':
-                        return (currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') ? (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                            <span className="font-medium">{product.barcodeCount || 0}</span>
-                          </td>
-                        ) : null;
-                      case 'Status':
-                        return (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                            {statusBadge}
-                          </td>
-                        );
-                      case 'Actions':
-                        return (
-                          <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm">
-                            <div className="flex items-center gap-2">
-                              {/* Fresh (new) products - full actions */}
-                              {currentTagFilter === 'new' && (
-                                <>
-                                  {/* Show "Create Purchase" button for unpurchased products */}
-                                  {/* Use stock_quantity (Total Stock) from backend - count of all barcodes not sold or defective */}
-                                  {/* If stock_quantity === 0, product has no barcodes, show purchase button */}
-                                  {(() => {
-                                    const stockQty = typeof product.stock_quantity === 'number'
-                                      ? product.stock_quantity
-                                      : parseFloat(product.stock_quantity || '0') || 0;
-                                    return stockQty === 0;
-                                  })() && (
-                                      <button
-                                        onClick={() => {
-                                          const params = new URLSearchParams();
-                                          params.set('product', product.id.toString());
-                                          navigate(`/purchases?${params.toString()}`);
-                                        }}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                                        title="Create Purchase for this Product"
-                                      >
-                                        <ShoppingCart className="h-3.5 w-3.5" />
-                                        <span>Purchase</span>
-                                      </button>
-                                    )}
-                                  <button
-                                    onClick={() => handleViewSKUs(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                                    title="View SKUs"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span>View SKUs</span>
-                                  </button>
-                                  {(() => {
-                                    const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-                                    const status = labelStatuses[product.id];
-                                    const isGenerating = generatingLabelsFor === product.id || (status?.generating);
-                                    const allGenerated = status?.all_generated;
-
-                                    if (!hasBarcodes) return null;
-
-                                    if (isGenerating) {
-                                      return (
-                                        <button
-                                          disabled
-                                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-md cursor-not-allowed"
-                                          title="Generating Labels..."
-                                        >
-                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                          <span>Generating...</span>
-                                        </button>
-                                      );
-                                    }
-
-                                    if (allGenerated) {
-                                      return (
-                                        <button
-                                          onClick={() => handlePrintLabels(product)}
-                                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                                          title="Print Labels"
-                                        >
-                                          <Printer className="h-3.5 w-3.5" />
-                                          <span>Print Labels</span>
-                                        </button>
-                                      );
-                                    }
-
-                                    return (
-                                      <button
-                                        onClick={() => handleGenerateLabels(product)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                        title="Generate Labels"
-                                      >
-                                        <Printer className="h-3.5 w-3.5" />
-                                        <span>Generate Labels</span>
-                                      </button>
-                                    );
-                                  })()}
-                                  {!isRetailUser && (
-                                    <button
-                                      onClick={() => handleDeleteProduct(product.id, product.name)}
-                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      title="Delete Product"
-                                      disabled={deleteProductMutation.isPending}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Sold products - view only */}
-                              {currentTagFilter === 'sold' && (
-                                <>
-                                  <button
-                                    onClick={() => handleViewSKUs(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                                    title="View SKUs"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span>View SKUs</span>
-                                  </button>
-                                  {!isRetailUser && (
-                                    <button
-                                      onClick={() => handleDeleteProduct(product.id, product.name)}
-                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      title="Delete Product"
-                                      disabled={deleteProductMutation.isPending}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Unknown products - mark as returned/defective */}
-                              {currentTagFilter === 'unknown' && (
-                                <>
-                                  <button
-                                    onClick={() => handleViewSKUs(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                                    title="View SKUs"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span>View SKUs</span>
-                                  </button>
-                                  <button
-                                    onClick={() => handleMarkAsReturned(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
-                                    title="Mark as Returned"
-                                    disabled={markAsReturnedMutation.isPending}
-                                  >
-                                    <CheckCircle className="h-3.5 w-3.5" />
-                                    <span>Mark Returned</span>
-                                  </button>
-                                  <button
-                                    onClick={() => handleMarkAsDefective(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 transition-all duration-200"
-                                    title="Mark as Defective"
-                                    disabled={markAsDefectiveMutation.isPending}
-                                  >
-                                    <XCircle className="h-3.5 w-3.5" />
-                                    <span>Mark Defective</span>
-                                  </button>
-                                  {!isRetailUser && (
-                                    <button
-                                      onClick={() => handleDeleteProduct(product.id, product.name)}
-                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      title="Delete Product"
-                                      disabled={deleteProductMutation.isPending}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Returned products - mark as fresh */}
-                              {currentTagFilter === 'returned' && (
-                                <>
-                                  <button
-                                    onClick={() => handleViewSKUs(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                                    title="View SKUs"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span>View SKUs</span>
-                                  </button>
-                                  <button
-                                    onClick={() => handleMarkAsFresh(product, 'returned')}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                    title="Mark as Fresh (Re-add to Inventory)"
-                                    disabled={markAsFreshMutation.isPending}
-                                  >
-                                    <RotateCcw className="h-3.5 w-3.5" />
-                                    <span>Mark Fresh</span>
-                                  </button>
-                                  {!isRetailUser && (
-                                    <button
-                                      onClick={() => handleDeleteProduct(product.id, product.name)}
-                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      title="Delete Product"
-                                      disabled={deleteProductMutation.isPending}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-
-                              {/* Defective products - mark as fresh (no edit button) */}
-                              {currentTagFilter === 'defective' && (
-                                <>
-                                  <button
-                                    onClick={() => handleViewSKUs(product)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                                    title="View SKUs"
-                                  >
-                                    <Eye className="h-3.5 w-3.5" />
-                                    <span>View SKUs</span>
-                                  </button>
-                                  <button
-                                    onClick={() => handleMarkAsFresh(product, 'defective')}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                    title="Mark as Fresh (Re-add to Inventory)"
-                                    disabled={markAsFreshMutation.isPending}
-                                  >
-                                    <RotateCcw className="h-3.5 w-3.5" />
-                                    <span>Mark Fresh</span>
-                                  </button>
-                                  {!isRetailUser && (
-                                    <button
-                                      onClick={() => handleDeleteProduct(product.id, product.name)}
-                                      className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      title="Delete Product"
-                                      disabled={deleteProductMutation.isPending}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-
-                              {/* In-Cart products - no actions */}
-                              {currentTagFilter === 'in-cart' && (
-                                <span className="text-xs text-gray-400">-</span>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      default:
-                        return null;
-                    }
-                  };
-
-                  const barcodes = product.barcodes || [];
-                  const hasMultipleBarcodes = barcodes.length > 1;
-                  const isExpanded = expandedProducts[product.id] || false;
-                  const showExpandable = (currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') && hasMultipleBarcodes;
-
-                  return (
-                    <Fragment key={product.id}>
-                      <tr className="hover:bg-gray-50">
-                        {getTableHeaders(currentTagFilter).map((header, idx) => {
-                          const cellKey = `${product.id}-${header}-${idx}`;
-                          if (idx === (currentTagFilter === 'defective' ? 1 : 0) && showExpandable) {
-                            // Add expand/collapse button in first column (Name)
-                            return (
-                              <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    type="checkbox"
-                                    checked={(() => {
-                                      const rows = getDefectiveBarcodesForProduct(product);
-                                      return rows.length > 0 && rows.every((b: any) => selectedDefectiveProducts.has(b.id));
-                                    })()}
-                                    onChange={(e) => handleToggleDefectiveProduct(product, e.target.checked)}
-                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                    title="Select product for move-out"
-                                  />
-                                  <button
-                                    onClick={() => toggleProductExpand(product.id)}
-                                    className="p-1 hover:bg-gray-100 rounded transition-colors"
-                                    title={isExpanded ? 'Collapse' : 'Expand'}
-                                  >
-                                    {isExpanded ? (
-                                      <ChevronDown className="h-4 w-4 text-gray-600" />
-                                    ) : (
-                                      <ChevronRight className="h-4 w-4 text-gray-600" />
-                                    )}
-                                  </button>
-                                  <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
-                                </div>
-                              </td>
-                            );
-                          }
-                          return renderTableCell(header, cellKey);
-                        })}
+                {filteredProducts.length > 0 ? filteredProducts.flatMap((product: any) => {
+                  const barcodes: any[] = Array.isArray(product.barcodes) ? product.barcodes : [];
+                  if (barcodes.length === 0) return [];
+                  return barcodes.map((barcode: any) => {
+                    const isSelected = selectedDefectiveProducts.has(barcode.id);
+                    return (
+                      <tr key={`${product.id}-barcode-${barcode.id}`} className={`hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}>
+                        {/* Checkbox */}
+                        <td className="px-4 py-3 w-8">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedDefectiveProducts(prev => new Set(prev).add(barcode.id));
+                                setSelectedDefectiveProductsData(prev => {
+                                  const next = new Map(prev);
+                                  next.set(barcode.id, { product, barcode });
+                                  return next;
+                                });
+                              } else {
+                                handleRemoveFromSelection(barcode.id);
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            title="Select barcode for move-out"
+                          />
+                        </td>
+                        {/* Name */}
+                        <td className="px-6 py-3 whitespace-nowrap">
+                          <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
+                            {product.name}
+                          </span>
+                        </td>
+                        {/* Short Code */}
+                        <td className="px-6 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <Barcode className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                            <span className="text-sm font-mono text-gray-700">{barcode.short_code || barcode.barcode || '-'}</span>
+                          </div>
+                        </td>
+                        {/* Brand */}
+                        <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-500">
+                          {product.brand_name || '-'}
+                        </td>
+                        {/* Category */}
+                        <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-500">
+                          {product.category_name || '-'}
+                        </td>
+                        {/* Actions */}
+                        <td className="px-6 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleMarkBarcodeAsFresh(barcode.id, 'defective')}
+                              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
+                              title="Mark as Fresh"
+                              disabled={markAsFreshMutation.isPending}
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              Fresh
+                            </button>
+                            {!isRetailUser && (
+                              <button
+                                onClick={() => handleDeleteProduct(product.id, product.name)}
+                                className="flex items-center justify-center w-7 h-7 text-red-600 bg-red-50 border border-red-200 rounded hover:bg-red-100 hover:text-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="Delete Product"
+                                disabled={deleteProductMutation.isPending}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
-                      {/* Expanded barcode rows */}
-                      {showExpandable && isExpanded && barcodes.map((barcode: any) => (
-                        <tr key={`${product.id}-barcode-${barcode.id}`} className="bg-gray-50 hover:bg-gray-100">
-                          <td className="px-6 py-3">
-                            <div className="flex items-center gap-2 pl-8">
-                              <input
-                                type="checkbox"
-                                checked={selectedDefectiveProducts.has(barcode.id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedDefectiveProducts(prev => new Set(prev).add(barcode.id));
-                                    setSelectedDefectiveProductsData(prev => {
-                                      const next = new Map(prev);
-                                      next.set(barcode.id, { product, barcode });
-                                      return next;
-                                    });
-                                  } else {
-                                    handleRemoveFromSelection(barcode.id);
-                                  }
-                                }}
-                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                title="Select barcode for move-out"
-                              />
-                              <Barcode className="h-3.5 w-3.5 text-gray-400" />
-                              <span className="text-xs font-mono text-gray-700">{barcode.short_code || barcode.barcode}</span>
-                              {barcode.tag && (
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${barcode.tag === 'unknown' ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
-                                  barcode.tag === 'returned' ? 'bg-purple-100 text-purple-700 border-purple-200' :
-                                    barcode.tag === 'defective' ? 'bg-red-100 text-red-700 border-red-200' :
-                                      barcode.tag === 'in-cart' ? 'bg-orange-100 text-orange-700 border-orange-200' :
-                                        'bg-gray-100 text-gray-700 border-gray-200'
-                                  }`}>
-                                  {barcode.tag === 'in-cart' ? 'In Cart' : barcode.tag}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-6 py-3"></td>
-                          <td className="px-6 py-3"></td>
-                          <td className="px-6 py-3"></td>
-                          <td className="px-6 py-3"></td>
-                          <td className="px-6 py-3"></td>
-                          <td className="px-6 py-3">
-                            <div className="flex items-center gap-2">
-                              {currentTagFilter === 'unknown' && (
-                                <>
-                                  <button
-                                    onClick={() => handleMarkBarcodeAsReturned(barcode.id)}
-                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
-                                    title="Mark as Returned"
-                                    disabled={markAsReturnedMutation.isPending}
-                                  >
-                                    <CheckCircle className="h-3 w-3" />
-                                    Returned
-                                  </button>
-                                  <button
-                                    onClick={() => handleMarkBarcodeAsDefective(barcode.id)}
-                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded hover:bg-red-100 transition-colors"
-                                    title="Mark as Defective"
-                                    disabled={markAsDefectiveMutation.isPending}
-                                  >
-                                    <XCircle className="h-3 w-3" />
-                                    Defective
-                                  </button>
-                                </>
-                              )}
-                              {(currentTagFilter === 'returned' || currentTagFilter === 'defective') && (
-                                <button
-                                  onClick={() => handleMarkBarcodeAsFresh(barcode.id, currentTagFilter)}
-                                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
-                                  title="Mark as Fresh"
-                                  disabled={markAsFreshMutation.isPending}
-                                >
-                                  <RotateCcw className="h-3 w-3" />
-                                  Fresh
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </Fragment>
-                  );
+                    );
+                  });
                 }) : (
                   <tr>
                     <td colSpan={getTableHeaders('defective').length} className="px-6 py-8 text-center text-gray-500">
@@ -2091,68 +1676,6 @@ export default function Products() {
                   </Button>
                 </div>
               )}
-            </div>
-            {/* Summary Panel for Defective Products */}
-            <div className="w-80 flex-shrink-0">
-              <Card>
-                <div className="p-4">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Selected Barcodes</h3>
-                  {selectedDefectiveProducts.size === 0 ? (
-                    <p className="text-sm text-gray-500 text-center py-8">
-                      No barcodes selected. Scan barcodes or tick checkboxes.
-                    </p>
-                  ) : (
-                    <div className="space-y-3 max-h-[600px] overflow-y-auto">
-                      {Array.from(selectedDefectiveProductsData.entries()).map(([barcodeId, row]) => {
-                        const product = row?.product;
-                        const barcode = row?.barcode;
-                        if (!product || !barcode) return null;
-                        return (
-                          <div
-                            key={barcodeId}
-                            className="flex items-start justify-between p-3 bg-gray-50 rounded-lg border border-gray-200"
-                          >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-900 truncate" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
-                                {product.name}
-                              </p>
-                              <p className="text-xs text-gray-500 mt-1">Code: {barcode.short_code || barcode.barcode || '-'}</p>
-                              {product.brand_name && (
-                                <p className="text-xs text-gray-500">Brand: {product.brand_name}</p>
-                              )}
-                            </div>
-                            <button
-                              onClick={() => handleRemoveFromSelection(barcodeId)}
-                              className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-600 transition-colors"
-                              title="Remove from selection"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {selectedDefectiveProducts.size > 0 && (
-                    <div className="mt-4 pt-4 border-t border-gray-200">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700">Total Selected:</span>
-                        <span className="text-sm font-semibold text-gray-900">
-                          {selectedDefectiveProducts.size} barcode(s)
-                        </span>
-                      </div>
-                      <Button
-                        onClick={handleDeselectAllDefective}
-                        variant="outline"
-                        size="sm"
-                        className="w-full mt-2"
-                      >
-                        Clear All
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </Card>
             </div>
           </div>
         ) : (
