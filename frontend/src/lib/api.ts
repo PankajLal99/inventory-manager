@@ -198,6 +198,68 @@ export const productsApi = {
   },
 };
 
+export type PublicCheckoutStore = {
+  id: number;
+  name: string;
+  code: string;
+  shop_type: string;
+};
+
+export type PublicCheckoutProduct = {
+  id: number;
+  name: string;
+  sku: string;
+  brand_name: string;
+  track_inventory: boolean;
+  available_qty: string;
+  selling_price: string;
+};
+
+export const publicCheckoutApi = {
+  stores: (retailer: string) => api.get<{ retailer: { code: string; name: string }; stores: PublicCheckoutStore[] }>('/public/self-checkout/stores/', { params: { retailer } }),
+  products: (retailer: string, storeId: number, search?: string) =>
+    api.get<{ store_id: number; count: number; results: PublicCheckoutProduct[] }>('/public/self-checkout/products/', {
+      params: {
+        retailer,
+        store_id: storeId,
+        ...(search ? { search } : {}),
+      },
+    }),
+  submit: (data: {
+    retailer: string;
+    store_id: number;
+    customer_name: string;
+    customer_phone: string;
+    items: Array<{ product_id: number; quantity: number }>;
+  }) => api.post<{ invoice_id: number; invoice_number: string; status: string; invoice_type: string; store_id: number }>('/public/self-checkout/submit/', data),
+  discardPending: (retailer: string, invoiceId: number) =>
+    api.post<{ status: string; message: string }>('/public/self-checkout/discard-pending/', { retailer, invoice_id: invoiceId }),
+  discardPendingKeepalive: (retailer: string, invoiceId: number) => {
+    const url = `${API_BASE_URL}/public/self-checkout/discard-pending/`;
+    const payload = JSON.stringify({ retailer, invoice_id: invoiceId });
+
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      try {
+        const blob = new Blob([payload], { type: 'application/json' });
+        if (navigator.sendBeacon(url, blob)) {
+          return;
+        }
+      } catch (_error) {
+        // Fall back to keepalive fetch below.
+      }
+    }
+
+    if (typeof fetch !== 'undefined') {
+      void fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      });
+    }
+  },
+};
+
 // Inventory API
 export const inventoryApi = {
   stock: {

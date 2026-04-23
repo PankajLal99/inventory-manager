@@ -1,7 +1,7 @@
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
@@ -12,7 +12,7 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses
 from backend.catalog.barcode_resolution import (
@@ -26,6 +26,7 @@ from backend.locations.models import Store
 from backend.parties.models import LedgerEntry, Customer
 from backend.core.tenant_api import require_active_retailer
 from backend.core.utils import create_audit_log
+from backend.tenants.models import Retailer
 from backend.parties.internal_ledger_utils import (
     create_internal_ledger_entry_if_mtshop,
     reverse_internal_ledger_entries_for_ledger_entries,
@@ -57,6 +58,365 @@ def _get_barcode_supplier_id(barcode_obj):
     if getattr(barcode_obj, 'purchase_id', None):
         return barcode_obj.purchase.supplier_id if barcode_obj.purchase else None
     return None
+
+
+def _resolve_public_retailer(request):
+    code = (
+        request.query_params.get('retailer')
+        or request.data.get('retailer')
+        or request.data.get('retailer_code')
+        or ''
+    )
+    code = str(code).strip().lower()
+    if not code:
+        return None, Response({'error': 'retailer is required'}, status=status.HTTP_400_BAD_REQUEST)
+    retailer = Retailer.objects.filter(code__iexact=code, is_active=True).first()
+    if not retailer:
+        return None, Response({'error': 'Retailer not found'}, status=status.HTTP_404_NOT_FOUND)
+    return retailer, None
+
+
+def _reset_invoice_barcodes_to_stock(invoice):
+    """Return barcode-backed items from a pending invoice to fresh stock."""
+    for item in invoice.items.select_related('barcode').all():
+        if not item.barcode:
+            continue
+        barcode = item.barcode
+        barcode.tag = 'new'
+        barcode.current_store_id = None
+        barcode.current_warehouse_id = None
+        barcode.save(update_fields=['tag', 'current_store_id', 'current_warehouse_id'])
+        invalidate_barcode_cache(barcode)
+
+
+def _discard_stale_public_pending_invoices(retailer, max_age_minutes=5):
+    """
+    Best-effort cleanup for abandoned public self-checkout draft invoices.
+    This protects stock when users leave tabs open, close the browser abruptly,
+    or resume from a different device later.
+    """
+    cutoff = timezone.now() - timedelta(minutes=max_age_minutes)
+    stale_invoices = (
+        Invoice.objects.filter(
+            retailer_id=retailer.id,
+            invoice_type='pending',
+            status='draft',
+            created_at__lt=cutoff,
+        )
+        .prefetch_related('items__barcode')
+        .order_by('id')[:50]
+    )
+
+    for invoice in stale_invoices:
+        invoice.status = 'void'
+        invoice.save(update_fields=['status', 'updated_at'])
+        _reset_invoice_barcodes_to_stock(invoice)
+
+
+def _public_product_offer_for_store(product, store):
+    if product.track_inventory:
+        barcodes = (
+            Barcode.objects.filter(
+                retailer_id=store.retailer_id,
+                product_id=product.id,
+                tag__in=['new', 'returned'],
+                current_warehouse__isnull=True,
+            )
+            .filter(Q(current_store_id=store.id) | Q(current_store__isnull=True))
+            .select_related('purchase_item')
+        )
+        available_count = 0
+        chosen_barcode = None
+        for barcode in barcodes:
+            is_valid, _ = validate_barcode_for_pos(barcode, store)
+            if not is_valid:
+                continue
+            available_count += 1
+            if chosen_barcode is None:
+                chosen_barcode = barcode
+
+        if available_count <= 0:
+            return None
+
+        if chosen_barcode is None:
+            return None
+        price = chosen_barcode.get_selling_price() or chosen_barcode.get_purchase_price() or Decimal('0.00')
+        return {
+            'price': price,
+            'available_qty': Decimal(available_count),
+        }
+
+    available_qty = get_available_stock_for_product(product, store=store)
+    if available_qty <= 0:
+        return None
+
+    barcode = single_barcode_for_untracked_product(product)
+    if barcode:
+        is_valid, _ = validate_barcode_for_pos(barcode, store)
+        if not is_valid:
+            return None
+    price = (barcode.get_selling_price() or barcode.get_purchase_price()) if barcode else Decimal('0.00')
+    return {
+        'price': price,
+        'available_qty': available_qty,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_self_checkout_stores(request):
+    retailer, err = _resolve_public_retailer(request)
+    if err:
+        return err
+
+    _discard_stale_public_pending_invoices(retailer)
+
+    stores = Store.objects.filter(retailer_id=retailer.id, is_active=True).order_by('name')
+    data = [
+        {
+            'id': store.id,
+            'name': store.name,
+            'code': store.code,
+            'shop_type': store.shop_type,
+        }
+        for store in stores
+    ]
+    return Response({'retailer': {'code': retailer.code, 'name': retailer.name}, 'stores': data})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_self_checkout_products(request):
+    retailer, err = _resolve_public_retailer(request)
+    if err:
+        return err
+
+    _discard_stale_public_pending_invoices(retailer)
+
+    store_id_raw = request.query_params.get('store_id')
+    if not store_id_raw:
+        return Response({'error': 'store_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        store_id = int(store_id_raw)
+    except (TypeError, ValueError):
+        return Response({'error': 'store_id must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+
+    store = Store.objects.filter(id=store_id, retailer_id=retailer.id, is_active=True).first()
+    if not store:
+        return Response({'error': 'Store not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    search = str(request.query_params.get('search') or '').strip()
+    products_qs = Product.objects.filter(retailer_id=retailer.id, is_active=True, deleted_at__isnull=True)
+    if search:
+        products_qs = products_qs.filter(
+            Q(name__icontains=search)
+            | Q(sku__icontains=search)
+            | Q(barcodes__barcode__icontains=search)
+            | Q(barcodes__short_code__icontains=search)
+        )
+    products_qs = products_qs.select_related('brand').distinct().order_by('name')[:80]
+
+    rows = []
+    for product in products_qs:
+        offer = _public_product_offer_for_store(product, store)
+        if not offer:
+            continue
+        price = Decimal(offer['price'])
+        if price <= 0:
+            continue
+        rows.append(
+            {
+                'id': product.id,
+                'name': product.name,
+                'sku': product.sku or '',
+                'brand_name': product.brand.name if product.brand else '',
+                'track_inventory': product.track_inventory,
+                'available_qty': str(Decimal(offer['available_qty']).quantize(Decimal('0.001'))),
+                'selling_price': str(price.quantize(Decimal('0.01'))),
+            }
+        )
+
+    return Response({'store_id': store.id, 'count': len(rows), 'results': rows})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@transaction.atomic
+def public_self_checkout_submit(request):
+    retailer, err = _resolve_public_retailer(request)
+    if err:
+        return err
+
+    _discard_stale_public_pending_invoices(retailer)
+
+    store_id_raw = request.data.get('store_id')
+    if not store_id_raw:
+        return Response({'error': 'store_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        store_id = int(store_id_raw)
+    except (TypeError, ValueError):
+        return Response({'error': 'store_id must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+
+    store = Store.objects.filter(id=store_id, retailer_id=retailer.id, is_active=True).first()
+    if not store:
+        return Response({'error': 'Store not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    customer_name = str(request.data.get('customer_name') or '').strip()
+    customer_phone = str(request.data.get('customer_phone') or '').strip()
+    if not customer_name:
+        return Response({'error': 'customer_name is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not customer_phone:
+        return Response({'error': 'customer_phone is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    raw_items = request.data.get('items')
+    if not isinstance(raw_items, list) or not raw_items:
+        return Response({'error': 'items must be a non-empty list'}, status=status.HTTP_400_BAD_REQUEST)
+
+    customer = Customer.objects.filter(retailer_id=retailer.id, phone=customer_phone).first()
+    if not customer:
+        customer = Customer.objects.create(
+            retailer_id=retailer.id,
+            name=customer_name,
+            phone=customer_phone,
+        )
+    elif customer_name and customer.name != customer_name:
+        customer.name = customer_name
+        customer.save(update_fields=['name'])
+
+    invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+    while Invoice.objects.filter(invoice_number=invoice_number, retailer_id=retailer.id).exists():
+        invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+    invoice = Invoice.objects.create(
+        retailer_id=retailer.id,
+        invoice_number=invoice_number,
+        store=store,
+        customer=customer,
+        invoice_type='pending',
+        status='draft',
+        created_by=None,
+    )
+
+    subtotal = Decimal('0.00')
+    tax_total = Decimal('0.00')
+    created_count = 0
+
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        product_id = raw_item.get('product_id')
+        quantity_raw = raw_item.get('quantity', 1)
+        try:
+            product_id = int(product_id)
+            quantity = Decimal(str(quantity_raw))
+        except (TypeError, ValueError, InvalidOperation):
+            continue
+        if quantity <= 0:
+            continue
+
+        product = Product.objects.filter(
+            id=product_id,
+            retailer_id=retailer.id,
+            is_active=True,
+            deleted_at__isnull=True,
+        ).select_related('tax_rate').first()
+        if not product:
+            continue
+
+        offer = _public_product_offer_for_store(product, store)
+        if not offer:
+            continue
+        unit_price = Decimal(offer['price'])
+        if unit_price <= 0:
+            continue
+
+        taxable_amount = (unit_price * quantity).quantize(Decimal('0.01'))
+        tax_rate = Decimal(str(product.tax_rate.rate)) if product.tax_rate else Decimal('0.00')
+        tax_amount = (taxable_amount * tax_rate / Decimal('100')).quantize(Decimal('0.01'))
+        line_total = taxable_amount + tax_amount
+
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=product,
+            variant=None,
+            quantity=quantity,
+            unit_price=unit_price,
+            manual_unit_price=unit_price,
+            discount_amount=Decimal('0.00'),
+            tax_amount=tax_amount,
+            line_total=line_total,
+        )
+
+        subtotal += taxable_amount
+        tax_total += tax_amount
+        created_count += 1
+
+    if created_count == 0:
+        transaction.set_rollback(True)
+        return Response({'error': 'No valid items found to create invoice'}, status=status.HTTP_400_BAD_REQUEST)
+
+    total = subtotal + tax_total
+    invoice.subtotal = subtotal
+    invoice.discount_amount = Decimal('0.00')
+    invoice.tax_amount = tax_total
+    invoice.total = total
+    invoice.paid_amount = Decimal('0.00')
+    invoice.due_amount = total
+    invoice.save(
+        update_fields=['subtotal', 'discount_amount', 'tax_amount', 'total', 'paid_amount', 'due_amount', 'updated_at']
+    )
+
+    return Response(
+        {
+            'invoice_id': invoice.id,
+            'invoice_number': invoice.invoice_number,
+            'status': invoice.status,
+            'invoice_type': invoice.invoice_type,
+            'store_id': store.id,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@transaction.atomic
+def public_self_checkout_discard_pending(request):
+    """
+    Discard (void) a pending/draft invoice and return all barcodes to stock.
+    Used when customer abandons checkout or session expires without completing payment.
+    """
+    retailer, err = _resolve_public_retailer(request)
+    if err:
+        return err
+
+    invoice_id = request.data.get('invoice_id')
+    if not invoice_id:
+        return Response({'error': 'invoice_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        invoice_id = int(invoice_id)
+    except (TypeError, ValueError):
+        return Response({'error': 'invoice_id must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+
+    invoice = Invoice.objects.filter(
+        id=invoice_id,
+        retailer_id=retailer.id,
+        invoice_type='pending',
+        status='draft',  # Only void draft invoices, not finalized ones
+    ).first()
+
+    if not invoice:
+        return Response({'error': 'Pending invoice not found or already finalized'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Void the invoice by setting status to 'void'
+    invoice.status = 'void'
+    invoice.save(update_fields=['status', 'updated_at'])
+
+    # Return all barcodes from invoice items back to stock
+    _reset_invoice_barcodes_to_stock(invoice)
+
+    return Response({'status': 'success', 'message': 'Pending invoice discarded'}, status=status.HTTP_200_OK)
 
 
 def _with_invoice_amount_annotations(queryset):

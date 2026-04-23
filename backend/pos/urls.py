@@ -14,7 +14,8 @@ from .views import (
     find_invoice_by_barcode, bulk_barcodes_check, process_replacement, search_invoices_by_number,
     replacement_credit_note,
     replacement_pos_lookup, replacement_pos_create,
-    repair_invoices_list, repair_status_choices, repair_device_models, find_repair_invoice_by_barcode, update_repair_status, update_repair, generate_repair_label
+    repair_invoices_list, repair_status_choices, repair_device_models, find_repair_invoice_by_barcode, update_repair_status, update_repair, generate_repair_label,
+    public_self_checkout_stores, public_self_checkout_products, public_self_checkout_submit, public_self_checkout_discard_pending
 )
 
 urlpatterns = [
@@ -91,4 +92,10 @@ urlpatterns = [
     path('pos/invoices/<int:pk>/update-repair-status/', update_repair_status, name='update-repair-status'),
     path('pos/invoices/<int:pk>/update-repair/', update_repair, name='update-repair'),
     path('pos/invoices/<int:pk>/generate-repair-label/', generate_repair_label, name='generate-repair-label'),
+
+    # Public self-checkout endpoints
+    path('public/self-checkout/stores/', public_self_checkout_stores, name='public-self-checkout-stores'),
+    path('public/self-checkout/products/', public_self_checkout_products, name='public-self-checkout-products'),
+    path('public/self-checkout/submit/', public_self_checkout_submit, name='public-self-checkout-submit'),
+    path('public/self-checkout/discard-pending/', public_self_checkout_discard_pending, name='public-self-checkout-discard-pending'),
 ]

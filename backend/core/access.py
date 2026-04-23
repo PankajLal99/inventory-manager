@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 # All UI routes and feature gates — keep in sync with Layout.tsx `permission` fields.
 ACCESS_PERMISSION_SEED: list[tuple[str, str, str]] = [
     ('nav.pos', 'POS', 'core'),
+    ('nav.self_checkout', 'Self checkout', 'core'),
     ('nav.repair_register', 'New repair', 'core'),
     ('nav.search', 'Search', 'core'),
     ('nav.dashboard', 'Dashboard', 'core'),
@@ -33,6 +34,8 @@ ACCESS_PERMISSION_SEED: list[tuple[str, str, str]] = [
     ('nav.payment_reminders', 'Payment reminders', 'financial'),
     ('nav.expenses', 'Expenses', 'financial'),
     ('nav.payments', 'Payments', 'financial'),
+    ('nav.stores', 'Stores', 'admin'),
+    ('nav.defective_move_outs', 'Defective move-outs', 'admin'),
     ('nav.active_carts', 'Active carts', 'admin'),
     ('nav.vendors', 'Vendors', 'admin'),
     ('nav.reports', 'Reports', 'admin'),

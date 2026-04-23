@@ -52,6 +52,7 @@ import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingCl
 import StockTransfers from './pages/stock/StockTransfers';
 import RoleManagement from './pages/admin/RoleManagement';
 import OnboardingSetup from './pages/onboarding/OnboardingSetup';
+import SelfCheckout from './pages/checkout/SelfCheckout';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -115,6 +116,7 @@ function App() {
               {/* Public vendor routes (no auth required) */}
               <Route path="/vendor-purchases" element={<VendorPurchases />} />
               <Route path="/vendor-purchases/:id" element={<VendorPurchaseDetail />} />
+              <Route path="/self-checkout" element={<PermissionRoute permission="nav.self_checkout" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><SelfCheckout /></PermissionRoute>} />
               <Route
                 path="/"
                 element={
@@ -172,10 +174,10 @@ function App() {
                 <Route path="payments" element={<PermissionRoute permission="nav.payments" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><Payments /></PermissionRoute>} />
                 <Route path="stock" element={<PermissionRoute permission="nav.stock_overview" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><StockOverview /></PermissionRoute>} />
                 <Route path="stock-transfers" element={<PermissionRoute permission="nav.stock_transfers" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><StockTransfers /></PermissionRoute>} />
-                <Route path="stores" element={<Stores />} />
+                <Route path="stores" element={<PermissionRoute permission="nav.stores" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><Stores /></PermissionRoute>} />
                 <Route path="search" element={<PermissionRoute permission="nav.search" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale', 'Repair', 'Temp'].some((x) => g.includes(x))}><Search /></PermissionRoute>} />
                 <Route path="vendors" element={<PermissionRoute permission="nav.vendors" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><Vendors /></PermissionRoute>} />
-                <Route path="defective-move-outs" element={<DefectiveMoveOuts />} />
+                <Route path="defective-move-outs" element={<PermissionRoute permission="nav.defective_move_outs" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><DefectiveMoveOuts /></PermissionRoute>} />
                 <Route path="role-management" element={<PermissionRoute permission="nav.role_management" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><RoleManagement /></PermissionRoute>} />
               </Route>
             </Routes>

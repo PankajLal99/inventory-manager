@@ -199,6 +199,7 @@ export default function Layout() {
       title: 'Core Operations',
       items: [
         { path: '/', icon: ShoppingCart, label: 'POS', permission: 'nav.pos' },
+        { path: '/self-checkout', icon: ExternalLink, label: 'Self Checkout', permission: 'nav.self_checkout' },
         { path: '/pos-repair-new', icon: Plus, label: 'New Repair', permission: 'nav.repair_register' },
         { path: '/search', icon: Search, label: 'Search', permission: 'nav.search' },
         { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: 'nav.dashboard' },
