@@ -387,19 +387,25 @@ class ProductFilter(django_filters.FilterSet):
         if not value:
             return queryset
         value = str(value).strip().upper()
-        return queryset.filter(
-            Q(barcodes__barcode=value) | Q(barcodes__short_code=value)
-        ).distinct()
+        
+        has_barcode = Barcode.objects.filter(
+            product_id=OuterRef('pk')
+        ).filter(Q(barcode=value) | Q(short_code=value))
+        
+        return queryset.filter(Exists(has_barcode))
     
     def filter_supplier(self, queryset, name, value):
         """Filter products by supplier through purchase items"""
         if not value:
             return queryset
-        supplier_product_ids = PurchaseItem.objects.filter(
+        
+        has_supplier = PurchaseItem.objects.filter(
+            product_id=OuterRef('pk'),
             purchase__supplier_id=value,
-            purchase__deleted_at__isnull=True,
-        ).values_list('product_id', flat=True).distinct()
-        return queryset.filter(id__in=supplier_product_ids)
+            purchase__deleted_at__isnull=True
+        )
+        
+        return queryset.filter(Exists(has_supplier))
     
     def filter_in_stock(self, queryset, name, value):
         """Filter products that are in stock"""
@@ -534,8 +540,12 @@ class ProductFilter(django_filters.FilterSet):
                 Q(Exists(has_normal_barcode)) | ~Q(Exists(has_any_barcode))
             ).distinct()
         else:
-            # For other tags: filter by barcode tag using Q object (more efficient)
-            return queryset.filter(barcodes__tag=value).distinct()
+            # For other tags: use Exists() instead of joins to prevent Cartesian explosions
+            has_tag = Barcode.objects.filter(
+                product_id=OuterRef('pk'),
+                tag=value
+            )
+            return queryset.filter(Exists(has_tag))
     
     def _is_likely_sku(self, search_term):
         """Detect if search term is likely a SKU/barcode vs product name
