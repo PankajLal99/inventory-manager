@@ -885,11 +885,11 @@ export default function Products() {
       case 'new':
         return ['Name', 'SKU', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions'];
       case 'sold':
-        return ['Name', 'SKU', 'Brand', 'Category', 'Quantity Sold', 'Status', 'Actions'];
+        return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'unknown':
-        return ['Name', 'SKU', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
+        return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'returned':
-        return ['Name', 'SKU', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
+        return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'defective':
         return ['', 'Name', 'Short Code', 'Brand', 'Category', 'Actions'];
       case 'in-cart':
@@ -1628,6 +1628,91 @@ export default function Products() {
               )}
             </div>
           </div>
+        ) : (tagFilter === 'sold' || tagFilter === 'unknown' || tagFilter === 'returned') ? (
+          <>
+            <Table headers={getTableHeaders(tagFilter)}>
+              {filteredProducts.length > 0 ? filteredProducts.flatMap((product: any) => {
+                const barcodes: any[] = Array.isArray(product.barcodes) ? product.barcodes : [];
+                if (barcodes.length === 0) return [];
+
+                const statusVariant: 'info' | 'warning' = tagFilter === 'unknown' ? 'warning' : 'info';
+                const statusLabel = tagFilter === 'sold' ? 'Sold' : tagFilter === 'unknown' ? 'Unknown' : 'Returned';
+
+                return barcodes.map((barcode: any, index: number) => {
+                  const barcodeValue = typeof barcode === 'string' ? barcode : (barcode?.short_code || barcode?.barcode || '-');
+                  const rowKey = typeof barcode === 'string'
+                    ? `${product.id}-barcode-${barcode}-${index}`
+                    : `${product.id}-barcode-${barcode?.id || index}`;
+
+                  return (
+                    <tr key={rowKey} className="hover:bg-gray-50">
+                      <td className="px-6 py-3 whitespace-nowrap">
+                        <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
+                          {product.name}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <Barcode className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                          <span className="text-sm font-mono text-gray-700">{barcodeValue}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-500">
+                        {product.brand_name || '-'}
+                      </td>
+                      <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-500">
+                        {product.category_name || '-'}
+                      </td>
+                      <td className="px-6 py-3 whitespace-nowrap">
+                        <Badge variant={statusVariant}>{statusLabel}</Badge>
+                      </td>
+                      <td className="px-6 py-3 whitespace-nowrap text-sm">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleViewSKUs(product)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                            title="View SKUs"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            <span>View SKUs</span>
+                          </button>
+                          {tagFilter === 'sold' && !isRetailUser && (
+                            <button
+                              onClick={() => handleDeleteProduct(product.id, product.name)}
+                              className="flex items-center justify-center w-8 h-8 text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 hover:border-red-300 hover:text-red-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Delete Product"
+                              disabled={deleteProductMutation.isPending}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                });
+              }) : (
+                <tr>
+                  <td colSpan={getTableHeaders(tagFilter).length} className="px-6 py-8 text-center text-gray-500">
+                    {productsList.length === 0
+                      ? 'No products found. Add products first.'
+                      : tagFilter === 'sold'
+                        ? 'No sold products found.'
+                        : tagFilter === 'unknown'
+                          ? 'No unknown products found.'
+                          : 'No returned products found.'}
+                  </td>
+                </tr>
+              )}
+            </Table>
+            {hasMoreProducts && (
+              <div className="flex justify-center py-3">
+                <Button variant="outline" onClick={() => setCurrentPage((p) => p + 1)} disabled={isFetching}>
+                  {isFetching ? 'Loading...' : 'Load more'}
+                </Button>
+              </div>
+            )}
+          </>
         ) : (
           <>
             <Table headers={getTableHeaders(tagFilter)}>
