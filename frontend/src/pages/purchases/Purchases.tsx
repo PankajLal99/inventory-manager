@@ -1384,9 +1384,10 @@ export default function Purchases() {
       await queryClient.cancelQueries({ queryKey: ['purchases'] });
 
       // Snapshot the previous value for rollback
-      const previousData = queryClient.getQueryData(purchasesInfiniteQueryKey);
+      const currentCacheKey = [...purchasesInfiniteQueryKey, resolvedUserStoreId ?? 'all'];
+      const previousData = queryClient.getQueryData(currentCacheKey);
 
-      queryClient.setQueryData(purchasesInfiniteQueryKey, (old: unknown) =>
+      queryClient.setQueryData(currentCacheKey, (old: unknown) =>
         updatePrintedInPurchasesInfiniteCache(old, itemId, printed)
       );
 
@@ -1395,16 +1396,18 @@ export default function Purchases() {
     },
     // On error, rollback to previous data
     onError: (error: any, _variables, context: any) => {
+      const currentCacheKey = [...purchasesInfiniteQueryKey, resolvedUserStoreId ?? 'all'];
       if (context?.previousData) {
-        queryClient.setQueryData(purchasesInfiniteQueryKey, context.previousData);
+        queryClient.setQueryData(currentCacheKey, context.previousData);
       }
       alert(error?.response?.data?.error || 'Failed to update printed status. Please try again.');
     },
     // On success, don't invalidate - keep the optimistic update
     onSettled: () => {
+      const currentCacheKey = [...purchasesInfiniteQueryKey, resolvedUserStoreId ?? 'all'];
       // Mark as stale but don't refetch to preserve optimistic update
       queryClient.invalidateQueries({
-        queryKey: [...purchasesInfiniteQueryKey],
+        queryKey: currentCacheKey,
         refetchType: 'none',
       });
     },

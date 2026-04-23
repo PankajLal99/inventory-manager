@@ -24,12 +24,16 @@ const convertImageToDataURL = async (url: string): Promise<string> => {
 };
 
 export const printLabelsFromResponse = async (responseData: any) => {
-  const rawUrls = responseData.labels
-    .filter((label: any) => label.image)
-    .map((label: any) => appendCacheBust(label.image));
+  // Filter out sold/defective and keep track of tags for coloring
+  const validLabels = responseData.labels
+    .filter((label: any) => label.image && label.tag !== 'sold' && label.tag !== 'defective')
+    .map((label: any) => ({
+      url: appendCacheBust(label.image),
+      tag: label.tag || 'new'
+    }));
 
-  if (rawUrls.length === 0) {
-    alert('No labels available to print.');
+  if (validLabels.length === 0) {
+    alert('No printable (non-sold, non-defective) labels available.');
     return;
   }
 
@@ -45,8 +49,11 @@ export const printLabelsFromResponse = async (responseData: any) => {
   const printableHeight = labelHeight - (pageMargin * 2);
 
   // Convert all images to Base64 before opening the window
-  const imageUrls = await Promise.all(
-    rawUrls.map((url: string) => convertImageToDataURL(url))
+  const imageLabels = await Promise.all(
+    validLabels.map(async (label: any) => ({
+      ...label,
+      base64Url: await convertImageToDataURL(label.url)
+    }))
   );
 
   // Open print preview in one tab with all labels
@@ -56,7 +63,7 @@ export const printLabelsFromResponse = async (responseData: any) => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Print Labels - ${imageUrls.length} label(s)</title>
+          <title>Print Labels - ${imageLabels.length} label(s)</title>
           <style>
             * {
               margin: 0;
@@ -84,6 +91,12 @@ export const printLabelsFromResponse = async (responseData: any) => {
               border: 1px dashed #ccc;
               box-sizing: border-box;
               overflow: hidden;
+            }
+            .label-green {
+              border: 2px solid #22c55e; /* Green for new/returned */
+            }
+            .label-red {
+              border: 2px solid #ef4444; /* Red for sold/defective (filtered out, but keeping class just in case) */
             }
             img {
               display: block;
@@ -161,11 +174,15 @@ export const printLabelsFromResponse = async (responseData: any) => {
           </style>
         </head>
         <body>
-          ${imageUrls.map((url: string, index: number) => `
-            <div class="label-container">
-              <img src="${url}" alt="Barcode Label ${index + 1}" />
+          ${imageLabels.map((label: any, index: number) => {
+            const isRed = label.tag === 'sold' || label.tag === 'defective';
+            const colorClass = isRed ? 'label-red' : 'label-green';
+            return `
+            <div class="label-container ${colorClass}">
+              <img src="${label.base64Url}" alt="Barcode Label ${index + 1}" />
             </div>
-          `).join('')}
+            `;
+          }).join('')}
           <script>
             (function() {
               // Images are already base64, so they should be loaded instantly.

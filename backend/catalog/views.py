@@ -1182,6 +1182,7 @@ def product_generate_labels(request, pk):
                     'purchase_date': data['purchase_date'],
                     'serial_number': data['serial_number'],
                     'label_obj': label_obj,
+                    'tag': barcode.tag,
                     'created': created
                 })
             else:
@@ -1189,6 +1190,7 @@ def product_generate_labels(request, pk):
                 generated_labels.append({
                     'barcode_id': barcode.id,
                     'barcode': barcode.barcode,
+                    'tag': barcode.tag,
                     'image': label_obj.label_image,
                     'newly_generated': False
                 })
@@ -1250,6 +1252,7 @@ def product_generate_labels(request, pk):
                     generated_labels.append({
                         'barcode_id': barcode_id,
                         'barcode': item['barcode_value'],
+                        'tag': item['tag'],
                         'image': blob_url,
                         'newly_generated': True
                     })
@@ -1280,6 +1283,7 @@ def product_generate_labels(request, pk):
                     generated_labels.append({
                         'barcode_id': barcode_id,
                         'barcode': item['barcode_value'],
+                        'tag': item['tag'],
                         'image': image_data_url,
                         'newly_generated': True
                     })
@@ -1311,6 +1315,7 @@ def product_generate_labels(request, pk):
                     generated_labels.append({
                         'barcode_id': item['barcode_id'],
                         'barcode': item['barcode_value'],
+                        'tag': item['tag'],
                         'image': image_data_url,
                         'newly_generated': True
                     })
@@ -1382,6 +1387,7 @@ def product_get_labels(request, pk):
         labels_list.append({
             'barcode_id': label.barcode.id,
             'barcode': label.barcode.barcode,
+            'tag': label.barcode.tag,
             'image': label.label_image,
             'newly_generated': False  # These are existing labels
         })
