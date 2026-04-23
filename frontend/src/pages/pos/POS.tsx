@@ -4566,11 +4566,6 @@ export default function POS() {
                         <div className="flex items-center gap-2 sm:gap-3 flex-1 sm:flex-initial sm:order-3">
                           {/* Price Input */}
                           <div className="flex-shrink-0 flex-1 sm:flex-initial sm:w-28">
-                            {!showPurchasePrice ? (
-                              <div className="px-2 py-1.5 bg-gray-100 border border-gray-300 rounded-md text-center" title="Price hidden">
-                                <span className="text-xs font-medium text-gray-400">•••</span>
-                              </div>
-                            ) : (
                             <div className="relative">
                               <div className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs font-medium">₹</div>
                               <Input
@@ -4734,7 +4729,6 @@ export default function POS() {
                                   }`}
                               />
                             </div>
-                            )}
                             {showPurchasePrice && priceErrors[item.id] && (
                               <div className="mt-1 text-xs text-red-600 font-medium break-words whitespace-normal" title={priceErrors[item.id]}>
                                 {priceErrors[item.id]}
@@ -4744,11 +4738,7 @@ export default function POS() {
 
                           {/* Line Total */}
                           <div className="flex-shrink-0 text-right sm:w-24">
-                            {!showPurchasePrice ? (
-                              <div className="px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-md">
-                                <span className="text-xs font-medium text-gray-400">•••</span>
-                              </div>
-                            ) : invoiceType !== 'pending' || effectivePrice > 0 ? (
+                            {invoiceType !== 'pending' || effectivePrice > 0 ? (
                               <div className="px-2 py-1.5 bg-blue-50 border border-blue-200 rounded-md">
                                 <span className="text-xs font-bold text-blue-700">
                                   ₹{formatNumber(lineTotal)}
