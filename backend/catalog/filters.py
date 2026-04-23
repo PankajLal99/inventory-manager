@@ -495,20 +495,18 @@ class ProductFilter(django_filters.FilterSet):
         
         if value == 'sold':
             # For 'sold' tag: tracked products with 'sold' barcodes OR non-tracked products with sold InvoiceItems
-            # OPTIMIZATION: Use Exists() to avoid Cartesian product explosion with annotate(Count)
-            has_sold_barcode = Barcode.objects.filter(
-                product_id=OuterRef('pk'),
-                tag='sold'
-            )
-            has_sold_invoice = InvoiceItem.objects.filter(
-                product_id=OuterRef('pk'),
+            # OPTIMIZATION: Use id__in subqueries to avoid Cartesian product explosion with annotate(Count)
+            sold_barcode_product_ids = Barcode.objects.filter(tag='sold').values('product_id')
+            
+            sold_invoice_product_ids = InvoiceItem.objects.filter(
+                product__track_inventory=False,
                 invoice__status__in=['paid', 'credit', 'partial'],
                 invoice__invoice_type__in=['cash', 'upi']
-            ).exclude(invoice__status='void')
+            ).exclude(invoice__status='void').values('product_id')
             
             return queryset.filter(
-                Q(Exists(has_sold_barcode)) |
-                (Q(track_inventory=False) & Q(Exists(has_sold_invoice)))
+                Q(id__in=sold_barcode_product_ids) |
+                Q(id__in=sold_invoice_product_ids)
             )
         elif value == 'new':
             # For 'new' tag: products with 'new' barcodes OR products without any barcodes
