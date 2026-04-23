@@ -1,10 +1,10 @@
-import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { getStockInfo, getProductNameColor } from '../../lib/utils';
-import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, ChevronDown, ChevronRight, Coins, FileText, X } from 'lucide-react';
+import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
@@ -37,7 +37,6 @@ export default function Products() {
   const [viewingProduct, setViewingProduct] = useState<any>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<number, { all_generated: boolean; generating: boolean }>>({});
-  const [expandedProducts, setExpandedProducts] = useState<Record<number, boolean>>({});
   // Barcode-level selection for defective move-out.
   const [selectedDefectiveProducts, setSelectedDefectiveProducts] = useState<Set<number>>(new Set());
   const [selectedDefectiveProductsData, setSelectedDefectiveProductsData] = useState<Map<number, any>>(new Map());
@@ -663,18 +662,6 @@ export default function Products() {
     }
   };
 
-  const handleMarkBarcodeAsReturned = (barcodeId: number) => {
-    if (window.confirm('Mark this barcode as returned?')) {
-      markAsReturnedMutation.mutate({ barcodeIds: [barcodeId] });
-    }
-  };
-
-  const handleMarkBarcodeAsDefective = (barcodeId: number) => {
-    if (window.confirm('Mark this barcode as defective? This will remove it from inventory.')) {
-      markAsDefectiveMutation.mutate({ barcodeIds: [barcodeId] });
-    }
-  };
-
   const handleMarkBarcodeAsFresh = (barcodeId: number, fromTag: string) => {
     const tagLabel = fromTag === 'returned' ? 'returned' : 'defective';
     if (window.confirm(`Mark this ${tagLabel} barcode as fresh and add it back to inventory?`)) {
@@ -890,43 +877,6 @@ export default function Products() {
       reason: moveOutData.reason,
       notes: moveOutData.notes,
     });
-  };
-
-  const handleToggleDefectiveProduct = (product: any, checked: boolean) => {
-    const barcodesForProduct = getDefectiveBarcodesForProduct(product);
-    if (barcodesForProduct.length === 0) return;
-
-    if (checked) {
-      setSelectedDefectiveProducts(prev => {
-        const next = new Set(prev);
-        barcodesForProduct.forEach((b: any) => next.add(b.id));
-        return next;
-      });
-      setSelectedDefectiveProductsData(prev => {
-        const next = new Map(prev);
-        barcodesForProduct.forEach((b: any) => next.set(b.id, { product, barcode: b }));
-        return next;
-      });
-      return;
-    }
-
-    setSelectedDefectiveProducts(prev => {
-      const next = new Set(prev);
-      barcodesForProduct.forEach((b: any) => next.delete(b.id));
-      return next;
-    });
-    setSelectedDefectiveProductsData(prev => {
-      const next = new Map(prev);
-      barcodesForProduct.forEach((b: any) => next.delete(b.id));
-      return next;
-    });
-  };
-
-  const toggleProductExpand = (productId: number) => {
-    setExpandedProducts(prev => ({
-      ...prev,
-      [productId]: !prev[productId]
-    }));
   };
 
   // Helper function to get table headers based on tag
