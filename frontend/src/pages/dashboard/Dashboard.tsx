@@ -10,7 +10,6 @@ import DateRangeSelector from '../../components/ui/DateRangeSelector';
 
 const PIN_LENGTH = 6;
 const DASHBOARD_PIN = (import.meta.env.VITE_DASHBOARD_PIN as string) || '908070';
-const DASHBOARD_UNLOCKED_SESSION_KEY = 'dashboard_unlocked_v1';
 
 /** When false, the “Manual / POS payments” KPI block is hidden (code kept for later). */
 const SHOW_MANUAL_POS_PAYMENTS_SECTION = false;
@@ -304,25 +303,10 @@ export default function Dashboard() {
   const { datePreset, dateFrom, dateTo, setListDateRange } = usePersistedListDateRange();
   const dateRange = { startDate: dateFrom, endDate: dateTo };
 
-  const [unlocked, setUnlocked] = useState(() => {
-    try {
-      return sessionStorage.getItem(DASHBOARD_UNLOCKED_SESSION_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [unlocked, setUnlocked] = useState(false);
   const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
   const [pinError, setPinError] = useState('');
   const pinInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  useEffect(() => {
-    try {
-      if (unlocked) sessionStorage.setItem(DASHBOARD_UNLOCKED_SESSION_KEY, 'true');
-      else sessionStorage.removeItem(DASHBOARD_UNLOCKED_SESSION_KEY);
-    } catch {
-      // ignore storage errors (private mode, etc)
-    }
-  }, [unlocked]);
 
   useEffect(() => {
     if (!user) {
