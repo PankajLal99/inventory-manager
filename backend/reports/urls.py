@@ -10,10 +10,16 @@ from .views_optimized import (
 urlpatterns = [
     path('reports/sales-summary/', views.sales_summary, name='sales-summary'),
     path('reports/top-products/', views.top_products, name='top-products'),
+    path('reports/stock-sold/', views.stock_sold_report, name='stock-sold'),
     path('reports/inventory-summary/', views.inventory_summary, name='inventory-summary'),
     path('reports/revenue/', views.revenue_report, name='revenue-report'),
     path('reports/customers/', views.customer_summary, name='customer-summary'),
     path('reports/stock-ordering/', views.stock_ordering_report, name='stock-ordering-report'),
+    # Analytics
+    path('reports/analytics-comparison/', views.analytics_comparison, name='analytics-comparison'),
+    path('reports/category-brand-analytics/', views.category_brand_analytics, name='category-brand-analytics'),
+    path('reports/kpi-detail/', views.kpi_detail, name='kpi-detail'),
+    # Dashboard
     path('reports/dashboard-kpis/', optimized_dashboard_kpis, name='dashboard-kpis'),
     path(
         'reports/overall-profit-billing-period-details/',
@@ -31,4 +37,3 @@ urlpatterns = [
         name='wholesale-pending-cleared-details',
     ),
 ]
-

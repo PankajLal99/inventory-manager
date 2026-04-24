@@ -577,10 +577,14 @@ export const historyApi = {
 export const reportsApi = {
   salesSummary: (params?: any) => api.get('/reports/sales-summary/', { params }),
   topProducts: (params?: any) => api.get('/reports/top-products/', { params }),
+  stockSold: (params?: any) => api.get('/reports/stock-sold/', { params }),
   inventorySummary: (params?: any) => api.get('/reports/inventory-summary/', { params }),
   revenue: (params?: any) => api.get('/reports/revenue/', { params }),
   customers: (params?: any) => api.get('/reports/customers/', { params }),
   stockOrdering: (params?: any) => api.get('/reports/stock-ordering/', { params }),
+  analyticsComparison: (params?: any) => api.get('/reports/analytics-comparison/', { params }),
+  categoryBrandAnalytics: (params?: any) => api.get('/reports/category-brand-analytics/', { params }),
+  kpiDetail: (params?: any) => api.get('/reports/kpi-detail/', { params }),
   dashboardKpis: (params?: any) => api.get('/reports/dashboard-kpis/', { params }),
   overallProfitBillingPeriodDetails: (params?: any) =>
     api.get('/reports/overall-profit-billing-period-details/', { params }),

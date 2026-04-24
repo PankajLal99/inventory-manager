@@ -5,7 +5,7 @@ from .models import Store, Warehouse
 class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
-        fields = ['id', 'name', 'code', 'shop_type', 'address', 'phone', 'email', 'auto_populate_price', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'code', 'shop_type', 'address', 'phone', 'email', 'auto_populate_price', 'is_active', 'created_at', 'updated_at', 'default_invoice_type']
 
 
 class WarehouseSerializer(serializers.ModelSerializer):

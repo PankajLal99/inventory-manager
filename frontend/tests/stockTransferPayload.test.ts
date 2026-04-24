@@ -8,8 +8,8 @@ describe('buildStockTransferCreatePayload', () => {
       destination: { kind: 'store', id: 20 },
       notes: 'restock',
       items: [
-        { productId: 5, quantity: '3' },
-        { productId: 6, variantId: 99, quantity: '1.5' },
+        { productId: 5, quantity: '3', selectedBarcodes: [] },
+        { productId: 6, quantity: '1.5', selectedBarcodes: ['BC001', 'BC002'] },
       ],
     });
     expect(body).toEqual({
@@ -17,8 +17,8 @@ describe('buildStockTransferCreatePayload', () => {
       from_store: 10,
       to_store: 20,
       items: [
-        { product: 5, variant: null, quantity: '3' },
-        { product: 6, variant: 99, quantity: '1.5' },
+        { product: 5, quantity: '3', selected_barcodes: [] },
+        { product: 6, quantity: '1.5', selected_barcodes: ['BC001', 'BC002'] },
       ],
     });
     expect(body).not.toHaveProperty('from_warehouse');
@@ -29,7 +29,7 @@ describe('buildStockTransferCreatePayload', () => {
     const body = buildStockTransferCreatePayload({
       source: { kind: 'warehouse', id: 3 },
       destination: { kind: 'store', id: 7 },
-      items: [{ productId: 1, quantity: '2' }],
+      items: [{ productId: 1, quantity: '2', selectedBarcodes: [] }],
     });
     expect(body.from_warehouse).toBe(3);
     expect(body.to_store).toBe(7);
@@ -41,7 +41,7 @@ describe('buildStockTransferCreatePayload', () => {
       source: { kind: 'store', id: 1 },
       destination: { kind: 'warehouse', id: 2 },
       notes: '  hi  ',
-      items: [{ productId: 1, quantity: '1' }],
+      items: [{ productId: 1, quantity: '1', selectedBarcodes: [] }],
     });
     expect(body.notes).toBe('hi');
     expect(body.to_warehouse).toBe(2);

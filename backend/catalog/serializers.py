@@ -210,6 +210,15 @@ class ProductSerializer(serializers.ModelSerializer):
     stock_bifurcation = serializers.SerializerMethodField()
     price_bifurcation = serializers.SerializerMethodField()
     supplier_breakdown = serializers.SerializerMethodField()
+    gst_inclusive = serializers.SerializerMethodField()
+
+    def get_gst_inclusive(self, obj):
+        """Get gst_inclusive from product's primary barcode or first barcode"""
+        from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+        product_barcode = single_barcode_for_untracked_product(obj)
+        if product_barcode and product_barcode.purchase_item:
+            return bool(product_barcode.purchase_item.gst_inclusive)
+        return False
 
     def get_stock_quantity(self, obj):
         """Calculate total stock quantity from barcodes - SUPREME SOURCE OF TRUTH
@@ -361,7 +370,7 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'sku', 'product_type', 'category', 'category_id', 'category_name', 
             'brand', 'brand_id', 'brand_name',
-            'description', 'can_go_below_purchase_price', 'tax_rate', 'track_inventory', 'track_batches',
+            'description', 'can_go_below_purchase_price', 'tax_rate', 'gst_inclusive', 'track_inventory', 'track_batches',
             'low_stock_threshold', 'image', 'is_active', 'variants', 'barcodes', 'components',
             'created_at', 'updated_at', 'stock_quantity', 'available_quantity', 'shop_stock', 'warehouse_stock',
             'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown'
@@ -447,6 +456,15 @@ class ProductListSerializer(serializers.ModelSerializer):
     price_bifurcation = serializers.SerializerMethodField()
     purchase_price = serializers.SerializerMethodField()
     selling_price = serializers.SerializerMethodField()
+    gst_inclusive = serializers.SerializerMethodField()
+
+    def get_gst_inclusive(self, obj):
+        """Get gst_inclusive from product's primary barcode or first barcode"""
+        from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+        product_barcode = single_barcode_for_untracked_product(obj)
+        if product_barcode and product_barcode.purchase_item:
+            return bool(product_barcode.purchase_item.gst_inclusive)
+        return False
 
     def _get_tag_filter(self):
         """Get the current tag filter from request context."""
@@ -752,7 +770,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'shop_stock', 'warehouse_stock', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown']
+        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'shop_stock', 'warehouse_stock', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'gst_inclusive', 'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown']
 
 
 class DefectiveProductItemSerializer(serializers.ModelSerializer):

@@ -154,6 +154,73 @@ def top_products(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def stock_sold_report(request):
+    """Stock sold report -- date range wise, including total amount from Invoices"""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+    date_from = request.query_params.get('date_from', None)
+    date_to = request.query_params.get('date_to', None)
+    store_id = request.query_params.get('store', None)
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    
+    if not date_from:
+        date_from = (timezone.now() - timedelta(days=30)).date()
+    else:
+        date_from = datetime.strptime(date_from, '%Y-%m-%d').date()
+    
+    if not date_to:
+        date_to = timezone.now().date()
+    else:
+        date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+    
+    # Base invoices
+    invoices = Invoice.objects.filter(
+        retailer_id=retailer.id,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+        status__in=['paid', 'partial']
+    ).exclude(customer__name__iexact='Manish Traders Loss')
+
+    if store_id:
+        try:
+            sid = int(store_id)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+        invoices = invoices.filter(store_id=sid)
+    elif allowed_store_ids is not None and not (request.user.is_superuser or request.user.is_staff):
+        invoices = invoices.filter(store_id__in=allowed_store_ids)
+
+    # Sum of Invoice totals (user specifically requested this field for value)
+    total_invoice_value = invoices.aggregate(
+        total=Sum('total', output_field=DecimalField())
+    )['total'] or Decimal('0.00')
+
+    # All products sold in this period
+    products_sold = InvoiceItem.objects.filter(
+        invoice__in=invoices
+    ).values(
+        'product__id',
+        'product__name',
+        'product__sku'
+    ).annotate(
+        total_quantity=Sum('quantity', output_field=DecimalField()),
+        total_revenue=Sum('line_total', output_field=DecimalField()),
+        order_count=Count('invoice', distinct=True)
+    ).order_by('-total_quantity')
+
+    return Response({
+        'period': {
+            'from': date_from.isoformat(),
+            'to': date_to.isoformat()
+        },
+        'total_invoice_value': float(total_invoice_value),
+        'products': list(products_sold)
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def inventory_summary(request):
     """Inventory summary report - uses barcode-based calculations"""
     try:
@@ -505,4 +572,297 @@ def stock_ordering_report(request):
         'out_of_stock': out_of_stock,
         'low_stock': low_stock,
         'products_needing_order': products_needing_order
+    })
+
+
+# ─── Helper ───────────────────────────────────────────────────────────────────
+
+def _build_invoice_qs(retailer, date_from, date_to, store_id, allowed_store_ids, user):
+    """Return a filtered Invoice queryset (paid/partial, right dates, right store)."""
+    qs = Invoice.objects.filter(
+        retailer_id=retailer.id,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+        status__in=['paid', 'partial'],
+    ).exclude(customer__name__iexact='Manish Traders Loss')
+
+    if store_id:
+        qs = qs.filter(store_id=store_id)
+    elif allowed_store_ids is not None and not (user.is_superuser or user.is_staff):
+        qs = qs.filter(store_id__in=allowed_store_ids)
+
+    return qs
+
+
+def _invoice_metrics(qs):
+    """Aggregate total_sales, total_invoices, items_sold, avg_order_value from queryset."""
+    agg = qs.aggregate(
+        total_sales=Sum('total', output_field=DecimalField()),
+        total_invoices=Count('id'),
+        avg_order_value=Avg('total', output_field=DecimalField()),
+    )
+    items_sold_agg = InvoiceItem.objects.filter(invoice__in=qs).aggregate(
+        items_sold=Sum('quantity', output_field=DecimalField())
+    )
+    return {
+        'total_sales': float(agg['total_sales'] or 0),
+        'total_invoices': agg['total_invoices'] or 0,
+        'items_sold': float(items_sold_agg['items_sold'] or 0),
+        'avg_order_value': float(agg['avg_order_value'] or 0),
+    }
+
+
+def _pct_change(curr, prev):
+    """Return % change between two floats, None if prev is 0."""
+    if prev and prev != 0:
+        return round(((curr - prev) / prev) * 100, 1)
+    return None
+
+
+# ─── analytics_comparison ────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def analytics_comparison(request):
+    """
+    Current period + comparison period metrics with % change.
+    Auto-computes previous period if compare_from/compare_to not given.
+    """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+
+    # Parse dates
+    def parse_date(val, default):
+        return datetime.strptime(val, '%Y-%m-%d').date() if val else default
+
+    date_from = parse_date(request.query_params.get('date_from'), (timezone.now() - timedelta(days=30)).date())
+    date_to = parse_date(request.query_params.get('date_to'), timezone.now().date())
+    store_id_raw = request.query_params.get('store')
+    store_id = int(store_id_raw) if store_id_raw else None
+
+    # Build comparison period (auto = same length shifted back)
+    compare_from_raw = request.query_params.get('compare_from')
+    compare_to_raw = request.query_params.get('compare_to')
+    if compare_from_raw and compare_to_raw:
+        compare_from = parse_date(compare_from_raw, None)
+        compare_to = parse_date(compare_to_raw, None)
+    else:
+        delta = (date_to - date_from).days + 1
+        compare_to = date_from - timedelta(days=1)
+        compare_from = compare_to - timedelta(days=delta - 1)
+
+    # Querysets
+    curr_qs = _build_invoice_qs(retailer, date_from, date_to, store_id, allowed_store_ids, request.user)
+    prev_qs = _build_invoice_qs(retailer, compare_from, compare_to, store_id, allowed_store_ids, request.user)
+
+    curr = _invoice_metrics(curr_qs)
+    prev = _invoice_metrics(prev_qs)
+
+    # Daily breakdown for chart (current period)
+    daily_current = list(
+        curr_qs.annotate(date=TruncDate('created_at'))
+        .values('date')
+        .annotate(
+            total=Sum('total', output_field=DecimalField()),
+            count=Count('id'),
+        )
+        .order_by('date')
+    )
+
+    daily_prev = list(
+        prev_qs.annotate(date=TruncDate('created_at'))
+        .values('date')
+        .annotate(
+            total=Sum('total', output_field=DecimalField()),
+            count=Count('id'),
+        )
+        .order_by('date')
+    )
+
+    # Per-store breakdown (for store comparison panel)
+    from backend.locations.models import Store as StoreModel
+    stores = StoreModel.objects.filter(retailer_id=retailer.id, is_active=True)
+    store_comparison = []
+    for store in stores:
+        sq = _build_invoice_qs(retailer, date_from, date_to, store.id, allowed_store_ids, request.user)
+        metrics = _invoice_metrics(sq)
+        store_comparison.append({
+            'store_id': store.id,
+            'store_name': store.name,
+            **metrics,
+        })
+
+    return Response({
+        'period': {'from': date_from.isoformat(), 'to': date_to.isoformat()},
+        'compare_period': {'from': compare_from.isoformat(), 'to': compare_to.isoformat()},
+        'current': curr,
+        'previous': prev,
+        'pct_change': {
+            'total_sales': _pct_change(curr['total_sales'], prev['total_sales']),
+            'total_invoices': _pct_change(curr['total_invoices'], prev['total_invoices']),
+            'items_sold': _pct_change(curr['items_sold'], prev['items_sold']),
+            'avg_order_value': _pct_change(curr['avg_order_value'], prev['avg_order_value']),
+        },
+        'daily_current': daily_current,
+        'daily_previous': daily_prev,
+        'store_comparison': store_comparison,
+    })
+
+
+# ─── category_brand_analytics ────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def category_brand_analytics(request):
+    """
+    Top categories, top brands, slow-moving, fast-selling products.
+    Supports optional ?category=<id> and ?brand=<id> filters.
+    """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+
+    def parse_date(val, default):
+        return datetime.strptime(val, '%Y-%m-%d').date() if val else default
+
+    date_from = parse_date(request.query_params.get('date_from'), (timezone.now() - timedelta(days=30)).date())
+    date_to = parse_date(request.query_params.get('date_to'), timezone.now().date())
+    store_id_raw = request.query_params.get('store')
+    store_id = int(store_id_raw) if store_id_raw else None
+    category_id = request.query_params.get('category')
+    brand_id = request.query_params.get('brand')
+    limit = int(request.query_params.get('limit', 10))
+
+    inv_qs = _build_invoice_qs(retailer, date_from, date_to, store_id, allowed_store_ids, request.user)
+    items_qs = InvoiceItem.objects.filter(invoice__in=inv_qs)
+
+    if category_id:
+        items_qs = items_qs.filter(product__category_id=category_id)
+    if brand_id:
+        items_qs = items_qs.filter(product__brand_id=brand_id)
+
+    # Top categories
+    top_categories = list(
+        items_qs.filter(product__category__isnull=False)
+        .values('product__category__id', 'product__category__name')
+        .annotate(
+            total_quantity=Sum('quantity', output_field=DecimalField()),
+            total_revenue=Sum('line_total', output_field=DecimalField()),
+            order_count=Count('invoice', distinct=True),
+        )
+        .order_by('-total_revenue')[:limit]
+    )
+
+    # Top brands
+    top_brands = list(
+        items_qs.filter(product__brand__isnull=False)
+        .values('product__brand__id', 'product__brand__name')
+        .annotate(
+            total_quantity=Sum('quantity', output_field=DecimalField()),
+            total_revenue=Sum('line_total', output_field=DecimalField()),
+            order_count=Count('invoice', distinct=True),
+        )
+        .order_by('-total_revenue')[:limit]
+    )
+
+    # All products in period with metrics
+    product_metrics = list(
+        items_qs.values(
+            'product__id', 'product__name', 'product__sku',
+            'product__category__name', 'product__brand__name'
+        ).annotate(
+            total_quantity=Sum('quantity', output_field=DecimalField()),
+            total_revenue=Sum('line_total', output_field=DecimalField()),
+            order_count=Count('invoice', distinct=True),
+        )
+    )
+
+    # Fast-selling = highest quantity
+    fast_selling = sorted(product_metrics, key=lambda x: float(x['total_quantity'] or 0), reverse=True)[:10]
+    # Slow-moving = lowest quantity (but >0 i.e. sold at least something)
+    slow_moving = sorted(
+        [p for p in product_metrics if float(p['total_quantity'] or 0) > 0],
+        key=lambda x: float(x['total_quantity'] or 0)
+    )[:10]
+
+    return Response({
+        'period': {'from': date_from.isoformat(), 'to': date_to.isoformat()},
+        'top_categories': top_categories,
+        'top_brands': top_brands,
+        'fast_selling': fast_selling,
+        'slow_moving': slow_moving,
+    })
+
+
+# ─── kpi_detail ──────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def kpi_detail(request):
+    """
+    Drill-down: return invoices contributing to a KPI.
+    ?metric=total_sales|total_invoices|items_sold|avg_order_value
+    """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+
+    def parse_date(val, default):
+        return datetime.strptime(val, '%Y-%m-%d').date() if val else default
+
+    date_from = parse_date(request.query_params.get('date_from'), (timezone.now() - timedelta(days=30)).date())
+    date_to = parse_date(request.query_params.get('date_to'), timezone.now().date())
+    store_id_raw = request.query_params.get('store')
+    store_id = int(store_id_raw) if store_id_raw else None
+    metric = request.query_params.get('metric', 'total_sales')
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 50))
+
+    inv_qs = _build_invoice_qs(retailer, date_from, date_to, store_id, allowed_store_ids, request.user)
+
+    # Order differently depending on metric
+    order_map = {
+        'total_sales': '-total',
+        'total_invoices': '-created_at',
+        'items_sold': '-created_at',
+        'avg_order_value': '-total',
+    }
+    inv_qs = inv_qs.select_related('customer', 'store').order_by(order_map.get(metric, '-created_at'))
+
+    total_count = inv_qs.count()
+    offset = (page - 1) * page_size
+    invoices_page = inv_qs[offset:offset + page_size]
+
+    rows = []
+    for inv in invoices_page:
+        rows.append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'created_at': inv.created_at.isoformat(),
+            'customer_name': inv.customer.name if inv.customer else 'Walk-in',
+            'store_name': inv.store.name if inv.store else '',
+            'status': inv.status,
+            'invoice_type': inv.invoice_type,
+            'subtotal': float(inv.subtotal),
+            'discount_amount': float(inv.discount_amount),
+            'tax_amount': float(inv.tax_amount),
+            'total': float(inv.total),
+            'paid_amount': float(inv.paid_amount),
+            'due_amount': float(inv.due_amount),
+        })
+
+    return Response({
+        'metric': metric,
+        'period': {'from': date_from.isoformat(), 'to': date_to.isoformat()},
+        'total_count': total_count,
+        'page': page,
+        'page_size': page_size,
+        'invoices': rows,
     })

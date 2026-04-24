@@ -11,6 +11,16 @@ class Store(models.Model):
         ('repair', 'Repair Shop')
     ]
 
+    INVOICE_TYPE_CHOICES = [
+        ('cash', 'Cash Invoice'),
+        ('upi', 'UPI Invoice'),
+        ('pending', 'Pending Invoice'),
+        ('defective', 'Defective Invoice'),
+        ('credit', 'Credit Invoice'),
+        ('mixed', 'Mixed Payment (Cash + UPI)'),
+        ('card','Card Invoice'),
+    ]
+
     retailer = models.ForeignKey(
         'tenants.Retailer',
         on_delete=models.CASCADE,
@@ -21,6 +31,7 @@ class Store(models.Model):
     name = models.CharField(max_length=200)
     code = models.CharField(max_length=50, db_index=True)
     shop_type = models.CharField(max_length=20, choices=SHOP_TYPE_CHOICES, default='retail')
+    default_invoice_type = models.CharField(max_length=20, choices=INVOICE_TYPE_CHOICES, default='cash')
     address = models.TextField(blank=True)
     state = models.CharField(max_length=100, blank=True, help_text='State for GST billing (e.g., Delhi, Maharashtra)')
     phone = models.CharField(max_length=20, blank=True)

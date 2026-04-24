@@ -52,7 +52,7 @@ export default function POS() {
   const [showScanner, setShowScanner] = useState(false);
   const [strictBarcodeMode, setStrictBarcodeMode] = useState(true); // Default to strict mode
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed' | 'credit'>('cash');
+  const [invoiceType, setInvoiceType] = useState<'cash' | 'upi' | 'pending' | 'mixed' | 'credit' | 'defective' | 'card'>('cash');
   const [invoiceDate, setInvoiceDate] = useState<string>(() => toLocalDateString(new Date()));
   const [cashAmount, setCashAmount] = useState<string>('');
   const [upiAmount, setUpiAmount] = useState<string>('');
@@ -1088,18 +1088,36 @@ export default function POS() {
     }
   }, [isWholesaleGroup, isWholesaleAdmin, invoiceType]);
 
+  // When the active store changes (or loads for the first time), initialise invoiceType
+  // from the store's default_invoice_type so the UI reflects the store's default before
+  // any cart has been created.
+  useEffect(() => {
+    if (!defaultStore?.default_invoice_type) return;
+    // Wholesale lane overrides are handled by the effect above — don't interfere.
+    if (isWholesaleGroup && !isWholesaleAdmin) return;
+    if (isWholesaleShop) return;
+    // Only update when there is no active cart; once a cart exists its stored
+    // invoice_type (set from the store default at creation time) takes precedence.
+    if (!cartId) {
+      setInvoiceType(backendToFrontendInvoiceType(defaultStore.default_invoice_type));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultStore?.id, defaultStore?.default_invoice_type]);
+
 
   // Helper function to convert backend invoice type to frontend invoice type
-  // Backend now supports 'cash', 'upi', 'pending', and 'mixed' directly
-  const backendToFrontendInvoiceType = (backendType: string): 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' => {
+  // Backend now supports 'cash', 'upi', 'pending', 'mixed', 'credit', 'card', and 'defective'
+  const backendToFrontendInvoiceType = (backendType: string): 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' | 'defective' | 'card' => {
     if (backendType === 'pending') return 'pending';
     if (backendType === 'upi') return 'upi';
     if (backendType === 'mixed') return 'mixed';
     if (backendType === 'credit') return 'credit';
+    if (backendType === 'card') return 'card';
+    if (backendType === 'defective') return 'defective';
     return 'cash';
   };
 
-  const frontendToBackendInvoiceType = (frontendType: 'cash' | 'upi' | 'pending' | 'mixed' | 'credit'): 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' => {
+  const frontendToBackendInvoiceType = (frontendType: 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' | 'defective' | 'card'): 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' | 'card' | 'defective' => {
     return frontendType;
   };
 
@@ -1327,6 +1345,8 @@ export default function POS() {
         cartData.invoice_type = 'pending';
       } else if (isWholesaleShop) {
         cartData.invoice_type = 'pending';
+      } else if (defaultStore.default_invoice_type) {
+        cartData.invoice_type = defaultStore.default_invoice_type;
       }
       return posApi.carts.create(cartData);
     },
@@ -1336,7 +1356,7 @@ export default function POS() {
       // Update invoiceType state from cart (Wholesale users/shop get 'pending' from backend when we created with it)
       const cartInvoiceType = (isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop
         ? (data.data.invoice_type === 'credit' ? 'credit' : 'pending')
-        : backendToFrontendInvoiceType(data.data.invoice_type || 'cash');
+        : backendToFrontendInvoiceType(data.data.invoice_type || defaultStore.default_invoice_type || 'cash');
       setInvoiceType(cartInvoiceType);
 
       // Save to localStorage FIRST
@@ -1874,7 +1894,7 @@ export default function POS() {
             } else if (isWholesaleShop) {
               cartData.invoice_type = 'pending';
             }
-            setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : 'cash');
+            setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : (defaultStore?.default_invoice_type || 'cash'));
             const data = await posApi.carts.create(cartData);
             const newCartId = data.data.id;
             if (username && data.data) {
@@ -1985,7 +2005,7 @@ export default function POS() {
           setCartId(null);
           setActiveTabId(null);
           setSelectedCustomer(null);
-          setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : 'cash');
+          setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : (defaultStore?.default_invoice_type || 'cash'));
           setCashAmount('');
           setUpiAmount('');
           setBarcodeInput('');
@@ -1998,7 +2018,7 @@ export default function POS() {
         setCartId(null);
         setActiveTabId(null);
         setSelectedCustomer(null);
-        setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : 'cash');
+        setInvoiceType((isWholesaleGroup && !isWholesaleAdmin) || isWholesaleShop ? 'pending' : (defaultStore?.default_invoice_type || 'cash'));
         setBarcodeInput('');
         // Create new cart automatically after checkout
         if (defaultStore) {
@@ -2076,7 +2096,9 @@ export default function POS() {
       'upi': 'UPI',
       'pending': 'PENDING',
       'mixed': 'MIXED',
-      'credit': 'CREDIT'
+      'credit': 'CREDIT',
+      'card': 'CARD',
+      'defective': 'DEFECTIVE'
     };
     const typeAbbr = invoiceTypeAbbr[tab.invoiceType] || 'CART';
 
@@ -2580,7 +2602,7 @@ export default function POS() {
             setCartId(null);
             setActiveTabId(null);
             setSelectedCustomer(null);
-            setInvoiceType(isWholesaleShop ? 'pending' : 'cash');
+            setInvoiceType(isWholesaleShop ? 'pending' : (defaultStore?.default_invoice_type || 'cash'));
             setBarcodeInput('');
             // Create new cart automatically after checkout if no other tabs
             if (defaultStore) {
@@ -3004,7 +3026,7 @@ export default function POS() {
     }, 600);
   };
 
-  // Auto-set invoice type when store is repair or wholesale; only reset to cash for retail
+  // Auto-set invoice type based on store type and store's default_invoice_type
   useEffect(() => {
     // Wholesale shop: only pending or credit; always enforce (even if cart had cash/upi/mixed)
     if (defaultStore?.shop_type === 'wholesale') {
@@ -3031,14 +3053,14 @@ export default function POS() {
       if (invoiceType !== 'pending') {
         setInvoiceType('pending');
       }
-    } else if (defaultStore?.shop_type === 'retail') {
-      if (invoiceType === 'pending') {
-        setInvoiceType('cash');
+    } else if (defaultStore?.default_invoice_type) {
+      // For retail and other non-repair, non-wholesale shops, apply the store's default invoice type
+      const storeDefault = defaultStore.default_invoice_type as typeof invoiceType;
+      if (invoiceType !== storeDefault) {
+        setInvoiceType(storeDefault);
       }
-    } else if (defaultStore?.shop_type !== 'repair' && defaultStore?.shop_type !== 'wholesale' && invoiceType === 'pending') {
-      setInvoiceType('cash');
     }
-  }, [defaultStore?.shop_type, invoiceType, cartId, cart?.data?.invoice_type, isWholesaleGroup, isWholesaleAdmin]);
+  }, [defaultStore?.shop_type, defaultStore?.default_invoice_type, invoiceType, cartId, cart?.data?.invoice_type, isWholesaleGroup, isWholesaleAdmin]);
 
   const tradeInCredit = useMemo(() => posTradeInCreditTotal(tradeInLines), [tradeInLines]);
 
@@ -3250,7 +3272,7 @@ export default function POS() {
                     } else if (selectedStore && selectedStore.shop_type !== 'repair' && invoiceType === 'pending') {
                       // If switching from repair to non-repair shop, reset to 'cash' — but not for Wholesale users
                       if (!isWholesaleGroup || isWholesaleAdmin) {
-                        setInvoiceType('cash');
+                        setInvoiceType(defaultStore?.default_invoice_type || 'cash');
                       }
                     }
 
@@ -3612,7 +3634,7 @@ export default function POS() {
                   value={isWholesaleShop && !['pending', 'credit'].includes(invoiceType) ? 'pending' : invoiceType}
                   onChange={(e) => {
                     if (isCartLocked) return;
-                    const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit';
+                    const newType = e.target.value as 'cash' | 'upi' | 'pending' | 'mixed' | 'credit' | 'defective' | 'card';
                     setInvoiceType(newType);
                     // Clear split amounts when switching away from mixed
                     if (newType !== 'mixed') {
@@ -3631,6 +3653,8 @@ export default function POS() {
                       <option value="cash">CASH</option>
                       <option value="upi">UPI</option>
                       <option value="mixed">CASH + UPI</option>
+                      <option value="card">CARD</option>
+                      <option value="defective">DEFECTIVE</option>
                     </>
                   )}
                   <option value="credit">CREDIT</option>
@@ -4875,7 +4899,7 @@ export default function POS() {
                                   setEditingManualPrice((prev) => ({ ...prev, [item.id]: value }));
 
                                   // When can_go_below_purchase_price is false: manual_unit_price cannot be less than purchase_price
-                                  if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit')) {
+                                  if (value && (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit' || invoiceType === 'card')) {
                                     const price = parseFloat(value);
                                     if (!isNaN(price) && price > 0) {
                                       let purchasePrice = parseFloat(item.product_purchase_price || '0');
@@ -4945,7 +4969,7 @@ export default function POS() {
                                         return;
                                       }
 
-                                      if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit') {
+                                      if (invoiceType === 'cash' || invoiceType === 'upi' || invoiceType === 'mixed' || invoiceType === 'credit' || invoiceType === 'card') {
                                         let purchasePrice = parseFloat(item.product_purchase_price || '0');
                                         if (item.product_name?.startsWith('Other -')) {
                                           const inlineCost = editingPurchasePrice[item.id];
