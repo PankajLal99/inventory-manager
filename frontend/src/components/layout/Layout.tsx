@@ -6,6 +6,7 @@ import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import PrintSettingsModal from '../PrintSettings';
+import ThermalPrintSettingsModal from '../ThermalPrintSettings';
 import ShortcutsHelpModal from '../ShortcutsHelpModal';
 import {
   LayoutDashboard,
@@ -41,6 +42,7 @@ import {
   Boxes,
   Truck,
   ShieldCheck,
+  Printer,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -61,6 +63,7 @@ export default function Layout() {
   const [isSearching, setIsSearching] = useState(false);
   const [_searchSelectedIndex, _setSearchSelectedIndex] = useState(-1);
   const [printSettingsOpen, setPrintSettingsOpen] = useState(false);
+  const [thermalPrintSettingsOpen, setThermalPrintSettingsOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -487,6 +490,16 @@ export default function Layout() {
                     <button
                       onClick={() => {
                         setUserMenuOpen(false);
+                        setThermalPrintSettingsOpen(true);
+                      }}
+                      className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      <Printer className="h-4 w-4 mr-3 text-gray-400" />
+                      Thermal Print Settings
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
                         setShortcutsHelpOpen(true);
                       }}
                       className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
@@ -518,6 +531,12 @@ export default function Layout() {
       <PrintSettingsModal
         isOpen={printSettingsOpen}
         onClose={() => setPrintSettingsOpen(false)}
+      />
+
+      {/* Thermal Print Settings Modal */}
+      <ThermalPrintSettingsModal
+        isOpen={thermalPrintSettingsOpen}
+        onClose={() => setThermalPrintSettingsOpen(false)}
       />
 
       {/* Shortcuts Help Modal */}

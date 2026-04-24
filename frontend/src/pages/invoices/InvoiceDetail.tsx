@@ -6,6 +6,7 @@ import { auth } from '../../lib/auth';
 import { hasInvoiceHideCashCheckout, isInvoiceRestrictedUser } from '../../lib/access';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import { toast } from '../../lib/toast';
+import { loadThermalPrintSettings } from '../../components/ThermalPrintSettings';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -2140,6 +2141,21 @@ export default function InvoiceDetail() {
   };
 
   const generateThermalInvoiceHTML = (invoice: any) => {
+    const thermalSettings = loadThermalPrintSettings();
+    const paperWidthMm = thermalSettings.paperWidth;
+    const paperHeightCss = thermalSettings.paperHeight === 0 ? 'auto' : `${thermalSettings.paperHeight}mm`;
+    const paperWidthIn = (paperWidthMm / 25.4).toFixed(3);
+    const bodyFontSize = thermalSettings.fontSize;
+    const headerFontSize = thermalSettings.headerFontSize;
+    const fontFamily = thermalSettings.fontFamily === 'monospace'
+      ? "'Courier New', monospace"
+      : "Arial, Helvetica, sans-serif";
+    const fontWeight = thermalSettings.fontWeight;
+    const textStroke = thermalSettings.textStroke ?? 0;
+    const textStrokeCss = textStroke > 0 ? `-webkit-text-stroke: ${textStroke}px #000; paint-order: stroke fill;` : '';
+    const subFontSize = Math.max(bodyFontSize - 1, 7);
+    const tableFontSize = Math.max(bodyFontSize - 1, 7);
+    const footerFontSize = Math.max(bodyFontSize - 2, 7);
 
     const formatDate = (dateString: string) => {
       const date = new Date(dateString);
@@ -2160,12 +2176,14 @@ export default function InvoiceDetail() {
         <meta charset="UTF-8">
           <style>
             * {margin: 0; padding: 0; box-sizing: border-box; }
-            @page {size: 4in auto; margin: 0.1in; }
+            @page {size: ${paperWidthIn}in ${paperHeightCss}; margin: 0.1in; }
             body {
-              font-family: 'Courier New', monospace;
-            font-size: 10px;
-            width: 4in;
-            max-width: 4in;
+              font-family: ${fontFamily};
+            font-size: ${bodyFontSize}px;
+            font-weight: ${fontWeight};
+            ${textStrokeCss}
+            width: ${paperWidthIn}in;
+            max-width: ${paperWidthIn}in;
             padding: 5px;
             color: #000;
             }
@@ -2175,19 +2193,19 @@ export default function InvoiceDetail() {
             border-bottom: 1px dashed #000;
             padding-bottom: 5px; 
             }
-            .header h1 {font-size: 14px; margin-bottom: 3px; font-weight: bold; }
-            .header p {font-size: 9px; margin: 1px 0; }
-            .info {margin-bottom: 6px; font-size: 9px; }
+            .header h1 {font-size: ${headerFontSize}px; margin-bottom: 3px; font-weight: bold; }
+            .header p {font-size: ${subFontSize}px; margin: 1px 0; }
+            .info {margin-bottom: 6px; font-size: ${subFontSize}px; }
             .info-row {margin: 2px 0; }
-            table {width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9px; }
+            table {width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: ${tableFontSize}px; }
             th {padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
             td {padding: 2px; border-bottom: 1px dotted #ccc; }
             .text-right {text-align: right; }
             .text-center {text-align: center; }
             .summary {margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
-            .summary-row {display: flex; justify-content: space-between; padding: 2px 0; font-size: 9px; }
-            .summary-total {border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; font-weight: bold; font-size: 11px; }
-            .footer {margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: 8px; }
+            .summary-row {display: flex; justify-content: space-between; padding: 2px 0; font-size: ${subFontSize}px; }
+            .summary-total {border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; font-weight: bold; font-size: ${bodyFontSize + 1}px; }
+            .footer {margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: ${footerFontSize}px; }
             /* Watermark - positioned relative to content area */
             body {position: relative; }
             .watermark {
