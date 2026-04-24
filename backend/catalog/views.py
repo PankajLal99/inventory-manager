@@ -2270,195 +2270,240 @@ def data_validation_check(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def defective_product_move_out(request):
-    """Create a defective product move-out transaction with invoice"""
+    """Create defective product move-out transactions, one invoice per supplier.
+
+    Groups all selected barcodes by their purchase supplier and creates a separate
+    move-out record + invoice for each supplier. Barcodes with no linked purchase
+    are grouped together under a single 'No Supplier' move-out.
+    """
+    from collections import defaultdict
     from backend.locations.models import Store
-    from backend.pos.models import Cart
-    
+    from backend.pos.models import InvoiceItem
+
     try:
         data = request.data
         store_id = data.get('store')
         reason = data.get('reason', 'defective')
         notes = data.get('notes', '')
-        product_ids = data.get('product_ids', [])  # List of product IDs
-        barcode_ids = data.get('barcode_ids', [])  # Optional: specific barcode IDs to move out
-        
+        product_ids = data.get('product_ids', [])
+        barcode_ids = data.get('barcode_ids', [])
+
         if not store_id:
             return Response({'error': 'Store is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         if not product_ids:
             return Response({'error': 'At least one product must be selected'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         store = get_object_or_404(Store, pk=store_id)
-        
-        # Generate move-out number
-        move_out_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        
-        # Get selected products and their defective barcodes
-        products = Product.objects.filter(id__in=product_ids)
-        total_loss = Decimal('0.00')
-        total_items = 0
-        items_to_create = []
-        
-        # Process each product to collect barcodes and calculate totals
-        for product in products:
-            # Get defective barcodes for this product
-            if barcode_ids:
-                # If specific barcodes provided, use those
-                barcodes = Barcode.objects.filter(
-                    id__in=barcode_ids,
-                    product=product,
-                    tag='defective'
-                )
-            else:
-                # Get all defective barcodes for this product
-                barcodes = Barcode.objects.filter(
-                    product=product,
-                    tag='defective'
-                )
-            
-            # Track items for move-out record
-            for barcode in barcodes:
-                price = barcode.get_purchase_price()
-                items_to_create.append({
-                    'product': product,
-                    'barcode': barcode,
-                    'purchase_price': price
-                })
-                total_loss += price
-                total_items += 1
-        
-        # Create invoice directly (no cart needed)
-        invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        # Ensure invoice number uniqueness
-        while Invoice.objects.filter(invoice_number=invoice_number).exists():
-            invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
-        
-        invoice = Invoice.objects.create(
-            invoice_number=invoice_number,
-            cart=None,  # No cart needed for move-out
-            store=store,
-            invoice_type='defective',  # Mark as defective invoice type
-            status='void', 
-            created_by=request.user
+
+        # ----------------------------------------------------------------
+        # 1. Resolve supplier for every selected defective barcode in ONE
+        #    flat query — no N+1, no heavy multi-join select_related.
+        #    We coalesce two paths:
+        #      a) barcode.purchase -> supplier  (legacy direct link)
+        #      b) barcode.purchase_item -> purchase -> supplier  (normal flow)
+        # ----------------------------------------------------------------
+        barcode_filter = dict(tag='defective', product_id__in=product_ids)
+        if barcode_ids:
+            barcode_filter['id__in'] = barcode_ids
+
+        supplier_rows = Barcode.objects.filter(**barcode_filter).values(
+            'id', 'product_id',
+            # path (a)
+            'purchase__supplier_id',
+            'purchase__supplier__name',
+            # path (b)
+            'purchase_item__purchase__supplier_id',
+            'purchase_item__purchase__supplier__name',
+            # purchase_price via purchase_item
+            'purchase_item__unit_price',
         )
-        
-        # Create invoice items directly and mark barcodes as sold
-        # For tracked products, create one invoice item per barcode (each with quantity 1)
-        # For non-tracked products, group by product and create one invoice item per product
-        subtotal = Decimal('0.00')
-        from backend.pos.models import InvoiceItem
-        
-        # Group items by product and track_inventory status
-        items_by_product = {}
-        for item_data in items_to_create:
-            product = item_data['product']
-            key = (product.id, product.track_inventory)
-            if key not in items_by_product:
-                items_by_product[key] = {
-                    'product': product,
-                    'barcodes': [],
-                    'prices': []
-                }
-            items_by_product[key]['barcodes'].append(item_data['barcode'])
-            items_by_product[key]['prices'].append(item_data['purchase_price'])
-        
-        # Create invoice items
-        for (product_id, track_inventory), product_data in items_by_product.items():
-            product = product_data['product']
-            barcodes = product_data['barcodes']
-            prices = product_data['prices']
-            
-            if track_inventory:
-                # For tracked products, create one invoice item per barcode
-                for barcode, price in zip(barcodes, prices):
-                    invoice_item = InvoiceItem.objects.create(
+
+        # Build a quick lookup: barcode_id -> {supplier_id, supplier_name, purchase_price}
+        barcode_supplier_map = {}
+        for row in supplier_rows:
+            sid   = row['purchase__supplier_id'] or row['purchase_item__purchase__supplier_id']
+            sname = row['purchase__supplier__name'] or row['purchase_item__purchase__supplier__name'] or 'No Supplier'
+            price = row['purchase_item__unit_price'] or Decimal('0.00')
+            barcode_supplier_map[row['id']] = {
+                'product_id':    row['product_id'],
+                'supplier_id':   sid,
+                'supplier_name': sname,
+                'purchase_price': Decimal(str(price)),
+            }
+
+        # ----------------------------------------------------------------
+        # 2. Fetch the actual Barcode model objects needed for invoice
+        #    creation (only the fields we write; minimal select_related).
+        # ----------------------------------------------------------------
+        barcode_objs = {
+            b.id: b
+            for b in Barcode.objects.filter(**barcode_filter).select_related('product')
+        }
+
+        products = Product.objects.filter(id__in=product_ids).in_bulk()  # {id: product}
+
+        items_to_create = []
+        for bid, info in barcode_supplier_map.items():
+            barcode = barcode_objs.get(bid)
+            product = products.get(info['product_id'])
+            if not barcode or not product:
+                continue
+            items_to_create.append({
+                'product':       product,
+                'barcode':       barcode,
+                'purchase_price': info['purchase_price'],
+                'supplier_id':   info['supplier_id'],
+                'supplier_name': info['supplier_name'],
+            })
+
+        if not items_to_create:
+            return Response(
+                {'error': 'No defective barcodes found for the selected products'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Group items by supplier — one invoice + move-out per supplier
+        items_by_supplier = defaultdict(list)
+        for item in items_to_create:
+            items_by_supplier[item['supplier_id']].append(item)
+
+        created_move_outs = []
+
+        for supplier_id, supplier_items in items_by_supplier.items():
+            supplier_name = supplier_items[0]['supplier_name']
+            group_total_loss = sum(item['purchase_price'] for item in supplier_items)
+            group_total_items = len(supplier_items)
+
+            # Unique move-out number
+            move_out_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+            # Unique invoice number
+            invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+            while Invoice.objects.filter(invoice_number=invoice_number).exists():
+                invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+            invoice = Invoice.objects.create(
+                invoice_number=invoice_number,
+                cart=None,
+                store=store,
+                invoice_type='defective',
+                status='void',
+                created_by=request.user
+            )
+
+            subtotal = Decimal('0.00')
+
+            # Group items within supplier by product (to handle tracked vs non-tracked)
+            items_by_product = {}
+            for item_data in supplier_items:
+                product = item_data['product']
+                key = (product.id, product.track_inventory)
+                if key not in items_by_product:
+                    items_by_product[key] = {'product': product, 'barcodes': [], 'prices': []}
+                items_by_product[key]['barcodes'].append(item_data['barcode'])
+                items_by_product[key]['prices'].append(item_data['purchase_price'])
+
+            for (product_id, track_inventory), product_data in items_by_product.items():
+                product = product_data['product']
+                barcodes = product_data['barcodes']
+                prices = product_data['prices']
+
+                if track_inventory:
+                    for barcode, price in zip(barcodes, prices):
+                        InvoiceItem.objects.create(
+                            invoice=invoice,
+                            product=product,
+                            variant=None,
+                            barcode=barcode,
+                            sold_barcode_value=barcode.barcode or '',
+                            quantity=Decimal('1.000'),
+                            unit_price=price,
+                            manual_unit_price=price,
+                            discount_amount=Decimal('0.00'),
+                            tax_amount=Decimal('0.00'),
+                            line_total=price
+                        )
+                        subtotal += price
+                        barcode.tag = 'sold'
+                        barcode.save(update_fields=['tag'])
+                else:
+                    total_qty = Decimal(str(len(barcodes)))
+                    unit_price = prices[0] if prices else Decimal('0.00')
+                    line_total = unit_price * total_qty
+                    InvoiceItem.objects.create(
                         invoice=invoice,
                         product=product,
-                        variant=None,  # Move-out doesn't track variants
-                        barcode=barcode,
-                        sold_barcode_value=barcode.barcode or '',
-                        quantity=Decimal('1.000'),  # Each barcode is quantity 1
-                        unit_price=price,
-                        manual_unit_price=price,
+                        variant=None,
+                        barcode=None,
+                        quantity=total_qty,
+                        unit_price=unit_price,
+                        manual_unit_price=unit_price,
                         discount_amount=Decimal('0.00'),
                         tax_amount=Decimal('0.00'),
-                        line_total=price
+                        line_total=line_total
                     )
-                    subtotal += price
-                    
-                    # Mark barcode as sold (they're being moved out)
-                    barcode.tag = 'sold'
-                    barcode.save(update_fields=['tag'])
-            else:
-                # For non-tracked products, create one invoice item with total quantity
-                total_qty = Decimal(str(len(barcodes)))
-                # Use average price or first price (all should be same for same product)
-                unit_price = prices[0] if prices else Decimal('0.00')
-                line_total = unit_price * total_qty
-                
-                invoice_item = InvoiceItem.objects.create(
-                    invoice=invoice,
-                    product=product,
-                    variant=None,
-                    barcode=None,  # Non-tracked products don't have individual barcodes
-                    quantity=total_qty,
-                    unit_price=unit_price,
-                    manual_unit_price=unit_price,
-                    discount_amount=Decimal('0.00'),
-                    tax_amount=Decimal('0.00'),
-                    line_total=line_total
-                )
-                subtotal += line_total
-        
-        # Update invoice totals
-        invoice.subtotal = subtotal
-        invoice.total = subtotal
-        invoice.paid_amount = subtotal
-        invoice.due_amount = Decimal('0.00')
-        invoice.save()
-        
-        # Create move-out record
-        move_out = DefectiveProductMoveOut.objects.create(
-            move_out_number=move_out_number,
-            store=store,
-            invoice=invoice,
-            reason=reason,
-            notes=notes,
-            total_loss=total_loss,
-            total_items=total_items,
-            created_by=request.user
-        )
-        
-        # Create move-out items
-        for item_data in items_to_create:
-            DefectiveProductItem.objects.create(
-                move_out=move_out,
-                product=item_data['product'],
-                barcode=item_data['barcode'],
-                purchase_price=item_data['purchase_price']
+                    subtotal += line_total
+
+            invoice.subtotal = subtotal
+            invoice.total = subtotal
+            invoice.paid_amount = subtotal
+            invoice.due_amount = Decimal('0.00')
+            invoice.save()
+
+            # Build notes with supplier label
+            move_out_notes = f"[Supplier: {supplier_name}] {notes}".strip() if notes else f"Supplier: {supplier_name}"
+
+            move_out = DefectiveProductMoveOut.objects.create(
+                move_out_number=move_out_number,
+                store=store,
+                invoice=invoice,
+                reason=reason,
+                notes=move_out_notes,
+                total_loss=group_total_loss,
+                total_items=group_total_items,
+                created_by=request.user
             )
-        
-        # Audit log
-        create_audit_log(
-            request=request,
-            action='defective_move_out_create',
-            model_name='DefectiveProductMoveOut',
-            object_id=str(move_out.id),
-            object_name=f"Move Out {move_out.move_out_number}",
-            object_reference=move_out.move_out_number,
-            barcode=None,
-            changes={
-                'move_out_number': move_out.move_out_number,
-                'store': store.name,
-                'invoice': invoice.invoice_number,
-                'total_loss': str(total_loss),
-                'total_items': total_items,
-            }
-        )
-        
-        serializer = DefectiveProductMoveOutSerializer(move_out)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
+
+            for item_data in supplier_items:
+                DefectiveProductItem.objects.create(
+                    move_out=move_out,
+                    product=item_data['product'],
+                    barcode=item_data['barcode'],
+                    purchase_price=item_data['purchase_price']
+                )
+
+            create_audit_log(
+                request=request,
+                action='defective_move_out_create',
+                model_name='DefectiveProductMoveOut',
+                object_id=str(move_out.id),
+                object_name=f"Move Out {move_out.move_out_number}",
+                object_reference=move_out.move_out_number,
+                barcode=None,
+                changes={
+                    'move_out_number': move_out.move_out_number,
+                    'store': store.name,
+                    'invoice': invoice.invoice_number,
+                    'supplier': supplier_name,
+                    'total_loss': str(group_total_loss),
+                    'total_items': group_total_items,
+                }
+            )
+
+            created_move_outs.append(move_out)
+
+        serializer = DefectiveProductMoveOutSerializer(created_move_outs, many=True)
+        first = created_move_outs[0]
+        return Response({
+            'move_outs': serializer.data,
+            'total_move_outs': len(created_move_outs),
+            # Top-level fields kept for backward compatibility
+            'move_out_number': first.move_out_number,
+            'invoice_number': first.invoice.invoice_number if first.invoice else None,
+            'invoice': first.invoice.id if first.invoice else None,
+        }, status=status.HTTP_201_CREATED)
+
     except Exception as e:
         return Response({
             'error': f'Failed to create move-out: {str(e)}'

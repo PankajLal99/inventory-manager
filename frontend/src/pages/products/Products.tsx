@@ -875,17 +875,29 @@ export default function Products() {
 
       return response.data;
     },
-    onSuccess: (moveOut) => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setSelectedDefectiveProducts(new Set());
       setSelectedDefectiveProductsData(new Map());
       setShowMoveOutModal(false);
       setMoveOutData({ reason: 'defective', notes: '' });
-      alert(`Move-out created successfully! Move-out: ${moveOut.move_out_number}\nInvoice: ${moveOut.invoice_number || 'N/A'}`);
-      // Navigate to invoice detail if invoice exists
-      if (moveOut.invoice) {
-        navigate(`/invoices/${moveOut.invoice}`);
+
+      // Backend now returns { move_outs: [...], total_move_outs: N, ... }
+      const moveOuts: any[] = response.move_outs || [response];
+      const count = moveOuts.length;
+
+      if (count === 1) {
+        alert(`Move-out created successfully!\nMove-out: ${moveOuts[0].move_out_number}\nInvoice: ${moveOuts[0].invoice_number || 'N/A'}`);
+        if (moveOuts[0].invoice) {
+          navigate(`/invoices/${moveOuts[0].invoice}`);
+        }
+      } else {
+        const details = moveOuts
+          .map((m: any) => `• ${m.move_out_number}  →  Invoice: ${m.invoice_number || 'N/A'}  (${m.notes || ''})`)
+          .join('\n');
+        alert(`${count} move-outs created (one per supplier):\n\n${details}`);
+        navigate('/defective-move-outs');
       }
     },
     onError: (error: any) => {

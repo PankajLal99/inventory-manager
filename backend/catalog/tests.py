@@ -284,3 +284,133 @@ class ProductQuantityTests(TransactionTestCase):
         
         # In a 'defective' view, stock_quantity should show the count of defective barcodes
         self.assertEqual(product_data['stock_quantity'], 3.0)
+
+
+class DefectiveMoveOutSupplierSplitTests(TransactionTestCase):
+    """Tests for defective_product_move_out: one invoice per supplier."""
+
+    def setUp(self):
+        from backend.catalog.models import DefectiveProductMoveOut
+        from backend.pos.models import Invoice
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        DefectiveProductMoveOut.objects.all().delete()
+        Invoice.objects.all().delete()
+
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.store = TestDataFactory.create_store()
+
+        self.supplier_a = TestDataFactory.create_supplier(name='Supplier A')
+        self.supplier_b = TestDataFactory.create_supplier(name='Supplier B')
+
+        self.product1 = TestDataFactory.create_product(name='Product Alpha', track_inventory=True)
+        self.product2 = TestDataFactory.create_product(name='Product Beta', track_inventory=True)
+
+    def _make_defective_barcode(self, product, supplier):
+        """Create a defective barcode linked to the given supplier's purchase."""
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=supplier, store=self.store)
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=product, quantity=Decimal('1'))
+        return TestDataFactory.create_barcode(product=product, tag='defective', purchase_item=purchase_item)
+
+    def test_single_supplier_creates_one_move_out(self):
+        """Selecting barcodes from one supplier should produce exactly one move-out and one invoice."""
+        from backend.catalog.models import DefectiveProductMoveOut
+        from backend.pos.models import Invoice
+
+        b1 = self._make_defective_barcode(self.product1, self.supplier_a)
+        b2 = self._make_defective_barcode(self.product1, self.supplier_a)
+
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product1.id],
+            'barcode_ids': [b1.id, b2.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.data
+        self.assertEqual(data['total_move_outs'], 1)
+        self.assertEqual(len(data['move_outs']), 1)
+        self.assertEqual(DefectiveProductMoveOut.objects.count(), 1)
+        # Barcodes should now be marked as sold
+        b1.refresh_from_db()
+        b2.refresh_from_db()
+        self.assertEqual(b1.tag, 'sold')
+        self.assertEqual(b2.tag, 'sold')
+
+    def test_two_suppliers_creates_two_move_outs(self):
+        """Barcodes from two different suppliers should produce two separate move-outs/invoices."""
+        from backend.catalog.models import DefectiveProductMoveOut
+        from backend.pos.models import Invoice
+
+        b1 = self._make_defective_barcode(self.product1, self.supplier_a)
+        b2 = self._make_defective_barcode(self.product2, self.supplier_b)
+
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product1.id, self.product2.id],
+            'barcode_ids': [b1.id, b2.id],
+            'reason': 'defective',
+            'notes': 'batch test',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.data
+        self.assertEqual(data['total_move_outs'], 2)
+        self.assertEqual(len(data['move_outs']), 2)
+        self.assertEqual(DefectiveProductMoveOut.objects.count(), 2)
+        # Two separate invoices
+        self.assertEqual(Invoice.objects.filter(invoice_type='defective').count(), 2)
+        # All barcodes sold
+        b1.refresh_from_db()
+        b2.refresh_from_db()
+        self.assertEqual(b1.tag, 'sold')
+        self.assertEqual(b2.tag, 'sold')
+        # Each move-out notes should mention its supplier
+        notes_values = list(DefectiveProductMoveOut.objects.values_list('notes', flat=True))
+        self.assertTrue(any('Supplier A' in n for n in notes_values))
+        self.assertTrue(any('Supplier B' in n for n in notes_values))
+
+    def test_five_suppliers_creates_five_move_outs(self):
+        """5 barcodes from 5 different suppliers → 5 move-outs."""
+        from backend.catalog.models import DefectiveProductMoveOut
+
+        suppliers = [TestDataFactory.create_supplier(name=f'S{i}') for i in range(5)]
+        product = TestDataFactory.create_product(name='Multi Supplier Product', track_inventory=True)
+        barcodes = [self._make_defective_barcode(product, s) for s in suppliers]
+
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [product.id],
+            'barcode_ids': [b.id for b in barcodes],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['total_move_outs'], 5)
+        self.assertEqual(DefectiveProductMoveOut.objects.count(), 5)
+
+    def test_no_supplier_barcodes_grouped_together(self):
+        """Barcodes with no purchase (no supplier) should be grouped into one 'No Supplier' move-out."""
+        from backend.catalog.models import DefectiveProductMoveOut
+
+        # Barcodes with no purchase_item → no supplier
+        b1 = TestDataFactory.create_barcode(product=self.product1, tag='defective')
+        b2 = TestDataFactory.create_barcode(product=self.product2, tag='defective')
+
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product1.id, self.product2.id],
+            'barcode_ids': [b1.id, b2.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        # Both no-supplier barcodes grouped into one move-out
+        self.assertEqual(response.data['total_move_outs'], 1)
+        self.assertIn('No Supplier', DefectiveProductMoveOut.objects.first().notes)
