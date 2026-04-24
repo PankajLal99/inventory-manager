@@ -678,15 +678,16 @@ export default function Products() {
     });
   };
 
-  // Handle barcode scan for defective barcode selection - uses loaded product list (EFFICIENT - no API calls)
-  const handleBarcodeScan = (barcode: string) => {
+  // Handle barcode scan for defective barcode selection.
+  // First searches loaded products; falls back to API lookup for products not yet paged in.
+  const handleBarcodeScan = async (barcode: string) => {
     if (!barcode || !barcode.trim()) return;
 
     const trimmedBarcode = barcode.trim();
     const normalizedScan = trimmedBarcode.toUpperCase();
     setBarcodeScanError(null);
 
-    // Search in already loaded defective products (filteredProducts already contains only defective when tagFilter === 'defective')
+    // Search in already loaded defective products first (fast, no API call)
     let matchedProduct = null;
     let matchedBarcode: any = null;
 
@@ -759,9 +760,50 @@ export default function Products() {
       // Clear input after successful scan
       setBarcodeInput('');
     } else {
-      // Barcode/short-code not found in loaded defective products
-      setBarcodeScanError(`Code "${trimmedBarcode}" not found. Try barcode or short code, and ensure product is defective.`);
-      setTimeout(() => setBarcodeScanError(null), 3000);
+      // Not found in locally loaded products — fall back to API lookup.
+      // This handles barcodes on pages that haven't been loaded yet (pagination).
+      try {
+        const response = await productsApi.byBarcode(trimmedBarcode, false, true);
+        const data = response.data;
+
+        if (data && data.barcode_tag === 'defective') {
+          const apiBarcode = {
+            id: data.barcode_id,
+            barcode: data.canonical_barcode,
+            short_code: data.matched_barcode,
+            tag: data.barcode_tag,
+            purchase_price: data.purchase_price,
+          };
+          const apiProduct = {
+            id: data.id,
+            name: data.name,
+            sku: data.sku,
+          };
+
+          if (selectedDefectiveProducts.has(apiBarcode.id)) {
+            setBarcodeScanError(`"${apiProduct.name}" barcode is already selected.`);
+            setTimeout(() => setBarcodeScanError(null), 2000);
+            return;
+          }
+          setSelectedDefectiveProducts(prev => new Set(prev).add(apiBarcode.id));
+          setSelectedDefectiveProductsData(prev => {
+            const next = new Map(prev);
+            next.set(apiBarcode.id, { product: apiProduct, barcode: apiBarcode });
+            return next;
+          });
+          setBarcodeInput('');
+        } else if (data && data.barcode_tag) {
+          // Barcode exists but isn't defective
+          setBarcodeScanError(`Code "${trimmedBarcode}" is not defective (current status: ${data.barcode_tag}).`);
+          setTimeout(() => setBarcodeScanError(null), 3000);
+        } else {
+          setBarcodeScanError(`Code "${trimmedBarcode}" not found. Try barcode or short code, and ensure product is defective.`);
+          setTimeout(() => setBarcodeScanError(null), 3000);
+        }
+      } catch (error: any) {
+        setBarcodeScanError(`Code "${trimmedBarcode}" not found. Try barcode or short code, and ensure product is defective.`);
+        setTimeout(() => setBarcodeScanError(null), 3000);
+      }
     }
   };
 
