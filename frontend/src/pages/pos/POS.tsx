@@ -339,6 +339,9 @@ export default function POS() {
     return {
       ...basePayload,
       unit_price: taxDetails.unitPriceForStorage,
+      // For inclusive GST, preserve the gross selling price (what customer pays) in manual_unit_price.
+      // unit_price is the ex-tax base; manual_unit_price is the displayed/gross price.
+      ...(taxIsInclusive ? { manual_unit_price: unitPrice } : {}),
       tax_amount: taxDetails.taxAmount,
       gst_percent: taxRatePercent,
       gst_inclusive: taxIsInclusive,
@@ -2227,7 +2230,7 @@ export default function POS() {
       discountAmount,
       taxRatePercent,
       isInclusive: taxIsInclusive,
-      priceMode: 'base',
+      priceMode: taxIsInclusive ? 'gross' : 'base',
     }).taxAmount;
 
     updateItemMutation.mutate({
@@ -3079,7 +3082,17 @@ export default function POS() {
     return cart.data.tax_bifurcation.reduce((sum: number, slab: any) => sum + parseFloat(slab.total_tax || '0'), 0);
   }, [cart?.data?.tax_bifurcation]);
 
-  const calculateTotal = () => cartGrossSubtotal - cartDiscount - tradeInCredit + cartTaxTotal;
+  // For inclusive-GST items, the tax is already baked into manual_unit_price (the gross selling price).
+  // Only exclusive-GST tax needs to be added on top of the subtotal.
+  const exclusiveTaxTotal = useMemo(() => {
+    if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
+    return cart.data.items.reduce((sum: number, item: any) => {
+      if (item.tax_is_inclusive === true) return sum;
+      return sum + (parseFloat(item.tax_amount || '0') || 0);
+    }, 0);
+  }, [cart?.data?.items]);
+
+  const calculateTotal = () => cartGrossSubtotal - cartDiscount - tradeInCredit + exclusiveTaxTotal;
   const calculateRoundedTotal = () => Math.round(calculateTotal());
   const calculateRoundOff = () => calculateRoundedTotal() - calculateTotal();
 
@@ -5010,7 +5023,7 @@ export default function POS() {
                                         discountAmount,
                                         taxRatePercent,
                                         isInclusive: taxIsInclusive,
-                                        priceMode: 'base',
+                                        priceMode: taxIsInclusive ? 'gross' : 'base',
                                       }).taxAmount;
 
                                       updateItemMutation.mutate({

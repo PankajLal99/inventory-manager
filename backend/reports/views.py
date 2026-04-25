@@ -3,7 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Avg, DecimalField
+from django.db.models import Sum, Count, Avg, DecimalField, IntegerField
 from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -197,17 +197,39 @@ def stock_sold_report(request):
     )['total'] or Decimal('0.00')
 
     # All products sold in this period
-    products_sold = InvoiceItem.objects.filter(
+    products_sold = list(InvoiceItem.objects.filter(
         invoice__in=invoices
     ).values(
         'product__id',
         'product__name',
-        'product__sku'
+        'product__sku',
+        'product__category__name',
+        'product__brand__name',
     ).annotate(
         total_quantity=Sum('quantity', output_field=DecimalField()),
         total_revenue=Sum('line_total', output_field=DecimalField()),
         order_count=Count('invoice', distinct=True)
-    ).order_by('-total_quantity')
+    ).order_by('-total_quantity'))
+
+    # Annotate each product with current available stock (barcodes with tag='new')
+    product_ids = [p['product__id'] for p in products_sold if p['product__id']]
+    if product_ids:
+        barcode_qs = Barcode.objects.filter(
+            product_id__in=product_ids,
+            retailer_id=retailer.id,
+            tag='new',
+            deleted_at__isnull=True,
+        )
+        if store_id:
+            barcode_qs = barcode_qs.filter(current_store_id=sid)
+        available_counts = dict(
+            barcode_qs.values('product_id').annotate(cnt=Count('id')).values_list('product_id', 'cnt')
+        )
+    else:
+        available_counts = {}
+
+    for p in products_sold:
+        p['available_quantity'] = available_counts.get(p['product__id'], 0)
 
     return Response({
         'period': {
@@ -215,7 +237,7 @@ def stock_sold_report(request):
             'to': date_to.isoformat()
         },
         'total_invoice_value': float(total_invoice_value),
-        'products': list(products_sold)
+        'products': products_sold
     })
 
 

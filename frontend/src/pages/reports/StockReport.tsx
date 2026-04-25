@@ -355,6 +355,29 @@ export default function StockReport() {
       doc.setTextColor(0, 0, 0);
       y += cardH + 10;
 
+      // ── All Products Sold ──
+      if (soldProducts.length > 0) {
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('All Products Sold', 14, y);
+        y += 4;
+        autoTable(doc, {
+          startY: y,
+          head: [['Product', 'SKU', 'Qty Sold', 'Revenue', 'Invoices', 'Remaining Stock']],
+          body: soldProducts.map((p: any) => [
+            p.product__name || '',
+            p.product__sku || 'N/A',
+            Math.round(p.total_quantity || 0),
+            `Rs.${formatNumber(p.total_revenue || 0)}`,
+            p.order_count || 0,
+            p.available_quantity != null ? Math.round(p.available_quantity) : '—',
+          ]),
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [99, 102, 241] },
+        });
+        y = (doc as any).lastAutoTable.finalY + 8;
+      }
+
       // ── Fast Selling Products ──
       if (fastSelling.length > 0) {
         doc.setFontSize(12);
@@ -469,7 +492,7 @@ export default function StockReport() {
     } finally {
       setPdfExporting(false);
     }
-  }, [curr, fastSelling, slowMoving, outOfStock, lowStock, topCategories, dateFrom, dateTo, currentStore]);
+  }, [curr, soldProducts, fastSelling, slowMoving, outOfStock, lowStock, topCategories, dateFrom, dateTo, currentStore]);
 
   // ── Tab columns ──
   const renderTable = () => {
@@ -559,7 +582,7 @@ export default function StockReport() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {tabData.map((p: any, i: number) => {
-              const remaining = p.available_quantity ?? p.remaining_stock ?? p.current_stock ?? null;
+              const remaining = p.available_quantity != null ? p.available_quantity : (p.remaining_stock ?? p.current_stock ?? null);
               return (
                 <tr key={p.product__id || i} className="hover:bg-indigo-50/30 transition-colors">
                   <td className="px-3 py-2.5 text-gray-400 text-xs font-mono">{i + 1}</td>
