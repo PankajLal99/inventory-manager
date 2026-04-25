@@ -742,6 +742,7 @@ class DefectiveProductMoveOutSerializer(serializers.ModelSerializer):
     items = DefectiveProductItemSerializer(many=True, read_only=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
     invoice_number = serializers.CharField(source='invoice.invoice_number', read_only=True)
+    customer_name = serializers.CharField(source='invoice.customer.name', read_only=True, default=None)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     reason_display = serializers.CharField(source='get_reason_display', read_only=True)
     
@@ -749,8 +750,8 @@ class DefectiveProductMoveOutSerializer(serializers.ModelSerializer):
         model = DefectiveProductMoveOut
         fields = [
             'id', 'move_out_number', 'store', 'store_name', 'invoice', 'invoice_number',
-            'reason', 'reason_display', 'notes', 'total_loss', 'total_adjustment', 'total_items',
-            'created_by', 'created_by_username', 'created_at', 'updated_at', 'items'
+            'customer_name', 'reason', 'reason_display', 'notes', 'total_loss', 'total_adjustment',
+            'total_items', 'created_by', 'created_by_username', 'created_at', 'updated_at', 'items'
         ]
         read_only_fields = ['move_out_number', 'total_loss', 'total_items', 'created_by', 'created_at', 'updated_at']
 

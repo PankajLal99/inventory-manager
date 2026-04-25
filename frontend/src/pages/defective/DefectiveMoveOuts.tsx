@@ -34,6 +34,7 @@ interface DefectiveMoveOut {
   store_name?: string;
   invoice: number | null;
   invoice_number?: string;
+  customer_name?: string;
   reason: string;
   reason_display?: string;
   notes: string;
@@ -460,6 +461,7 @@ export default function DefectiveMoveOuts() {
             <Table headers={[
               { label: 'Move-Out #', align: 'left' },
               { label: 'Date', align: 'left' },
+              { label: 'Customer', align: 'left' },
               { label: 'Store', align: 'left' },
               { label: 'Invoice', align: 'left' },
               { label: 'Reason', align: 'left' },
@@ -476,12 +478,17 @@ export default function DefectiveMoveOuts() {
                   >
                     <TableCell>
                       <span className="font-mono font-semibold text-gray-900">
-                        {moveOut.move_out_number}
+                        {moveOut.move_out_number.split('-').pop()}
                       </span>
                     </TableCell>
                     <TableCell>
                       <span className="text-gray-600">
                         {formatDate(moveOut.created_at)}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-gray-900 font-medium">
+                        {moveOut.customer_name || '—'}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -570,9 +577,14 @@ export default function DefectiveMoveOuts() {
                       <div className="flex items-center gap-2 mb-1">
                         <FileText className="h-4 w-4 text-red-600 flex-shrink-0" />
                         <span className="font-mono font-semibold text-gray-900 text-base">
-                          {moveOut.move_out_number}
+                          {moveOut.move_out_number.split('-').pop()}
                         </span>
                       </div>
+                      {moveOut.customer_name && (
+                        <div className="text-sm font-medium text-gray-900 mb-1">
+                          {moveOut.customer_name}
+                        </div>
+                      )}
                       <div className="text-sm text-gray-600 mb-1">
                         {formatDate(moveOut.created_at)}
                       </div>
