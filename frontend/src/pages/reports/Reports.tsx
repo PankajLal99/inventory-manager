@@ -350,46 +350,111 @@ export default function Reports() {
   const handleExportPdf = useCallback(() => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageW = doc.internal.pageSize.getWidth();
-    let y = 15;
+    let y = 0;
 
-    // Title
+    // ── Title banner ──
+    doc.setFillColor(59, 130, 246);
+    doc.rect(0, 0, pageW, 30, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFontSize(18);
     doc.setFont('helvetica', 'bold');
-    doc.text('Reports & Analytics', pageW / 2, y, { align: 'center' });
-    y += 8;
-    doc.setFontSize(10);
+    doc.text('Reports & Analytics', pageW / 2, 13, { align: 'center' });
+    doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100);
-    doc.text(`${currentStore?.name || 'All Stores'} · ${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`, pageW / 2, y, { align: 'center' });
-    y += 5;
-    doc.text(`vs ${compareLabel}: ${fmtDate(compareFrom)} – ${fmtDate(compareTo)}`, pageW / 2, y, { align: 'center' });
-    y += 10;
-    doc.setTextColor(0);
+    doc.text(
+      `${currentStore?.name || 'All Stores'}  |  ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}`,
+      pageW / 2, 21, { align: 'center' }
+    );
+    doc.text(`Compared with ${compareLabel}: ${fmtDate(compareFrom)} to ${fmtDate(compareTo)}`, pageW / 2, 27, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+    y = 38;
 
-    // KPI Summary
-    doc.setFontSize(12);
+    // ── Visual KPI Cards (coloured rectangles) ──
+    const kpiCards = [
+      {
+        label: 'Total Sales',
+        curr: `Rs.${formatNumber(curr.total_sales || 0)}`,
+        prev: `Rs.${formatNumber(prev.total_sales || 0)}`,
+        pct: pctChange.total_sales,
+        rgb: [16, 185, 129] as [number, number, number],
+      },
+      {
+        label: 'Total Invoices',
+        curr: String(curr.total_invoices || 0),
+        prev: String(prev.total_invoices || 0),
+        pct: pctChange.total_invoices,
+        rgb: [59, 130, 246] as [number, number, number],
+      },
+      {
+        label: 'Items Sold',
+        curr: String(Math.round(curr.items_sold || 0)),
+        prev: String(Math.round(prev.items_sold || 0)),
+        pct: pctChange.items_sold,
+        rgb: [139, 92, 246] as [number, number, number],
+      },
+      {
+        label: 'Avg Order Value',
+        curr: `Rs.${formatNumber(curr.avg_order_value || 0)}`,
+        prev: `Rs.${formatNumber(prev.avg_order_value || 0)}`,
+        pct: pctChange.avg_order_value,
+        rgb: [245, 158, 11] as [number, number, number],
+      },
+    ];
+
+    const cardW = (pageW - 28) / 4;
+    const cardH = 26;
+    kpiCards.forEach((k, i) => {
+      const x = 14 + i * (cardW + 2);
+      // Card background
+      doc.setFillColor(...k.rgb);
+      doc.roundedRect(x, y, cardW, cardH, 3, 3, 'F');
+      // Label
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.text(k.label, x + cardW / 2, y + 7, { align: 'center' });
+      // Current value
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text(k.curr, x + cardW / 2, y + 15, { align: 'center' });
+      // Prev + % change
+      doc.setFontSize(6.5);
+      doc.setFont('helvetica', 'normal');
+      const pctStr = k.pct != null
+        ? `${k.pct > 0 ? '+' : ''}${Number(k.pct).toFixed(1)}%`
+        : '';
+      doc.text(`vs ${k.prev}  ${pctStr}`, x + cardW / 2, y + 22, { align: 'center' });
+    });
+    doc.setTextColor(0, 0, 0);
+    y += cardH + 10;
+
+    // ── KPI comparison table ──
+    doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
     doc.text('KPI Summary', 14, y);
     y += 4;
-
     autoTable(doc, {
       startY: y,
-      head: [['Metric', 'Current', 'Previous', '% Change']],
+      head: [['Metric', 'Current Period', 'Comparison Period', '% Change']],
       body: [
-        ['Total Sales', `₹${formatNumber(curr.total_sales || 0)}`, `₹${formatNumber(prev.total_sales || 0)}`, pctChange.total_sales != null ? `${pctChange.total_sales > 0 ? '+' : ''}${Number(pctChange.total_sales).toFixed(1)}%` : '—'],
-        ['Total Invoices', String(curr.total_invoices || 0), String(prev.total_invoices || 0), pctChange.total_invoices != null ? `${pctChange.total_invoices > 0 ? '+' : ''}${Number(pctChange.total_invoices).toFixed(1)}%` : '—'],
-        ['Items Sold', String(Math.round(curr.items_sold || 0)), String(Math.round(prev.items_sold || 0)), pctChange.items_sold != null ? `${pctChange.items_sold > 0 ? '+' : ''}${Number(pctChange.items_sold).toFixed(1)}%` : '—'],
-        ['Avg Order Value', `₹${formatNumber(curr.avg_order_value || 0)}`, `₹${formatNumber(prev.avg_order_value || 0)}`, pctChange.avg_order_value != null ? `${pctChange.avg_order_value > 0 ? '+' : ''}${Number(pctChange.avg_order_value).toFixed(1)}%` : '—'],
+        ['Total Sales', `Rs.${formatNumber(curr.total_sales || 0)}`, `Rs.${formatNumber(prev.total_sales || 0)}`, pctChange.total_sales != null ? `${pctChange.total_sales > 0 ? '+' : ''}${Number(pctChange.total_sales).toFixed(1)}%` : '-'],
+        ['Total Invoices', String(curr.total_invoices || 0), String(prev.total_invoices || 0), pctChange.total_invoices != null ? `${pctChange.total_invoices > 0 ? '+' : ''}${Number(pctChange.total_invoices).toFixed(1)}%` : '-'],
+        ['Items Sold', String(Math.round(curr.items_sold || 0)), String(Math.round(prev.items_sold || 0)), pctChange.items_sold != null ? `${pctChange.items_sold > 0 ? '+' : ''}${Number(pctChange.items_sold).toFixed(1)}%` : '-'],
+        ['Avg Order Value', `Rs.${formatNumber(curr.avg_order_value || 0)}`, `Rs.${formatNumber(prev.avg_order_value || 0)}`, pctChange.avg_order_value != null ? `${pctChange.avg_order_value > 0 ? '+' : ''}${Number(pctChange.avg_order_value).toFixed(1)}%` : '-'],
       ],
       styles: { fontSize: 9 },
       headStyles: { fillColor: [59, 130, 246] },
+      columnStyles: {
+        3: { halign: 'center' },
+      },
     });
-    y = (doc as any).lastAutoTable.finalY + 8;
+    y = (doc as any).lastAutoTable.finalY + 10;
 
-    // Top Selling Products
+    // ── Top Products ──
     const topProds = (productTab === 'fast' ? fastSelling : productTab === 'slow' ? slowMoving : fastSelling);
     if (topProds.length > 0) {
-      doc.setFontSize(12);
+      if (y > 230) { doc.addPage(); y = 14; }
+      doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
       doc.text('Top Products', 14, y);
       y += 4;
@@ -399,52 +464,52 @@ export default function Reports() {
         body: topProds.slice(0, 15).map((p: any) => [
           p.product__name || '',
           p.product__sku || 'N/A',
-          p.product__category__name || '—',
-          p.product__brand__name || '—',
+          p.product__category__name || '-',
+          p.product__brand__name || '-',
           Math.round(p.total_quantity || 0),
-          `₹${formatNumber(p.total_revenue || 0)}`,
+          `Rs.${formatNumber(p.total_revenue || 0)}`,
         ]),
         styles: { fontSize: 8 },
         headStyles: { fillColor: [99, 102, 241] },
       });
-      y = (doc as any).lastAutoTable.finalY + 8;
+      y = (doc as any).lastAutoTable.finalY + 10;
     }
 
-    // Top Categories
+    // ── Top Categories ──
     if (topCategories.length > 0) {
-      if (y > 240) { doc.addPage(); y = 15; }
-      doc.setFontSize(12);
+      if (y > 230) { doc.addPage(); y = 14; }
+      doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
       doc.text('Top Categories', 14, y);
       y += 4;
       autoTable(doc, {
         startY: y,
-        head: [['Category', 'Revenue', 'Qty', 'Orders']],
+        head: [['Category', 'Revenue', 'Qty Sold', 'Orders']],
         body: topCategories.map((c: any) => [
           c.product__category__name || 'Unknown',
-          `₹${formatNumber(c.total_revenue || 0)}`,
+          `Rs.${formatNumber(c.total_revenue || 0)}`,
           Math.round(c.total_quantity || 0),
           c.order_count || 0,
         ]),
         styles: { fontSize: 8 },
         headStyles: { fillColor: [245, 158, 11] },
       });
-      y = (doc as any).lastAutoTable.finalY + 8;
+      y = (doc as any).lastAutoTable.finalY + 10;
     }
 
-    // Top Brands
+    // ── Top Brands ──
     if (topBrands.length > 0) {
-      if (y > 240) { doc.addPage(); y = 15; }
-      doc.setFontSize(12);
+      if (y > 230) { doc.addPage(); y = 14; }
+      doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
       doc.text('Top Brands', 14, y);
       y += 4;
       autoTable(doc, {
         startY: y,
-        head: [['Brand', 'Revenue', 'Qty', 'Orders']],
+        head: [['Brand', 'Revenue', 'Qty Sold', 'Orders']],
         body: topBrands.map((b: any) => [
           b.product__brand__name || 'Unknown',
-          `₹${formatNumber(b.total_revenue || 0)}`,
+          `Rs.${formatNumber(b.total_revenue || 0)}`,
           Math.round(b.total_quantity || 0),
           b.order_count || 0,
         ]),

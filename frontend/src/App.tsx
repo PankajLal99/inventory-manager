@@ -21,6 +21,7 @@ import Invoices from './pages/invoices/Invoices';
 import InvoiceDetail from './pages/invoices/InvoiceDetail';
 import InvoiceEdit from './pages/invoices/InvoiceEdit';
 import Reports from './pages/reports/Reports';
+import StockReport from './pages/reports/StockReport';
 import Replacement from './pages/replacement/Replacement';
 import ReplacementPOS from './pages/replacement/ReplacementPOS';
 import ReplaceProduct from './pages/replacement/ReplaceProduct';
@@ -157,6 +158,7 @@ function App() {
                 <Route path="credit-notes/:id" element={<PermissionRoute permission="nav.credit_notes" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'Retail'].some((x) => g.includes(x))}><CreditNoteShowcase /></PermissionRoute>} />
                 <Route path="history" element={<PermissionRoute permission="nav.history" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><History /></PermissionRoute>} />
                 <Route path="reports" element={<PermissionRoute permission="nav.reports" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><Reports /></PermissionRoute>} />
+                <Route path="stock-report" element={<PermissionRoute permission="nav.reports" fallbackAllowed={(g) => ['Admin', 'RetailAdmin', 'WholesaleAdmin'].some((x) => g.includes(x))}><StockReport /></PermissionRoute>} />
                 <Route path="replacement" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><Replacement /></PermissionRoute>} />
                 <Route path="replacement/pos" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><ReplacementPOS /></PermissionRoute>} />
                 <Route path="replacement/replace-product" element={<PermissionRoute permission="nav.replacement" fallbackAllowed={(g) => ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'].some((x) => g.includes(x))}><ReplaceProduct /></PermissionRoute>} />
