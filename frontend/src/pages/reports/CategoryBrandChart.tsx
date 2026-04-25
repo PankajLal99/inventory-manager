@@ -49,7 +49,7 @@ export default function CategoryBrandChart({ categories, brands }: Props) {
         {categories.length === 0 ? (
           <p className="text-gray-500 text-sm py-8 text-center">No category data</p>
         ) : (
-          <HorizBar data={categories.map(c => ({ ...c, name: (c as any)['product__category__name'] || 'Unknown' }))} colors={CAT_COLORS} />
+          <HorizBar data={categories} colors={CAT_COLORS} />
         )}
       </div>
 
@@ -59,7 +59,7 @@ export default function CategoryBrandChart({ categories, brands }: Props) {
         {brands.length === 0 ? (
           <p className="text-gray-500 text-sm py-8 text-center">No brand data</p>
         ) : (
-          <HorizBar data={brands.map(b => ({ ...b, name: (b as any)['product__brand__name'] || 'Unknown' }))} colors={BRAND_COLORS} />
+          <HorizBar data={brands} colors={BRAND_COLORS} />
         )}
       </div>
     </div>

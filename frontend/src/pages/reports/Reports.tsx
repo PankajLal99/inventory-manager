@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 import { reportsApi, catalogApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import * as XLSX from 'xlsx';
@@ -759,6 +759,14 @@ export default function Reports() {
               </select>
             </div>
           )}
+          {/* Stock Report link */}
+          <Link
+            to="/stock-report"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors shadow-sm"
+          >
+            <Package className="h-4 w-4" />
+            Stock Report
+          </Link>
           {/* Export PDF */}
           <button
             onClick={handleExportPdf}
