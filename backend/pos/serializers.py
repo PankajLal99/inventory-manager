@@ -107,6 +107,16 @@ class CartItemSerializer(serializers.ModelSerializer):
                 return bool(barcode_obj.purchase_item.gst_inclusive)
         except Exception:
             pass
+        # Fallback for non-tracked products: scanned_barcodes is always empty for them,
+        # so resolve the representative barcode directly from the product.
+        try:
+            if obj.product and not obj.product.track_inventory:
+                from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                barcode_obj = single_barcode_for_untracked_product(obj.product)
+                if barcode_obj and barcode_obj.purchase_item is not None:
+                    return bool(barcode_obj.purchase_item.gst_inclusive)
+        except Exception:
+            pass
         return False
     
     def get_tax_bifurcation(self, obj):
