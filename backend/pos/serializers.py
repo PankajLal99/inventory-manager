@@ -610,43 +610,86 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
     original_customer_name = serializers.CharField(read_only=True)
     tax_bifurcation = serializers.SerializerMethodField()
 
+    def _resolve_known_tax_rate(self, obj):
+        """Get authoritative GST rate from barcode->purchase_item or product->tax_rate."""
+        try:
+            if obj.barcode and obj.barcode.purchase_item and obj.barcode.purchase_item.gst_percent is not None:
+                return Decimal(str(obj.barcode.purchase_item.gst_percent))
+        except Exception:
+            pass
+        try:
+            if not obj.barcode and obj.product and not obj.product.track_inventory:
+                from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                rep = single_barcode_for_untracked_product(obj.product)
+                if rep and rep.purchase_item and rep.purchase_item.gst_percent is not None:
+                    return Decimal(str(rep.purchase_item.gst_percent))
+        except Exception:
+            pass
+        try:
+            if obj.product and obj.product.tax_rate and obj.product.tax_rate.rate is not None:
+                return Decimal(str(obj.product.tax_rate.rate))
+        except Exception:
+            pass
+        return Decimal('0')
+
+    def _resolve_is_inclusive(self, obj):
+        """Resolve whether this invoice item's GST is inclusive."""
+        try:
+            if obj.barcode and obj.barcode.purchase_item is not None:
+                return bool(obj.barcode.purchase_item.gst_inclusive)
+        except Exception:
+            pass
+        try:
+            if not obj.barcode and obj.product and not obj.product.track_inventory:
+                from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                rep = single_barcode_for_untracked_product(obj.product)
+                if rep and rep.purchase_item is not None:
+                    return bool(rep.purchase_item.gst_inclusive)
+        except Exception:
+            pass
+        return False
+
     def get_tax_bifurcation(self, obj):
         """Calculate GST split for this item row."""
         try:
-            from backend.core.gst_utils import calculate_gst_bifurcation
-            
+            from decimal import ROUND_HALF_UP
+
             tax_amt = Decimal(str(obj.tax_amount or '0'))
             if tax_amt <= 0:
                 return None
-                
+
             qty = Decimal(str(obj.quantity or '0'))
             if qty <= 0:
                 return None
-                
-            # Deriving effective rate since it's not stored
-            # Total = Base + Tax
-            # Tax = TaxAmount
-            # Base = LineTotal - TaxAmount
+
             line_total = Decimal(str(obj.line_total or '0'))
             base = line_total - tax_amt
             if base <= 0:
                 return None
-                
-            rate = (tax_amt / base) * Decimal('100')
-            
-            # Get states for bifurcation logic
-            store_state = obj.invoice.store.state if obj.invoice.store else None
-            customer_state = obj.invoice.customer.state if obj.invoice.customer else None
-            
-            # Using inclusive=False because we already have base and tax_amt
-            # But calculate_gst_bifurcation expects unit_price. 
-            # We'll leverage it by passing unit_price=base/qty.
-            return calculate_gst_bifurcation(
-                unit_price=base/qty,
-                quantity=qty,
-                tax_rate=rate,
-                is_inclusive=False
-            )
+
+            # Use known rate from product/purchase to avoid rounding artifacts
+            known_rate = self._resolve_known_tax_rate(obj)
+            rate = known_rate if known_rate > 0 else (tax_amt / base) * Decimal('100')
+            is_inclusive = self._resolve_is_inclusive(obj)
+
+            half_tax = (tax_amt / Decimal('2')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            cgst = half_tax
+            sgst = tax_amt - half_tax
+            half_rate = rate / Decimal('2')
+
+            return {
+                'base_amount': float(base.quantize(Decimal('0.01'))),
+                'total_tax': float(tax_amt),
+                'cgst': float(cgst),
+                'sgst': float(sgst),
+                'igst': 0.0,
+                'cgst_rate': float(half_rate),
+                'sgst_rate': float(half_rate),
+                'igst_rate': 0.0,
+                'total': float(line_total.quantize(Decimal('0.01'))),
+                'is_inclusive': is_inclusive,
+                'rate': float(rate.quantize(Decimal('0.01'))),
+            }
         except Exception:
             return None
 
@@ -726,9 +769,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
     def get_tax_bifurcation(self, obj):
         """Consolidate tax bifurcation from all items, bifurcated by (rate, gst_inclusive)."""
-        from backend.core.gst_utils import calculate_gst_bifurcation
+        from decimal import ROUND_HALF_UP
 
-        items = obj.items.all().select_related('barcode__purchase_item')
+        item_serializer = InvoiceItemSerializer()
+        items = obj.items.all().select_related('barcode__purchase_item', 'product__tax_rate')
         slabs = {}
 
         for item in items:
@@ -736,29 +780,17 @@ class InvoiceSerializer(serializers.ModelSerializer):
             if item_tax <= 0:
                 continue
 
-            qty = Decimal(str(item.quantity or '0'))
             line_total = Decimal(str(item.line_total or '0'))
             base = line_total - item_tax
             if base <= 0:
                 continue
 
-            rate = (item_tax / base) * Decimal('100')
+            # Use known rate from product/purchase to avoid rounding artifacts
+            known_rate = item_serializer._resolve_known_tax_rate(item)
+            rate = known_rate if known_rate > 0 else (item_tax / base) * Decimal('100')
             rate_key = float(rate.quantize(Decimal('0.01')))
 
-            # Resolve is_inclusive via the linked barcode's purchase_item.
-            # For non-tracked products, invoice items have no barcode; fall back to the
-            # product's representative barcode (the one created at purchase time).
-            is_inclusive = False
-            try:
-                if item.barcode and item.barcode.purchase_item is not None:
-                    is_inclusive = bool(item.barcode.purchase_item.gst_inclusive)
-                elif item.product and not item.product.track_inventory:
-                    from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
-                    rep_barcode = single_barcode_for_untracked_product(item.product)
-                    if rep_barcode and rep_barcode.purchase_item is not None:
-                        is_inclusive = bool(rep_barcode.purchase_item.gst_inclusive)
-            except Exception:
-                pass
+            is_inclusive = item_serializer._resolve_is_inclusive(item)
 
             slab_key = (rate_key, is_inclusive)
             if slab_key not in slabs:
@@ -772,18 +804,11 @@ class InvoiceSerializer(serializers.ModelSerializer):
                     'igst': Decimal('0.00'),
                 }
 
-            bif = calculate_gst_bifurcation(
-                unit_price=base / qty,
-                quantity=qty,
-                tax_rate=rate,
-                is_inclusive=False
-            )
-
-            slabs[slab_key]['base_amount'] += Decimal(str(bif['base_amount']))
-            slabs[slab_key]['total_tax'] += Decimal(str(bif['total_tax']))
-            slabs[slab_key]['cgst'] += Decimal(str(bif['cgst']))
-            slabs[slab_key]['sgst'] += Decimal(str(bif['sgst']))
-            slabs[slab_key]['igst'] += Decimal(str(bif['igst']))
+            half_tax = (item_tax / Decimal('2')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            slabs[slab_key]['base_amount'] += base.quantize(Decimal('0.01'))
+            slabs[slab_key]['total_tax'] += item_tax
+            slabs[slab_key]['cgst'] += half_tax
+            slabs[slab_key]['sgst'] += (item_tax - half_tax)
 
         result = []
         for key in sorted(slabs.keys(), key=lambda k: (k[0], k[1])):

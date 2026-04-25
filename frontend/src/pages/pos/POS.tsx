@@ -5021,20 +5021,23 @@ export default function POS() {
                                       const discountAmount = Math.max(0, toFiniteNumber(item.discount_amount));
                                       const taxRatePercent = deriveItemTaxRatePercent(item);
                                       const taxIsInclusive = deriveItemTaxInclusive(item);
-                                      const nextTaxAmount = calculateTaxDetails({
+                                      const { taxAmount: nextTaxAmount, unitPriceForStorage } = calculateTaxDetails({
                                         unitPrice: price,
                                         quantity: qty,
                                         discountAmount,
                                         taxRatePercent,
                                         isInclusive: taxIsInclusive,
                                         priceMode: taxIsInclusive ? 'gross' : 'base',
-                                      }).taxAmount;
+                                      });
 
                                       updateItemMutation.mutate({
                                         itemId: item.id,
                                         data: {
                                           manual_unit_price: price,
                                           tax_amount: nextTaxAmount,
+                                          // For inclusive GST, send the ex-tax base so backend
+                                          // checkout can distinguish inclusive vs exclusive.
+                                          ...(taxIsInclusive ? { unit_price: unitPriceForStorage } : {}),
                                         },
                                       });
                                       // Note: Editing state will be cleared in onSuccess handler of the mutation

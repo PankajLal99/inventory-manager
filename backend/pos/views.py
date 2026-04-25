@@ -4136,6 +4136,33 @@ def cart_checkout(request, pk):
         item_adj_discount = {}  # ci.id -> total discount (item-level + proportional cart share)
         item_adj_tax = {}       # ci.id -> recomputed tax after discount
 
+        def _is_item_inclusive(ci_):
+            """Check if cart item has inclusive GST via barcode/product data or price heuristic."""
+            try:
+                if ci_.scanned_barcodes:
+                    b_upper = str(ci_.scanned_barcodes[0] or '').strip().upper()
+                    try:
+                        bc = Barcode.objects.get(barcode=b_upper)
+                    except Barcode.DoesNotExist:
+                        bc = Barcode.objects.get(short_code=b_upper)
+                    if bc.purchase_item is not None:
+                        return bool(bc.purchase_item.gst_inclusive)
+            except Exception:
+                pass
+            try:
+                if not ci_.product.track_inventory:
+                    rep = single_barcode_for_untracked_product(ci_.product)
+                    if rep and rep.purchase_item is not None:
+                        return bool(rep.purchase_item.gst_inclusive)
+            except Exception:
+                pass
+            # Fallback: price heuristic
+            return bool(
+                ci_.unit_price and ci_.manual_unit_price
+                and ci_.tax_amount and ci_.tax_amount > Decimal('0')
+                and ci_.unit_price < ci_.manual_unit_price
+            )
+
         if cart_discount > 0:
             all_items_list = [ci for ci in cart.items.all() if ci.quantity > 0]
 
@@ -4144,9 +4171,7 @@ def cart_checkout(request, pk):
                 For inclusive-GST items the frontend stores the ex-tax price in unit_price
                 and the gross (inclusive) price in manual_unit_price. Use unit_price so
                 that discount proration and tax-rate back-computation work on the real base."""
-                if (ci_.unit_price and ci_.manual_unit_price
-                        and ci_.tax_amount and ci_.tax_amount > Decimal('0')
-                        and ci_.unit_price < ci_.manual_unit_price):
+                if _is_item_inclusive(ci_) and ci_.unit_price:
                     return ci_.unit_price
                 return ci_.manual_unit_price or ci_.unit_price or Decimal('0')
 
@@ -4172,13 +4197,8 @@ def cart_checkout(request, pk):
         for ci in cart.items.all():
             if ci.quantity <= 0: continue
 
-            # Detect inclusive GST: frontend stores ex-tax base in unit_price and gross in
-            # manual_unit_price for inclusive items. If they differ (and tax > 0), it's inclusive.
-            is_incl = (
-                ci.unit_price is not None and ci.manual_unit_price is not None
-                and ci.tax_amount is not None and ci.tax_amount > Decimal('0')
-                and ci.unit_price < ci.manual_unit_price
-            )
+            # Detect inclusive GST from barcode/product data (with price heuristic fallback)
+            is_incl = _is_item_inclusive(ci)
             # display_up: what the customer pays per unit (gross for inclusive, selling price otherwise)
             display_up = ci.manual_unit_price or ci.unit_price or Decimal('0.00')
             # Use adjusted discount/tax when cart-level discount is active
