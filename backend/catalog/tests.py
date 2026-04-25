@@ -335,11 +335,11 @@ class DefectiveMoveOutSupplierSplitTests(TransactionTestCase):
         self.assertEqual(data['total_move_outs'], 1)
         self.assertEqual(len(data['move_outs']), 1)
         self.assertEqual(DefectiveProductMoveOut.objects.count(), 1)
-        # Barcodes should now be marked as sold
+        # Barcodes should remain defective after move-out (move-out is NOT a sale)
         b1.refresh_from_db()
         b2.refresh_from_db()
-        self.assertEqual(b1.tag, 'sold')
-        self.assertEqual(b2.tag, 'sold')
+        self.assertEqual(b1.tag, 'defective')
+        self.assertEqual(b2.tag, 'defective')
 
     def test_two_suppliers_creates_two_move_outs(self):
         """Barcodes from two different suppliers should produce two separate move-outs/invoices."""
@@ -364,11 +364,11 @@ class DefectiveMoveOutSupplierSplitTests(TransactionTestCase):
         self.assertEqual(DefectiveProductMoveOut.objects.count(), 2)
         # Two separate invoices
         self.assertEqual(Invoice.objects.filter(invoice_type='defective').count(), 2)
-        # All barcodes sold
+        # Barcodes should remain defective after move-out
         b1.refresh_from_db()
         b2.refresh_from_db()
-        self.assertEqual(b1.tag, 'sold')
-        self.assertEqual(b2.tag, 'sold')
+        self.assertEqual(b1.tag, 'defective')
+        self.assertEqual(b2.tag, 'defective')
         # Each move-out notes should mention its supplier
         notes_values = list(DefectiveProductMoveOut.objects.values_list('notes', flat=True))
         self.assertTrue(any('Supplier A' in n for n in notes_values))

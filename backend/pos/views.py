@@ -3680,7 +3680,8 @@ def invoice_detail(request, pk):
             
             # Unmark barcodes as sold (change back to 'new') when restore_stock is true
             # This applies to ALL invoices when items are returned to stock
-            if restore_stock:
+            # EXCEPTION: defective-type invoices — barcodes should stay 'defective'
+            if restore_stock and invoice.invoice_type != 'defective':
                 for item in invoice.items.all():
                     if item.barcode:
                         # Mark tracked product barcode as 'new' (fresh)

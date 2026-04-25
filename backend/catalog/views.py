@@ -1638,6 +1638,21 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
     
     if is_sold and sold_invoice:
         response_data['sold_invoice'] = sold_invoice
+
+    # Check if defective barcode has already been moved out
+    if barcode_obj.tag == 'defective':
+        try:
+            move_out_item = DefectiveProductItem.objects.select_related('move_out').filter(
+                barcode=barcode_obj
+            ).first()
+            if move_out_item:
+                move_out = move_out_item.move_out
+                response_data['defective_moved_out'] = True
+                response_data['defective_move_out_number'] = move_out.move_out_number
+                response_data['defective_move_out_reason'] = move_out.get_reason_display()
+                response_data['defective_move_out_notes'] = move_out.notes or ''
+        except Exception:
+            pass
     
     return response_data
 
@@ -2383,10 +2398,21 @@ def defective_product_move_out(request):
             while Invoice.objects.filter(invoice_number=invoice_number).exists():
                 invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
+            # Resolve a Customer record for the supplier so the invoice shows the
+            # vendor name instead of "Walking Customer".
+            from backend.parties.models import Customer as PartyCustomer
+            invoice_customer = None
+            if supplier_name and supplier_name != 'No Supplier':
+                invoice_customer, _created = PartyCustomer.objects.get_or_create(
+                    name=supplier_name,
+                    defaults={'is_active': True},
+                )
+
             invoice = Invoice.objects.create(
                 invoice_number=invoice_number,
                 cart=None,
                 store=store,
+                customer=invoice_customer,
                 invoice_type='defective',
                 status='void',
                 created_by=request.user
@@ -2425,8 +2451,8 @@ def defective_product_move_out(request):
                             line_total=price
                         )
                         subtotal += price
-                        barcode.tag = 'sold'
-                        barcode.save(update_fields=['tag'])
+                        # Keep barcode as 'defective' — move-out is NOT a sale.
+                        # The DefectiveProductItem link tracks which barcodes were moved out.
                 else:
                     total_qty = Decimal(str(len(barcodes)))
                     unit_price = prices[0] if prices else Decimal('0.00')

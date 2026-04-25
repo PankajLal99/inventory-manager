@@ -20,7 +20,7 @@ from backend.core.cache_utils import (
     make_cache_key,
     PRODUCTS_LIST_CACHE_TTL,
 )
-from backend.catalog.models import Product, Barcode
+from backend.catalog.models import Product, Barcode, DefectiveProductItem
 from backend.catalog.serializers import ProductListSerializer
 from backend.catalog.filters import ProductFilter
 from backend.pos.models import CartItem, InvoiceItem
@@ -130,17 +130,26 @@ def _optimized_product_list_internal(request):
     )
 
     if needs_barcode_prefetch:
-        queryset = queryset.prefetch_related(
-            Prefetch(
-                'barcodes',
-                queryset=Barcode.objects.filter(
-                    tag__in=barcode_tags
-                ).exclude(
-                    purchase__status='draft'
-                ).filter(
-                    purchase__deleted_at__isnull=True
-                ).select_related('purchase', 'purchase__supplier')
+        barcode_qs = Barcode.objects.filter(
+            tag__in=barcode_tags
+        ).exclude(
+            purchase__status='draft'
+        ).filter(
+            purchase__deleted_at__isnull=True
+        ).select_related('purchase', 'purchase__supplier')
+
+        # For defective tab, also prefetch move-out records so the frontend
+        # can tell which barcodes have already been sent out.
+        if tag == 'defective':
+            barcode_qs = barcode_qs.prefetch_related(
+                Prefetch(
+                    'defective_move_outs',
+                    queryset=DefectiveProductItem.objects.select_related('move_out'),
+                )
             )
+
+        queryset = queryset.prefetch_related(
+            Prefetch('barcodes', queryset=barcode_qs)
         )
         logger.info(f"Fetching barcodes with tags {barcode_tags} (tag filter requires them)")
     else:

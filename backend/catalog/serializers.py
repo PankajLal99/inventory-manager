@@ -41,6 +41,7 @@ class BarcodeSerializer(serializers.ModelSerializer):
     invoice_type_display = serializers.SerializerMethodField()
     sold_price = serializers.SerializerMethodField()
     sold_quantity = serializers.SerializerMethodField()
+    defective_move_out_info = serializers.SerializerMethodField()
     
     class Meta:
         model = Barcode
@@ -48,8 +49,25 @@ class BarcodeSerializer(serializers.ModelSerializer):
             'id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 
             'tag', 'tag_display', 'purchase_price', 'selling_price', 'supplier_name', 'purchase_date', 
             'invoice_number', 'invoice_id', 'invoice_date', 'customer_name', 'invoice_type_display',
-            'sold_price', 'sold_quantity', 'created_at'
+            'sold_price', 'sold_quantity', 'defective_move_out_info', 'created_at'
         ]
+
+    def get_defective_move_out_info(self, obj):
+        """Return move-out info if this defective barcode has already been moved out."""
+        if obj.tag != 'defective':
+            return None
+        # Use prefetched data when available (from optimized list view)
+        if hasattr(obj, '_prefetched_objects_cache') and 'defective_move_outs' in obj._prefetched_objects_cache:
+            items = obj._prefetched_objects_cache['defective_move_outs']
+            if items:
+                move_out = items[0].move_out
+                return {
+                    'moved_out': True,
+                    'move_out_number': move_out.move_out_number,
+                    'reason': move_out.get_reason_display(),
+                    'notes': move_out.notes or '',
+                }
+        return None
     
     def _get_active_invoice_item(self, obj):
         """Helper to get the active (non-void) invoice item for this barcode"""

@@ -722,6 +722,15 @@ export default function Products() {
     if (matchedProduct) {
       // Prefer exact barcode-level selection.
       if (matchedBarcode?.id) {
+        // Check if this barcode has already been moved out
+        if (matchedBarcode.defective_move_out_info?.moved_out) {
+          const info = matchedBarcode.defective_move_out_info;
+          const reason = info.reason || 'Defective';
+          const moveOutNum = info.move_out_number || '';
+          setBarcodeScanError(`"${matchedProduct.name}" has already been sent out (${reason}). Move-out: ${moveOutNum}`);
+          setTimeout(() => setBarcodeScanError(null), 4000);
+          return;
+        }
         if (selectedDefectiveProducts.has(matchedBarcode.id)) {
           setBarcodeScanError(`"${matchedProduct.name}" barcode is already selected.`);
           setTimeout(() => setBarcodeScanError(null), 2000);
@@ -767,6 +776,16 @@ export default function Products() {
         const data = response.data;
 
         if (data && data.barcode_tag === 'defective') {
+          // Check if this barcode has already been moved out
+          if (data.defective_moved_out) {
+            const reason = data.defective_move_out_reason || 'Defective';
+            const moveOutNum = data.defective_move_out_number || '';
+            setBarcodeScanError(`"${data.name}" has already been sent out (${reason}). Move-out: ${moveOutNum}`);
+            setTimeout(() => setBarcodeScanError(null), 4000);
+            setBarcodeInput('');
+            return;
+          }
+
           const apiBarcode = {
             id: data.barcode_id,
             barcode: data.canonical_barcode,
