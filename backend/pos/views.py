@@ -2706,6 +2706,37 @@ def cart_items(request, pk):
         if serializer.is_valid():
             with transaction.atomic():
                 cart_item = serializer.save()
+
+                # Auto-compute tax for non-tracked products when frontend didn't
+                # know the tax rate at add time (ProductListSerializer may not have
+                # had barcodes loaded).
+                if (cart_item.tax_amount or Decimal('0')) == 0:
+                    effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0')
+                    if effective_price > 0:
+                        tax_rate = Decimal('0')
+                        is_inclusive = False
+                        if product_barcode and product_barcode.purchase_item:
+                            if product_barcode.purchase_item.gst_percent is not None:
+                                tax_rate = Decimal(str(product_barcode.purchase_item.gst_percent))
+                            is_inclusive = bool(product_barcode.purchase_item.gst_inclusive)
+                        elif product.tax_rate and product.tax_rate.rate is not None:
+                            tax_rate = Decimal(str(product.tax_rate.rate))
+                        if tax_rate > 0:
+                            qty = Decimal(str(cart_item.quantity or 1))
+                            discount = Decimal(str(cart_item.discount_amount or 0))
+                            if is_inclusive:
+                                gross_total = effective_price * qty - discount
+                                base_total = (gross_total * Decimal('100') / (Decimal('100') + tax_rate)).quantize(Decimal('0.01'))
+                                computed_tax = (gross_total - base_total).quantize(Decimal('0.01'))
+                                # For inclusive items, unit_price should be the ex-tax base
+                                base_unit = (base_total / qty).quantize(Decimal('0.01')) if qty > 0 else Decimal('0')
+                                cart_item.unit_price = base_unit
+                                cart_item.manual_unit_price = effective_price
+                            else:
+                                taxable_base = effective_price * qty - discount
+                                computed_tax = (taxable_base * tax_rate / Decimal('100')).quantize(Decimal('0.01'))
+                            cart_item.tax_amount = computed_tax
+                            cart_item.save(update_fields=['tax_amount', 'unit_price', 'manual_unit_price'])
                 
                 # Update stock quantity when item is added to cart
                 # Use helper function to reduce duplication
