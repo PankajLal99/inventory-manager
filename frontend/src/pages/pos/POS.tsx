@@ -2473,14 +2473,18 @@ export default function POS() {
               </tr>
             </thead>
             <tbody>
-              ${invoice.items && Array.isArray(invoice.items) ? invoice.items.map((item: any) => `
+              ${invoice.items && Array.isArray(invoice.items) ? invoice.items.map((item: any) => {
+                const qty = parseFloat(item.quantity || '0');
+                const qtyDisplay = Number.isInteger(qty) ? String(qty) : formatNumber(qty, 3);
+                const displayPrice = item.manual_unit_price ?? item.unit_price ?? '0';
+                return `
                 <tr>
                   <td>${(item.product_name || '-').substring(0, 20)}</td>
-                  <td class="text-right">${item.quantity}</td>
-                  <td class="text-right">₹${formatNumber(item.manual_unit_price ?? item.unit_price ?? '0')}</td>
+                  <td class="text-right">${qtyDisplay}</td>
+                  <td class="text-right">₹${formatNumber(displayPrice)}</td>
                   <td class="text-right">₹${formatNumber(item.line_total || '0')}</td>
-                </tr>
-              `).join('') : '<tr><td colspan="4">No items</td></tr>'}
+                </tr>`;
+              }).join('') : '<tr><td colspan="4">No items</td></tr>'}
             </tbody>
           </table>
           <div class="summary">
@@ -2513,7 +2517,7 @@ export default function POS() {
                 const incl = slab.is_inclusive != null ? (slab.is_inclusive ? ' Incl.' : ' Excl.') : '';
                 return `
                 ${divRow(`GST @${rate}%${incl}`, '₹' + formatNumber(slab.total_tax), 'padding-left:5px;')}
-                ${divRow('Taxable: ₹' + formatNumber(slab.base_amount, 2), '', 'padding-left:10px;font-size:8px;color:#555;')}
+                ${divRow((slab.is_inclusive ? 'Base (ex-tax): ₹' : 'Taxable: ₹') + formatNumber(slab.base_amount, 2), '', 'padding-left:10px;font-size:8px;color:#555;')}
                 ${divRow('CGST @' + half + '%', '₹' + formatNumber(slab.cgst), 'padding-left:10px;font-size:8px;color:#555;')}
                 ${divRow('SGST @' + half + '%', '₹' + formatNumber(slab.sgst), 'padding-left:10px;font-size:8px;color:#555;')}`;
               }).join('')}

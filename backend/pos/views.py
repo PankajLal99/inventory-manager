@@ -4138,21 +4138,31 @@ def cart_checkout(request, pk):
 
         if cart_discount > 0:
             all_items_list = [ci for ci in cart.items.all() if ci.quantity > 0]
+
+            def _item_base_up(ci_):
+                """Return ex-tax unit price for a cart item.
+                For inclusive-GST items the frontend stores the ex-tax price in unit_price
+                and the gross (inclusive) price in manual_unit_price. Use unit_price so
+                that discount proration and tax-rate back-computation work on the real base."""
+                if (ci_.unit_price and ci_.manual_unit_price
+                        and ci_.tax_amount and ci_.tax_amount > Decimal('0')
+                        and ci_.unit_price < ci_.manual_unit_price):
+                    return ci_.unit_price
+                return ci_.manual_unit_price or ci_.unit_price or Decimal('0')
+
             total_base = sum(
-                (ci.manual_unit_price or ci.unit_price or Decimal('0')) * ci.quantity
-                - ci.discount_amount
+                _item_base_up(ci) * ci.quantity - ci.discount_amount
                 for ci in all_items_list
             ) or Decimal('1')
             for ci in all_items_list:
-                up_ci = ci.manual_unit_price or ci.unit_price or Decimal('0')
-                item_base = max(up_ci * ci.quantity - ci.discount_amount, Decimal('0'))
+                base_up_ci = _item_base_up(ci)
+                item_base = max(base_up_ci * ci.quantity - ci.discount_amount, Decimal('0'))
                 prop = cart_discount * (item_base / total_base)
                 adj_disc = ci.discount_amount + prop
-                # Recompute tax on reduced base at same back-computed rate
-                original_base = max(up_ci * ci.quantity - ci.discount_amount, Decimal('0'))
-                if original_base > 0 and ci.tax_amount > 0:
-                    rate = ci.tax_amount / original_base
-                    adj_base = max(up_ci * ci.quantity - adj_disc, Decimal('0'))
+                # Recompute tax on reduced base using rate relative to the ex-tax base
+                if item_base > 0 and ci.tax_amount > 0:
+                    rate = ci.tax_amount / item_base
+                    adj_base = max(base_up_ci * ci.quantity - adj_disc, Decimal('0'))
                     adj_tax = (adj_base * rate).quantize(Decimal('0.01'))
                 else:
                     adj_tax = ci.tax_amount
@@ -4162,16 +4172,32 @@ def cart_checkout(request, pk):
         for ci in cart.items.all():
             if ci.quantity <= 0: continue
 
-            up = ci.manual_unit_price or ci.unit_price or Decimal('0.00')
+            # Detect inclusive GST: frontend stores ex-tax base in unit_price and gross in
+            # manual_unit_price for inclusive items. If they differ (and tax > 0), it's inclusive.
+            is_incl = (
+                ci.unit_price is not None and ci.manual_unit_price is not None
+                and ci.tax_amount is not None and ci.tax_amount > Decimal('0')
+                and ci.unit_price < ci.manual_unit_price
+            )
+            # display_up: what the customer pays per unit (gross for inclusive, selling price otherwise)
+            display_up = ci.manual_unit_price or ci.unit_price or Decimal('0.00')
             # Use adjusted discount/tax when cart-level discount is active
             adj_discount = item_adj_discount.get(ci.id, ci.discount_amount)
             adj_tax = item_adj_tax.get(ci.id, ci.tax_amount)
             pd = adj_discount / ci.quantity if ci.quantity > 0 else Decimal('0.00')
             pt = adj_tax / ci.quantity if ci.quantity > 0 else Decimal('0.00')
-            line_unit_total = up - pd + pt
 
             if not ci.product.track_inventory:
-                line_total = line_unit_total * ci.quantity
+                if is_incl:
+                    # Inclusive: tax is already baked into display_up — do NOT add adj_tax again
+                    line_total = display_up * ci.quantity - adj_discount
+                else:
+                    # Exclusive / custom (no tax): add tax on top of the selling price
+                    line_total = display_up * ci.quantity - adj_discount + adj_tax
+                # subtotal = pre-tax base = what customer pays minus the tax portion
+                subtotal += line_total - adj_tax
+                discount_total += adj_discount
+                tax_total += adj_tax
                 InvoiceItem.objects.create(
                     invoice=invoice, product=ci.product, variant=ci.variant,
                     quantity=ci.quantity, unit_price=ci.unit_price,
@@ -4180,10 +4206,6 @@ def cart_checkout(request, pk):
                     line_total=line_total,
                     purchase_price=ci.purchase_price,
                 )
-                # subtotal = pre-tax, net-of-discount base (up * qty - discount)
-                subtotal += (up - pd) * ci.quantity
-                discount_total += adj_discount
-                tax_total += adj_tax
                 items_added += 1
             else:
                 scanned = ci.scanned_barcodes or []
@@ -4198,6 +4220,12 @@ def cart_checkout(request, pk):
                     raise ValueError(f"Insufficient available barcodes for {ci.product.name}. Required {int(ci.quantity)}, found {len(barcodes_list)}.")
                 
                 for b_obj in barcodes_list:
+                    if is_incl:
+                        # Inclusive: tax is inside display_up; line total = gross minus per-unit discount
+                        line_unit_total = display_up - pd
+                    else:
+                        # Exclusive: add per-unit tax on top of selling price
+                        line_unit_total = display_up - pd + pt
                     InvoiceItem.objects.create(
                         invoice=invoice, product=ci.product, variant=ci.variant,
                         barcode=b_obj, sold_barcode_value=b_obj.barcode or '',
@@ -4217,8 +4245,8 @@ def cart_checkout(request, pk):
                         b_obj.tag = 'sold'
                     b_obj.save(update_fields=['tag'])
                     invalidate_barcode_cache(b_obj)
-                    # subtotal = pre-tax, net-of-discount base (up - pd per unit)
-                    subtotal += (up - pd)
+                    # subtotal = pre-tax base = line_unit_total minus the per-unit tax portion
+                    subtotal += line_unit_total - pt
                     discount_total += pd
                     tax_total += pt
                     items_added += 1

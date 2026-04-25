@@ -2366,7 +2366,7 @@ export default function InvoiceDetail() {
               const incl = slab.is_inclusive != null ? (slab.is_inclusive ? ' Incl.' : ' Excl.') : '';
               return `
               ${divRow(`GST @${rate}%${incl}`, '₹' + formatNumber(slab.total_tax), 'padding-left:5px;')}
-              ${divRow('Taxable: ₹' + formatNumber(slab.base_amount, 2), '', 'padding-left:10px;font-size:8px;color:#555;')}
+              ${divRow((slab.is_inclusive ? 'Base (ex-tax): ₹' : 'Taxable: ₹') + formatNumber(slab.base_amount, 2), '', 'padding-left:10px;font-size:8px;color:#555;')}
               ${divRow('CGST @' + half + '%', '₹' + formatNumber(slab.cgst), 'padding-left:10px;font-size:8px;color:#555;')}
               ${divRow('SGST @' + half + '%', '₹' + formatNumber(slab.sgst), 'padding-left:10px;font-size:8px;color:#555;')}`;
             }).join('')}
@@ -3133,7 +3133,7 @@ export default function InvoiceDetail() {
                                 <span className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</span>
                               </TableCell>
                               <TableCell>
-                                <span className="text-xs text-gray-600 font-semibold">{barcodeItem.item.quantity}</span>
+                                <span className="text-xs text-gray-600 font-semibold">{(() => { const q = parseFloat(barcodeItem.item.quantity || '0'); return Number.isInteger(q) ? String(q) : formatNumber(q, 3); })()}</span>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -3312,7 +3312,7 @@ export default function InvoiceDetail() {
                               <div key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-white rounded-md p-3 border border-gray-200">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
-                                  <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
+                                  <div className="text-xs text-gray-500">Qty: {(() => { const q = parseFloat(item.quantity || '0'); return Number.isInteger(q) ? String(q) : formatNumber(q, 3); })()}</div>
                                 </div>
                                 {!isPending && (
                                   <div className="grid grid-cols-2 gap-2 text-xs">
@@ -5911,7 +5911,7 @@ export default function InvoiceDetail() {
                                     <>
                                       <div className="flex items-center gap-2">
                                         <span className="text-sm text-gray-600">
-                                          Quantity: <span className="font-semibold text-gray-900 text-base">{item.quantity}</span>
+                                          Quantity: <span className="font-semibold text-gray-900 text-base">{(() => { const q = parseFloat(item.quantity || '0'); return Number.isInteger(q) ? String(q) : formatNumber(q, 3); })()}</span>
                                         </span>
                                       </div>
                                       {!item.manual_unit_price && (
@@ -5946,7 +5946,7 @@ export default function InvoiceDetail() {
                                   ) : (
                                     <>
                                       <span className="text-sm text-gray-600">
-                                        ₹{formatNumber(item.manual_unit_price || item.unit_price || '0')} × {item.quantity} = ₹{formatNumber(item.line_total || '0')}
+                                        ₹{formatNumber(item.manual_unit_price || item.unit_price || '0')} × {(() => { const q = parseFloat(item.quantity || '0'); return Number.isInteger(q) ? String(q) : formatNumber(q, 3); })()} = ₹{formatNumber(item.line_total || '0')}
                                       </span>
                                       <button
                                         onClick={() => {
@@ -5972,7 +5972,7 @@ export default function InvoiceDetail() {
                               <Minus className="h-4 w-4" />
                             </button>
                             <span className="min-w-[3rem] px-2 py-1 text-center font-semibold text-gray-900 bg-gray-50 rounded border border-gray-300">
-                              {item.quantity}
+                              {(() => { const q = parseFloat(item.quantity || '0'); return Number.isInteger(q) ? String(q) : formatNumber(q, 3); })()}
                             </span>
                             <button
                               onClick={() => handleUpdateQuantity(item, 1)}
