@@ -244,7 +244,6 @@ export default function Layout() {
         { path: '/active-carts', icon: ClipboardList, label: 'Active Carts', permission: 'nav.active_carts' },
         { path: '/vendors', icon: Users, label: 'Vendors', permission: 'nav.vendors' },
         { path: '/reports', icon: BarChart3, label: 'Reports', permission: 'nav.reports' },
-        { path: '/stock-report', icon: BarChart3, label: 'Stock Report', permission: 'nav.reports' },
         { path: '/history', icon: History, label: 'History', permission: 'nav.history' },
         { path: '/role-management', icon: ShieldCheck, label: 'Role Management', permission: 'nav.role_management' },
       ],

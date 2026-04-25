@@ -83,7 +83,7 @@ export default function StockReport() {
   const [dateFrom, setDateFrom] = useState(() => addDays(toLocalDateString(new Date()), -30));
   const [dateTo, setDateTo] = useState(() => toLocalDateString(new Date()));
   const [activeDateFilter, setActiveDateFilter] = useState('last_month');
-  const [activeTab, setActiveTab] = useState<ProductTab>('sold');
+  const [activeTab, setActiveTab] = useState<ProductTab>('fast');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [excelExporting, setExcelExporting] = useState(false);
@@ -239,7 +239,7 @@ export default function StockReport() {
     setExcelExporting(true);
     try {
       // Sheet 1: Sold Products
-      const soldHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Orders'];
+      const soldHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Invoices'];
       const soldRows = fastSelling.map((p: any) => [
         p.product__name || '',
         p.product__sku || 'N/A',
@@ -251,7 +251,7 @@ export default function StockReport() {
       ]);
 
       // Sheet 2: Slow Moving
-      const slowHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Orders'];
+      const slowHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Invoices'];
       const slowRows = slowMoving.map((p: any) => [
         p.product__name || '',
         p.product__sku || 'N/A',
@@ -452,7 +452,7 @@ export default function StockReport() {
         y += 4;
         autoTable(doc, {
           startY: y,
-          head: [['Category', 'Revenue', 'Qty', 'Orders']],
+          head: [['Category', 'Revenue', 'Qty', 'Invoices']],
           body: topCategories.map((c: any) => [
             c.product__category__name || 'Unknown',
             `Rs.${formatNumber(c.total_revenue || 0)}`,
@@ -540,7 +540,57 @@ export default function StockReport() {
       );
     }
 
-    // sold / fast / slow – same column structure
+    // All Products Sold – includes remaining stock column
+    if (activeTab === 'sold') {
+      return (
+        <table className="w-full text-sm">
+          <thead className="bg-indigo-50">
+            <tr>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-indigo-600 uppercase">#</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-indigo-600 uppercase">Product</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-indigo-600 uppercase">Category</th>
+              <th className="px-3 py-2.5 text-left text-xs font-medium text-indigo-600 uppercase">Brand</th>
+              <th className="px-3 py-2.5 text-right text-xs font-medium text-indigo-600 uppercase">Qty Sold</th>
+              <th className="px-3 py-2.5 text-right text-xs font-medium text-indigo-600 uppercase">Revenue</th>
+              <th className="px-3 py-2.5 text-right text-xs font-medium text-indigo-600 uppercase">Invoices</th>
+              <th className="px-3 py-2.5 text-right text-xs font-medium text-indigo-600 uppercase">Remaining Stock</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {tabData.map((p: any, i: number) => {
+              const remaining = p.available_quantity ?? p.remaining_stock ?? p.current_stock ?? null;
+              return (
+                <tr key={p.product__id || i} className="hover:bg-indigo-50/30 transition-colors">
+                  <td className="px-3 py-2.5 text-gray-400 text-xs font-mono">{i + 1}</td>
+                  <td className="px-3 py-2.5">
+                    <span className="font-medium text-gray-900">{p.product__name}</span>
+                    {p.product__sku && <span className="ml-2 text-xs text-gray-400 font-mono">{p.product__sku}</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-gray-500">{p.product__category__name || '—'}</td>
+                  <td className="px-3 py-2.5 text-gray-500">{p.product__brand__name || '—'}</td>
+                  <td className="px-3 py-2.5 text-right font-semibold text-gray-900">{Math.round(p.total_quantity || 0)}</td>
+                  <td className="px-3 py-2.5 text-right font-semibold text-gray-900">₹{formatNumber(p.total_revenue || 0)}</td>
+                  <td className="px-3 py-2.5 text-right text-gray-500">{p.order_count || 0}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    {remaining === null ? (
+                      <span className="text-gray-400">—</span>
+                    ) : remaining <= 0 ? (
+                      <span className="font-bold text-red-600">0</span>
+                    ) : remaining <= 5 ? (
+                      <span className="font-semibold text-orange-500">{Math.round(remaining)}</span>
+                    ) : (
+                      <span className="font-semibold text-green-600">{Math.round(remaining)}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      );
+    }
+
+    // fast / slow – same column structure
     return (
       <table className="w-full text-sm">
         <thead className="bg-gray-50">
@@ -551,7 +601,7 @@ export default function StockReport() {
             <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Brand</th>
             <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Qty Sold</th>
             <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Revenue</th>
-            <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Orders</th>
+            <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Invoices</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
@@ -794,8 +844,8 @@ export default function StockReport() {
             <h2 className="text-base font-bold text-gray-900">Product Analysis</h2>
           </div>
 
-          {/* Category + Brand Filters (only for sold/fast/slow tabs) */}
-          {(activeTab === 'sold' || activeTab === 'fast' || activeTab === 'slow') && (
+          {/* Category + Brand Filters (only for fast/slow tabs — sold uses stockSold endpoint) */}
+          {(activeTab === 'fast' || activeTab === 'slow') && (
             <div className="flex gap-2 flex-wrap">
               <div className="relative">
                 <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
@@ -838,6 +888,7 @@ export default function StockReport() {
         {/* Tab switcher */}
         <div className="flex flex-wrap gap-1 mb-5 bg-gray-100 rounded-lg p-1 w-fit">
           {[
+            { key: 'sold' as ProductTab, label: '📦 All Products' },
             { key: 'fast' as ProductTab, label: '⚡ Fast Selling' },
             { key: 'slow' as ProductTab, label: '🐢 Slow Moving' },
             { key: 'out_of_stock' as ProductTab, label: '🚫 Out of Stock' },

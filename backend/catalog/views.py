@@ -1976,6 +1976,21 @@ def barcode_by_barcode(request, barcode=None):
                     
                     if is_sold and sold_invoice:
                         response_data['sold_invoice'] = sold_invoice
+                else:
+                    # Searched value is the product SKU (not a barcode) — populate GST info from the
+                    # product's representative barcode so the frontend handles inclusive GST correctly.
+                    from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                    rep_barcode = (
+                        single_barcode_for_untracked_product(product)
+                        if not product.track_inventory
+                        else product.barcodes.filter(tag__in=['new', 'returned']).select_related('purchase_item').first()
+                    )
+                    if rep_barcode and getattr(rep_barcode, 'purchase_item', None) is not None:
+                        response_data['gst_percent'] = float(getattr(rep_barcode.purchase_item, 'gst_percent', 0) or 0)
+                        response_data['gst_inclusive'] = bool(getattr(rep_barcode.purchase_item, 'gst_inclusive', False))
+                    elif product.tax_rate:
+                        response_data['gst_percent'] = float(product.tax_rate.rate or 0)
+                        response_data['gst_inclusive'] = False
                 
                 # Cache the response for 5 minutes
                 cache.set(cache_key, response_data, 300)
@@ -2053,6 +2068,21 @@ def barcode_by_barcode(request, barcode=None):
                 
                 if sold_invoice:
                     response_data['sold_invoice'] = sold_invoice
+            else:
+                # Searched value is the product name (not a barcode) — populate GST info from the
+                # product's representative barcode so the frontend can correctly handle inclusive GST.
+                from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                rep_barcode = (
+                    single_barcode_for_untracked_product(product)
+                    if not product.track_inventory
+                    else product.barcodes.filter(tag__in=['new', 'returned']).select_related('purchase_item').first()
+                )
+                if rep_barcode and getattr(rep_barcode, 'purchase_item', None) is not None:
+                    response_data['gst_percent'] = float(getattr(rep_barcode.purchase_item, 'gst_percent', 0) or 0)
+                    response_data['gst_inclusive'] = bool(getattr(rep_barcode.purchase_item, 'gst_inclusive', False))
+                elif product.tax_rate:
+                    response_data['gst_percent'] = float(product.tax_rate.rate or 0)
+                    response_data['gst_inclusive'] = False
             
             response = Response(response_data)
             # Add cache headers for browser-level caching (1 minute for barcode lookups)
