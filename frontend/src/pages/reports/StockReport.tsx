@@ -184,6 +184,7 @@ export default function StockReport() {
 
   const soldProducts: any[] = (() => {
     if (!stockSoldData) return [];
+    if (Array.isArray(stockSoldData.products)) return stockSoldData.products;
     if (Array.isArray(stockSoldData.results)) return stockSoldData.results;
     if (Array.isArray(stockSoldData.data)) return stockSoldData.data;
     if (Array.isArray(stockSoldData)) return stockSoldData;
