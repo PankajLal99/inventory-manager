@@ -1921,6 +1921,7 @@ export default function Purchases() {
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Quantity</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Unit Price</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Selling Price</th>
+                                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">GST</th>
                                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase">Total</th>
                                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">Labels</th>
                                     <th className="px-3 py-2 text-center text-xs font-medium text-gray-700 uppercase">Printed</th>
@@ -1951,6 +1952,18 @@ export default function Purchases() {
                                               ? `₹${formatNumber(item.selling_price)}`
                                               : '-'}
                                           </span>
+                                        </td>
+                                        <td className="px-3 py-2 text-center">
+                                          {item.gst_percent != null && parseFloat(item.gst_percent) > 0 ? (
+                                            <div className="flex flex-col items-center gap-0.5">
+                                              <span className="text-sm text-gray-900">{formatNumber(item.gst_percent)}%</span>
+                                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${item.gst_inclusive ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                                                {item.gst_inclusive ? 'Incl' : 'Excl'}
+                                              </span>
+                                            </div>
+                                          ) : (
+                                            <span className="text-xs text-gray-400">-</span>
+                                          )}
                                         </td>
                                         <td className="px-3 py-2 text-right">
                                           <span className="text-sm font-semibold text-gray-900">₹{formatNumber(item.line_total || 0)}</span>
@@ -2229,7 +2242,20 @@ export default function Purchases() {
                                   </div>
                                 </div>
                               </div>
-                              <div className="grid grid-cols-1 gap-2 mt-2 pt-2 border-t border-gray-100 text-xs">
+                              <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-gray-100 text-xs">
+                                <div>
+                                  <div className="text-gray-500 mb-0.5">GST</div>
+                                  {item.gst_percent != null && parseFloat(item.gst_percent) > 0 ? (
+                                    <div className="flex items-center gap-1">
+                                      <span className="font-semibold text-gray-900">{formatNumber(item.gst_percent)}%</span>
+                                      <span className={`font-medium px-1 py-0.5 rounded ${item.gst_inclusive ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                                        {item.gst_inclusive ? 'Incl' : 'Excl'}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="font-semibold text-gray-400">-</div>
+                                  )}
+                                </div>
                                 <div>
                                   <div className="text-gray-500 mb-0.5">Total</div>
                                   <div className="font-semibold text-gray-900">₹{formatNumber(item.line_total || 0)}</div>

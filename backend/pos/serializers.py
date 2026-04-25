@@ -337,6 +337,12 @@ class CartSerializer(serializers.ModelSerializer):
         from backend.catalog.models import Barcode
         try:
             if not item.scanned_barcodes:
+                # Fallback for non-tracked products: scanned_barcodes is always [] for them.
+                if item.product and not item.product.track_inventory:
+                    from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                    barcode_obj = single_barcode_for_untracked_product(item.product)
+                    if barcode_obj and barcode_obj.purchase_item is not None:
+                        return bool(barcode_obj.purchase_item.gst_inclusive)
                 return False
             first_val = str(item.scanned_barcodes[0] or '').strip().upper()
             if not first_val:
@@ -676,11 +682,18 @@ class InvoiceSerializer(serializers.ModelSerializer):
             rate = (item_tax / base) * Decimal('100')
             rate_key = float(rate.quantize(Decimal('0.01')))
 
-            # Resolve is_inclusive via the linked barcode's purchase_item
+            # Resolve is_inclusive via the linked barcode's purchase_item.
+            # For non-tracked products, invoice items have no barcode; fall back to the
+            # product's representative barcode (the one created at purchase time).
             is_inclusive = False
             try:
                 if item.barcode and item.barcode.purchase_item is not None:
                     is_inclusive = bool(item.barcode.purchase_item.gst_inclusive)
+                elif item.product and not item.product.track_inventory:
+                    from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                    rep_barcode = single_barcode_for_untracked_product(item.product)
+                    if rep_barcode and rep_barcode.purchase_item is not None:
+                        is_inclusive = bool(rep_barcode.purchase_item.gst_inclusive)
             except Exception:
                 pass
 

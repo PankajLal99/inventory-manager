@@ -202,7 +202,7 @@ export default function Layout() {
       title: 'Core Operations',
       items: [
         { path: '/', icon: ShoppingCart, label: 'POS', permission: 'nav.pos' },
-        { path: '/self-checkout', icon: ExternalLink, label: 'Self Checkout', permission: 'nav.self_checkout' },
+        { path: '/self-checkout', href: import.meta.env.VITE_SELF_CHECKOUT_BASE_URL || 'https://pos.intratechno.com', icon: ExternalLink, label: 'Self Checkout', permission: 'nav.self_checkout' },
         { path: '/pos-repair-new', icon: Plus, label: 'New Repair', permission: 'nav.repair_register' },
         { path: '/search', icon: Search, label: 'Search', permission: 'nav.search' },
         { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', permission: 'nav.dashboard' },
@@ -340,29 +340,45 @@ export default function Layout() {
                   const isActive =
                     location.pathname === item.path ||
                     (item.path === '/' && (location.pathname === '/' || location.pathname === '/pos'));
-                  return (
-                    <Link
-                      key={item.path}
-                      to={item.path}
-                      className={`group flex items-center rounded-xl transition-all duration-200 px-4 py-3 ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''
-                        } ${isActive
-                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white'
-                          : 'text-gray-700 hover:bg-gray-100'
+                  const linkClassName = `group flex items-center rounded-xl transition-all duration-200 px-4 py-3 ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${
+                    isActive
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  }`;
+                  const linkContent = (
+                    <>
+                      <Icon
+                        className={`h-5 w-5 transition-transform duration-200 mr-3 ${sidebarCollapsed ? 'lg:mr-0' : ''} ${
+                          isActive ? 'scale-110' : 'group-hover:scale-110'
                         }`}
+                      />
+                      <span className={`font-medium ${sidebarCollapsed ? 'lg:hidden' : ''}`}>{item.label}</span>
+                      {isActive && (
+                        <div className={`ml-auto w-1.5 h-1.5 bg-white rounded-full ${sidebarCollapsed ? 'lg:hidden' : ''}`} />
+                      )}
+                    </>
+                  );
+                  return 'href' in item && item.href ? (
+                    <a
+                      key={item.path}
+                      href={item.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={linkClassName}
                       onClick={() => setSidebarOpen(false)}
                       title={sidebarCollapsed ? item.label : undefined}
                     >
-                      <Icon
-                        className={`h-5 w-5 transition-transform duration-200 mr-3 ${sidebarCollapsed ? 'lg:mr-0' : ''
-                          } ${isActive ? 'scale-110' : 'group-hover:scale-110'
-                          }`}
-                      />
-                      <span className={`font-medium ${sidebarCollapsed ? 'lg:hidden' : ''
-                        }`}>{item.label}</span>
-                      {isActive && (
-                        <div className={`ml-auto w-1.5 h-1.5 bg-white rounded-full ${sidebarCollapsed ? 'lg:hidden' : ''
-                          }`} />
-                      )}
+                      {linkContent}
+                    </a>
+                  ) : (
+                    <Link
+                      key={item.path}
+                      to={item.path}
+                      className={linkClassName}
+                      onClick={() => setSidebarOpen(false)}
+                      title={sidebarCollapsed ? item.label : undefined}
+                    >
+                      {linkContent}
                     </Link>
                   );
                 })}
