@@ -121,7 +121,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     
     def get_tax_bifurcation(self, obj):
         try:
-            from backend.core.gst_utils import calculate_gst_bifurcation
+            from decimal import ROUND_HALF_UP
 
             tax_amt = Decimal(str(obj.tax_amount or '0'))
             if tax_amt <= 0:
@@ -131,27 +131,47 @@ class CartItemSerializer(serializers.ModelSerializer):
             if qty <= 0:
                 return None
 
-            # unit_price stored is always the base (ex-tax) price, regardless of whether
-            # the original purchase was GST-inclusive or exclusive.
-            unit_price = Decimal(str(obj.manual_unit_price if obj.manual_unit_price is not None else obj.unit_price) or '0')
+            # Resolve whether the original purchase was GST-inclusive
+            is_inclusive = self.get_tax_is_inclusive(obj)
+
+            # Prefer the authoritative tax rate from the product/purchase to avoid
+            # rounding artifacts when reverse-computing rate from stored amounts.
+            known_rate = Decimal(str(self.get_tax_percent(obj) or 0))
+
+            # For GST-inclusive items, unit_price is the ex-tax base and
+            # manual_unit_price is the gross (tax-included) display price.
+            # Always use unit_price (the base) for tax bifurcation math.
+            if is_inclusive:
+                unit_price = Decimal(str(obj.unit_price or '0'))
+            else:
+                unit_price = Decimal(str(obj.manual_unit_price if obj.manual_unit_price is not None else obj.unit_price) or '0')
             base = unit_price * qty - Decimal(str(obj.discount_amount or '0'))
             if base <= 0:
                 return None
 
-            rate = (tax_amt / base) * Decimal('100')
+            # Use known rate if available; fall back to reverse-computed rate.
+            rate = known_rate if known_rate > 0 else (tax_amt / base) * Decimal('100')
 
-            # Resolve whether the original purchase was GST-inclusive
-            is_inclusive = self.get_tax_is_inclusive(obj)
+            # Use stored tax_amount directly and split into CGST/SGST to avoid
+            # penny discrepancies from recomputing tax via rate * base.
+            half_tax = (tax_amt / Decimal('2')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            cgst = half_tax
+            sgst = tax_amt - half_tax
+            half_rate = rate / Decimal('2')
 
-            result = calculate_gst_bifurcation(
-                unit_price=base / qty,
-                quantity=qty,
-                tax_rate=rate,
-                is_inclusive=False  # base is already extracted; always compute exclusive from here
-            )
-            result['is_inclusive'] = is_inclusive
-            result['rate'] = float(rate.quantize(Decimal('0.01')))
-            return result
+            return {
+                'base_amount': float(base.quantize(Decimal('0.01'))),
+                'total_tax': float(tax_amt),
+                'cgst': float(cgst),
+                'sgst': float(sgst),
+                'igst': 0.0,
+                'cgst_rate': float(half_rate),
+                'sgst_rate': float(half_rate),
+                'igst_rate': 0.0,
+                'total': float((base + tax_amt).quantize(Decimal('0.01'))),
+                'is_inclusive': is_inclusive,
+                'rate': float(rate.quantize(Decimal('0.01'))),
+            }
         except Exception:
             return None
 
@@ -365,7 +385,7 @@ class CartSerializer(serializers.ModelSerializer):
         return False
 
     def get_tax_bifurcation(self, obj):
-        from backend.core.gst_utils import calculate_gst_bifurcation
+        from decimal import ROUND_HALF_UP
 
         items = obj.items.all()
         # Key: (rounded_rate, is_inclusive) so that same-rate inclusive/exclusive items
@@ -377,18 +397,60 @@ class CartSerializer(serializers.ModelSerializer):
 
         # First pass: collect per-item (item_id -> base) to compute total taxable base
         item_bases = {}
+        item_inclusive_map = {}
         for item in items:
             if Decimal(str(item.tax_amount or '0')) <= 0:
                 continue
             qty = Decimal(str(item.quantity or '0'))
             if qty <= 0:
                 continue
-            unit_price = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
-            base = unit_price * qty - Decimal(str(item.discount_amount or '0'))
+            is_incl = self._resolve_item_gst_inclusive(item)
+            item_inclusive_map[item.id] = is_incl
+            # For GST-inclusive items, unit_price is the ex-tax base;
+            # manual_unit_price is the gross (tax-included) display price.
+            if is_incl:
+                up = Decimal(str(item.unit_price or '0'))
+            else:
+                up = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
+            base = up * qty - Decimal(str(item.discount_amount or '0'))
             if base > 0:
                 item_bases[item.id] = base
 
         total_taxable_base = sum(item_bases.values()) or Decimal('1')
+
+        # Resolve authoritative tax rates per item to avoid rounding artifacts
+        item_known_rates = {}
+        for item in items:
+            try:
+                from backend.catalog.models import Barcode as _Barcode
+                known = Decimal('0')
+                if item.scanned_barcodes:
+                    first_val = str(item.scanned_barcodes[0] or '').strip().upper()
+                    if first_val:
+                        retailer_id = getattr(obj, 'retailer_id', None)
+                        bqs = _Barcode.objects.all()
+                        if retailer_id:
+                            bqs = bqs.filter(retailer_id=retailer_id)
+                        try:
+                            bc = bqs.get(barcode=first_val)
+                        except _Barcode.DoesNotExist:
+                            try:
+                                bc = bqs.get(short_code=first_val)
+                            except _Barcode.DoesNotExist:
+                                bc = None
+                        if bc and bc.purchase_item and bc.purchase_item.gst_percent is not None:
+                            known = Decimal(str(bc.purchase_item.gst_percent))
+                if known <= 0 and item.product and item.product.track_inventory is False:
+                    from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
+                    rep = single_barcode_for_untracked_product(item.product)
+                    if rep and rep.purchase_item and rep.purchase_item.gst_percent is not None:
+                        known = Decimal(str(rep.purchase_item.gst_percent))
+                if known <= 0 and item.product and item.product.tax_rate and item.product.tax_rate.rate is not None:
+                    known = Decimal(str(item.product.tax_rate.rate))
+                if known > 0:
+                    item_known_rates[item.id] = known
+            except Exception:
+                pass
 
         for item in items:
             item_tax = Decimal(str(item.tax_amount or '0'))
@@ -399,29 +461,34 @@ class CartSerializer(serializers.ModelSerializer):
             if qty <= 0:
                 continue
 
-            # unit_price stored is always the base (ex-tax) price.
-            unit_price = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
+            # For GST-inclusive items, unit_price is the ex-tax base;
+            # manual_unit_price is the gross (tax-included) display price.
+            is_inclusive = item_inclusive_map.get(item.id, self._resolve_item_gst_inclusive(item))
+            if is_inclusive:
+                unit_price = Decimal(str(item.unit_price or '0'))
+            else:
+                unit_price = Decimal(str(item.manual_unit_price if item.manual_unit_price is not None else item.unit_price) or '0')
             base = unit_price * qty - Decimal(str(item.discount_amount or '0'))
             if base <= 0:
                 continue
+
+            # Prefer known rate to avoid rounding artifacts
+            known_rate = item_known_rates.get(item.id, Decimal('0'))
 
             # Apply proportional share of the cart-level discount to this item's base.
             if cart_discount > 0:
                 prop_discount = cart_discount * (base / total_taxable_base)
                 adjusted_base = max(base - prop_discount, Decimal('0'))
-                # Recompute tax proportionally on the reduced base (same GST rate)
-                rate = (item_tax / base) * Decimal('100')
+                rate = known_rate if known_rate > 0 else (item_tax / base) * Decimal('100')
                 item_tax = (adjusted_base * rate / Decimal('100')).quantize(Decimal('0.01'))
                 base = adjusted_base
             else:
-                rate = (item_tax / base) * Decimal('100')
+                rate = known_rate if known_rate > 0 else (item_tax / base) * Decimal('100')
 
             if base <= 0 or item_tax <= 0:
                 continue
 
             rate_rounded = float(rate.quantize(Decimal('0.01')))
-
-            is_inclusive = self._resolve_item_gst_inclusive(item)
             slab_key = (rate_rounded, is_inclusive)
 
             if slab_key not in slabs:
@@ -435,18 +502,14 @@ class CartSerializer(serializers.ModelSerializer):
                     'igst': Decimal('0.00'),
                 }
 
-            bif = calculate_gst_bifurcation(
-                unit_price=base / qty,
-                quantity=qty,
-                tax_rate=rate,
-                is_inclusive=False  # base already extracted
-            )
+            # Use stored/adjusted tax_amount directly and split into CGST/SGST
+            # to avoid penny discrepancies from recomputing tax via rate * base.
+            half_tax = (item_tax / Decimal('2')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-            slabs[slab_key]['base_amount'] += Decimal(str(bif['base_amount']))
-            slabs[slab_key]['total_tax'] += Decimal(str(bif['total_tax']))
-            slabs[slab_key]['cgst'] += Decimal(str(bif['cgst']))
-            slabs[slab_key]['sgst'] += Decimal(str(bif['sgst']))
-            slabs[slab_key]['igst'] += Decimal(str(bif['igst']))
+            slabs[slab_key]['base_amount'] += base.quantize(Decimal('0.01'))
+            slabs[slab_key]['total_tax'] += item_tax
+            slabs[slab_key]['cgst'] += half_tax
+            slabs[slab_key]['sgst'] += (item_tax - half_tax)
 
         result = []
         # Sort by rate first, then exclusive before inclusive
