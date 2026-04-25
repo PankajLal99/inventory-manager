@@ -770,7 +770,7 @@ export default function StockReport() {
                   cx="50%"
                   cy="50%"
                   outerRadius={80}
-                  label={({ name, percent }) => `${name?.slice(0, 10)} ${(percent * 100).toFixed(0)}%`}
+                  label={({ name, percent }) => `${name?.slice(0, 10)} ${((percent ?? 0) * 100).toFixed(0)}%`}
                   labelLine={false}
                   fontSize={10}
                 >
