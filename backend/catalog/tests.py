@@ -318,6 +318,7 @@ class DefectiveMoveOutSupplierSplitTests(TransactionTestCase):
         """Selecting barcodes from one supplier should produce exactly one move-out and one invoice."""
         from backend.catalog.models import DefectiveProductMoveOut
         from backend.pos.models import Invoice
+        from backend.parties.models import Customer as PartyCustomer
 
         b1 = self._make_defective_barcode(self.product1, self.supplier_a)
         b2 = self._make_defective_barcode(self.product1, self.supplier_a)
@@ -335,6 +336,10 @@ class DefectiveMoveOutSupplierSplitTests(TransactionTestCase):
         self.assertEqual(data['total_move_outs'], 1)
         self.assertEqual(len(data['move_outs']), 1)
         self.assertEqual(DefectiveProductMoveOut.objects.count(), 1)
+        invoice = Invoice.objects.get(invoice_type='defective')
+        self.assertIsNotNone(invoice.customer)
+        self.assertEqual(invoice.customer.name, self.supplier_a.name)
+        self.assertTrue(PartyCustomer.objects.filter(name=self.supplier_a.name).exists())
         # Barcodes should remain defective after move-out (move-out is NOT a sale)
         b1.refresh_from_db()
         b2.refresh_from_db()

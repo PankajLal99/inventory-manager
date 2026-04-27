@@ -2419,14 +2419,18 @@ def defective_product_move_out(request):
             while Invoice.objects.filter(invoice_number=invoice_number).exists():
                 invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
-            # Resolve an existing Customer record for supplier display.
-            # Do not auto-create here: some deployments have extra non-null
-            # columns on `customers` (e.g. state), and silent get_or_create
-            # can fail at DB level.
+            # Resolve/create a Customer record for supplier display so move-out
+            # invoices consistently carry a linked customer.
             from backend.parties.models import Customer as PartyCustomer
             invoice_customer = None
             if supplier_name and supplier_name != 'No Supplier':
-                invoice_customer = PartyCustomer.objects.filter(name=supplier_name).first()
+                invoice_customer = PartyCustomer.objects.filter(name__iexact=supplier_name).first()
+                if not invoice_customer:
+                    try:
+                        invoice_customer = PartyCustomer.objects.create(name=supplier_name)
+                    except Exception:
+                        # Handle possible concurrent create/unique race safely.
+                        invoice_customer = PartyCustomer.objects.filter(name__iexact=supplier_name).first()
 
             invoice = Invoice.objects.create(
                 invoice_number=invoice_number,
