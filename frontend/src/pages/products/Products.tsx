@@ -53,6 +53,12 @@ export default function Products() {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [statusProduct, setStatusProduct] = useState<any>(null);
   const [newTag, setNewTag] = useState<string>('');
+  const [showBarcodeStatusTool, setShowBarcodeStatusTool] = useState(false);
+  const [statusLookupInput, setStatusLookupInput] = useState('');
+  const [bulkStatusInput, setBulkStatusInput] = useState('');
+  const [statusUpdateTag, setStatusUpdateTag] = useState('');
+  const [statusLookupError, setStatusLookupError] = useState<string | null>(null);
+  const [scannedStatusRows, setScannedStatusRows] = useState<any[]>([]);
   const [adjustmentData, setAdjustmentData] = useState({
     adjustment_type: 'in',
     product: '',
@@ -425,6 +431,228 @@ export default function Products() {
       alert(errorMsg);
     },
   });
+
+  const bulkStatusUpdateMutation = useMutation({
+    mutationFn: async ({
+      directBarcodeIds,
+      soldViaUnknownIds,
+      newTag,
+    }: {
+      directBarcodeIds: number[];
+      soldViaUnknownIds: number[];
+      newTag: string;
+    }) => {
+      const allUpdatedBarcodes: any[] = [];
+      const allErrors: string[] = [];
+
+      if (directBarcodeIds.length > 0) {
+        const directResponse = await catalogApi.barcodes.bulkUpdateTags({
+          barcode_ids: directBarcodeIds,
+          tag: newTag
+        });
+        allUpdatedBarcodes.push(...(directResponse.data?.updated_barcodes || []));
+        allErrors.push(...(directResponse.data?.errors || []));
+      }
+
+      if (soldViaUnknownIds.length > 0) {
+        const toUnknownResponse = await catalogApi.barcodes.bulkUpdateTags({
+          barcode_ids: soldViaUnknownIds,
+          tag: 'unknown'
+        });
+        const unknownErrors: string[] = toUnknownResponse.data?.errors || [];
+        if (unknownErrors.length > 0) {
+          allErrors.push(...unknownErrors);
+        }
+
+        const convertedToUnknownIds = (toUnknownResponse.data?.updated_barcodes || [])
+          .map((b: any) => b?.id)
+          .filter(Boolean);
+
+        if (convertedToUnknownIds.length > 0) {
+          const finalResponse = await catalogApi.barcodes.bulkUpdateTags({
+            barcode_ids: convertedToUnknownIds,
+            tag: newTag
+          });
+          allUpdatedBarcodes.push(...(finalResponse.data?.updated_barcodes || []));
+          allErrors.push(...(finalResponse.data?.errors || []));
+        }
+      }
+
+      return {
+        data: {
+          updated_barcodes: allUpdatedBarcodes,
+          errors: allErrors,
+        }
+      };
+    },
+    onSuccess: (response, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['product-barcodes'] });
+
+      const updatedCount = response.data?.updated_barcodes?.length || 0;
+      const errors = response.data?.errors || [];
+
+      if (updatedCount > 0) {
+        alert(`Successfully updated ${updatedCount} barcode(s) to "${variables.newTag}".`);
+      } else if (errors.length > 0) {
+        alert(`No barcodes were updated. ${errors.join(', ')}`);
+      } else {
+        alert('No barcodes were updated. Please check if the tag transition is allowed.');
+      }
+
+      setScannedStatusRows([]);
+      setStatusLookupInput('');
+      setBulkStatusInput('');
+      setStatusUpdateTag('');
+      setStatusLookupError(null);
+    },
+    onError: (error: any) => {
+      const errorMsg = error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        'Failed to update barcode statuses';
+      alert(errorMsg);
+    },
+  });
+
+  const getReadableTagLabel = (tag: string) => {
+    if (!tag) return 'Unknown';
+    const normalized = String(tag).toLowerCase();
+    if (normalized === 'new') return 'Fresh (New)';
+    if (normalized === 'in-cart') return 'In Cart';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  const resolveBarcodeStatus = async (rawCode: string) => {
+    const code = (rawCode || '').trim();
+    if (!code) return null;
+    const response = await productsApi.byBarcode(code, false, true);
+    const data = response?.data;
+    if (!data?.barcode_id) {
+      throw new Error(`Code "${code}" not found`);
+    }
+
+    return {
+      lookup: code,
+      barcodeId: data.barcode_id,
+      barcode: data.canonical_barcode || data.matched_barcode || code,
+      shortCode: data.matched_barcode || '',
+      productName: data.name || 'Unknown Product',
+      sku: data.sku || '',
+      currentTag: String(data.barcode_tag || 'unknown').toLowerCase(),
+    };
+  };
+
+  const addSingleStatusLookup = async () => {
+    const code = statusLookupInput.trim();
+    if (!code) return;
+    setStatusLookupError(null);
+
+    try {
+      const row = await resolveBarcodeStatus(code);
+      if (!row) return;
+      setScannedStatusRows((prev) => {
+        if (prev.some((item: any) => item.barcodeId === row.barcodeId)) return prev;
+        return [row, ...prev];
+      });
+      setStatusLookupInput('');
+    } catch (error: any) {
+      const msg = error?.response?.data?.error || error?.message || `Code "${code}" not found`;
+      setStatusLookupError(msg);
+      setTimeout(() => setStatusLookupError(null), 3000);
+    }
+  };
+
+  const addBulkStatusLookups = async () => {
+    const codes = Array.from(
+      new Set(
+        bulkStatusInput
+          .split(/[\n,\s]+/)
+          .map((c) => c.trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (codes.length === 0) {
+      setStatusLookupError('Please enter at least one barcode/short code.');
+      setTimeout(() => setStatusLookupError(null), 2500);
+      return;
+    }
+
+    setStatusLookupError(null);
+    const results = await Promise.allSettled(codes.map((code) => resolveBarcodeStatus(code)));
+    const successfulRows = results
+      .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled' && !!r.value)
+      .map((r) => r.value);
+    const failedCount = results.filter((r) => r.status === 'rejected').length;
+
+    setScannedStatusRows((prev) => {
+      const seen = new Set(prev.map((item: any) => item.barcodeId));
+      const next = [...prev];
+      successfulRows.forEach((row) => {
+        if (!seen.has(row.barcodeId)) {
+          seen.add(row.barcodeId);
+          next.unshift(row);
+        }
+      });
+      return next;
+    });
+
+    if (failedCount > 0) {
+      setStatusLookupError(`${failedCount} code(s) could not be found.`);
+      setTimeout(() => setStatusLookupError(null), 3000);
+    }
+  };
+
+  const removeScannedStatusRow = (barcodeId: number) => {
+    setScannedStatusRows((prev) => prev.filter((row: any) => row.barcodeId !== barcodeId));
+  };
+
+  const handleApplyBulkStatus = () => {
+    if (!statusUpdateTag) {
+      alert('Please select a target status.');
+      return;
+    }
+    if (scannedStatusRows.length === 0) {
+      alert('Please scan at least one barcode first.');
+      return;
+    }
+
+    const directBarcodeIds = scannedStatusRows
+      .filter((row: any) => {
+        const current = String(row.currentTag || '').toLowerCase();
+        if (current !== 'sold') return true;
+        return statusUpdateTag === 'sold' || statusUpdateTag === 'unknown';
+      })
+      .map((row: any) => row.barcodeId)
+      .filter(Boolean);
+
+    const soldViaUnknownIds = scannedStatusRows
+      .filter((row: any) => {
+        const current = String(row.currentTag || '').toLowerCase();
+        return current === 'sold' && statusUpdateTag !== 'sold' && statusUpdateTag !== 'unknown';
+      })
+      .map((row: any) => row.barcodeId)
+      .filter(Boolean);
+
+    const barcodeIds = [...directBarcodeIds, ...soldViaUnknownIds];
+    if (barcodeIds.length === 0) {
+      alert('No valid barcode IDs found to update.');
+      return;
+    }
+
+    if (soldViaUnknownIds.length > 0) {
+      const proceed = window.confirm(
+        `${soldViaUnknownIds.length} sold barcode(s) need a 2-step transition (sold -> unknown -> ${statusUpdateTag}). Continue?`
+      );
+      if (!proceed) return;
+    }
+
+    if (!window.confirm(`Update ${barcodeIds.length} barcode(s) to "${getReadableTagLabel(statusUpdateTag)}"?`)) {
+      return;
+    }
+
+    bulkStatusUpdateMutation.mutate({ directBarcodeIds, soldViaUnknownIds, newTag: statusUpdateTag });
+  };
 
   const deleteProductMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -1263,10 +1491,19 @@ export default function Products() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-gray-900">Products</h1>
-        <Button onClick={() => { setEditingProduct(undefined); setShowForm(true); }}>
-          <Plus className="h-5 w-5 mr-2 inline" />
-          Add Product
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setShowBarcodeStatusTool(true)}
+          >
+            <Barcode className="h-5 w-5 mr-2 inline" />
+            Barcode Status
+          </Button>
+          <Button onClick={() => { setEditingProduct(undefined); setShowForm(true); }}>
+            <Plus className="h-5 w-5 mr-2 inline" />
+            Add Product
+          </Button>
+        </div>
       </div>
 
       {/* Tag Tabs - Primary Navigation */}
@@ -2825,6 +3062,122 @@ export default function Products() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={showBarcodeStatusTool}
+        onClose={() => {
+          setShowBarcodeStatusTool(false);
+          setStatusLookupInput('');
+          setBulkStatusInput('');
+          setStatusUpdateTag('');
+          setStatusLookupError(null);
+          setScannedStatusRows([]);
+        }}
+        title="Barcode Status Update"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Scan / Enter Barcode or Short Code</label>
+              <Input
+                value={statusLookupInput}
+                onChange={(e) => setStatusLookupInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addSingleStatusLookup();
+                  }
+                }}
+                placeholder="Scan one code and press Enter"
+              />
+            </div>
+            <Button type="button" onClick={addSingleStatusLookup}>
+              Add Code
+            </Button>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Bulk Scan / Paste (comma, space, or newline separated)</label>
+            <textarea
+              className="block w-full px-3 py-2 border border-gray-300 rounded-lg"
+              rows={4}
+              value={bulkStatusInput}
+              onChange={(e) => setBulkStatusInput(e.target.value)}
+              placeholder="Paste multiple barcodes/short codes"
+            />
+            <div className="mt-2 flex justify-end">
+              <Button type="button" variant="outline" onClick={addBulkStatusLookups}>
+                Add Bulk Codes
+              </Button>
+            </div>
+          </div>
+
+          {statusLookupError && (
+            <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+              {statusLookupError}
+            </div>
+          )}
+
+          <div className="border rounded-lg">
+            <div className="px-3 py-2 border-b bg-gray-50 text-sm font-medium text-gray-700">
+              Scanned Items ({scannedStatusRows.length})
+            </div>
+            {scannedStatusRows.length === 0 ? (
+              <div className="p-4 text-sm text-gray-500">No barcodes scanned yet.</div>
+            ) : (
+              <div className="max-h-64 overflow-y-auto">
+                {scannedStatusRows.map((row: any) => (
+                  <div key={row.barcodeId} className="px-3 py-2 border-b last:border-b-0 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">{row.productName}</div>
+                      <div className="text-xs text-gray-600">
+                        {row.barcode} {row.shortCode ? `(${row.shortCode})` : ''} {row.sku ? `• SKU: ${row.sku}` : ''}
+                      </div>
+                      <div className="text-xs text-gray-700 mt-0.5">
+                        Current: {getReadableTagLabel(row.currentTag)}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => removeScannedStatusRow(row.barcodeId)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Set New Status For All Scanned Items</label>
+              <Select
+                value={statusUpdateTag}
+                onChange={(e) => setStatusUpdateTag(e.target.value)}
+              >
+                <option value="">Select target status</option>
+                <option value="new">Fresh (New)</option>
+                <option value="sold">Sold</option>
+                <option value="unknown">Unknown</option>
+                <option value="returned">Returned</option>
+                <option value="defective">Defective</option>
+                <option value="in-cart">In Cart</option>
+              </Select>
+            </div>
+            <Button
+              type="button"
+              onClick={handleApplyBulkStatus}
+              disabled={bulkStatusUpdateMutation.isPending || !statusUpdateTag || scannedStatusRows.length === 0}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {bulkStatusUpdateMutation.isPending ? 'Updating...' : 'Apply Status'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* Move Out Modal for Defective Products */}
