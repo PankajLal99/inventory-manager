@@ -163,7 +163,9 @@ export default function RepairRegistration() {
         }
     });
     const customerSearchResults = useMemo(() => {
-        return customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
+        if (!customersResponse) return [];
+        const results = customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []);
+        return Array.isArray(results) ? results : [];
     }, [customersResponse]);
 
     useEffect(() => {
