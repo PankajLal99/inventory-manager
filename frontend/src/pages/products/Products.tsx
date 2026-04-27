@@ -434,49 +434,37 @@ export default function Products() {
 
   const bulkStatusUpdateMutation = useMutation({
     mutationFn: async ({
-      directBarcodeIds,
-      soldViaUnknownIds,
+      barcodeIds,
       newTag,
     }: {
-      directBarcodeIds: number[];
-      soldViaUnknownIds: number[];
+      barcodeIds: number[];
       newTag: string;
     }) => {
       const allUpdatedBarcodes: any[] = [];
       const allErrors: string[] = [];
+      // Force direct status updates per barcode (confirmed=true) with no flow checks in UI.
+      const results = await Promise.allSettled(
+        barcodeIds.map((barcodeId) =>
+          catalogApi.barcodes.updateTag(barcodeId, { tag: newTag, confirmed: true })
+        )
+      );
 
-      if (directBarcodeIds.length > 0) {
-        const directResponse = await catalogApi.barcodes.bulkUpdateTags({
-          barcode_ids: directBarcodeIds,
-          tag: newTag
-        });
-        allUpdatedBarcodes.push(...(directResponse.data?.updated_barcodes || []));
-        allErrors.push(...(directResponse.data?.errors || []));
-      }
-
-      if (soldViaUnknownIds.length > 0) {
-        const toUnknownResponse = await catalogApi.barcodes.bulkUpdateTags({
-          barcode_ids: soldViaUnknownIds,
-          tag: 'unknown'
-        });
-        const unknownErrors: string[] = toUnknownResponse.data?.errors || [];
-        if (unknownErrors.length > 0) {
-          allErrors.push(...unknownErrors);
+      results.forEach((result, idx) => {
+        if (result.status === 'fulfilled') {
+          const updated = result.value?.data?.updated_barcode;
+          if (updated) {
+            allUpdatedBarcodes.push(updated);
+          } else {
+            allUpdatedBarcodes.push({ id: barcodeIds[idx] });
+          }
+          return;
         }
-
-        const convertedToUnknownIds = (toUnknownResponse.data?.updated_barcodes || [])
-          .map((b: any) => b?.id)
-          .filter(Boolean);
-
-        if (convertedToUnknownIds.length > 0) {
-          const finalResponse = await catalogApi.barcodes.bulkUpdateTags({
-            barcode_ids: convertedToUnknownIds,
-            tag: newTag
-          });
-          allUpdatedBarcodes.push(...(finalResponse.data?.updated_barcodes || []));
-          allErrors.push(...(finalResponse.data?.errors || []));
-        }
-      }
+        const err: any = result.reason;
+        const message = err?.response?.data?.error ||
+          err?.response?.data?.message ||
+          `Barcode ID ${barcodeIds[idx]} update failed`;
+        allErrors.push(message);
+      });
 
       return {
         data: {
@@ -493,11 +481,15 @@ export default function Products() {
       const errors = response.data?.errors || [];
 
       if (updatedCount > 0) {
-        alert(`Successfully updated ${updatedCount} barcode(s) to "${variables.newTag}".`);
+        if (errors.length > 0) {
+          alert(`Updated ${updatedCount} barcode(s) to "${variables.newTag}". Failed: ${errors.length}.`);
+        } else {
+          alert(`Successfully updated ${updatedCount} barcode(s) to "${variables.newTag}".`);
+        }
       } else if (errors.length > 0) {
         alert(`No barcodes were updated. ${errors.join(', ')}`);
       } else {
-        alert('No barcodes were updated. Please check if the tag transition is allowed.');
+        alert('No barcodes were updated.');
       }
 
       setScannedStatusRows([]);
@@ -617,41 +609,19 @@ export default function Products() {
       return;
     }
 
-    const directBarcodeIds = scannedStatusRows
-      .filter((row: any) => {
-        const current = String(row.currentTag || '').toLowerCase();
-        if (current !== 'sold') return true;
-        return statusUpdateTag === 'sold' || statusUpdateTag === 'unknown';
-      })
+    const barcodeIds = scannedStatusRows
       .map((row: any) => row.barcodeId)
       .filter(Boolean);
-
-    const soldViaUnknownIds = scannedStatusRows
-      .filter((row: any) => {
-        const current = String(row.currentTag || '').toLowerCase();
-        return current === 'sold' && statusUpdateTag !== 'sold' && statusUpdateTag !== 'unknown';
-      })
-      .map((row: any) => row.barcodeId)
-      .filter(Boolean);
-
-    const barcodeIds = [...directBarcodeIds, ...soldViaUnknownIds];
     if (barcodeIds.length === 0) {
       alert('No valid barcode IDs found to update.');
       return;
-    }
-
-    if (soldViaUnknownIds.length > 0) {
-      const proceed = window.confirm(
-        `${soldViaUnknownIds.length} sold barcode(s) need a 2-step transition (sold -> unknown -> ${statusUpdateTag}). Continue?`
-      );
-      if (!proceed) return;
     }
 
     if (!window.confirm(`Update ${barcodeIds.length} barcode(s) to "${getReadableTagLabel(statusUpdateTag)}"?`)) {
       return;
     }
 
-    bulkStatusUpdateMutation.mutate({ directBarcodeIds, soldViaUnknownIds, newTag: statusUpdateTag });
+    bulkStatusUpdateMutation.mutate({ barcodeIds, newTag: statusUpdateTag });
   };
 
   const deleteProductMutation = useMutation({
