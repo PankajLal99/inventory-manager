@@ -142,6 +142,8 @@ class Invoice(models.Model):
     pending_cleared_at = models.DateTimeField(null=True, blank=True, db_index=True)
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='voided_invoices')
+    # Present in some deployments as NOT NULL with default false; keep model aligned.
+    is_replacement_return = models.BooleanField(default=False)
     is_edited = models.BooleanField(default=False)
     edited_on = models.DateTimeField(null=True, blank=True)
     # POS checkout: returns/trade-ins applied against prior invoices (same customer), netted on this invoice

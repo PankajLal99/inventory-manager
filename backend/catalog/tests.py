@@ -414,3 +414,327 @@ class DefectiveMoveOutSupplierSplitTests(TransactionTestCase):
         # Both no-supplier barcodes grouped into one move-out
         self.assertEqual(response.data['total_move_outs'], 1)
         self.assertIn('No Supplier', DefectiveProductMoveOut.objects.first().notes)
+
+
+class BarcodeSerializerSupplierTests(TransactionTestCase):
+    """Tests for BarcodeSerializer supplier_name/supplier_id via both Path A and Path B."""
+
+    def setUp(self):
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.supplier = TestDataFactory.create_supplier(name='TestVendor')
+        self.product = TestDataFactory.create_product(name='Supplier Test Product', track_inventory=True)
+
+    def test_supplier_name_via_path_a(self):
+        """supplier_name returned when barcode.purchase.supplier is set (Path A)."""
+        from backend.catalog.serializers import BarcodeSerializer
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, status='finalized')
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=self.product, quantity=Decimal('1'))
+        barcode = TestDataFactory.create_barcode(product=self.product, tag='defective', purchase_item=purchase_item)
+        barcode.purchase = purchase
+        barcode.save()
+
+        data = BarcodeSerializer(barcode).data
+        self.assertEqual(data['supplier_name'], 'TestVendor')
+        self.assertEqual(data['supplier_id'], self.supplier.id)
+
+    def test_supplier_name_via_path_b(self):
+        """supplier_name returned via purchase_item.purchase.supplier when barcode.purchase is None (Path B)."""
+        from backend.catalog.serializers import BarcodeSerializer
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, status='finalized')
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=self.product, quantity=Decimal('1'))
+        barcode = TestDataFactory.create_barcode(product=self.product, tag='defective', purchase_item=purchase_item)
+        # Ensure barcode.purchase is None to exercise Path B
+        barcode.purchase = None
+        barcode.save()
+
+        data = BarcodeSerializer(barcode).data
+        self.assertEqual(data['supplier_name'], 'TestVendor')
+        self.assertEqual(data['supplier_id'], self.supplier.id)
+
+    def test_supplier_none_when_no_purchase(self):
+        """supplier_name and supplier_id are None when barcode has no purchase at all."""
+        from backend.catalog.serializers import BarcodeSerializer
+        barcode = TestDataFactory.create_barcode(product=self.product, tag='defective')
+
+        data = BarcodeSerializer(barcode).data
+        self.assertIsNone(data['supplier_name'])
+        self.assertIsNone(data['supplier_id'])
+
+    def test_supplier_id_field_present(self):
+        """supplier_id is included in serialized output."""
+        from backend.catalog.serializers import BarcodeSerializer
+        barcode = TestDataFactory.create_barcode(product=self.product, tag='new')
+        data = BarcodeSerializer(barcode).data
+        self.assertIn('supplier_id', data)
+
+
+class DefectiveMoveOutAddItemsTests(TransactionTestCase):
+    """Tests for the add-items-to-existing-move-out endpoint."""
+
+    def setUp(self):
+        from backend.catalog.models import DefectiveProductMoveOut, DefectiveProductItem
+        from backend.pos.models import Invoice
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        DefectiveProductMoveOut.objects.all().delete()
+        Invoice.objects.all().delete()
+
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier(name='AddItemsSupplier')
+        self.product = TestDataFactory.create_product(name='Product X', track_inventory=True)
+
+    def _make_defective_barcode(self, product=None, supplier=None):
+        product = product or self.product
+        supplier = supplier or self.supplier
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=supplier, store=self.store)
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=product, quantity=Decimal('1'))
+        return TestDataFactory.create_barcode(product=product, tag='defective', purchase_item=purchase_item)
+
+    def _create_move_out(self, barcodes):
+        """Create a move-out via the API and return the move-out id."""
+        product_ids = list({b.product_id for b in barcodes})
+        barcode_ids = [b.id for b in barcodes]
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': product_ids,
+            'barcode_ids': barcode_ids,
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return response.data['move_outs'][0]['id']
+
+    def test_add_items_success(self):
+        """Adding new defective barcodes to an existing move-out should succeed."""
+        from backend.catalog.models import DefectiveProductMoveOut, DefectiveProductItem
+
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        # Add a second barcode
+        b2 = self._make_defective_barcode()
+        response = self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b2.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['added_items'], 1)
+
+        move_out = DefectiveProductMoveOut.objects.get(pk=move_out_id)
+        self.assertEqual(move_out.total_items, 2)
+        self.assertEqual(DefectiveProductItem.objects.filter(move_out=move_out).count(), 2)
+
+    def test_add_items_updates_totals(self):
+        """total_loss and total_items should be updated after adding items."""
+        from backend.catalog.models import DefectiveProductMoveOut
+
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+        original = DefectiveProductMoveOut.objects.get(pk=move_out_id)
+        original_loss = original.total_loss
+        original_items = original.total_items
+
+        b2 = self._make_defective_barcode()
+        self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b2.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        updated = DefectiveProductMoveOut.objects.get(pk=move_out_id)
+        self.assertEqual(updated.total_items, original_items + 1)
+        self.assertGreaterEqual(updated.total_loss, original_loss)
+
+    def test_add_items_rejects_already_moved_barcode(self):
+        """Barcodes already in a move-out should be rejected."""
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        # Try to add b1 again — it's already in the move-out
+        response = self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b1.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already in a move-out', response.data['error'])
+
+    def test_add_items_rejects_empty_barcode_ids(self):
+        """Empty barcode_ids should return 400."""
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        response = self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('No barcodes provided', response.data['error'])
+
+    def test_add_items_rejects_non_defective_barcode(self):
+        """Non-defective barcodes should not be added."""
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        # Create a 'new' tag barcode
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, store=self.store)
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=self.product, quantity=Decimal('1'))
+        b_new = TestDataFactory.create_barcode(product=self.product, tag='new', purchase_item=purchase_item)
+
+        response = self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b_new.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_add_items_nonexistent_move_out_returns_404(self):
+        """Adding items to a nonexistent move-out should return 404."""
+        b1 = self._make_defective_barcode()
+
+        response = self.client.post('/api/v1/defective-products/move-outs/99999/add-items/', {
+            'barcode_ids': [b1.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_add_multiple_items_at_once(self):
+        """Adding multiple barcodes in a single call should work correctly."""
+        from backend.catalog.models import DefectiveProductMoveOut
+
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        b2 = self._make_defective_barcode()
+        b3 = self._make_defective_barcode()
+        b4 = self._make_defective_barcode()
+
+        response = self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b2.id, b3.id, b4.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['added_items'], 3)
+
+        move_out = DefectiveProductMoveOut.objects.get(pk=move_out_id)
+        self.assertEqual(move_out.total_items, 4)  # 1 original + 3 added
+
+    def test_add_items_skips_already_moved_reports_count(self):
+        """When some barcodes are already moved, they should be skipped and reported."""
+        b1 = self._make_defective_barcode()
+        b2 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        # b3 is new and should be added; b1 already in move-out and should be skipped
+        b3 = self._make_defective_barcode()
+        response = self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b1.id, b3.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['added_items'], 1)
+        self.assertEqual(response.data['skipped_already_moved'], 1)
+
+    def test_add_items_updates_invoice_totals(self):
+        """Invoice subtotal/total should be updated when items are added."""
+        from backend.pos.models import Invoice
+
+        b1 = self._make_defective_barcode()
+        move_out_id = self._create_move_out([b1])
+
+        from backend.catalog.models import DefectiveProductMoveOut
+        move_out = DefectiveProductMoveOut.objects.select_related('invoice').get(pk=move_out_id)
+        invoice = move_out.invoice
+        original_total = invoice.total
+
+        b2 = self._make_defective_barcode()
+        self.client.post(f'/api/v1/defective-products/move-outs/{move_out_id}/add-items/', {
+            'barcode_ids': [b2.id],
+            'product_ids': [self.product.id],
+        }, format='json')
+
+        invoice.refresh_from_db()
+        self.assertGreaterEqual(invoice.total, original_total)
+
+
+class DefectiveMoveOutListTests(TransactionTestCase):
+    """Tests for the defective move-out list endpoint."""
+
+    def setUp(self):
+        from backend.catalog.models import DefectiveProductMoveOut
+        from backend.pos.models import Invoice
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        DefectiveProductMoveOut.objects.all().delete()
+        Invoice.objects.all().delete()
+
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier(name='ListTestSupplier')
+        self.product = TestDataFactory.create_product(name='ListTestProduct', track_inventory=True)
+
+    def _make_defective_barcode(self, product=None, supplier=None):
+        product = product or self.product
+        supplier = supplier or self.supplier
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=supplier, store=self.store)
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=product, quantity=Decimal('1'))
+        return TestDataFactory.create_barcode(product=product, tag='defective', purchase_item=purchase_item)
+
+    def test_list_returns_customer_name(self):
+        """Move-out list should include the customer_name (supplier name) from invoice."""
+        b1 = self._make_defective_barcode()
+        self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [b1.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+
+        response = self.client.get('/api/v1/defective-products/move-outs/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data if isinstance(response.data, list) else response.data.get('results', response.data)
+        if isinstance(results, list):
+            move_out = results[0]
+        else:
+            move_out = results
+        self.assertIn('customer_name', move_out)
+        self.assertEqual(move_out['customer_name'], 'ListTestSupplier')
+
+    def test_products_defective_list_excludes_already_moved_out_barcodes(self):
+        """Defective products list should not include barcodes already linked to move-out items."""
+        b1 = self._make_defective_barcode()
+        b2 = self._make_defective_barcode()
+
+        # Move out one barcode
+        create_response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [b1.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+
+        # Defective list should only show the remaining barcode
+        list_response = self.client.get('/api/v1/products/', {'tag': 'defective', 'supplier': self.supplier.id})
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = list_response.data.get('results', [])
+        product_data = next((p for p in results if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+
+        barcodes = product_data.get('barcodes', [])
+        barcode_ids = {b['id'] for b in barcodes}
+        self.assertNotIn(b1.id, barcode_ids)
+        self.assertIn(b2.id, barcode_ids)

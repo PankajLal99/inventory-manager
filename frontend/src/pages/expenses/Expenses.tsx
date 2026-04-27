@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Coins, Plus, Search, Pencil, Trash2 } from 'lucide-react';
-import { posApi } from '../../lib/api';
+import { Coins, Plus, Search, Pencil, Trash2, User, ChevronRight } from 'lucide-react';
+import { customersApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { toast } from '../../lib/toast';
 import { formatDateDDMMYYYY, formatNumber, getTodayDateString } from '../../lib/utils';
@@ -45,6 +45,12 @@ interface ExpenseFormState {
   expense_amount: string;
 }
 
+interface BorrowerSuggestion {
+  id: number;
+  name: string;
+  groupName: string;
+}
+
 const getDefaultFormState = (): ExpenseFormState => ({
   expense_date: getTodayDateString(),
   expense_type: '',
@@ -67,6 +73,9 @@ export default function Expenses() {
   const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
   const [debouncedExpenseType, setDebouncedExpenseType] = useState('');
   const [debouncedBorrowerName, setDebouncedBorrowerName] = useState('');
+  const [borrowerGroupFilter, setBorrowerGroupFilter] = useState('');
+  const [isBorrowerSearchFocused, setIsBorrowerSearchFocused] = useState(false);
+  const [activeBorrowerIndex, setActiveBorrowerIndex] = useState(-1);
   const canSeeExpenseListing = (user?.groups || []).includes('Super');
 
   useEffect(() => {
@@ -133,25 +142,60 @@ export default function Expenses() {
     return [];
   }, [expenseTypeSuggestionsData]);
 
-  const { data: borrowerSuggestionsData } = useQuery({
-    queryKey: ['expense-borrower-suggestions', debouncedBorrowerName],
+  const { data: customerGroupsData } = useQuery({
+    queryKey: ['expense-borrower-customer-groups'],
     queryFn: async () => {
-      const response = await posApi.expenses.borrowers(
-        debouncedBorrowerName ? { q: debouncedBorrowerName } : {}
-      );
+      const response = await customersApi.groups.list();
       return response.data;
     },
     enabled: isModalOpen,
     retry: false,
   });
 
-  const borrowerSuggestions: string[] = useMemo(() => {
-    if (!borrowerSuggestionsData) return [];
-    if (Array.isArray(borrowerSuggestionsData)) return borrowerSuggestionsData;
-    if (Array.isArray(borrowerSuggestionsData.results)) return borrowerSuggestionsData.results;
-    if (Array.isArray(borrowerSuggestionsData.data)) return borrowerSuggestionsData.data;
+  const customerGroups = useMemo(() => {
+    if (!customerGroupsData) return [];
+    if (Array.isArray(customerGroupsData.results)) return customerGroupsData.results;
+    if (Array.isArray(customerGroupsData.data)) return customerGroupsData.data;
+    if (Array.isArray(customerGroupsData)) return customerGroupsData;
     return [];
+  }, [customerGroupsData]);
+
+  const { data: borrowerSuggestionsData, isLoading: borrowerSuggestionsLoading, isError: borrowerSuggestionsError } = useQuery({
+    queryKey: ['expense-borrower-suggestions', debouncedBorrowerName, borrowerGroupFilter],
+    queryFn: async () => {
+      const params: Record<string, string> = {};
+      if (debouncedBorrowerName) params.search = debouncedBorrowerName;
+      if (borrowerGroupFilter) params.customer_group = borrowerGroupFilter;
+      const response = await customersApi.list(params);
+      return response.data;
+    },
+    enabled: isModalOpen,
+    retry: false,
+  });
+
+  const borrowerSuggestions: BorrowerSuggestion[] = useMemo(() => {
+    if (!borrowerSuggestionsData) return [];
+    const list = Array.isArray(borrowerSuggestionsData)
+      ? borrowerSuggestionsData
+      : Array.isArray(borrowerSuggestionsData.results)
+        ? borrowerSuggestionsData.results
+        : Array.isArray(borrowerSuggestionsData.data)
+          ? borrowerSuggestionsData.data
+          : [];
+
+    return list
+      .filter((item: any) => item?.name)
+      .slice(0, 10)
+      .map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        groupName: item.customer_group_name || item.customer_group?.name || 'No Group',
+      }));
   }, [borrowerSuggestionsData]);
+
+  useEffect(() => {
+    setActiveBorrowerIndex(-1);
+  }, [form.borrower_name, borrowerGroupFilter, borrowerSuggestions.length]);
 
   const expenses: Expense[] = useMemo(() => {
     if (!data) return [];
@@ -200,6 +244,8 @@ export default function Expenses() {
     setIsModalOpen(false);
     setEditingExpense(null);
     setForm(getDefaultFormState());
+    setBorrowerGroupFilter('');
+    setIsBorrowerSearchFocused(false);
   };
 
   const openCreateModal = () => {
@@ -473,18 +519,106 @@ export default function Expenses() {
             value={form.lender_name}
             onChange={(e) => setForm((prev) => ({ ...prev, lender_name: e.target.value }))}
           />
+          <Select
+            label="Borrower Group"
+            value={borrowerGroupFilter}
+            onChange={(e) => setBorrowerGroupFilter(e.target.value)}
+          >
+            <option value="">All Groups</option>
+            {customerGroups.map((group: any) => (
+              <option key={group.id} value={String(group.id)}>
+                {group.name}
+              </option>
+            ))}
+          </Select>
           <Input
             type="text"
             label="Borrower Name"
-            list="borrower-name-suggestions"
             value={form.borrower_name}
             onChange={(e) => setForm((prev) => ({ ...prev, borrower_name: e.target.value }))}
+            onFocus={() => setIsBorrowerSearchFocused(true)}
+            onBlur={() => setTimeout(() => setIsBorrowerSearchFocused(false), 200)}
+            onKeyDown={(e) => {
+              const hasDropdown = isBorrowerSearchFocused || form.borrower_name.trim() || borrowerGroupFilter;
+              if (!hasDropdown || borrowerSuggestions.length === 0) {
+                if (e.key === 'Escape') setIsBorrowerSearchFocused(false);
+                return;
+              }
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setIsBorrowerSearchFocused(true);
+                setActiveBorrowerIndex((prev) => (prev + 1) % borrowerSuggestions.length);
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setIsBorrowerSearchFocused(true);
+                setActiveBorrowerIndex((prev) => (prev <= 0 ? borrowerSuggestions.length - 1 : prev - 1));
+                return;
+              }
+              if (e.key === 'Enter') {
+                if (activeBorrowerIndex >= 0 && activeBorrowerIndex < borrowerSuggestions.length) {
+                  e.preventDefault();
+                  const picked = borrowerSuggestions[activeBorrowerIndex];
+                  setForm((prev) => ({ ...prev, borrower_name: picked.name }));
+                  setIsBorrowerSearchFocused(false);
+                }
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setIsBorrowerSearchFocused(false);
+                setActiveBorrowerIndex(-1);
+              }
+            }}
           />
-          <datalist id="borrower-name-suggestions">
-            {borrowerSuggestions.map((suggestion) => (
-              <option key={suggestion} value={suggestion} />
-            ))}
-          </datalist>
+          <div className="relative">
+            {(isBorrowerSearchFocused || form.borrower_name.trim() || borrowerGroupFilter) && (
+              <div className="absolute z-50 w-full -mt-2 bg-white border border-gray-100 rounded-xl shadow-lg p-2 max-h-64 overflow-y-auto">
+                {borrowerSuggestionsLoading ? (
+                  <div className="p-4 text-sm text-gray-500 text-center">Searching borrowers...</div>
+                ) : borrowerSuggestionsError ? (
+                  <div className="p-4 text-sm text-red-500 text-center">Failed to load borrowers. Try again.</div>
+                ) : borrowerSuggestions.length > 0 ? (
+                  borrowerSuggestions.map((suggestion) => (
+                    <button
+                      key={suggestion.id}
+                      type="button"
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, borrower_name: suggestion.name }));
+                        setIsBorrowerSearchFocused(false);
+                      }}
+                      onMouseEnter={() => {
+                        const idx = borrowerSuggestions.findIndex((item) => item.id === suggestion.id);
+                        setActiveBorrowerIndex(idx);
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-lg flex items-center justify-between group transition-colors ${
+                        activeBorrowerIndex >= 0 &&
+                        borrowerSuggestions[activeBorrowerIndex]?.id === suggestion.id
+                          ? 'bg-blue-50'
+                          : 'hover:bg-blue-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center group-hover:bg-blue-600 transition-colors shrink-0">
+                          <User className="h-4 w-4 text-gray-400 group-hover:text-white" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate">
+                            {suggestion.name}
+                            {` (${suggestion.groupName})`}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-4 text-sm text-gray-500 text-center">No borrowers found</div>
+                )}
+              </div>
+            )}
+          </div>
           <Select
             label="Payment Type *"
             value={form.payment_choices_type}

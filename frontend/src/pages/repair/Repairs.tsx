@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import ToastContainer from '../../components/ui/Toast';
@@ -177,7 +177,9 @@ function parseAmount(value: unknown): number {
 export default function Repairs() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const listSearchDebounceRef = useRef<number | null>(null);
+  const [autoLoadRemainingPages, setAutoLoadRemainingPages] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [user, setUser] = useState<any>(null);
@@ -215,6 +217,23 @@ export default function Repairs() {
     loadUser();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (listSearchDebounceRef.current) {
+        window.clearTimeout(listSearchDebounceRef.current);
+      }
+    };
+  }, []);
+
+  const handleListSearchChange = (value: string) => {
+    if (listSearchDebounceRef.current) {
+      window.clearTimeout(listSearchDebounceRef.current);
+    }
+    listSearchDebounceRef.current = window.setTimeout(() => {
+      setDebouncedSearch(value.trim());
+    }, 250);
+  };
+
   // Fetch stores (already filtered by backend based on user groups)
   const { data: storesResponse } = useQuery({
     queryKey: ['stores'],
@@ -241,33 +260,89 @@ export default function Repairs() {
   const repairStore = repairStores.find((s: any) => s.id === defaultStore?.id) || repairStores[0];
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['repair-invoices', statusFilter, repairStore?.id, currentPage, barcodeSearch, search],
+    queryKey: ['repair-invoices', statusFilter, repairStore?.id, currentPage, debouncedSearch],
     queryFn: async () => {
       const params: any = {};
-      // Keep this page fully loaded by default so grouped sections
-      // (received/WIP/done/etc.) are not capped by pagination.
-      params.unpaginated = 1;
+      params.page = currentPage;
       if (statusFilter) {
         params.repair_status = statusFilter;
       }
-      if (search.trim()) {
-        params.search = search.trim();
+      if (debouncedSearch) {
+        params.search = debouncedSearch;
       }
-      if (barcodeSearch.trim()) {
-        params.repair_barcode = barcodeSearch.trim();
-      }
-      // When searching by text or barcode, show results across all repair stores.
+      // When searching by text, show results across all repair stores.
       // Only apply store filter when there is no search input.
-      if (!search.trim() && !barcodeSearch.trim() && repairStore?.id) {
+      if (!debouncedSearch && repairStore?.id) {
         params.store = repairStore.id;
       }
       const response = await posApi.repair.invoices.list(params);
       return response.data;
     },
     // Avoid an initial unscoped fetch before repair store is resolved.
-    // Allow fetch without store only when user is actively searching.
-    enabled: Boolean(repairStore?.id) || Boolean(search.trim()) || Boolean(barcodeSearch.trim()),
+    // Allow fetch without store only when user is actively searching by text.
+    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
     placeholderData: keepPreviousData,
+    retry: false,
+  });
+
+  const buildKpiParams = (extra: Record<string, any> = {}) => {
+    const params: any = { limit: 1, ...extra };
+    if (debouncedSearch) {
+      params.search = debouncedSearch;
+    }
+    if (!debouncedSearch && repairStore?.id) {
+      params.store = repairStore.id;
+    }
+    return params;
+  };
+
+  const { data: totalKpiData } = useQuery({
+    queryKey: ['repair-invoices-kpi-total', repairStore?.id, debouncedSearch],
+    queryFn: async () => {
+      const response = await posApi.repair.invoices.list(buildKpiParams());
+      return response.data;
+    },
+    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    retry: false,
+  });
+
+  const { data: receivedKpiData } = useQuery({
+    queryKey: ['repair-invoices-kpi-received', repairStore?.id, debouncedSearch],
+    queryFn: async () => {
+      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'received' }));
+      return response.data;
+    },
+    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    retry: false,
+  });
+
+  const { data: deliveredKpiData } = useQuery({
+    queryKey: ['repair-invoices-kpi-delivered', repairStore?.id, debouncedSearch],
+    queryFn: async () => {
+      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'delivered' }));
+      return response.data;
+    },
+    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    retry: false,
+  });
+
+  const { data: wipKpiData } = useQuery({
+    queryKey: ['repair-invoices-kpi-wip', repairStore?.id, debouncedSearch],
+    queryFn: async () => {
+      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'work_in_progress' }));
+      return response.data;
+    },
+    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    retry: false,
+  });
+
+  const { data: notRepairedKpiData } = useQuery({
+    queryKey: ['repair-invoices-kpi-not-repaired', repairStore?.id, debouncedSearch],
+    queryFn: async () => {
+      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'not_repaired' }));
+      return response.data;
+    },
+    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
     retry: false,
   });
 
@@ -298,8 +373,9 @@ export default function Repairs() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
+    setAutoLoadRemainingPages(true);
     setLoadedRepairs([]);
-  }, [statusFilter, defaultStore?.id, search, barcodeSearch]);
+  }, [statusFilter, defaultStore?.id, debouncedSearch]);
 
   useEffect(() => {
     if (!data) return;
@@ -315,6 +391,37 @@ export default function Repairs() {
       return merged;
     });
   }, [data]);
+
+  useEffect(() => {
+    if (!data || isFetching) return;
+    const hasMore = Number(data.page || 1) < Number(data.total_pages || 1);
+    if (!hasMore) return;
+    // Keep typing/search responsive and avoid endless background fetches when user is filtering.
+    if (debouncedSearch || statusFilter || !autoLoadRemainingPages) return;
+    // Wait for KPI totals before deciding whether we've loaded enough rows.
+    if (!wipKpiData || !receivedKpiData) return;
+
+    const loadedWip = loadedRepairs.filter((inv) => inv.repair?.status === 'work_in_progress').length;
+    const loadedReceived = loadedRepairs.filter((inv) => inv.repair?.status === 'received').length;
+    const needMoreWip = loadedWip < Number(wipKpiData?.count || 0);
+    const needMoreReceived = loadedReceived < Number(receivedKpiData?.count || 0);
+
+    // Auto-load next page only until WIP/Received sections are fully populated.
+    if (needMoreWip || needMoreReceived) {
+      setCurrentPage((p) => p + 1);
+      return;
+    }
+    setAutoLoadRemainingPages(false);
+  }, [
+    data,
+    isFetching,
+    debouncedSearch,
+    statusFilter,
+    autoLoadRemainingPages,
+    loadedRepairs,
+    wipKpiData,
+    receivedKpiData,
+  ]);
 
   // Sync edit form when opening edit modal
   useEffect(() => {
@@ -549,9 +656,11 @@ export default function Repairs() {
     );
   };
 
-  const totalRepairs = filteredRepairs.length;
-  const receivedRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'received').length;
-  const deliveredRepairs = filteredRepairs.filter(inv => inv.repair?.status === 'delivered').length;
+  const totalRepairs = Number(totalKpiData?.count || 0);
+  const receivedRepairs = Number(receivedKpiData?.count || 0);
+  const deliveredRepairs = Number(deliveredKpiData?.count || 0);
+  const workInProgressRepairs = Number(wipKpiData?.count || 0);
+  const notRepairedRepairs = Number(notRepairedKpiData?.count || 0);
 
   if (isLoading) {
     return <LoadingState message="Loading repairs..." />;
@@ -685,8 +794,7 @@ export default function Repairs() {
                 <Input
                   type="text"
                   placeholder="Invoice #, customer, contact, model, barcode, short code..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => handleListSearchChange(e.target.value)}
                   className="pl-10"
                 />
               </div>
@@ -872,7 +980,7 @@ export default function Repairs() {
             const isNotRepairedGroup = group.status === 'not_repaired';
             const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
             // When status or search filters are active, show all rows (no date slicing).
-            const hasAnySearch = Boolean(search.trim()) || Boolean(barcodeSearch.trim());
+            const hasAnySearch = Boolean(debouncedSearch) || Boolean(barcodeSearch.trim());
             const hasGroupDateSelector = group.status === 'delivered' && !statusFilter && !hasAnySearch;
             const selectedGroupDate = hasGroupDateSelector
               ? getGroupSelectedDate(group.status, group.items)
@@ -903,7 +1011,15 @@ export default function Repairs() {
                   />
                   <h2 className="text-xl font-bold text-gray-900">{group.label}</h2>
                   <Badge variant="outline" className="ml-2 font-mono">
-                    {displayedGroupItems.length}
+                    {group.status === 'work_in_progress'
+                      ? workInProgressRepairs
+                      : group.status === 'received'
+                        ? receivedRepairs
+                        : group.status === 'delivered'
+                          ? deliveredRepairs
+                          : group.status === 'not_repaired'
+                            ? notRepairedRepairs
+                            : displayedGroupItems.length}
                   </Badge>
                   {hasGroupDateSelector && (
                     <div className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>

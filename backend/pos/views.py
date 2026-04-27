@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch
+from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, Exists, OuterRef
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
@@ -263,10 +263,13 @@ def repair_invoices_list(request):
     """List all repair invoices (invoices from Repair shops with Repair records)"""
     from backend.locations.models import Store
     
-    # Filter invoices from Repair shops (lowercase as per model) that have Repair records
-    repair_stores = Store.objects.filter(shop_type='repair', is_active=True)
+    # Filter invoices from Repair shops (lowercase as per model) that have Repair records.
+    # Materialize once to avoid repeated subquery/exists checks during request processing.
+    repair_store_ids = list(
+        Store.objects.filter(shop_type='repair', is_active=True).values_list('id', flat=True)
+    )
     queryset = Invoice.objects.filter(
-        store__in=repair_stores,
+        store_id__in=repair_store_ids,
         repair__isnull=False  # Only invoices with Repair records
     ).select_related('customer', 'store', 'created_by', 'repair')
 
@@ -281,7 +284,7 @@ def repair_invoices_list(request):
     if store_id:
         try:
             sid = int(store_id)
-            if repair_stores.filter(id=sid).exists():
+            if sid in repair_store_ids:
                 queryset = queryset.filter(store_id=sid)
         except (ValueError, TypeError):
             pass
@@ -322,37 +325,39 @@ def repair_invoices_list(request):
     search = request.query_params.get('search', None)
     invoice_number = request.query_params.get('invoice_number', None)
     if search:
-        queryset = queryset.filter(
+        item_barcode_match = InvoiceItem.objects.filter(
+            invoice_id=OuterRef('pk')
+        ).filter(
+            Q(barcode__short_code__icontains=search)
+            | Q(barcode__barcode__icontains=search)
+            | Q(sold_barcode_value__icontains=search)
+        )
+        queryset = queryset.annotate(
+            has_item_barcode_match=Exists(item_barcode_match)
+        ).filter(
             Q(invoice_number__icontains=search)
             | Q(customer__name__icontains=search)
             | Q(repair__contact_no__icontains=search)
             | Q(repair__model_name__icontains=search)
             | Q(repair__barcode__icontains=search)
-            | Q(items__barcode__short_code__icontains=search)
-            | Q(items__barcode__barcode__icontains=search)
-            | Q(items__sold_barcode_value__icontains=search)
+            | Q(has_item_barcode_match=True)
         )
-        # Item-level joins can duplicate invoices; keep unique invoices in the list.
-        queryset = queryset.distinct()
     elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
 
-    queryset = _with_invoice_amount_annotations(queryset)
-    
     unpaginated_param = str(request.query_params.get('unpaginated', '')).strip().lower()
     force_unpaginated = unpaginated_param in ('1', 'true', 'yes')
+    try:
+        requested_page = int(request.query_params.get('page', 1))
+    except (TypeError, ValueError):
+        requested_page = 1
+    requested_page = max(1, requested_page)
 
-    has_active_filters = any([
-        date_from,
-        date_to,
-        repair_status,
-        repair_barcode,
-        search,
-        invoice_number,
-    ])
-
-    # Default view stays paginated; filtered or explicitly unpaginated view returns full result set.
-    if has_active_filters or force_unpaginated:
+    queryset = _with_invoice_amount_annotations(queryset)
+    
+    # Only explicit unpaginated requests return full result set.
+    # Filtered views should stay paginated to avoid multi-MB responses that can freeze UI.
+    if force_unpaginated:
         serializer = RepairInvoiceListSerializer(
             queryset,
             many=True,
@@ -369,8 +374,13 @@ def repair_invoices_list(request):
 
     # Pagination
     from django.core.paginator import Paginator
-    page = int(request.query_params.get('page', 1))
-    limit = int(request.query_params.get('limit', 50))
+    page = requested_page
+    try:
+        limit = int(request.query_params.get('limit', 50))
+    except (TypeError, ValueError):
+        limit = 50
+    # Safety cap to prevent very large page payloads.
+    limit = max(1, min(limit, 200))
     
     paginator = Paginator(queryset, limit)
     page_obj = paginator.get_page(page)

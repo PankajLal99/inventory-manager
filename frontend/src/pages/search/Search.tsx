@@ -282,11 +282,11 @@ export default function Search() {
               <button
                 type="button"
                 onClick={handleClearSearch}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 p-2.5 sm:p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
                 aria-label="Clear search"
                 title="Clear"
               >
-                <X className="h-4 w-4" />
+                <X className="h-5 w-5 sm:h-4 sm:w-4" />
               </button>
             )}
           </div>

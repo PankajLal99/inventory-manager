@@ -645,11 +645,12 @@ export default function Invoices() {
               { label: '', align: 'right' },
             ]}>
               {filteredInvoices.map((invoice) => {
+                const isMtShopCustomer = String(invoice.customer_name || '').toUpperCase().includes('MT SHOP');
                 return (
                   <TableRow
                     key={invoice.id}
                     onClick={() => navigate(buildInvoiceDetailPath(invoice.id))}
-                    className={`cursor-pointer transition-colors hover:opacity-80 ${invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
+                    className={`cursor-pointer transition-colors hover:opacity-80 ${isMtShopCustomer ? 'bg-indigo-100/80 border-l-4 border-l-indigo-500' : invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
                           invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/50' : ''
@@ -680,6 +681,11 @@ export default function Invoices() {
                         <span className="text-gray-900">
                           {invoice.customer_name || 'Walk-in Customer'}
                         </span>
+                        {isMtShopCustomer && (
+                          <span className="inline-flex items-center rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                            MT SHOP
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -768,11 +774,12 @@ export default function Invoices() {
           {/* Mobile Card View */}
           <div className="md:hidden space-y-3">
             {filteredInvoices.map((invoice) => {
+              const isMtShopCustomer = String(invoice.customer_name || '').toUpperCase().includes('MT SHOP');
               return (
                 <div
                   key={invoice.id}
                   onClick={() => navigate(buildInvoiceDetailPath(invoice.id))}
-                  className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
+                  className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${isMtShopCustomer ? 'bg-indigo-100 border-indigo-400 ring-1 ring-indigo-300' : invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
                         invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/70 border-purple-100' :
@@ -802,6 +809,11 @@ export default function Invoices() {
                         <span className="truncate">
                           {invoice.customer_name || 'Walk-in Customer'}
                         </span>
+                        {isMtShopCustomer && (
+                          <span className="inline-flex items-center rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                            MT SHOP
+                          </span>
+                        )}
                       </div>
                       <div className="mt-1.5 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 shadow-sm">
                         <span

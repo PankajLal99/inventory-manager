@@ -136,17 +136,9 @@ def _optimized_product_list_internal(request):
             purchase__status='draft'
         ).filter(
             purchase__deleted_at__isnull=True
-        ).select_related('purchase', 'purchase__supplier')
-
-        # For defective tab, also prefetch move-out records so the frontend
-        # can tell which barcodes have already been sent out.
-        if tag == 'defective':
-            barcode_qs = barcode_qs.prefetch_related(
-                Prefetch(
-                    'defective_move_outs',
-                    queryset=DefectiveProductItem.objects.select_related('move_out'),
-                )
-            )
+        ).select_related('purchase', 'purchase__supplier',
+                         'purchase_item', 'purchase_item__purchase',
+                         'purchase_item__purchase__supplier')
 
         queryset = queryset.prefetch_related(
             Prefetch('barcodes', queryset=barcode_qs)
@@ -178,21 +170,26 @@ def _optimized_product_list_internal(request):
     # OPTIMIZATION 4: Only do expensive stock filtering when explicitly requested
     # Skip stock calculations for search/tag filters that don't need them
     needs_stock_calculation = (in_stock == 'true' or low_stock == 'true' or out_of_stock == 'true')
-    
+
+    # Build active-cart context ONCE and reuse for stock filtering + serializer context.
+    active_cart_barcodes = set()
+    active_cart_product_quantities = {}
+    if needs_stock_calculation or needs_barcode_prefetch:
+        cart_rows = CartItem.objects.filter(cart__status='active').values_list(
+            'scanned_barcodes', 'product_id', 'quantity'
+        )
+        for scanned_barcodes, product_id, quantity in cart_rows:
+            if scanned_barcodes:
+                active_cart_barcodes.update(scanned_barcodes)
+            if product_id:
+                try:
+                    active_cart_product_quantities[product_id] = (
+                        active_cart_product_quantities.get(product_id, 0) + float(quantity)
+                    )
+                except (ValueError, TypeError):
+                    pass
+
     if needs_stock_calculation:
-        # Get active cart barcodes ONCE
-        active_cart_barcodes = set()
-        cart_items = CartItem.objects.filter(
-            cart__status='active'
-        ).exclude(
-            scanned_barcodes__isnull=True
-        ).exclude(
-            scanned_barcodes=[]
-        ).only('scanned_barcodes')
-        
-        for cart_item in cart_items:
-            if cart_item.scanned_barcodes:
-                active_cart_barcodes.update(cart_item.scanned_barcodes)
         
         # Get all product IDs AFTER other filters are applied (smaller dataset)
         all_product_ids = list(queryset.values_list('id', flat=True))
@@ -269,44 +266,6 @@ def _optimized_product_list_internal(request):
     search_q = (search or '').strip() if search else ''
     use_name_relevance = bool(search_q and search_mode == 'name_only')
 
-    # OPTIMIZATION 6: Only prepare cart context when barcodes were fetched
-    if needs_barcode_prefetch:
-        # Reuse active cart data if already calculated
-        if 'active_cart_barcodes' not in locals():
-            active_cart_barcodes = set()
-            cart_items = CartItem.objects.filter(
-                cart__status='active'
-            ).exclude(
-                scanned_barcodes__isnull=True
-            ).exclude(
-                scanned_barcodes=[]
-            ).only('scanned_barcodes')
-            
-            for cart_item in cart_items:
-                if cart_item.scanned_barcodes:
-                    active_cart_barcodes.update(cart_item.scanned_barcodes)
-        
-        # Get product quantities in active carts (for non-tracked items)
-        active_cart_product_quantities = {}
-        for item in CartItem.objects.filter(cart__status='active').select_related('product'):
-            if item.product_id:
-                current_qty = active_cart_product_quantities.get(item.product_id, 0)
-                try:
-                    current_qty += float(item.quantity)
-                except (ValueError, TypeError):
-                    pass
-                active_cart_product_quantities[item.product_id] = current_qty
-    else:
-        # No cart checks needed for simple product list
-        active_cart_barcodes = set()
-        active_cart_product_quantities = {}
-    
-    context = {
-        'request': request,
-        'active_cart_barcodes': active_cart_barcodes,
-        'active_cart_product_quantities': active_cart_product_quantities
-    }
-
     # OPTIMIZATION 5: Order and paginate (name_only search shares global-search relevance ranking)
     if use_name_relevance:
         from django.db.models import Case, IntegerField, Value, When
@@ -356,6 +315,23 @@ def _optimized_product_list_internal(request):
             estimated_count = page * limit + 1
         else:
             estimated_count = offset + len(page_results)
+
+    moved_out_barcode_ids = set()
+    if tag == 'defective' and page_results:
+        page_product_ids = [p.id for p in page_results if getattr(p, 'id', None)]
+        if page_product_ids:
+            moved_out_barcode_ids = set(
+                DefectiveProductItem.objects.filter(
+                    barcode__product_id__in=page_product_ids
+                ).values_list('barcode_id', flat=True)
+            )
+
+    context = {
+        'request': request,
+        'active_cart_barcodes': active_cart_barcodes,
+        'active_cart_product_quantities': active_cart_product_quantities,
+        'moved_out_barcode_ids': moved_out_barcode_ids,
+    }
 
     # Serialize only the current page
     serializer = ProductListSerializer(page_results, many=True, context=context)

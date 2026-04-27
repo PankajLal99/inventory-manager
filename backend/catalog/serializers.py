@@ -33,6 +33,7 @@ class BarcodeSerializer(serializers.ModelSerializer):
     purchase_price = serializers.SerializerMethodField()
     selling_price = serializers.SerializerMethodField()
     supplier_name = serializers.SerializerMethodField()
+    supplier_id = serializers.SerializerMethodField()
     purchase_date = serializers.SerializerMethodField()
     invoice_number = serializers.SerializerMethodField()
     invoice_id = serializers.SerializerMethodField()
@@ -47,7 +48,8 @@ class BarcodeSerializer(serializers.ModelSerializer):
         model = Barcode
         fields = [
             'id', 'product', 'variant', 'barcode', 'short_code', 'is_primary', 
-            'tag', 'tag_display', 'purchase_price', 'selling_price', 'supplier_name', 'purchase_date', 
+            'tag', 'tag_display', 'purchase_price', 'selling_price', 'supplier_name', 'supplier_id',
+            'purchase_date', 
             'invoice_number', 'invoice_id', 'invoice_date', 'customer_name', 'invoice_type_display',
             'sold_price', 'sold_quantity', 'defective_move_out_info', 'created_at'
         ]
@@ -108,9 +110,19 @@ class BarcodeSerializer(serializers.ModelSerializer):
         return float(val) if val is not None else None
 
     def get_supplier_name(self, obj):
-        """Get supplier name from purchase"""
+        """Get supplier name from purchase (path A or path B)"""
         if obj.purchase and obj.purchase.supplier:
             return obj.purchase.supplier.name
+        if obj.purchase_item and obj.purchase_item.purchase and obj.purchase_item.purchase.supplier:
+            return obj.purchase_item.purchase.supplier.name
+        return None
+
+    def get_supplier_id(self, obj):
+        """Get supplier ID from purchase (path A or path B)"""
+        if obj.purchase and obj.purchase.supplier:
+            return obj.purchase.supplier_id
+        if obj.purchase_item and obj.purchase_item.purchase and obj.purchase_item.purchase.supplier:
+            return obj.purchase_item.purchase.supplier_id
         return None
     
     def get_purchase_date(self, obj):
@@ -497,11 +509,24 @@ class ProductListSerializer(serializers.ModelSerializer):
                 if cart_item.scanned_barcodes:
                     active_cart_barcodes.update(cart_item.scanned_barcodes)
 
+        # Defective barcodes already linked to any move-out should not be shown
+        # in the selectable defective list.
+        moved_out_barcode_ids = self.context.get('moved_out_barcode_ids')
+        if moved_out_barcode_ids is None and tag_filter == 'defective':
+            moved_out_barcode_ids = set(
+                DefectiveProductItem.objects.filter(
+                    barcode__product=obj
+                ).values_list('barcode_id', flat=True)
+            )
+
         # Helper to check if barcode should be included
         def should_include_barcode(barcode_obj):
             # Filter by tag if requested
             if tag_filter:
                 if barcode_obj.tag != tag_filter:
+                    return False
+                # For defective list, hide already moved-out barcodes.
+                if tag_filter == 'defective' and moved_out_barcode_ids and barcode_obj.id in moved_out_barcode_ids:
                     return False
                 return True
             

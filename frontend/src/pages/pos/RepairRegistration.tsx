@@ -42,6 +42,7 @@ export default function RepairRegistration() {
     const [repairDescription, setRepairDescription] = useState('');
     const [customerGroupFilter, setCustomerGroupFilter] = useState('');
     const [isSearchFocused, setIsSearchFocused] = useState(false);
+    const [activeCustomerIndex, setActiveCustomerIndex] = useState(-1);
 
 
     const queryClient = useQueryClient();
@@ -164,6 +165,10 @@ export default function RepairRegistration() {
     const customerSearchResults = useMemo(() => {
         return customersResponse && (customersResponse.results ?? customersResponse.data ?? (Array.isArray(customersResponse) ? customersResponse : []));
     }, [customersResponse]);
+
+    useEffect(() => {
+        setActiveCustomerIndex(-1);
+    }, [customerSearch, customerGroupFilter, customerSearchResults.length]);
 
     // Mutations
     const createCustomerMutation = useMutation({
@@ -412,6 +417,33 @@ export default function RepairRegistration() {
                                 value={customerSearch}
                                 onChange={(e) => setCustomerSearch(e.target.value)}
                                 onKeyDown={(e) => {
+                                    const list = Array.isArray(customerSearchResults) ? customerSearchResults : [];
+                                    const canNavigate = (isSearchFocused || customerSearch) && (customerSearch || customerGroupFilter) && list.length > 0;
+                                    if (e.key === 'ArrowDown' && canNavigate) {
+                                        e.preventDefault();
+                                        setActiveCustomerIndex((prev) => (prev + 1) % list.length);
+                                        return;
+                                    }
+                                    if (e.key === 'ArrowUp' && canNavigate) {
+                                        e.preventDefault();
+                                        setActiveCustomerIndex((prev) => (prev <= 0 ? list.length - 1 : prev - 1));
+                                        return;
+                                    }
+                                    if (e.key === 'Enter' && canNavigate && activeCustomerIndex >= 0 && activeCustomerIndex < list.length) {
+                                        e.preventDefault();
+                                        const picked = list[activeCustomerIndex];
+                                        setSelectedCustomer(picked);
+                                        setCustomerSearch('');
+                                        setRepairContactNo(picked.phone || '');
+                                        setIsSearchFocused(false);
+                                        return;
+                                    }
+                                    if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        setIsSearchFocused(false);
+                                        setActiveCustomerIndex(-1);
+                                        return;
+                                    }
                                     if (e.key !== 'Enter') return;
                                     const hasNoMatches = Array.isArray(customerSearchResults) && customerSearchResults.length === 0;
                                     if (customerSearch.trim() && !customersLoading && !customersError && hasNoMatches) {
@@ -479,7 +511,7 @@ export default function RepairRegistration() {
                                         ) : (() => {
                                             const list = customerSearchResults;
                                             return list && list.length > 0 ? (
-                                            list.map((c: any) => (
+                                            list.map((c: any, idx: number) => (
                                                 <button
                                                     key={c.id}
                                                     onClick={() => {
@@ -487,7 +519,10 @@ export default function RepairRegistration() {
                                                         setCustomerSearch('');
                                                         setRepairContactNo(c.phone || '');
                                                     }}
-                                                    className="w-full text-left px-5 py-4 hover:bg-blue-50 rounded-xl flex items-center justify-between group transition-colors"
+                                                    onMouseEnter={() => setActiveCustomerIndex(idx)}
+                                                    className={`w-full text-left px-5 py-4 rounded-xl flex items-center justify-between group transition-colors ${
+                                                        activeCustomerIndex === idx ? 'bg-blue-50' : 'hover:bg-blue-50'
+                                                    }`}
                                                 >
                                                     <div className="flex items-center gap-4">
                                                         <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center group-hover:bg-blue-600 transition-colors">

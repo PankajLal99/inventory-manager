@@ -441,14 +441,25 @@ def product_list_create(request):
                     pass
                 active_cart_product_quantities[item.product_id] = current_qty
 
+        paginator = Paginator(queryset, limit)
+        page_obj = paginator.get_page(page)
+
+        moved_out_barcode_ids = set()
+        if request.query_params.get('tag') == 'defective':
+            page_product_ids = [p.id for p in page_obj.object_list if getattr(p, 'id', None)]
+            if page_product_ids:
+                moved_out_barcode_ids = set(
+                    DefectiveProductItem.objects.filter(
+                        barcode__product_id__in=page_product_ids
+                    ).values_list('barcode_id', flat=True)
+                )
+
         context = {
             'request': request,
             'active_cart_barcodes': active_cart_barcodes,
-            'active_cart_product_quantities': active_cart_product_quantities
+            'active_cart_product_quantities': active_cart_product_quantities,
+            'moved_out_barcode_ids': moved_out_barcode_ids,
         }
-        
-        paginator = Paginator(queryset, limit)
-        page_obj = paginator.get_page(page)
         
         serializer = ProductListSerializer(page_obj, many=True, context=context)
         response = Response({
@@ -1641,6 +1652,16 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
 
     # Check if defective barcode has already been moved out
     if barcode_obj.tag == 'defective':
+        # Include supplier info for defective barcodes
+        supplier = None
+        if barcode_obj.purchase and barcode_obj.purchase.supplier:
+            supplier = barcode_obj.purchase.supplier
+        elif hasattr(barcode_obj, 'purchase_item') and barcode_obj.purchase_item and barcode_obj.purchase_item.purchase and barcode_obj.purchase_item.purchase.supplier:
+            supplier = barcode_obj.purchase_item.purchase.supplier
+        if supplier:
+            response_data['supplier_id'] = supplier.id
+            response_data['supplier_name'] = supplier.name
+
         try:
             move_out_item = DefectiveProductItem.objects.select_related('move_out').filter(
                 barcode=barcode_obj
@@ -2398,15 +2419,14 @@ def defective_product_move_out(request):
             while Invoice.objects.filter(invoice_number=invoice_number).exists():
                 invoice_number = f"DEF-{timezone.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
-            # Resolve a Customer record for the supplier so the invoice shows the
-            # vendor name instead of "Walking Customer".
+            # Resolve an existing Customer record for supplier display.
+            # Do not auto-create here: some deployments have extra non-null
+            # columns on `customers` (e.g. state), and silent get_or_create
+            # can fail at DB level.
             from backend.parties.models import Customer as PartyCustomer
             invoice_customer = None
             if supplier_name and supplier_name != 'No Supplier':
-                invoice_customer, _created = PartyCustomer.objects.get_or_create(
-                    name=supplier_name,
-                    defaults={'is_active': True},
-                )
+                invoice_customer = PartyCustomer.objects.filter(name=supplier_name).first()
 
             invoice = Invoice.objects.create(
                 invoice_number=invoice_number,
@@ -2607,3 +2627,133 @@ def defective_product_move_out_detail(request, pk):
     # GET request
     serializer = DefectiveProductMoveOutSerializer(move_out)
     return Response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def defective_product_move_out_add_items(request, pk):
+    """Add barcode items to an existing defective move-out.
+
+    Expects: { barcode_ids: [...], product_ids: [...] }
+    Each barcode must be tag='defective' and not already in any move-out.
+    Updates the linked invoice with new InvoiceItem rows and recalculates totals.
+    """
+    from backend.pos.models import InvoiceItem
+    from django.db import transaction
+
+    move_out = get_object_or_404(
+        DefectiveProductMoveOut.objects.select_related('store', 'invoice'),
+        pk=pk,
+    )
+
+    barcode_ids = request.data.get('barcode_ids', [])
+    product_ids = request.data.get('product_ids', [])
+
+    if not barcode_ids:
+        return Response({'error': 'No barcodes provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        with transaction.atomic():
+            # Lock the move-out to prevent concurrent modifications
+            move_out = DefectiveProductMoveOut.objects.select_for_update().get(pk=move_out.pk)
+
+            # Resolve barcodes
+            barcodes = Barcode.objects.filter(
+                id__in=barcode_ids,
+                tag='defective',
+                product_id__in=product_ids,
+            ).select_related('product', 'purchase', 'purchase__supplier',
+                             'purchase_item', 'purchase_item__purchase')
+
+            if not barcodes.exists():
+                return Response({'error': 'No valid defective barcodes found'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Exclude barcodes already in ANY move-out
+            already_moved = set(
+                DefectiveProductItem.objects.filter(
+                    barcode_id__in=barcode_ids,
+                ).values_list('barcode_id', flat=True)
+            )
+
+            new_barcodes = [b for b in barcodes if b.id not in already_moved]
+            if not new_barcodes:
+                return Response({'error': 'All selected barcodes are already in a move-out'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            added_loss = Decimal('0.00')
+            invoice = move_out.invoice
+
+            for barcode in new_barcodes:
+                # Determine purchase price
+                price = Decimal('0.00')
+                if barcode.purchase_item:
+                    price = barcode.purchase_item.unit_price or Decimal('0.00')
+
+                # Create DefectiveProductItem
+                DefectiveProductItem.objects.create(
+                    move_out=move_out,
+                    product=barcode.product,
+                    barcode=barcode,
+                    purchase_price=price,
+                )
+
+                # Add InvoiceItem if invoice exists
+                if invoice and barcode.product.track_inventory:
+                    InvoiceItem.objects.create(
+                        invoice=invoice,
+                        product=barcode.product,
+                        variant=None,
+                        barcode=barcode,
+                        sold_barcode_value=barcode.barcode or '',
+                        quantity=Decimal('1.000'),
+                        unit_price=price,
+                        manual_unit_price=price,
+                        discount_amount=Decimal('0.00'),
+                        tax_amount=Decimal('0.00'),
+                        line_total=price,
+                    )
+
+                added_loss += price
+
+            # Update move-out totals
+            move_out.total_loss = move_out.total_loss + added_loss
+            move_out.total_items = move_out.total_items + len(new_barcodes)
+            move_out.save(update_fields=['total_loss', 'total_items'])
+
+            # Update invoice totals
+            if invoice:
+                invoice.subtotal = invoice.subtotal + added_loss
+                invoice.total = invoice.total + added_loss
+                invoice.paid_amount = invoice.paid_amount + added_loss
+                invoice.save(update_fields=['subtotal', 'total', 'paid_amount'])
+
+            create_audit_log(
+                request=request,
+                action='defective_move_out_add_items',
+                model_name='DefectiveProductMoveOut',
+                object_id=str(move_out.id),
+                object_name=f"Move Out {move_out.move_out_number}",
+                object_reference=move_out.move_out_number,
+                barcode=None,
+                changes={
+                    'added_barcodes': len(new_barcodes),
+                    'added_loss': str(added_loss),
+                    'new_total_items': move_out.total_items,
+                    'new_total_loss': str(move_out.total_loss),
+                }
+            )
+
+        # Re-fetch for serialization
+        move_out.refresh_from_db()
+        serializer = DefectiveProductMoveOutSerializer(move_out)
+        return Response({
+            'move_out': serializer.data,
+            'added_items': len(new_barcodes),
+            'skipped_already_moved': len(already_moved & set(barcode_ids)),
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to add items to move-out: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

@@ -48,6 +48,8 @@ export default function Products() {
     reason: 'defective',
     notes: '',
   });
+  const [moveOutMode, setMoveOutMode] = useState<'new' | 'existing'>('new');
+  const [selectedExistingMoveOutId, setSelectedExistingMoveOutId] = useState<number | null>(null);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [statusProduct, setStatusProduct] = useState<any>(null);
   const [newTag, setNewTag] = useState<string>('');
@@ -674,7 +676,12 @@ export default function Products() {
     return barcodes.filter((b: any) => {
       if (!b || typeof b !== 'object') return false;
       if (!b.id) return false;
-      return !b.tag || String(b.tag) === 'defective';
+      const isDefective = !b.tag || String(b.tag) === 'defective';
+      if (!isDefective) return false;
+      // Enforce supplier filter at barcode level because product-level supplier filtering
+      // can still return mixed-supplier barcode arrays for the same product.
+      if (supplierFilter && b.supplier_id && String(b.supplier_id) !== supplierFilter) return false;
+      return true;
     });
   };
 
@@ -693,8 +700,8 @@ export default function Products() {
 
     // Search through all filtered products
     for (const product of filteredProducts) {
-      // Check if product has barcodes array
-      const barcodes = product.barcodes || [];
+      // Check only selectable defective barcodes (respects supplier filter).
+      const barcodes = getDefectiveBarcodesForProduct(product);
 
       // Try to find matching barcode in the barcodes array
       const matchingBarcode = barcodes.find((b: any) => {
@@ -729,6 +736,13 @@ export default function Products() {
           const moveOutNum = info.move_out_number || '';
           setBarcodeScanError(`"${matchedProduct.name}" has already been sent out (${reason}). Move-out: ${moveOutNum}`);
           setTimeout(() => setBarcodeScanError(null), 4000);
+          return;
+        }
+        // Check supplier filter
+        if (supplierFilter && matchedBarcode.supplier_id && String(matchedBarcode.supplier_id) !== supplierFilter) {
+          const supplierName = matchedBarcode.supplier_name || 'another supplier';
+          setBarcodeScanError(`This barcode belongs to "${supplierName}" — does not match the selected supplier filter.`);
+          setTimeout(() => setBarcodeScanError(null), 3000);
           return;
         }
         if (selectedDefectiveProducts.has(matchedBarcode.id)) {
@@ -786,12 +800,23 @@ export default function Products() {
             return;
           }
 
+          // Check supplier filter
+          if (supplierFilter && data.supplier_id && String(data.supplier_id) !== supplierFilter) {
+            const supplierName = data.supplier_name || 'another supplier';
+            setBarcodeScanError(`This barcode belongs to "${supplierName}" — does not match the selected supplier filter.`);
+            setTimeout(() => setBarcodeScanError(null), 3000);
+            setBarcodeInput('');
+            return;
+          }
+
           const apiBarcode = {
             id: data.barcode_id,
             barcode: data.canonical_barcode,
             short_code: data.matched_barcode,
             tag: data.barcode_tag,
             purchase_price: data.purchase_price,
+            supplier_id: data.supplier_id,
+            supplier_name: data.supplier_name,
           };
           const apiProduct = {
             id: data.id,
@@ -897,10 +922,13 @@ export default function Products() {
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['existing-move-outs'] });
       setSelectedDefectiveProducts(new Set());
       setSelectedDefectiveProductsData(new Map());
       setShowMoveOutModal(false);
       setMoveOutData({ reason: 'defective', notes: '' });
+      setMoveOutMode('new');
+      setSelectedExistingMoveOutId(null);
 
       // Backend now returns { move_outs: [...], total_move_outs: N, ... }
       const moveOuts: any[] = response.move_outs || [response];
@@ -928,14 +956,69 @@ export default function Products() {
     },
   });
 
+  // Add items to existing move-out mutation
+  const addToMoveOutMutation = useMutation({
+    mutationFn: async (data: { moveOutId: number; productIds: number[]; barcodeIds: number[] }) => {
+      const response = await catalogApi.defectiveProducts.moveOuts.addItems(data.moveOutId, {
+        product_ids: data.productIds,
+        barcode_ids: data.barcodeIds,
+      });
+      return response.data;
+    },
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['existing-move-outs'] });
+      setSelectedDefectiveProducts(new Set());
+      setSelectedDefectiveProductsData(new Map());
+      setShowMoveOutModal(false);
+      setMoveOutData({ reason: 'defective', notes: '' });
+      setMoveOutMode('new');
+      setSelectedExistingMoveOutId(null);
+
+      const mo = response.move_out;
+      alert(`Added ${response.added_items} item(s) to move-out ${mo?.move_out_number || ''}.${response.skipped_already_moved ? ` (${response.skipped_already_moved} already in a move-out)` : ''}`);
+    },
+    onError: (error: any) => {
+      const errorMsg = error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Failed to add items to move-out';
+      alert(errorMsg);
+    },
+  });
+
+  // Fetch existing move-outs when modal is open
+  const { data: existingMoveOutsData } = useQuery({
+    queryKey: ['existing-move-outs'],
+    queryFn: () => catalogApi.defectiveProducts.moveOuts.list(),
+    enabled: showMoveOutModal,
+  });
+
+  const existingMoveOuts = useMemo(() => {
+    if (!existingMoveOutsData) return [];
+    const results = existingMoveOutsData.data?.results || existingMoveOutsData.data || [];
+    return Array.isArray(results) ? results : [];
+  }, [existingMoveOutsData]);
+
   const handleMoveOutDefective = () => {
     if (selectedDefectiveProducts.size === 0) {
       alert('Please select at least one defective barcode to move out.');
       return;
     }
-
+    setMoveOutMode(existingMoveOuts.length > 0 ? 'existing' : 'new');
+    setSelectedExistingMoveOutId(null);
     setShowMoveOutModal(true);
   };
+
+  // Prevent stale/hidden selections when leaving defective view or changing supplier filter.
+  useEffect(() => {
+    setSelectedDefectiveProducts(new Set());
+    setSelectedDefectiveProductsData(new Map());
+    setBarcodeScanError(null);
+  }, [supplierFilter, tagFilter]);
 
   const handleMoveOutSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -944,19 +1027,28 @@ export default function Products() {
       .filter(Boolean);
     const barcodeIds = selectedBarcodes.map((row: any) => row?.barcode?.id).filter(Boolean);
     const productIds = [...new Set(selectedBarcodes.map((row: any) => row?.product?.id).filter(Boolean))];
-    moveOutDefectiveMutation.mutate({
-      productIds,
-      barcodeIds,
-      reason: moveOutData.reason,
-      notes: moveOutData.notes,
-    });
+
+    if (moveOutMode === 'existing' && selectedExistingMoveOutId) {
+      addToMoveOutMutation.mutate({
+        moveOutId: selectedExistingMoveOutId,
+        productIds,
+        barcodeIds,
+      });
+    } else {
+      moveOutDefectiveMutation.mutate({
+        productIds,
+        barcodeIds,
+        reason: moveOutData.reason,
+        notes: moveOutData.notes,
+      });
+    }
   };
 
   // Helper function to get table headers based on tag
   const getTableHeaders = (tag: string): string[] => {
     switch (tag) {
       case 'new':
-        return ['Name', 'SKU', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions'];
+        return ['Name', 'Brand', 'Category', 'Total Stock', 'Low Stock Threshold', 'Status', 'Actions'];
       case 'sold':
         return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'unknown':
@@ -966,9 +1058,9 @@ export default function Products() {
       case 'defective':
         return ['', 'Name', 'Short Code', 'Brand', 'Category', 'Actions'];
       case 'in-cart':
-        return ['Name', 'SKU', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
+        return ['Name', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
       default:
-        return ['Name', 'SKU', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions'];
+        return ['Name', 'Brand', 'Category', 'Total Stock', 'Low Stock Threshold', 'Status', 'Actions'];
     }
   };
 
@@ -1607,7 +1699,7 @@ export default function Products() {
             <div className="flex-1 min-w-0 overflow-x-auto">
               <Table headers={getTableHeaders(tagFilter)}>
                 {filteredProducts.length > 0 ? filteredProducts.flatMap((product: any) => {
-                  const barcodes: any[] = Array.isArray(product.barcodes) ? product.barcodes : [];
+                  const barcodes: any[] = getDefectiveBarcodesForProduct(product);
                   if (barcodes.length === 0) return [];
                   return barcodes.map((barcode: any) => {
                     const isSelected = selectedDefectiveProducts.has(barcode.id);
@@ -1897,6 +1989,16 @@ export default function Products() {
                               ? (product.stock_quantity || 0)
                               : (product.barcodeCount || 0)
                             }
+                          </span>
+                        </td>
+                      ) : null;
+                    case 'Low Stock Threshold':
+                      return currentTagFilter === 'new' ? (
+                        <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <span className="font-medium">
+                            {typeof product.low_stock_threshold === 'number'
+                              ? product.low_stock_threshold
+                              : (parseFloat(product.low_stock_threshold || '0') || 0)}
                           </span>
                         </td>
                       ) : null;
@@ -2732,6 +2834,8 @@ export default function Products() {
           onClose={() => {
             setShowMoveOutModal(false);
             setMoveOutData({ reason: 'defective', notes: '' });
+            setMoveOutMode('new');
+            setSelectedExistingMoveOutId(null);
           }}
           title="Move Out Defective Products"
           size="md"
@@ -2746,36 +2850,89 @@ export default function Products() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Reason <span className="text-red-500">*</span>
-              </label>
-              <Select
-                value={moveOutData.reason}
-                onChange={(e) => setMoveOutData({ ...moveOutData, reason: e.target.value })}
-                required
-              >
-                <option value="defective">Defective</option>
-                <option value="damaged">Damaged</option>
-                <option value="expired">Expired</option>
-                <option value="return_to_supplier">Return to Supplier</option>
-                <option value="disposal">Disposal</option>
-                <option value="other">Other</option>
-              </Select>
-            </div>
+            {/* Choose: add to existing or create new */}
+            {existingMoveOuts.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Add to existing move-out or create new?
+                </label>
+                <div className="flex gap-4 mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="moveOutMode"
+                      value="existing"
+                      checked={moveOutMode === 'existing'}
+                      onChange={() => setMoveOutMode('existing')}
+                      className="text-blue-600"
+                    />
+                    <span className="text-sm">Add to existing</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="moveOutMode"
+                      value="new"
+                      checked={moveOutMode === 'new'}
+                      onChange={() => { setMoveOutMode('new'); setSelectedExistingMoveOutId(null); }}
+                      className="text-blue-600"
+                    />
+                    <span className="text-sm">Create new</span>
+                  </label>
+                </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Notes (Optional)
-              </label>
-              <textarea
-                className="block w-full px-3 py-2 border border-gray-300 rounded-lg"
-                rows={4}
-                value={moveOutData.notes}
-                onChange={(e) => setMoveOutData({ ...moveOutData, notes: e.target.value })}
-                placeholder="Add any additional notes about this move-out..."
-              />
-            </div>
+                {moveOutMode === 'existing' && (
+                  <Select
+                    value={selectedExistingMoveOutId?.toString() || ''}
+                    onChange={(e) => setSelectedExistingMoveOutId(e.target.value ? Number(e.target.value) : null)}
+                    required
+                  >
+                    <option value="">Select a move-out...</option>
+                    {existingMoveOuts.map((mo: any) => (
+                      <option key={mo.id} value={mo.id}>
+                        {(mo.move_out_number || '').split('-').pop()} — {mo.customer_name || 'Unknown'} ({mo.total_items} items, {mo.reason_display})
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </div>
+            )}
+
+            {/* Show reason/notes only for new move-outs */}
+            {moveOutMode === 'new' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Reason <span className="text-red-500">*</span>
+                  </label>
+                  <Select
+                    value={moveOutData.reason}
+                    onChange={(e) => setMoveOutData({ ...moveOutData, reason: e.target.value })}
+                    required
+                  >
+                    <option value="defective">Defective</option>
+                    <option value="damaged">Damaged</option>
+                    <option value="expired">Expired</option>
+                    <option value="return_to_supplier">Return to Supplier</option>
+                    <option value="disposal">Disposal</option>
+                    <option value="other">Other</option>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Notes (Optional)
+                  </label>
+                  <textarea
+                    className="block w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    rows={4}
+                    value={moveOutData.notes}
+                    onChange={(e) => setMoveOutData({ ...moveOutData, notes: e.target.value })}
+                    placeholder="Add any additional notes about this move-out..."
+                  />
+                </div>
+              </>
+            )}
 
             <div className="flex justify-end gap-3 pt-4">
               <Button
@@ -2784,16 +2941,20 @@ export default function Products() {
                 onClick={() => {
                   setShowMoveOutModal(false);
                   setMoveOutData({ reason: 'defective', notes: '' });
+                  setMoveOutMode('new');
+                  setSelectedExistingMoveOutId(null);
                 }}
-                disabled={moveOutDefectiveMutation.isPending}
+                disabled={moveOutDefectiveMutation.isPending || addToMoveOutMutation.isPending}
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                disabled={moveOutDefectiveMutation.isPending}
+                disabled={moveOutDefectiveMutation.isPending || addToMoveOutMutation.isPending || (moveOutMode === 'existing' && !selectedExistingMoveOutId)}
               >
-                {moveOutDefectiveMutation.isPending ? 'Creating...' : 'Create Move-Out'}
+                {(moveOutDefectiveMutation.isPending || addToMoveOutMutation.isPending)
+                  ? (moveOutMode === 'existing' ? 'Adding...' : 'Creating...')
+                  : (moveOutMode === 'existing' ? 'Add to Move-Out' : 'Create Move-Out')}
               </Button>
             </div>
           </form>
