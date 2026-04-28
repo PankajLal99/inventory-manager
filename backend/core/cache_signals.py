@@ -72,10 +72,27 @@ def invalidate_cache_pattern(pattern):
 
 
 # --- Manual Invalidation Helpers ---
+def _should_run_invalidation(name: str, cooldown_seconds: int = 5) -> bool:
+    """
+    Debounce repeated invalidation calls across signals.
+    A single user action can trigger multiple model saves (e.g. Barcode + CartItem),
+    which would otherwise run the same invalidation repeatedly.
+    """
+    lock_key = f"cache_invalidation_lock:{name}"
+    try:
+        # cache.add returns True only when key does not already exist.
+        return cache.add(lock_key, 1, timeout=cooldown_seconds)
+    except Exception:
+        # If cache backend has issues, fail open so correctness is preserved.
+        return True
+
 
 def invalidate_products_cache_manual():
     """Manually invalidate products cache"""
     try:
+        if not _should_run_invalidation("products_list"):
+            logger.debug("Skipped duplicate products cache invalidation (debounced)")
+            return
         invalidate_cache_pattern("products_list")
         logger.info("Invalidated products cache (Manual/Signal)")
     except Exception as e:
@@ -84,6 +101,9 @@ def invalidate_products_cache_manual():
 def invalidate_purchases_cache_manual():
     """Manually invalidate purchases cache"""
     try:
+        if not _should_run_invalidation("purchases_list"):
+            logger.debug("Skipped duplicate purchases cache invalidation (debounced)")
+            return
         invalidate_cache_pattern("purchases_list")
         logger.info("Invalidated purchases cache (Manual/Signal)")
     except Exception as e:
@@ -92,6 +112,9 @@ def invalidate_purchases_cache_manual():
 def invalidate_stock_cache_manual():
     """Manually invalidate stock cache"""
     try:
+        if not _should_run_invalidation("stock_calc"):
+            logger.debug("Skipped duplicate stock cache invalidation (debounced)")
+            return
         invalidate_cache_pattern("stock_calc")
         logger.info("Invalidated stock cache (Manual/Signal)")
     except Exception as e:
@@ -100,6 +123,9 @@ def invalidate_stock_cache_manual():
 def invalidate_dashboard_cache_manual():
     """Manually invalidate dashboard cache"""
     try:
+        if not _should_run_invalidation("dashboard_kpis"):
+            logger.debug("Skipped duplicate dashboard cache invalidation (debounced)")
+            return
         invalidate_cache_pattern("dashboard_kpis")
         logger.info("Invalidated dashboard cache (Manual/Signal)")
     except Exception as e:
