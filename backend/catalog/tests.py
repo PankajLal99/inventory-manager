@@ -743,3 +743,73 @@ class DefectiveMoveOutListTests(TransactionTestCase):
         barcode_ids = {b['id'] for b in barcodes}
         self.assertNotIn(b1.id, barcode_ids)
         self.assertIn(b2.id, barcode_ids)
+
+
+class BarcodeLookupPosScanTests(TransactionTestCase):
+    """Validate POS-specific lightweight barcode lookup behavior."""
+
+    def setUp(self):
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.product = TestDataFactory.create_product(name="POS Scan Product", track_inventory=True)
+        self.barcode = TestDataFactory.create_barcode_with_purchase(
+            user=self.user,
+            product=self.product,
+            barcode=f"POS-SCAN-{TestDataFactory.random_string(8).upper()}",
+            tag='new',
+        )
+
+    def test_pos_scan_returns_lightweight_payload(self):
+        response = self.client.get(
+            f"/api/v1/barcodes/by-barcode/{self.barcode.barcode}/",
+            {"barcode_only": "true", "pos_scan": "true", "no_cache": "true"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.product.id)
+        self.assertEqual(response.data["barcode_id"], self.barcode.id)
+        self.assertIn("stock_quantity", response.data)
+        self.assertIn("available_quantity", response.data)
+        self.assertIn("matched_barcode", response.data)
+        self.assertEqual(response.data.get("barcodes"), [])
+        # Lightweight POS response should not include heavy serializer sections.
+        self.assertNotIn("variants", response.data)
+        self.assertNotIn("components", response.data)
+        self.assertNotIn("supplier_breakdown", response.data)
+
+    def test_regular_barcode_lookup_still_returns_full_product_shape(self):
+        response = self.client.get(
+            f"/api/v1/barcodes/by-barcode/{self.barcode.barcode}/",
+            {"barcode_only": "true", "no_cache": "true"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Full serializer fields still exist for non-pos callers.
+        self.assertIn("variants", response.data)
+        self.assertIn("components", response.data)
+        self.assertIn("supplier_breakdown", response.data)
+
+    def test_pos_scan_sold_barcode_still_includes_invoice_number(self):
+        from backend.pos.models import InvoiceItem
+
+        self.barcode.tag = 'sold'
+        self.barcode.save(update_fields=['tag'])
+
+        invoice = TestDataFactory.create_invoice(user=self.user, invoice_type='cash', status='paid')
+        InvoiceItem.objects.create(
+            invoice=invoice,
+            product=self.product,
+            barcode=self.barcode,
+            quantity=Decimal('1'),
+            unit_price=Decimal('0'),
+            line_total=Decimal('0'),
+        )
+
+        response = self.client.get(
+            f"/api/v1/barcodes/by-barcode/{self.barcode.barcode}/",
+            {"barcode_only": "true", "pos_scan": "true", "no_cache": "true"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data.get("barcode_available"), False)
+        self.assertEqual(response.data.get("sold_invoice"), invoice.invoice_number)

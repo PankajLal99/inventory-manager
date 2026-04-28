@@ -1692,18 +1692,21 @@ def build_barcode_response_lightweight(barcode_obj, product, logger, match_type=
         available_quantity=Count('id', filter=Q(tag__in=['new', 'returned']))
     )
 
+    selling_price = barcode_obj.get_selling_price() or barcode_obj.get_purchase_price() or Decimal('0')
+
     response_data = {
         'id': product.id,
         'name': product.name,
-        'sku': product.sku,
+        'sku': getattr(product, 'sku', ''),
         'brand_name': product.brand.name if getattr(product, 'brand', None) else None,
         'category_name': product.category.name if getattr(product, 'category', None) else None,
-        'product_type': product.product_type,
-        'track_inventory': product.track_inventory,
-        'low_stock_threshold': product.low_stock_threshold,
-        'can_go_below_purchase_price': product.can_go_below_purchase_price,
-        'tax_rate': product.tax_rate,
-        'selling_price': float(product.selling_price) if product.selling_price is not None else 0,
+        'product_type': getattr(product, 'product_type', 'standard'),
+        'track_inventory': getattr(product, 'track_inventory', True),
+        'low_stock_threshold': getattr(product, 'low_stock_threshold', 0),
+        # Be defensive for mixed/legacy product schemas in lightweight scan path.
+        'can_go_below_purchase_price': getattr(product, 'can_go_below_purchase_price', False),
+        'tax_rate': getattr(product, 'tax_rate', 0),
+        'selling_price': float(selling_price),
         # Keep shape close to ProductSerializer to avoid frontend regressions.
         'barcodes': [],
         'stock_quantity': float(stock_counts.get('stock_quantity') or 0),

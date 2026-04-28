@@ -106,7 +106,8 @@ export default function POS() {
   }
 
   const [scanQueue, setScanQueue] = useState<QueueItem[]>([]);
-  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const processingQueueIdsRef = useRef<Set<string>>(new Set());
+  const MAX_PARALLEL_SCAN_WORKERS = 4;
   const queuedKnownBarcodesRef = useRef<Set<string>>(new Set());
   const queueRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryClient = useQueryClient();
@@ -712,15 +713,7 @@ export default function POS() {
 
   // Process the queue
   useEffect(() => {
-    const processNextItem = async () => {
-      // If already processing or no pending items, stop
-      if (isProcessingQueue) return;
-
-      const nextItem = scanQueue.find(item => item.status === 'pending');
-      if (!nextItem) return;
-
-      setIsProcessingQueue(true);
-
+    const startWorker = async (nextItem: QueueItem) => {
       // Mark as processing
       setScanQueue(prev => prev.map(item =>
         item.id === nextItem.id ? { ...item, status: 'processing' } : item
@@ -728,23 +721,6 @@ export default function POS() {
 
       const barcodeToScan = nextItem.code;
       let scannedBarcodeForAdd = barcodeToScan;
-
-      // Check against current processing/success items in queue to prevent race conditions within the queue itself
-      // If we have another item with same code in queue that is already 'success' or 'processing', we should wait or skip?
-      // Actually, if 'success' is in queue, it means we handled it.
-      const isAlreadyProcessedInQueue = scanQueue.some(item =>
-        item.id !== nextItem.id &&
-        item.code === barcodeToScan &&
-        (item.status === 'success' || item.status === 'processing')
-      );
-
-      if (isAlreadyProcessedInQueue) {
-        setScanQueue(prev => prev.map(item =>
-          item.id === nextItem.id ? { ...item, status: 'error', message: 'Duplicate scan' } : item
-        ));
-        setIsProcessingQueue(false);
-        return;
-      }
 
       try {
         // Fast local check from in-memory set to avoid waiting on per-item cart refetches.
@@ -754,12 +730,10 @@ export default function POS() {
           setScanQueue(prev => prev.map(item =>
             item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
           ));
-          setIsProcessingQueue(false);
           return;
         }
 
         // Check product existence and availability via API
-        // Use barcode_only=true to strictly match barcodes
         let productData = null;
 
         try {
@@ -768,12 +742,11 @@ export default function POS() {
             if (barcodeCheck.data.barcode_available === false) {
               const errorMsg = barcodeCheck.data.sold_invoice
                 ? `Sold (Inv #${barcodeCheck.data.sold_invoice})`
-                : `Sold / Unavailable`;
+                : 'Sold / Unavailable';
 
               setScanQueue(prev => prev.map(item =>
                 item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
               ));
-              setIsProcessingQueue(false);
               return;
             }
             productData = barcodeCheck.data;
@@ -781,13 +754,10 @@ export default function POS() {
             scannedBarcodeForAdd = (barcodeCheck.data as any).canonical_barcode ?? barcodeCheck.data.matched_barcode ?? barcodeToScan;
           }
         } catch (err: any) {
-          // Not found as strict barcode
-          // Verify if it is really not found or some other error
           const errorMsg = err?.response?.data?.message || err?.message || 'Product not found';
           setScanQueue(prev => prev.map(item =>
             item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
           ));
-          setIsProcessingQueue(false);
           return;
         }
 
@@ -795,15 +765,9 @@ export default function POS() {
           setScanQueue(prev => prev.map(item =>
             item.id === nextItem.id ? { ...item, status: 'error', message: 'Product not found' } : item
           ));
-          setIsProcessingQueue(false);
           return;
         }
 
-
-
-        // Add to cart
-        // IMPORTANT: Pass the scannedBarcode to ensure backend uses THIS specific barcode
-        // and doesn't auto-assign a new one if it's a serialized product
         const result = await processItemMutation.mutateAsync({
           product: productData.id,
           quantity: 1,
@@ -817,11 +781,8 @@ export default function POS() {
           item.id === nextItem.id ? { ...item, status: 'success', message: msg } : item
         ));
 
-        // Immediately mark these values locally so next queue item can short-circuit duplicate checks.
         queuedKnownBarcodesRef.current.add(String(barcodeToScan || '').trim());
         queuedKnownBarcodesRef.current.add(String(scannedBarcodeForAdd || '').trim());
-
-        // Refresh cart in a throttled, non-blocking way (was awaited per item before).
         scheduleQueueCartRefresh();
 
       } catch (error: any) {
@@ -837,7 +798,6 @@ export default function POS() {
             queuedKnownBarcodesRef.current.add(String(barcodeToScan || '').trim());
             queuedKnownBarcodesRef.current.add(String(scannedBarcodeForAdd || '').trim());
             scheduleQueueCartRefresh();
-            setIsProcessingQueue(false);
             return;
           }
         }
@@ -845,12 +805,48 @@ export default function POS() {
           item.id === nextItem.id ? { ...item, status: 'error', message: errorMsg } : item
         ));
       } finally {
-        setIsProcessingQueue(false);
+        processingQueueIdsRef.current.delete(nextItem.id);
       }
     };
 
-    processNextItem();
-  }, [scanQueue, isProcessingQueue, cartId, strictBarcodeMode, scheduleQueueCartRefresh]);
+    const running = processingQueueIdsRef.current.size;
+    const availableSlots = Math.max(0, MAX_PARALLEL_SCAN_WORKERS - running);
+    if (availableSlots <= 0) return;
+
+    const pendingItems = scanQueue.filter(item => item.status === 'pending');
+    if (pendingItems.length === 0) return;
+
+    const inFlightCodes = new Set(
+      scanQueue
+        .filter(item => item.status === 'processing')
+        .map(item => item.code)
+    );
+
+    let started = 0;
+    for (const nextItem of pendingItems) {
+      if (started >= availableSlots) break;
+      if (processingQueueIdsRef.current.has(nextItem.id)) continue;
+
+      // Skip duplicate code when same code already succeeded/processing in this queue window.
+      const isDuplicate = scanQueue.some(item =>
+        item.id !== nextItem.id &&
+        item.code === nextItem.code &&
+        (item.status === 'success' || item.status === 'processing')
+      ) || inFlightCodes.has(nextItem.code);
+
+      if (isDuplicate) {
+        setScanQueue(prev => prev.map(item =>
+          item.id === nextItem.id ? { ...item, status: 'error', message: 'Duplicate scan' } : item
+        ));
+        continue;
+      }
+
+      processingQueueIdsRef.current.add(nextItem.id);
+      inFlightCodes.add(nextItem.code);
+      started += 1;
+      void startWorker(nextItem);
+    }
+  }, [scanQueue, cartId, strictBarcodeMode, scheduleQueueCartRefresh, processItemMutation]);
 
   // Initialize username and load carts on mount
   useEffect(() => {
