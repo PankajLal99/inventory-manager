@@ -107,11 +107,51 @@ export default function POS() {
 
   const [scanQueue, setScanQueue] = useState<QueueItem[]>([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const queuedKnownBarcodesRef = useRef<Set<string>>(new Set());
+  const queueRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryClient = useQueryClient();
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const priceInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const isTypingInPriceInput = useRef(false);
   const processingBarcodesRef = useRef<Set<string>>(new Set());
   const cartTabsRef = useRef<CartTab[]>([]);
+
+  // Keep an in-memory set of barcodes known to be in cart (or just added by queue)
+  // so queue processing doesn't need to block on cart refetch after every item.
+  useEffect(() => {
+    const nextSet = new Set<string>();
+    const currentCartData = queryClient.getQueryData(['cart', cartId]) as any;
+    const items = currentCartData?.data?.items || [];
+    for (const item of items) {
+      const scannedBarcodes = item.scanned_barcodes || [];
+      for (const bc of scannedBarcodes) {
+        const normalized = String(bc || '').trim();
+        if (normalized) nextSet.add(normalized);
+      }
+      const itemBarcode = String(item?.barcode || '').trim();
+      if (itemBarcode) nextSet.add(itemBarcode);
+    }
+    queuedKnownBarcodesRef.current = nextSet;
+  }, [cartId, queryClient]);
+
+  const scheduleQueueCartRefresh = useCallback(() => {
+    if (queueRefreshTimerRef.current) return;
+    queueRefreshTimerRef.current = setTimeout(() => {
+      if (cartId) {
+        queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+      }
+      queueRefreshTimerRef.current = null;
+    }, 250);
+  }, [cartId, queryClient]);
+
+  useEffect(() => {
+    return () => {
+      if (queueRefreshTimerRef.current) {
+        clearTimeout(queueRefreshTimerRef.current);
+        queueRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Helper to add item to queue
   const addToQueue = useCallback((barcodes: string[]) => {
@@ -159,8 +199,6 @@ export default function POS() {
       clearTimeout(handler);
     };
   }, [barcodeInput]);
-
-  const queryClient = useQueryClient();
 
   // Bulk add: parse barcodes (line or space separated)
   const parseBulkBarcodes = useCallback((text: string): string[] => {
@@ -691,11 +729,6 @@ export default function POS() {
       const barcodeToScan = nextItem.code;
       let scannedBarcodeForAdd = barcodeToScan;
 
-      // Use queryClient to get the LATEST cart data directly from cache
-      // The 'cart' closure variable might be stale during rapid processing
-      const currentCartData = queryClient.getQueryData(['cart', cartId]) as any;
-      const currentItems = currentCartData?.data?.items || [];
-
       // Check against current processing/success items in queue to prevent race conditions within the queue itself
       // If we have another item with same code in queue that is already 'success' or 'processing', we should wait or skip?
       // Actually, if 'success' is in queue, it means we handled it.
@@ -714,21 +747,8 @@ export default function POS() {
       }
 
       try {
-        // UI-LEVEL CHECK: Check if barcode is already in cart items (using FRESH data)
-        let alreadyInCart = false;
-        // Check both raw scan and potential variations (though raw scan is most important first)
-        for (const item of currentItems) {
-          const scannedBarcodes = item.scanned_barcodes || [];
-          if (scannedBarcodes.some((bc: string) => bc && typeof bc === 'string' && bc.trim() === barcodeToScan)) {
-            alreadyInCart = true;
-            break;
-          }
-          // Also check if the matched_barcode matches (will be done after API lookup too, but good to check here)
-          if (item.barcode === barcodeToScan) {
-            alreadyInCart = true;
-            break;
-          }
-        }
+        // Fast local check from in-memory set to avoid waiting on per-item cart refetches.
+        const alreadyInCart = queuedKnownBarcodesRef.current.has(barcodeToScan);
 
         if (alreadyInCart) {
           setScanQueue(prev => prev.map(item =>
@@ -797,36 +817,28 @@ export default function POS() {
           item.id === nextItem.id ? { ...item, status: 'success', message: msg } : item
         ));
 
-        // Refetch cart to ensure next item sees correct state
-        // We do this via the global mutation onSuccess usually, but here manually awaiting
-        await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
+        // Immediately mark these values locally so next queue item can short-circuit duplicate checks.
+        queuedKnownBarcodesRef.current.add(String(barcodeToScan || '').trim());
+        queuedKnownBarcodesRef.current.add(String(scannedBarcodeForAdd || '').trim());
+
+        // Refresh cart in a throttled, non-blocking way (was awaited per item before).
+        scheduleQueueCartRefresh();
 
       } catch (error: any) {
         const errorMsg = error?.response?.data?.message || error?.message || 'Failed';
         const isAlreadyInCartError =
           errorMsg?.includes('already in another cart') || errorMsg?.includes('already been scanned');
         if (isAlreadyInCartError && cartId) {
-          try {
-            await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
-            const freshCart = await queryClient.fetchQuery({ queryKey: ['cart', cartId] }) as any;
-            const items = freshCart?.data?.items || [];
-            const isInCurrentCart = [barcodeToScan, scannedBarcodeForAdd].some(bc => {
-              const b = String(bc || '').trim();
-              return b && items.some(
-                (item: any) =>
-                  (item.scanned_barcodes || []).some((x: string) => x && String(x).trim() === b)
-              );
-            });
-            if (isInCurrentCart) {
-              setScanQueue(prev => prev.map(item =>
-                item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
-              ));
-              await queryClient.invalidateQueries({ queryKey: ['cart', cartId] });
-              setIsProcessingQueue(false);
-              return;
-            }
-          } catch (_e) {
-            // Refetch failed, fall through to show error
+          const isAnotherCart = errorMsg?.includes('another cart');
+          if (!isAnotherCart) {
+            setScanQueue(prev => prev.map(item =>
+              item.id === nextItem.id ? { ...item, status: 'success', message: 'Already in cart' } : item
+            ));
+            queuedKnownBarcodesRef.current.add(String(barcodeToScan || '').trim());
+            queuedKnownBarcodesRef.current.add(String(scannedBarcodeForAdd || '').trim());
+            scheduleQueueCartRefresh();
+            setIsProcessingQueue(false);
+            return;
           }
         }
         setScanQueue(prev => prev.map(item =>
@@ -838,7 +850,7 @@ export default function POS() {
     };
 
     processNextItem();
-  }, [scanQueue, isProcessingQueue, cartId, queryClient, strictBarcodeMode]); // Added strictBarcodeMode dependency
+  }, [scanQueue, isProcessingQueue, cartId, strictBarcodeMode, scheduleQueueCartRefresh]);
 
   // Initialize username and load carts on mount
   useEffect(() => {
