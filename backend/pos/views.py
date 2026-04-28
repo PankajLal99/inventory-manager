@@ -6120,6 +6120,7 @@ def replacement_replace(request):
         scanned_override=request.data.get('scanned_original_barcode'),
     )
     invoice = invoice_item.invoice
+    original_invoice_status = invoice.status
     
     if invoice.status == 'void':
         return Response({
@@ -6335,14 +6336,9 @@ def replacement_replace(request):
         # Recalculate due_amount based on new total
         invoice.due_amount = invoice.total - invoice.paid_amount
     
-    # Update invoice status based on payment
-    if invoice.due_amount <= Decimal('0.00'):
-        invoice.status = 'paid'
-    elif invoice.paid_amount > Decimal('0.00'):
-        invoice.status = 'partial'
-    else:
-        invoice.status = 'draft'
-    
+    # Preserve invoice lifecycle state during replacement.
+    # Replacement changes pricing/ledger, but should not force payment status transitions.
+    invoice.status = original_invoice_status
     invoice.save()
     
     # Calculate price difference for ledger entry
@@ -7376,6 +7372,7 @@ def bulk_barcodes_check_pos(request):
 def process_replacement(request, invoice_id):
     """Process replacement - mark items as unknown and remove/reduce items from invoice"""
     invoice = get_object_or_404(Invoice, pk=invoice_id)
+    original_invoice_status = invoice.status
     
     if invoice.status == 'void':
         return Response({
@@ -7630,14 +7627,8 @@ def process_replacement(request, invoice_id):
             # Recalculate due_amount based on new total
             invoice.due_amount = invoice.total - invoice.paid_amount
         
-        # Update invoice status based on payment
-        if invoice.due_amount <= Decimal('0.00'):
-            invoice.status = 'paid'
-        elif invoice.paid_amount > Decimal('0.00'):
-            invoice.status = 'partial'
-        else:
-            invoice.status = 'draft'
-        
+        # Preserve invoice lifecycle state during replacement processing.
+        invoice.status = original_invoice_status
         invoice.save()
     
     # Return updated invoice
