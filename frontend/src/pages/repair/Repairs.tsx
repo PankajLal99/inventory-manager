@@ -204,6 +204,7 @@ export default function Repairs() {
     delivered: toLocalDateString(new Date()),
   }));
   const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
+  const [visibleRepairs, setVisibleRepairs] = useState<RepairInvoice[]>([]);
 
   useEffect(() => {
     const loadUser = async () => {
@@ -375,6 +376,7 @@ export default function Repairs() {
     setCurrentPage(1);
     setAutoLoadRemainingPages(true);
     setLoadedRepairs([]);
+    setVisibleRepairs([]);
   }, [statusFilter, defaultStore?.id, debouncedSearch]);
 
   useEffect(() => {
@@ -395,7 +397,10 @@ export default function Repairs() {
   useEffect(() => {
     if (!data || isFetching) return;
     const hasMore = Number(data.page || 1) < Number(data.total_pages || 1);
-    if (!hasMore) return;
+    if (!hasMore) {
+      setAutoLoadRemainingPages(false);
+      return;
+    }
     // Keep typing/search responsive and avoid endless background fetches when user is filtering.
     if (debouncedSearch || statusFilter || !autoLoadRemainingPages) return;
     // Wait for KPI totals before deciding whether we've loaded enough rows.
@@ -422,6 +427,18 @@ export default function Repairs() {
     wipKpiData,
     receivedKpiData,
   ]);
+
+  useEffect(() => {
+    // In filtered/search mode, update rows immediately.
+    if (debouncedSearch || statusFilter) {
+      setVisibleRepairs(loadedRepairs);
+      return;
+    }
+    // In default view, reveal rows only after background preload completes.
+    if (!autoLoadRemainingPages) {
+      setVisibleRepairs(loadedRepairs);
+    }
+  }, [loadedRepairs, debouncedSearch, statusFilter, autoLoadRemainingPages]);
 
   // Sync edit form when opening edit modal
   useEffect(() => {
@@ -560,7 +577,7 @@ export default function Repairs() {
     },
   });
 
-  const repairInvoices: RepairInvoice[] = loadedRepairs;
+  const repairInvoices: RepairInvoice[] = visibleRepairs;
   const hasMoreRepairs =
     Boolean(data) && Number(data.page || 1) < Number(data.total_pages || 1);
 
@@ -662,7 +679,10 @@ export default function Repairs() {
   const workInProgressRepairs = Number(wipKpiData?.count || 0);
   const notRepairedRepairs = Number(notRepairedKpiData?.count || 0);
 
-  if (isLoading) {
+  const waitingForInitialRows =
+    !debouncedSearch && !statusFilter && autoLoadRemainingPages && visibleRepairs.length === 0;
+
+  if (isLoading || waitingForInitialRows) {
     return <LoadingState message="Loading repairs..." />;
   }
 
