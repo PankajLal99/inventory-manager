@@ -565,7 +565,7 @@ export default function POS() {
       try {
         // For typed input that looks like a barcode, check if it's an actual barcode
         // Use barcode_only=true to only search in Barcode table, not Product SKU
-        const response = await productsApi.byBarcode(trimmedBarcodeInput, strictBarcodeMode, true);
+        const response = await productsApi.byBarcodePos(trimmedBarcodeInput, true);
         if (response.data) {
           // Check barcode tag status
           const barcodeTag = response.data.barcode_tag;
@@ -743,7 +743,7 @@ export default function POS() {
         let productData = null;
 
         try {
-          const barcodeCheck = await productsApi.byBarcode(barcodeToScan, strictBarcodeMode, true);
+          const barcodeCheck = await productsApi.byBarcodePos(barcodeToScan, true);
           if (barcodeCheck.data) {
             if (barcodeCheck.data.barcode_available === false) {
               const errorMsg = barcodeCheck.data.sold_invoice
@@ -2529,7 +2529,7 @@ export default function POS() {
       try {
         // Use barcode_only=true to only search in Barcode table, not Product SKU
         // This ensures we only find actual barcodes, not product SKUs
-        const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, strictBarcodeMode, true);
+        const barcodeResponse = await productsApi.byBarcodePos(trimmedBarcode, true);
         if (barcodeResponse.data) {
           product = barcodeResponse.data;
           // Check if the API returned a matched_barcode field
@@ -3675,7 +3675,7 @@ export default function POS() {
 
                               try {
                                 // Use barcode_only=true to only search in Barcode table, not Product SKU
-                                const barcodeCheck = await productsApi.byBarcode(searchValue, strictBarcodeMode, true);
+                                const barcodeCheck = await productsApi.byBarcodePos(searchValue, true);
                                 if (barcodeCheck.data) {
                                   if (barcodeCheck.data.barcode_available === false) {
                                     const errorMsg = barcodeCheck.data.sold_invoice
@@ -4139,7 +4139,7 @@ export default function POS() {
                                   try {
                                     // Try to check if it's a barcode that's sold
                                     // Use barcode_only=true to only search in Barcode table, not Product SKU
-                                    const barcodeCheck = await productsApi.byBarcode(searchValue, strictBarcodeMode, true);
+                                    const barcodeCheck = await productsApi.byBarcodePos(searchValue, true);
                                     if (barcodeCheck.data) {
                                       // If it's a barcode and it's sold, show error and prevent adding
                                       if (barcodeCheck.data.barcode_available === false) {

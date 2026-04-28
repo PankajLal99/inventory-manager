@@ -1626,7 +1626,12 @@ def check_barcode_sold_status(barcode_obj):
 # Helper function to build response for barcode lookup
 def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
     """Build standardized response for barcode lookup"""
-    is_sold, sold_invoice = check_barcode_sold_status(barcode_obj)
+    # Fast-path for scanner-only flows: for non-sold tags we can skip InvoiceItem lookup.
+    # This endpoint is called on each scan, so avoid extra joins unless needed.
+    if barcode_obj.tag == 'sold':
+        is_sold, sold_invoice = check_barcode_sold_status(barcode_obj)
+    else:
+        is_sold, sold_invoice = False, None
     
     logger.info(f"Found product by barcode ({match_type}): {product.name} (Barcode: {barcode_obj.barcode}, Tag: {barcode_obj.tag})")
     serializer = ProductSerializer(product)
@@ -1675,6 +1680,50 @@ def build_barcode_response(barcode_obj, product, logger, match_type='exact'):
         except Exception:
             pass
     
+    return response_data
+
+
+def build_barcode_response_lightweight(barcode_obj, product, logger, match_type='exact'):
+    """Build minimal response for high-frequency barcode_only scans."""
+    logger.info(f"Found product by barcode ({match_type}, lightweight): {product.name} (Barcode: {barcode_obj.barcode}, Tag: {barcode_obj.tag})")
+
+    stock_counts = product.barcodes.aggregate(
+        stock_quantity=Count('id', filter=~Q(tag='sold')),
+        available_quantity=Count('id', filter=Q(tag__in=['new', 'returned']))
+    )
+
+    response_data = {
+        'id': product.id,
+        'name': product.name,
+        'sku': product.sku,
+        'brand_name': product.brand.name if getattr(product, 'brand', None) else None,
+        'category_name': product.category.name if getattr(product, 'category', None) else None,
+        'product_type': product.product_type,
+        'track_inventory': product.track_inventory,
+        'low_stock_threshold': product.low_stock_threshold,
+        'can_go_below_purchase_price': product.can_go_below_purchase_price,
+        'tax_rate': product.tax_rate,
+        'selling_price': float(product.selling_price) if product.selling_price is not None else 0,
+        # Keep shape close to ProductSerializer to avoid frontend regressions.
+        'barcodes': [],
+        'stock_quantity': float(stock_counts.get('stock_quantity') or 0),
+        'available_quantity': float(stock_counts.get('available_quantity') or 0),
+        'matched_barcode': barcode_obj.short_code or barcode_obj.barcode,
+        'canonical_barcode': barcode_obj.barcode,
+        'barcode_id': barcode_obj.id,
+        'barcode_tag': barcode_obj.tag,
+        'barcode_available': barcode_obj.tag in ['new', 'returned'],
+    }
+
+    status_message, barcode_status = get_barcode_status_message(barcode_obj, None)
+    response_data['barcode_status'] = barcode_status
+    response_data['barcode_status_message'] = status_message
+
+    if barcode_obj.tag == 'sold':
+        is_sold, sold_invoice = check_barcode_sold_status(barcode_obj)
+        if is_sold and sold_invoice:
+            response_data['sold_invoice'] = sold_invoice
+
     return response_data
 
 
@@ -1753,6 +1802,9 @@ def barcode_by_barcode(request, barcode=None):
 
         # Check if we should only search barcodes (skip SKU fallback)
         barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'
+        # POS scanner optimization flag: return lightweight payload for high-frequency scans.
+        # Keep normal behavior for all other callers.
+        pos_scan = request.query_params.get('pos_scan', 'false').lower() == 'true'
         # Skip all cache (API response + barcode cache) when no_cache=true — use for invoice add to avoid stale matches
         no_cache = request.query_params.get('no_cache', 'false').lower() == 'true'
 
@@ -1771,7 +1823,8 @@ def barcode_by_barcode(request, barcode=None):
         logger.info(f"Looking up barcode/SKU: '{barcode_clean}'")
         
         # Check cache first (5 minute TTL for barcode lookups) — skip when no_cache=true (e.g. invoice creation)
-        cache_key = f'barcode_lookup:{barcode_clean}'
+        # Include mode in cache key. POS scan uses lightweight payload, others use full payload.
+        cache_key = f'barcode_lookup:v3:{barcode_clean}:bo:{1 if barcode_only else 0}:ps:{1 if pos_scan else 0}'
         if not no_cache:
             cached_response = cache.get(cache_key)
             if cached_response:
@@ -1789,7 +1842,10 @@ def barcode_by_barcode(request, barcode=None):
             product = barcode_obj.product or (barcode_obj.variant.product if barcode_obj.variant else None)
             if product and product.is_active:
                 logger.info(f"Found barcode match: '{barcode_clean}' -> '{barcode_obj.short_code or barcode_obj.barcode}'")
-                response_data = build_barcode_response(barcode_obj, product, logger, 'flexible_match')
+                if pos_scan:
+                    response_data = build_barcode_response_lightweight(barcode_obj, product, logger, 'flexible_match')
+                else:
+                    response_data = build_barcode_response(barcode_obj, product, logger, 'flexible_match')
                 # Cache the API response for 5 minutes (separate from barcode data cache) — skip when no_cache
                 if not no_cache:
                     cache.set(cache_key, response_data, 300)

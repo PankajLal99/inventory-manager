@@ -126,6 +126,14 @@ export const productsApi = {
     if (noCache) params.no_cache = 'true';
     return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
   },
+  byBarcodePos: (barcode: string, noCache: boolean = true) => {
+    const params: Record<string, string> = {
+      barcode_only: 'true',
+      pos_scan: 'true',
+    };
+    if (noCache) params.no_cache = 'true';
+    return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
+  },
   generateLabel: (zplCode: string) => api.post('/products/generate-label/', { zpl_code: zplCode }),
   generateLabels: (productId: number, purchaseId?: number, supplierId?: string) => {
     const data = purchaseId ? { purchase_id: purchaseId } : {};
