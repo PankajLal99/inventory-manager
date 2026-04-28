@@ -62,6 +62,13 @@ interface ReplacementItem {
   return_tag?: 'returned' | 'defective' | 'unknown';
 }
 
+const pickAutoReplacementPrice = (product: any): number | null => {
+  const candidates = [product?.selling_price, product?.purchase_price, product?.unit_price]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return candidates.length > 0 ? candidates[0] : null;
+};
+
 export default function ReplaceProduct() {
   const navigate = useNavigate();
   const [searchValue, setSearchValue] = useState('');
@@ -547,8 +554,8 @@ export default function ReplaceProduct() {
   };
 
   const handleProductSelect = async (itemId: number, product: any, searchedValue?: string) => {
-    // Default charge for the new line: prefer selling, then purchase (matches POS barcode lookup)
-    const productPrice = Number(product.selling_price || product.purchase_price || product.unit_price || 0);
+    // Auto charge for new line: only accept positive catalog prices; otherwise fallback later to old sale.
+    const productPrice = pickAutoReplacementPrice(product);
     const purchaseCost =
       product.purchase_price != null && product.purchase_price !== ''
         ? Number(product.purchase_price)
@@ -782,7 +789,13 @@ export default function ReplaceProduct() {
         const chargePrice =
           replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
             ? replacement.manual_unit_price
-            : (replacement.new_unit_price ?? oldSale);
+            : (
+              replacement.new_unit_price !== null &&
+              replacement.new_unit_price !== undefined &&
+              replacement.new_unit_price > 0
+                ? replacement.new_unit_price
+                : oldSale
+            );
         replacementData.manual_unit_price = chargePrice;
 
         console.log('Final replacementData:', replacementData);
@@ -1351,7 +1364,13 @@ export default function ReplaceProduct() {
                                           const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
                                           const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
                                             ? replacement.manual_unit_price
-                                            : (replacement.new_unit_price || originalPrice);
+                                            : (
+                                              replacement.new_unit_price !== null &&
+                                              replacement.new_unit_price !== undefined &&
+                                              replacement.new_unit_price > 0
+                                                ? replacement.new_unit_price
+                                                : originalPrice
+                                            );
                                           const diff = currentPrice - originalPrice;
                                           const totalDiff = diff * selectedQuantity;
 
@@ -1367,7 +1386,13 @@ export default function ReplaceProduct() {
                                           const originalPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
                                           const currentPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
                                             ? replacement.manual_unit_price
-                                            : (replacement.new_unit_price || originalPrice);
+                                            : (
+                                              replacement.new_unit_price !== null &&
+                                              replacement.new_unit_price !== undefined &&
+                                              replacement.new_unit_price > 0
+                                                ? replacement.new_unit_price
+                                                : originalPrice
+                                            );
                                           const diff = currentPrice - originalPrice;
 
                                           if (diff === 0) return 'No price difference per unit';
@@ -1412,7 +1437,13 @@ export default function ReplaceProduct() {
                               const oldPrice = parseFloat(item.manual_unit_price || item.unit_price || '0');
                               const newPrice = replacement.manual_unit_price !== null && replacement.manual_unit_price !== undefined
                                 ? replacement.manual_unit_price
-                                : (replacement.new_unit_price || oldPrice);
+                                : (
+                                  replacement.new_unit_price !== null &&
+                                  replacement.new_unit_price !== undefined &&
+                                  replacement.new_unit_price > 0
+                                    ? replacement.new_unit_price
+                                    : oldPrice
+                                );
                               const diff = (newPrice - oldPrice) * replacement.quantity;
                               totalPriceDiff += diff;
                             }
