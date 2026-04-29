@@ -72,6 +72,8 @@ export default function Expenses() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [form, setForm] = useState<ExpenseFormState>(getDefaultFormState());
   const [debouncedExpenseType, setDebouncedExpenseType] = useState('');
+  const [isExpenseTypeFocused, setIsExpenseTypeFocused] = useState(false);
+  const [activeExpenseTypeIndex, setActiveExpenseTypeIndex] = useState(-1);
   const [debouncedBorrowerName, setDebouncedBorrowerName] = useState('');
   const [borrowerGroupFilter, setBorrowerGroupFilter] = useState('');
   const [isBorrowerSearchFocused, setIsBorrowerSearchFocused] = useState(false);
@@ -122,7 +124,11 @@ export default function Expenses() {
     return () => window.clearTimeout(timer);
   }, [form.borrower_name]);
 
-  const { data: expenseTypeSuggestionsData } = useQuery({
+  const {
+    data: expenseTypeSuggestionsData,
+    isLoading: expenseTypeSuggestionsLoading,
+    isError: expenseTypeSuggestionsError,
+  } = useQuery({
     queryKey: ['expense-type-suggestions', debouncedExpenseType],
     queryFn: async () => {
       const response = await posApi.expenses.types(
@@ -141,6 +147,10 @@ export default function Expenses() {
     if (Array.isArray(expenseTypeSuggestionsData.data)) return expenseTypeSuggestionsData.data;
     return [];
   }, [expenseTypeSuggestionsData]);
+
+  useEffect(() => {
+    setActiveExpenseTypeIndex(-1);
+  }, [form.expense_type, expenseTypeSuggestions.length]);
 
   const { data: customerGroupsData } = useQuery({
     queryKey: ['expense-borrower-customer-groups'],
@@ -244,6 +254,8 @@ export default function Expenses() {
     setIsModalOpen(false);
     setEditingExpense(null);
     setForm(getDefaultFormState());
+    setIsExpenseTypeFocused(false);
+    setActiveExpenseTypeIndex(-1);
     setBorrowerGroupFilter('');
     setIsBorrowerSearchFocused(false);
   };
@@ -503,16 +515,83 @@ export default function Expenses() {
             type="text"
             label="Expense Type *"
             placeholder="Example: Electricity bill"
-            list="expense-type-suggestions"
             value={form.expense_type}
             onChange={(e) => setForm((prev) => ({ ...prev, expense_type: e.target.value }))}
+            onFocus={() => setIsExpenseTypeFocused(true)}
+            onBlur={() => setTimeout(() => setIsExpenseTypeFocused(false), 200)}
+            onKeyDown={(e) => {
+              const hasDropdown = isExpenseTypeFocused;
+              if (!hasDropdown || expenseTypeSuggestions.length === 0) {
+                if (e.key === 'Escape') setIsExpenseTypeFocused(false);
+                return;
+              }
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setIsExpenseTypeFocused(true);
+                setActiveExpenseTypeIndex((prev) => (prev + 1) % expenseTypeSuggestions.length);
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setIsExpenseTypeFocused(true);
+                setActiveExpenseTypeIndex((prev) => (prev <= 0 ? expenseTypeSuggestions.length - 1 : prev - 1));
+                return;
+              }
+              if (e.key === 'Enter') {
+                if (activeExpenseTypeIndex >= 0 && activeExpenseTypeIndex < expenseTypeSuggestions.length) {
+                  e.preventDefault();
+                  const picked = expenseTypeSuggestions[activeExpenseTypeIndex];
+                  setForm((prev) => ({ ...prev, expense_type: picked }));
+                  setIsExpenseTypeFocused(false);
+                }
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setIsExpenseTypeFocused(false);
+                setActiveExpenseTypeIndex(-1);
+              }
+            }}
             required
           />
-          <datalist id="expense-type-suggestions">
-            {expenseTypeSuggestions.map((suggestion) => (
-              <option key={suggestion} value={suggestion} />
-            ))}
-          </datalist>
+          <div className="relative">
+            {isExpenseTypeFocused && (
+              <div className="absolute z-50 w-full -mt-2 bg-white border border-gray-100 rounded-xl shadow-lg p-2 max-h-64 overflow-y-auto">
+                {expenseTypeSuggestionsLoading ? (
+                  <div className="p-4 text-sm text-gray-500 text-center">Searching expense types...</div>
+                ) : expenseTypeSuggestionsError ? (
+                  <div className="p-4 text-sm text-red-500 text-center">Failed to load expense types. Try again.</div>
+                ) : expenseTypeSuggestions.length > 0 ? (
+                  expenseTypeSuggestions.map((suggestion, index) => (
+                    <button
+                      key={`${suggestion}-${index}`}
+                      type="button"
+                      onClick={() => {
+                        setForm((prev) => ({ ...prev, expense_type: suggestion }));
+                        setIsExpenseTypeFocused(false);
+                      }}
+                      onMouseEnter={() => setActiveExpenseTypeIndex(index)}
+                      className={`w-full text-left px-3 py-2 rounded-lg flex items-center justify-between group transition-colors ${
+                        activeExpenseTypeIndex === index ? 'bg-blue-50' : 'hover:bg-blue-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center group-hover:bg-blue-600 transition-colors shrink-0">
+                          <User className="h-4 w-4 text-gray-400 group-hover:text-white" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate">{suggestion}</p>
+                        </div>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-4 text-sm text-gray-500 text-center">No expense types found</div>
+                )}
+              </div>
+            )}
+          </div>
           <Input
             type="text"
             label="Lender Name"
