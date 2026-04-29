@@ -539,7 +539,7 @@ export default function Expenses() {
             onFocus={() => setIsBorrowerSearchFocused(true)}
             onBlur={() => setTimeout(() => setIsBorrowerSearchFocused(false), 200)}
             onKeyDown={(e) => {
-              const hasDropdown = isBorrowerSearchFocused || form.borrower_name.trim() || borrowerGroupFilter;
+              const hasDropdown = isBorrowerSearchFocused;
               if (!hasDropdown || borrowerSuggestions.length === 0) {
                 if (e.key === 'Escape') setIsBorrowerSearchFocused(false);
                 return;
@@ -573,7 +573,7 @@ export default function Expenses() {
             }}
           />
           <div className="relative">
-            {(isBorrowerSearchFocused || form.borrower_name.trim() || borrowerGroupFilter) && (
+            {isBorrowerSearchFocused && (
               <div className="absolute z-50 w-full -mt-2 bg-white border border-gray-100 rounded-xl shadow-lg p-2 max-h-64 overflow-y-auto">
                 {borrowerSuggestionsLoading ? (
                   <div className="p-4 text-sm text-gray-500 text-center">Searching borrowers...</div>
