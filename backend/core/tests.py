@@ -1,4 +1,5 @@
 from decimal import Decimal
+from django.utils import timezone
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
@@ -214,6 +215,7 @@ class GlobalSearchProductPriceFallbackTests(APITestCase):
         purchase = Purchase.objects.create(
             supplier=self.supplier,
             purchase_number='PUR-SEARCH-PRICE-001',
+            purchase_date=timezone.now().date(),
             status='finalized',
             created_by=self.user,
         )
