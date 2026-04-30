@@ -2042,11 +2042,10 @@ export default function Products() {
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => handleViewSKUs(product)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                            className="flex items-center justify-center w-8 h-8 text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
                             title="View SKUs"
                           >
                             <Eye className="h-3.5 w-3.5" />
-                            <span>View SKUs</span>
                           </button>
                           {tagFilter === 'sold' && !isRetailUser && (
                             <button
@@ -2247,20 +2246,18 @@ export default function Products() {
                                         params.set('product', product.id.toString());
                                         navigate(`/purchases?${params.toString()}`);
                                       }}
-                                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
+                                      className="flex items-center justify-center w-8 h-8 text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
                                       title="Create Purchase for this Product"
                                     >
                                       <ShoppingCart className="h-3.5 w-3.5" />
-                                      <span>Purchase</span>
                                     </button>
                                   )}
                                 <button
                                   onClick={() => handleViewSKUs(product)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                  className="flex items-center justify-center w-8 h-8 text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
                                   title="View SKUs"
                                 >
                                   <Eye className="h-3.5 w-3.5" />
-                                  <span>View SKUs</span>
                                 </button>
                                 {(() => {
                                   const hasBarcodes = product.barcodes && product.barcodes.length > 0;
@@ -2272,11 +2269,10 @@ export default function Products() {
                                     return (
                                       <button
                                         disabled
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-md cursor-not-allowed"
+                                        className="flex items-center justify-center w-8 h-8 text-gray-500 bg-gray-50 border border-gray-200 rounded-md cursor-not-allowed"
                                         title="Generating Labels..."
                                       >
                                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                        <span>Generating...</span>
                                       </button>
                                     );
                                   }
@@ -2284,22 +2280,20 @@ export default function Products() {
                                     return (
                                       <button
                                         onClick={() => handlePrintLabels(product)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
+                                        className="flex items-center justify-center w-8 h-8 text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
                                         title="Print Labels"
                                       >
                                         <Printer className="h-3.5 w-3.5" />
-                                        <span>Print Labels</span>
                                       </button>
                                     );
                                   }
                                   return (
                                     <button
                                       onClick={() => handleGenerateLabels(product)}
-                                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
+                                      className="flex items-center justify-center w-8 h-8 text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
                                       title="Generate Labels"
                                     >
                                       <Printer className="h-3.5 w-3.5" />
-                                      <span>Generate Labels</span>
                                     </button>
                                   );
                                 })()}
@@ -2319,11 +2313,10 @@ export default function Products() {
                               <>
                                 <button
                                   onClick={() => handleViewSKUs(product)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                  className="flex items-center justify-center w-8 h-8 text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
                                   title="View SKUs"
                                 >
                                   <Eye className="h-3.5 w-3.5" />
-                                  <span>View SKUs</span>
                                 </button>
                                 {!isRetailUser && (
                                   <button
@@ -2340,11 +2333,10 @@ export default function Products() {
                             {(currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') && (
                               <button
                                 onClick={() => handleViewSKUs(product)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                className="flex items-center justify-center w-8 h-8 text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
                                 title="View SKUs"
                               >
                                 <Eye className="h-3.5 w-3.5" />
-                                <span>View SKUs</span>
                               </button>
                             )}
                           </div>
