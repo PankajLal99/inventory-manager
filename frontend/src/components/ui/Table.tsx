@@ -39,7 +39,7 @@ export default function Table({ headers, children, className = '', compact }: Ta
                 return (
                   <th
                     key={index}
-                    className={`${px} ${thPy} ${alignClass} text-xs font-semibold text-gray-700 uppercase tracking-wider`}
+                    className={`${px} ${thPy} ${alignClass} text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-normal break-words leading-tight`}
                   >
                     {header.label}
                   </th>

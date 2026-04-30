@@ -1246,7 +1246,7 @@ export default function Products() {
   const getTableHeaders = (tag: string): string[] => {
     switch (tag) {
       case 'new':
-        return ['Name', 'Brand', 'Category', 'Total Stock', 'Low Stock Threshold', 'Status', 'Actions'];
+        return ['Name', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions', 'Low Stock Limit'];
       case 'sold':
         return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'unknown':
@@ -1258,7 +1258,7 @@ export default function Products() {
       case 'in-cart':
         return ['Name', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
       default:
-        return ['Name', 'Brand', 'Category', 'Total Stock', 'Low Stock Threshold', 'Status', 'Actions'];
+        return ['Name', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions', 'Low Stock Limit'];
     }
   };
 
@@ -2200,6 +2200,7 @@ export default function Products() {
                         </td>
                       ) : null;
                     case 'Low Stock Threshold':
+                    case 'Low Stock Limit':
                       return currentTagFilter === 'new' ? (
                         <td key={cellKey} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <span className="font-medium">
