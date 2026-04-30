@@ -8,6 +8,8 @@ from django.contrib.auth import get_user_model
 from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
 from backend.pos.models import Invoice, InvoiceItem
+from backend.parties.models import Supplier
+from backend.purchasing.models import Purchase, PurchaseItem
 
 User = get_user_model()
 
@@ -187,3 +189,51 @@ class GlobalSearchBarcodeTests(APITestCase):
         barcodes = response.data.get('barcodes', [])
         self.assertEqual(len(barcodes), 1, 'Backend normalizes query to upper; lowercase search should find EXACT-BARCODE-001')
         self.assertEqual(barcodes[0]['barcode'], 'EXACT-BARCODE-001')
+
+
+class GlobalSearchProductPriceFallbackTests(APITestCase):
+    """Regression tests for product price fields in global search payload."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='searchpriceuser', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.category = Category.objects.create(name='Folder')
+        self.supplier = Supplier.objects.create(name='BLUEHORSE', code='BLUEHORSE')
+
+    def test_product_search_fills_price_from_supplier_breakdown_when_barcode_price_unavailable(self):
+        """
+        Product search should return top-level purchase/selling prices using supplier rows
+        when direct barcode-derived values are unavailable.
+        """
+        product = Product.objects.create(
+            name='FOLDER IPHONE XR TFT GX NON PESTING',
+            category=self.category,
+            track_inventory=True,
+            is_active=True,
+        )
+        purchase = Purchase.objects.create(
+            supplier=self.supplier,
+            purchase_number='PUR-SEARCH-PRICE-001',
+            status='finalized',
+            created_by=self.user,
+        )
+        PurchaseItem.objects.create(
+            purchase=purchase,
+            product=product,
+            quantity=Decimal('10'),
+            shop_quantity=Decimal('10'),
+            warehouse_quantity=Decimal('0'),
+            unit_price=Decimal('665'),
+            selling_price=Decimal('0'),
+        )
+
+        url = reverse('global-search')
+        response = self.client.get(url, {'q': 'FOLDER IPHONE XR TFT GX', 'type': 'product'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        products = response.data.get('products', [])
+        target = next((p for p in products if p.get('id') == product.id), None)
+        self.assertIsNotNone(target)
+
+        # Fallback behavior from supplier_breakdown should populate top-level fields.
+        self.assertEqual(target.get('purchase_price'), 665.0)
+        self.assertEqual(target.get('selling_price'), 665.0)
