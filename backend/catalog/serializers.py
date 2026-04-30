@@ -665,6 +665,17 @@ class ProductListSerializer(serializers.ModelSerializer):
         if product_barcode:
             purchase_price = product_barcode.get_purchase_price()
             return float(purchase_price) if purchase_price else None
+
+        # Fallback for tracked products / empty barcode payloads in search:
+        # derive a representative purchase price from supplier breakdown rows.
+        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
+        max_purchase = 0.0
+        for row in breakdown:
+            value = float(row.get('purchase_price_value') or 0)
+            if value > max_purchase:
+                max_purchase = value
+        if max_purchase > 0:
+            return max_purchase
         return None
 
     def get_selling_price(self, obj):
@@ -678,6 +689,23 @@ class ProductListSerializer(serializers.ModelSerializer):
         if product_barcode:
             selling_price = product_barcode.get_selling_price()
             return float(selling_price) if selling_price else None
+
+        # Fallback for tracked products / empty barcode payloads in search:
+        # prefer max selling price from supplier rows, then purchase price row value.
+        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
+        max_selling = 0.0
+        max_purchase = 0.0
+        for row in breakdown:
+            selling_value = float(row.get('selling_price_value') or 0)
+            purchase_value = float(row.get('purchase_price_value') or 0)
+            if selling_value > max_selling:
+                max_selling = selling_value
+            if purchase_value > max_purchase:
+                max_purchase = purchase_value
+        if max_selling > 0:
+            return max_selling
+        if max_purchase > 0:
+            return max_purchase
         return None
 
     def get_stock_bifurcation(self, obj):
