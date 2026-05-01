@@ -470,7 +470,7 @@ export default function Search() {
                           onClick={() => navigate(`/products/${item.id}`)}
                           className="p-3 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
                         >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+                          <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start gap-2 mb-2">
                                 <div className="flex-1 min-w-0">
@@ -506,14 +506,14 @@ export default function Search() {
                               </div>
 
                             </div>
-                            <div className="w-full sm:w-auto flex items-start justify-between sm:justify-start sm:flex-col sm:items-end gap-2 sm:gap-1 flex-shrink-0 pt-0.5">
-                              <div className="flex items-center gap-4 sm:gap-3">
-                                <div className="text-left sm:text-right">
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0 pt-0.5">
+                              <div className="flex items-center gap-3">
+                                <div className="text-right">
                                   <div className={`text-xl font-bold leading-none ${hasPrice ? 'text-green-600 group-hover:text-green-700' : 'text-gray-400 group-hover:text-gray-500'}`}>
                                     {priceDisplay}
                                   </div>
                                 </div>
-                                <div className="text-left sm:text-right">
+                                <div className="text-right">
                                   <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-none">QTY</div>
                                   <div className="text-xl font-bold text-indigo-600 group-hover:text-indigo-700 leading-none">
                                     {warehousePlusAvailable}
@@ -524,7 +524,7 @@ export default function Search() {
                             </div>
                           </div>
 
-                          {/* Supplier Breakdown */}
+                          {/* Supplier Breakdown Table */}
                           {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
                             <div className="mt-4 overflow-x-auto border border-gray-100 rounded-md">
                               <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
@@ -544,23 +544,7 @@ export default function Search() {
                                   Show zero rows
                                 </label>
                               </div>
-                              <div className="md:hidden divide-y divide-gray-100">
-                                {item.supplier_breakdown.map((s: any, sIdx: number) => (
-                                  <div key={sIdx} className="px-3 py-2.5 space-y-1.5">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-xs font-semibold text-gray-900 truncate">{s.supplier}</span>
-                                      <span className="text-[11px] text-gray-500 whitespace-nowrap">{s.purchase_date ?? '—'}</span>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                                      <div className="text-gray-500">Whse: <span className="font-semibold text-gray-700">{formatNumber(s.warehouse_available ?? s.warehouse_stock, 2)}</span></div>
-                                      <div className="text-gray-500">Available: <span className="font-semibold text-blue-600">{formatNumber(s.shop_barcode_count ?? s.shop_stock, 2)}</span></div>
-                                      <div className="text-gray-500">Purchase: <span className="font-medium text-gray-700">{s.price}</span></div>
-                                      <div className="text-gray-500">Selling: <span className="font-medium text-green-600">{s.selling_price ?? '—'}</span></div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                              <table className="hidden md:table min-w-full divide-y divide-gray-100">
+                              <table className="min-w-full divide-y divide-gray-100">
                                 <thead className="bg-gray-50">
                                   <tr>
                                     <th className="px-3 py-2 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider align-middle whitespace-nowrap">Supplier</th>
