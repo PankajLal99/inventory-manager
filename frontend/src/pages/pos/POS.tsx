@@ -24,6 +24,7 @@ import BarcodeScanner from '../../components/BarcodeScanner';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { ShoppingCart, Search, Plus, Minus, Trash2, Barcode, CheckCircle, XCircle, Camera, AlertTriangle, User, FileText, ChevronDown, ChevronUp, Sparkles, UserPlus, X, Trash, Store, Edit, Wrench, Phone, Package, DollarSign, Lock, LockOpen, Eye, EyeOff, ListOrdered, RefreshCw } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
@@ -33,6 +34,14 @@ import PosTradeInCartModal, {
   posTradeInPayload,
   type PosTradeInLine,
 } from './PosTradeInCartModal';
+
+function escapeHtml(s: unknown): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -116,6 +125,7 @@ export default function POS() {
   const isTypingInPriceInput = useRef(false);
   const processingBarcodesRef = useRef<Set<string>>(new Set());
   const cartTabsRef = useRef<CartTab[]>([]);
+  const draftSnapshotFrameRef = useRef<HTMLIFrameElement>(null);
 
   // Keep an in-memory set of barcodes known to be in cart (or just added by queue)
   // so queue processing doesn't need to block on cart refetch after every item.
@@ -2798,6 +2808,238 @@ export default function POS() {
 
   const calculateTotal = () => cartGrossSubtotal - tradeInCredit;
 
+  const copyDraftSnapshotToClipboard = useCallback(async () => {
+    const cartData = cart?.data;
+    const items = cartData?.items;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      showToast('Cart is empty', 'info');
+      return;
+    }
+
+    const now = new Date();
+    const headerDate = now.toLocaleString('en-IN', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const draftItems = items.map((item: any, idx: number) => {
+      const editingPrice = editingManualPrice?.[item.id];
+      const unitPrice =
+        editingPrice !== undefined && editingPrice !== ''
+          ? (parseFloat(editingPrice) || 0)
+          : (parseFloat(item.manual_unit_price) || 0);
+      const qty = parseFloat(String(item.quantity ?? '0')) || 0;
+      const lineTotal = unitPrice * qty;
+      const name = item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : (item.product_name || 'Item');
+      return {
+        idx: idx + 1,
+        name,
+        qty,
+        unitPrice,
+        lineTotal,
+      };
+    });
+
+    const subtotal = cartGrossSubtotal || 0;
+    const tradeIn = tradeInCredit || 0;
+    const total = calculateTotal() || 0;
+
+    const title = 'DRAFT POS SNAPSHOT';
+    const storeName = defaultStore?.name || cartData?.store_name || '-';
+    const customerName = selectedCustomer?.name || cartData?.customer_name || 'Walk-in Customer';
+    const cartLabel = cartData?.cart_number || (cartId ? `CART-${cartId}` : 'Cart');
+
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      .draft-a4,
+      .draft-a4 table {
+        font-family: Arial, sans-serif;
+      }
+      .draft-a4 .items-grid {
+        width: 100%;
+        margin-top: 10px;
+        font-size: 12px;
+      }
+      .draft-a4 .items-grid-row {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr) 70px 110px 110px;
+      }
+      .draft-a4 .items-grid-cell {
+        border: 1px solid #000;
+        padding: 6px 8px;
+        display: flex;
+        align-items: center;
+        min-height: 42px;
+        line-height: 1.3;
+        box-sizing: border-box;
+      }
+      .draft-a4 .items-grid-header .items-grid-cell {
+        font-weight: 700;
+      }
+      .draft-a4 .cell-left {
+        justify-content: flex-start;
+        text-align: left;
+      }
+      .draft-a4 .cell-right {
+        justify-content: flex-end;
+        text-align: right;
+      }
+      .draft-a4 .items-grid-cell.product-cell {
+        white-space: normal;
+        word-break: break-word;
+      }
+      .draft-a4 .totals-table td {
+        border: 1px solid #000;
+        padding: 6px 8px;
+      }
+      .draft-a4 .totals-table td:first-child {
+        text-align: left;
+      }
+      .draft-a4 .totals-table td:last-child {
+        text-align: right;
+      }
+      .draft-a4 .totals-table tr {
+        height: 38px;
+      }
+      .draft-a4 .totals-table td,
+      .draft-a4 .totals-table td {
+        vertical-align: middle !important;
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="draft-a4" style="font-family: Arial, sans-serif; color:#000; width: 794px; margin: 0 auto;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; border:1px solid #000; padding:10px 12px;">
+        <div>
+          <div style="font-size:18px; font-weight:700; letter-spacing:0.4px;">${escapeHtml(title)}</div>
+          <div style="font-size:12px; margin-top:2px;">${escapeHtml(cartLabel)} · ${escapeHtml(headerDate)}</div>
+          <div style="font-size:12px; margin-top:6px;"><strong>Store:</strong> ${escapeHtml(storeName)}</div>
+          <div style="font-size:12px; margin-top:2px;"><strong>Customer:</strong> ${escapeHtml(customerName)}</div>
+        </div>
+        <div style="text-align:right; font-size:12px;">
+          <div><strong>Items:</strong> ${draftItems.length}</div>
+          <div style="margin-top:4px; color:#555;">(Draft copy)</div>
+        </div>
+      </div>
+
+      <div class="items-grid">
+        <div class="items-grid-row items-grid-header">
+          <div class="items-grid-cell cell-left">#</div>
+          <div class="items-grid-cell cell-left">Product</div>
+          <div class="items-grid-cell cell-right">Qty</div>
+          <div class="items-grid-cell cell-right">Price</div>
+          <div class="items-grid-cell cell-right">Total</div>
+        </div>
+        ${draftItems
+          .map(
+            (r) => `<div class="items-grid-row">
+          <div class="items-grid-cell cell-left">${r.idx}</div>
+          <div class="items-grid-cell cell-left product-cell">${escapeHtml(r.name)}</div>
+          <div class="items-grid-cell cell-right">${escapeHtml(formatNumber(r.qty, 3))}</div>
+          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.unitPrice))}</div>
+          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.lineTotal))}</div>
+        </div>`
+          )
+          .join('')}
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+        <table class="totals-table" style="border-collapse:collapse; font-size:12px; min-width: 260px;">
+          <tbody>
+            <tr>
+              <td><strong>Subtotal</strong></td>
+              <td>₹${escapeHtml(formatNumber(subtotal))}</td>
+            </tr>
+            ${tradeIn > 0
+              ? `<tr>
+              <td><strong>Trade-in</strong></td>
+              <td>-₹${escapeHtml(formatNumber(tradeIn))}</td>
+            </tr>`
+              : ''}
+            <tr>
+              <td><strong>Total</strong></td>
+              <td><strong>₹${escapeHtml(formatNumber(total))}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+    try {
+      const iframe = draftSnapshotFrameRef.current;
+      const doc = iframe?.contentDocument;
+      if (!iframe || !doc) {
+        showToast('Snapshot preview not ready. Please refresh and try again.', 'error');
+        return;
+      }
+
+      doc.open();
+      doc.write(html);
+      doc.close();
+
+      // Let the iframe lay out content before capturing.
+      await new Promise((r) => window.setTimeout(r, 60));
+
+      const body = doc.body;
+      const el = doc.documentElement;
+      const w = el?.scrollWidth ?? 794; // A4 width ~210mm at 96dpi
+      const h = el?.scrollHeight ?? 1123;
+
+      const canvas = await html2canvas(body, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: w,
+        windowHeight: h,
+      });
+
+      const blob: Blob | null = await new Promise((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png', 1)
+      );
+
+      if (!blob) {
+        showToast('Failed to create snapshot image.', 'error');
+        return;
+      }
+
+      const canWriteImage =
+        typeof (window as any).ClipboardItem !== 'undefined' &&
+        !!navigator.clipboard &&
+        typeof (navigator.clipboard as any).write === 'function';
+
+      if (!canWriteImage) {
+        showToast('Image clipboard not supported in this browser.', 'error');
+        return;
+      }
+
+      await (navigator.clipboard as any).write([new (window as any).ClipboardItem({ 'image/png': blob })]);
+      showToast('Draft snapshot image copied to clipboard.', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to copy to clipboard. Please check permissions.', 'error');
+    }
+  }, [
+    cart?.data,
+    cartGrossSubtotal,
+    cartId,
+    calculateTotal,
+    defaultStore?.name,
+    editingManualPrice,
+    selectedCustomer?.name,
+    showToast,
+    tradeInCredit,
+  ]);
+
   const calculateTotalQuantity = () => {
     if (!cart?.data?.items || !Array.isArray(cart.data.items)) return 0;
     return cart.data.items.reduce((sum: number, item: any) => {
@@ -4356,6 +4598,17 @@ export default function POS() {
                 >
                   {showPurchasePrice ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
                 </button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={copyDraftSnapshotToClipboard}
+                  disabled={!cart?.data?.items || !Array.isArray(cart.data.items) || cart.data.items.length === 0}
+                  className="flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50"
+                  title="Copy draft A4-style snapshot to clipboard"
+                >
+                  <Camera className="h-4 w-4" />
+                  <span className="hidden sm:inline">Snapshot</span>
+                </Button>
                 {!isCartLocked && ((cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer) && (
                 <Button
                   variant="outline"
@@ -5082,6 +5335,22 @@ export default function POS() {
           </div>
         </div>
       )}
+
+      {/* Offscreen iframe used to render "draft snapshot" HTML for image capture */}
+      <iframe
+        ref={draftSnapshotFrameRef}
+        title="draft-snapshot"
+        style={{
+          position: 'fixed',
+          left: '-99999px',
+          top: 0,
+          width: '794px',
+          height: '1px',
+          border: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
+      />
 
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
