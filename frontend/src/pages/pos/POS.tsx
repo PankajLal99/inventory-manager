@@ -4550,7 +4550,7 @@ export default function POS() {
 
           <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-4 sm:p-6">
             <div className="flex items-center justify-between mb-4 sm:mb-6">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Cart Items</h2>
                 {isCartLocked && (
                   <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200">
@@ -4603,11 +4603,12 @@ export default function POS() {
                   size="sm"
                   onClick={copyDraftSnapshotToClipboard}
                   disabled={!cart?.data?.items || !Array.isArray(cart.data.items) || cart.data.items.length === 0}
-                  className="flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50"
-                  title="Copy draft A4-style snapshot to clipboard"
+                  className="flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50 shrink-0"
+                  title="Copy production snapshot to clipboard"
                 >
                   <Camera className="h-4 w-4" />
-                  <span className="hidden sm:inline">Snapshot</span>
+                  <span className="sm:hidden">Snapshot</span>
+                  <span className="hidden sm:inline">Production Snapshot</span>
                 </Button>
                 {!isCartLocked && ((cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer) && (
                 <Button
@@ -5546,4 +5547,3 @@ export default function POS() {
     </div>
   );
 }
-
