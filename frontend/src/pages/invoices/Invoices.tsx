@@ -14,6 +14,7 @@ import {
   Store,
   ChevronDown,
   Loader2,
+  BarChart3,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { DateRangePreset, formatNumber } from '../../lib/utils';
@@ -40,6 +41,7 @@ interface Invoice {
   customer_group_name?: string | null;
   status: string;
   invoice_type: string;
+  is_replacement_return?: boolean;
   subtotal: string;
   discount_amount: string;
   tax_amount: string;
@@ -47,6 +49,12 @@ interface Invoice {
   display_total?: string | number;
   computed_total?: string | number;
   computed_paid?: string | number;
+  replacement_summary?: {
+    total_credit?: string | number;
+    historical_total?: string | number;
+    adjusted_total?: string | number;
+    lines_count?: number;
+  } | null;
   paid_amount: string;
   due_amount: string;
   created_at: string;
@@ -71,6 +79,7 @@ const INVOICES_LIST_STATE_KEY = 'invoices:list-state:v1';
 type InvoicesListState = {
   search: string;
   invoiceTypeFilter: string;
+  showReplacement: boolean;
   datePreset: DateRangePreset;
   dateRange: { startDate: string; endDate: string };
   selectedStoreId: number | null;
@@ -91,6 +100,7 @@ const readPersistedInvoicesListState = (): InvoicesListState | null => {
     return {
       search: typeof parsed.search === 'string' ? parsed.search : '',
       invoiceTypeFilter: typeof parsed.invoiceTypeFilter === 'string' ? parsed.invoiceTypeFilter : '',
+      showReplacement: typeof parsed.showReplacement === 'boolean' ? parsed.showReplacement : false,
       datePreset: safePreset,
       dateRange: {
         startDate: typeof parsed.dateRange?.startDate === 'string' ? parsed.dateRange.startDate : '',
@@ -114,6 +124,11 @@ const parseAmount = (value: unknown) => {
   const parsed = parseFloat(String(value ?? '0'));
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const invoiceDisplayPaid = (invoice: Invoice) =>
+  invoice?.replacement_summary?.adjusted_total != null
+    ? parseAmount(invoice.replacement_summary.adjusted_total)
+    : parseAmount(invoice.computed_paid);
 
 const invoiceTypeLabel: Record<string, string> = {
   cash: 'Cash',
@@ -169,6 +184,12 @@ export default function Invoices() {
   const [invoiceTypeFilter, setInvoiceTypeFilter] = useState<string>(
     () => searchParams.get('invoice_type') ?? persistedListStateRef.current?.invoiceTypeFilter ?? ''
   );
+  const [showReplacement, setShowReplacement] = useState<boolean>(() => {
+    const v = (searchParams.get('show_replacement') ?? '').trim().toLowerCase();
+    if (v === '1' || v === 'true' || v === 'yes' || v === 'y') return true;
+    if (v === '0' || v === 'false' || v === 'no' || v === 'n') return false;
+    return persistedListStateRef.current?.showReplacement ?? false;
+  });
   const [datePreset, setDatePreset] = useState<DateRangePreset>(() => {
     const preset = searchParams.get('preset');
     if (preset === 'one_day' || preset === 'last_7_days' || preset === 'last_30_days' || preset === 'custom') {
@@ -251,7 +272,7 @@ export default function Invoices() {
   // Default view uses date-based pagination; any active filter returns full filtered data.
   const useFilteredMode = !!invoiceTypeFilter || !!dateFrom || !!dateTo || !!search.trim() || !!defaultStore?.id;
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', useFilteredMode ? 1 : currentPage, search],
+    queryKey: ['invoices', invoiceTypeFilter, dateFrom, dateTo, defaultStore?.id ?? 'all', useFilteredMode ? 1 : currentPage, search, showReplacement],
     queryFn: () => posApi.invoices.list({
       invoice_type: invoiceTypeFilter || undefined,
       date_from: dateFrom || undefined,
@@ -260,6 +281,7 @@ export default function Invoices() {
       page: useFilteredMode ? undefined : currentPage,
       search: search.trim() || undefined,
       ordering: invoiceTypeFilter ? 'created_at' : '-created_at',
+      include_replacement: showReplacement ? 'true' : undefined,
     }),
     enabled: true,
     placeholderData: keepPreviousData,
@@ -270,6 +292,7 @@ export default function Invoices() {
     const trimmedSearch = search.trim();
     if (trimmedSearch) nextParams.set('search', trimmedSearch);
     if (invoiceTypeFilter) nextParams.set('invoice_type', invoiceTypeFilter);
+    if (showReplacement) nextParams.set('show_replacement', '1');
     if (datePreset && datePreset !== 'custom') nextParams.set('preset', datePreset);
     if (dateFrom) nextParams.set('date_from', dateFrom);
     if (dateTo) nextParams.set('date_to', dateTo);
@@ -282,6 +305,7 @@ export default function Invoices() {
   }, [
     search,
     invoiceTypeFilter,
+    showReplacement,
     datePreset,
     dateFrom,
     dateTo,
@@ -297,6 +321,7 @@ export default function Invoices() {
     const snapshot: InvoicesListState = {
       search,
       invoiceTypeFilter,
+      showReplacement,
       datePreset,
       dateRange: {
         startDate: dateFrom,
@@ -307,7 +332,7 @@ export default function Invoices() {
     };
     window.sessionStorage.setItem(INVOICES_LIST_STATE_KEY, JSON.stringify(snapshot));
     writePersistedListDateRange(datePreset, dateFrom, dateTo);
-  }, [search, invoiceTypeFilter, datePreset, dateFrom, dateTo, selectedStoreId, currentPage]);
+  }, [search, invoiceTypeFilter, showReplacement, datePreset, dateFrom, dateTo, selectedStoreId, currentPage]);
 
   const invoices: Invoice[] = data?.data?.results || data?.data?.results || data?.data || [];
   const rawData = data?.data && typeof data.data === 'object' ? data.data : null;
@@ -330,6 +355,7 @@ export default function Invoices() {
     const isRepairByCustomerGroup = customerGroup === 'REPAIR';
     const isRepairInvoice = Boolean(invoice.repair) || isRepairByType || isRepairByCustomerGroup;
 
+    if (!showReplacement && invoice.is_replacement_return) return false;
     if (invoice.invoice_type === 'defective') return false;
     if (isRepairInvoice) return false;
     return true;
@@ -354,7 +380,7 @@ export default function Invoices() {
   // KPI summary based on currently loaded/visible invoice results
   const totalRevenue = filteredInvoices
     .filter(inv => inv.status === 'paid')
-    .reduce((sum, inv) => sum + parseAmount(inv.total), 0);
+    .reduce((sum, inv) => sum + invoiceDisplayPaid(inv), 0);
   const totalPendingInvoiceAmount = filteredInvoices
     .filter(inv => inv.invoice_type === 'pending')
     .reduce((sum, inv) => sum + parseAmount(inv.display_total ?? inv.total), 0);
@@ -374,13 +400,13 @@ export default function Invoices() {
   // Profit summary for Super group footer row; bifurcate Paid vs Credit
   const paidSales = footerTotalsInvoices
     .filter((inv) => !isCreditInvoice(inv))
-    .reduce((s, inv) => s + parseAmount(inv.computed_paid), 0);
+    .reduce((s, inv) => s + invoiceDisplayPaid(inv), 0);
   const paidDifference = footerTotalsInvoices
     .filter((inv) => !isCreditInvoice(inv))
-    .reduce((s, inv) => s + (parseAmount(inv.computed_paid) - parseAmount(inv.computed_total)), 0);
+    .reduce((s, inv) => s + (invoiceDisplayPaid(inv) - parseAmount(inv.computed_total)), 0);
   const creditDifference = footerTotalsInvoices
     .filter((inv) => isCreditInvoice(inv))
-    .reduce((s, inv) => s + (parseAmount(inv.computed_paid) - parseAmount(inv.computed_total)), 0);
+    .reduce((s, inv) => s + (invoiceDisplayPaid(inv) - parseAmount(inv.computed_total)), 0);
   const pendingAmount = filteredInvoices
     .filter((inv) => String(inv.invoice_type || '').toLowerCase() === 'pending')
     .reduce((s, inv) => s + parseAmount(inv.display_total ?? inv.total), 0);
@@ -433,42 +459,77 @@ export default function Invoices() {
           subtitle={groupContainsAdmin ? 'View and manage all invoices (all stores)' : 'View and manage all invoices'}
           icon={FileText}
         />
-        {/* Store selector: Admin gets "All" + stores; non-Admin gets stores only */}
-        {stores.length > 0 && (
-          <div className="w-full sm:w-auto">
-            <div className="relative group">
-              <div className="flex items-center gap-2 sm:gap-3 bg-white border-2 border-blue-200 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm hover:shadow-md hover:border-blue-400 transition-all duration-200 cursor-pointer">
-                <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
-                  <div className="flex-shrink-0 p-1.5 bg-blue-50 rounded-lg">
-                    <Store className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
+        <div className="w-full sm:w-auto flex items-center gap-3">
+          {/* Store selector: Admin gets "All" + stores; non-Admin gets stores only */}
+          {stores.length > 0 && (
+            <div className="w-full sm:w-auto">
+              <div className="relative group">
+                <div className="flex items-center gap-2 sm:gap-3 bg-white border-2 border-blue-200 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm hover:shadow-md hover:border-blue-400 transition-all duration-200 cursor-pointer">
+                  <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+                    <div className="flex-shrink-0 p-1.5 bg-blue-50 rounded-lg">
+                      <Store className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm sm:text-base font-semibold text-gray-900 truncate block">
+                        {selectedStoreId === null ? 'All' : (currentStore?.name || 'Select Store')}
+                      </span>
+                    </div>
+                    <ChevronDown className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400 group-hover:text-blue-600 transition-colors flex-shrink-0" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm sm:text-base font-semibold text-gray-900 truncate block">
-                      {selectedStoreId === null ? 'All' : (currentStore?.name || 'Select Store')}
-                    </span>
-                  </div>
-                  <ChevronDown className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400 group-hover:text-blue-600 transition-colors flex-shrink-0" />
                 </div>
+                <select
+                  value={selectedStoreId === null ? '' : selectedStoreId.toString()}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setCurrentPage(1);
+                    setSelectedStoreId(val === '' ? null : parseInt(val, 10));
+                  }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
+                >
+                  <option value="">All</option>
+                  {stores.map((store: any) => (
+                    <option key={store.id} value={store.id.toString()}>
+                      {store.name}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <select
-                value={selectedStoreId === null ? '' : selectedStoreId.toString()}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setCurrentPage(1);
-                  setSelectedStoreId(val === '' ? null : parseInt(val, 10));
-                }}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 appearance-none"
-              >
-                <option value="">All</option>
-                {stores.map((store: any) => (
-                  <option key={store.id} value={store.id.toString()}>
-                    {store.name}
-                  </option>
-                ))}
-              </select>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Replacement invoices toggle */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showReplacement}
+            onClick={() => {
+              setCurrentPage(1);
+              setShowReplacement((v) => !v);
+            }}
+            className={`shrink-0 inline-flex items-center gap-2 rounded-xl border px-3 py-2.5 sm:py-3 shadow-sm transition-all ${
+              showReplacement
+                ? 'bg-emerald-50 border-emerald-200 hover:border-emerald-300'
+                : 'bg-white border-gray-200 hover:border-gray-300'
+            }`}
+            title="Toggle replacement-return invoices in this list"
+          >
+            <BarChart3 className={`h-4 w-4 sm:h-5 sm:w-5 ${showReplacement ? 'text-emerald-700' : 'text-gray-500'}`} />
+            <span className={`text-sm font-semibold ${showReplacement ? 'text-emerald-900' : 'text-gray-700'}`}>
+              Replacement
+            </span>
+            <span
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                showReplacement ? 'bg-emerald-600' : 'bg-gray-300'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  showReplacement ? 'translate-x-4' : 'translate-x-1'
+                }`}
+              />
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* Stats Cards - live summary of currently loaded invoices; hidden from Retail and Repair groups */}
@@ -710,7 +771,7 @@ export default function Invoices() {
                     )}
                     <TableCell align="right">
                       <span className="text-green-600 font-medium">
-                        ₹{formatNumber(parseAmount(invoice.computed_paid))}
+                        ₹{formatNumber(invoiceDisplayPaid(invoice))}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -837,7 +898,7 @@ export default function Invoices() {
                         )}
                         <div>
                           <div className="text-xs font-medium text-green-600 uppercase tracking-wide mb-1">Paid</div>
-                          <div className="text-sm font-semibold text-green-600">₹{formatNumber(parseAmount(invoice.computed_paid))}</div>
+                          <div className="text-sm font-semibold text-green-600">₹{formatNumber(invoiceDisplayPaid(invoice))}</div>
                         </div>
                       </div>
                     </div>

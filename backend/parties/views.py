@@ -18,7 +18,12 @@ INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
 def _credit_invoice_plus_manual_payment_filter():
     """Credit-ledger view = invoices moved to ledger (status=credit) + manual received payments.
     Pending invoices do not affect ledger until user does 'Move to Ledger' (mark credit)."""
-    return Q(invoice__status='credit') | Q(invoice__isnull=True, entry_type='credit')
+    return (
+        Q(invoice__status='credit')
+        # Replacement-return finalize credits are posted to ledger while invoice ends as paid.
+        | Q(invoice__is_replacement_return=True, entry_type='credit')
+        | Q(invoice__isnull=True, entry_type='credit')
+    )
 
 
 def _exclude_standard_ledger_group_entries(queryset):
@@ -977,7 +982,9 @@ def ledger_customer_detail(request, customer_id):
         entries = entries.filter(entry_type=entry_type)
     if search:
         entries = entries.filter(
-            Q(description__icontains=search) | Q(invoice__invoice_number__icontains=search)
+            Q(description__icontains=search)
+            | Q(invoice__invoice_number__icontains=search)
+            | Q(customer__name__icontains=search)
         )
     
     entries = entries.order_by('created_at')

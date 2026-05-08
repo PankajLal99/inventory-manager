@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.utils import timezone
 
 from backend.core.models import SoftDeleteModel, SoftDeleteQuerySet, SoftDeleteManager
+from backend.core.storage import ProductImageStorage
 
 
 class ProductQuerySet(SoftDeleteQuerySet):
@@ -85,7 +86,7 @@ class Product(SoftDeleteModel):
     track_inventory = models.BooleanField(default=True)
     track_batches = models.BooleanField(default=False)
     low_stock_threshold = models.IntegerField(default=0)
-    image = models.URLField(blank=True)  # or use ImageField with storage
+    image = models.ImageField(storage=ProductImageStorage(), upload_to='mt-images/', blank=True, null=True)
     is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

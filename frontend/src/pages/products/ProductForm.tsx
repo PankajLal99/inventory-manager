@@ -5,7 +5,9 @@ import { productsApi, catalogApi } from '../../lib/api';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
-import { Plus } from 'lucide-react';
+import { Plus, Image as ImageIcon, Trash2 } from 'lucide-react';
+
+const MAX_IMAGE_FILE_BYTES = 8 * 1024 * 1024;
 
 interface ProductFormProps {
   productId?: number;
@@ -34,6 +36,10 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
   const [showBrandDropdown, setShowBrandDropdown] = useState(false);
   const categoryRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [imageTouched, setImageTouched] = useState(false);
+  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
 
   const { data: product } = useQuery({
     queryKey: ['product', productId],
@@ -205,6 +211,9 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
         track_inventory: productData.track_inventory !== undefined ? productData.track_inventory : true,
         can_go_below_purchase_price: productData.can_go_below_purchase_price || false,
       });
+      setImagePreview(typeof productData.image === 'string' ? productData.image : '');
+      setImageTouched(false);
+      setSelectedImageFile(null);
     } else if (initialName && !productId) {
       // If we have an initial name and we're creating (not editing), set it
       setFormData(prev => ({ ...prev, name: initialName }));
@@ -244,6 +253,11 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
     }
   }, [formData.brand, brands]);
 
+  useEffect(() => {
+    if (!imagePreview.startsWith('blob:')) return;
+    return () => URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
+
   const mutation = useMutation({
     mutationFn: (data: any) =>
       productId ? productsApi.update(productId, data) : productsApi.create(data),
@@ -251,6 +265,7 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
       // Invalidate all product-related queries across the application
       // This ensures all pages (Products, POS, Purchases, Reports, etc.) refresh with updated data
       queryClient.invalidateQueries({ queryKey: ['products'] }); // Main products list
+      queryClient.invalidateQueries({ queryKey: ['global-search'] });
       queryClient.invalidateQueries({ queryKey: ['product-barcodes'] }); // Product barcodes
       queryClient.invalidateQueries({ queryKey: ['label-status'] }); // Label status
       queryClient.invalidateQueries({ queryKey: ['top-products'] }); // Reports
@@ -375,7 +390,25 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
       baseData.brand_id = null;
     }
 
-    mutation.mutate(baseData);
+    if (!imageTouched) {
+      mutation.mutate(baseData);
+      return;
+    }
+
+    // If user removed picture, send explicit null (not multipart empty string),
+    // otherwise DRF ImageField reports "submitted data was not a file".
+    if (!selectedImageFile) {
+      mutation.mutate({ ...baseData, image: null });
+      return;
+    }
+
+    const formPayload = new FormData();
+    Object.entries(baseData).forEach(([key, value]) => {
+      if (value === null || value === undefined) return;
+      formPayload.append(key, String(value));
+    });
+    formPayload.append('image', selectedImageFile);
+    mutation.mutate(formPayload);
   };
 
   return (
@@ -563,6 +596,71 @@ export default function ProductForm({ productId, onClose, onProductCreated, init
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
             placeholder="Enter product description (optional)"
           />
+        </div>
+
+        {/* Product picture */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Product picture</label>
+          <p className="text-xs text-gray-500 mb-2">Optional. Stored in Azure container under folder mt-images.</p>
+          <div className="flex flex-wrap items-start gap-3">
+            {imagePreview ? (
+              <div className="relative rounded-lg border border-gray-200 overflow-hidden bg-gray-50 shrink-0">
+                <img src={imagePreview} alt="Product preview" className="h-24 w-24 object-cover" />
+              </div>
+            ) : (
+              <div className="h-24 w-24 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 bg-gray-50">
+                <ImageIcon className="h-8 w-8" />
+              </div>
+            )}
+            <div className="flex flex-col gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  if (file.size > MAX_IMAGE_FILE_BYTES) {
+                    alert('Image must be 8 MB or smaller.');
+                    return;
+                  }
+                  if (!file.type.startsWith('image/')) {
+                    alert('Please choose an image file.');
+                    return;
+                  }
+                  const localPreviewUrl = URL.createObjectURL(file);
+                  setImagePreview(localPreviewUrl);
+                  setSelectedImageFile(file);
+                  setImageTouched(true);
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full sm:w-auto"
+              >
+                {imagePreview ? 'Replace picture' : 'Upload picture'}
+              </Button>
+              {imagePreview && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setImagePreview('');
+                    setSelectedImageFile(null);
+                    setImageTouched(true);
+                  }}
+                  className="w-full sm:w-auto text-red-600 border-red-200 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4 inline mr-1.5 align-text-bottom" />
+                  Remove picture
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Info Message - Full Width */}

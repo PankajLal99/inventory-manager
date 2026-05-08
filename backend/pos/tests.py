@@ -2086,3 +2086,111 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('void', response.data.get('error', '').lower())
+
+
+class ReplacementPosAPITests(APITestCase):
+    """Smoke tests for Replacement POS lookup + create endpoints."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'rp_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='RP Store', shop_type='retail')
+        self.customer = Customer.objects.create(name=f'RPCust{uuid.uuid4().hex[:6]}', phone=f'9{uuid.uuid4().int % 900000000 + 100000000}')
+        self.category = Category.objects.create(name='RPCat')
+        self.product = Product.objects.create(
+            name='RP Product',
+            category=self.category,
+            product_type='simple',
+            track_inventory=True,
+        )
+        self.barcode = Barcode.objects.create(
+            product=self.product,
+            barcode=f'RPBC{uuid.uuid4().hex[:8].upper()}',
+            short_code=f'RP{uuid.uuid4().hex[:6].upper()}',
+            tag='sold',
+        )
+        self.invoice = Invoice.objects.create(
+            invoice_number=f'INV-RP-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        self.line = InvoiceItem.objects.create(
+            invoice=self.invoice,
+            product=self.product,
+            barcode=self.barcode,
+            sold_barcode_value=self.barcode.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            manual_unit_price=None,
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('100.00'),
+        )
+
+    def test_replacement_pos_lookup(self):
+        url = reverse('replacement-pos-lookup')
+        r = self.client.post(url, {'barcode': self.barcode.barcode}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertFalse(r.data['ambiguous'])
+        self.assertEqual(r.data['line']['original_invoice_item_id'], self.line.id)
+
+    def test_replacement_pos_create_pending(self):
+        url = reverse('replacement-pos-create')
+        body = {
+            'mode': 'pending',
+            'lines': [
+                {
+                    'original_invoice_item_id': self.line.id,
+                    'return_tag': 'returned',
+                    'accepted_return_price': '50.00',
+                }
+            ],
+        }
+        r = self.client.post(url, body, format='json')
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        inv = Invoice.objects.get(id=r.data['id'])
+        self.assertTrue(inv.is_replacement_return)
+        self.assertEqual(inv.status, 'draft')
+        self.assertEqual(inv.invoice_type, 'pending')
+
+    def test_replacement_pos_create_instant_restores_barcode_and_credit(self):
+        url = reverse('replacement-pos-create')
+        body = {
+            'mode': 'instant',
+            'settlement_invoice_type': 'credit',
+            'customer': self.customer.id,
+            'lines': [
+                {
+                    'original_invoice_item_id': self.line.id,
+                    'return_tag': 'returned',
+                    'accepted_return_price': '40.00',
+                }
+            ],
+        }
+        r = self.client.post(url, body, format='json')
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED, r.data)
+        inv = Invoice.objects.get(id=r.data['id'])
+        self.assertEqual(inv.status, 'paid')
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, Decimal('40.00'))
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'returned')
+
+    def test_replacement_pos_duplicate_blocked(self):
+        url = reverse('replacement-pos-create')
+        line_payload = [
+            {'original_invoice_item_id': self.line.id, 'return_tag': 'returned', 'accepted_return_price': '10.00'}
+        ]
+        r1 = self.client.post(url, {'mode': 'pending', 'lines': line_payload}, format='json')
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
+        r2 = self.client.post(url, {'mode': 'pending', 'lines': line_payload}, format='json')
+        self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
