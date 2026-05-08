@@ -566,7 +566,7 @@ export default function InvoiceDetail() {
       setReplSettlementType('cash');
       setReplCashAmount('');
       setReplUpiAmount('');
-      toast.success('Replacement invoice finalized successfully!');
+      toast('Replacement invoice finalized successfully!', 'success');
     },
     onError: (error: any) => {
       const msg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to finalize replacement invoice';
