@@ -778,7 +778,11 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'barcodes', 'stock_quantity', 'shop_stock', 'warehouse_stock', 'available_quantity', 'sold_quantity', 'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown']
+        fields = [
+            'id', 'name', 'sku', 'category_name', 'brand_name', 'low_stock_threshold', 'is_active', 'image',
+            'barcodes', 'stock_quantity', 'shop_stock', 'warehouse_stock', 'available_quantity', 'sold_quantity',
+            'track_inventory', 'purchase_price', 'selling_price', 'stock_bifurcation', 'price_bifurcation', 'supplier_breakdown',
+        ]
 
 
 class DefectiveProductItemSerializer(serializers.ModelSerializer):

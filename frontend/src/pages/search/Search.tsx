@@ -19,12 +19,14 @@ import {
   Barcode as BarcodeIcon,
   Camera,
   X,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import BarcodeScanner from '../../components/BarcodeScanner';
+import Modal from '../../components/ui/Modal';
 
 interface SearchResults {
   products: any[];
@@ -56,6 +58,7 @@ export default function Search() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [productLimit, setProductLimit] = useState(40);
   const scrollYRef = useRef<number | null>(null);
+  const [productImagePreview, setProductImagePreview] = useState<{ src: string; title: string } | null>(null);
 
   // Debounce input so we only search after user stops typing
   useEffect(() => {
@@ -520,7 +523,23 @@ export default function Search() {
                                   </div>
                                 </div>
                               </div>
-                              <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors mt-auto" />
+                              <div className="flex items-center gap-0.5 mt-auto">
+                                {item.image ? (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setProductImagePreview({ src: item.image, title: item.name });
+                                    }}
+                                    className="p-2 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                    title="View product picture"
+                                    aria-label="View product picture"
+                                  >
+                                    <ImageIcon className="h-5 w-5" />
+                                  </button>
+                                ) : null}
+                                <ExternalLink className="h-4 w-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
+                              </div>
                             </div>
                           </div>
 
@@ -899,6 +918,23 @@ export default function Search() {
           <SearchIcon className="h-12 w-12 text-gray-300 mx-auto mb-4" />
           <p className="text-gray-600">Enter a search query to find products, customers, invoices, and more</p>
         </div>
+      )}
+
+      {productImagePreview && (
+        <Modal
+          isOpen={Boolean(productImagePreview)}
+          onClose={() => setProductImagePreview(null)}
+          title={productImagePreview.title}
+          size="lg"
+        >
+          <div className="flex justify-center p-1">
+            <img
+              src={productImagePreview.src}
+              alt=""
+              className="max-h-[72vh] w-auto max-w-full rounded-md object-contain"
+            />
+          </div>
+        </Modal>
       )}
     </div>
   );

@@ -3285,6 +3285,7 @@ def invoice_list_create(request):
         date_from = request.query_params.get('date_from', None)
         date_to = request.query_params.get('date_to', None)
         search = request.query_params.get('search', None)
+        include_replacement = str(request.query_params.get('include_replacement', '') or '').strip().lower()
 
         if date:
             queryset = queryset.filter(created_at__date=date)
@@ -3304,6 +3305,11 @@ def invoice_list_create(request):
             queryset = queryset.filter(status=status_filter)
         if invoice_type_filter:
             queryset = queryset.filter(invoice_type=invoice_type_filter)
+
+        # Replacement POS invoices (`is_replacement_return`) are hidden by default on the main Invoices page.
+        # Opt-in: include_replacement=true/1/yes
+        if include_replacement not in ('1', 'true', 'yes', 'y'):
+            queryset = queryset.exclude(is_replacement_return=True)
         
         # Exclude defective invoices from regular invoice list (they appear in defective move-outs page)
         # Only exclude if not explicitly filtering by defective type
@@ -3417,7 +3423,7 @@ def invoice_detail(request, pk):
     invoice = get_object_or_404(Invoice, pk=pk)
     
     if request.method == 'GET':
-        serializer = InvoiceSerializer(invoice)
+        serializer = InvoiceSerializer(invoice, context={'include_replacement_context': True})
         return Response(serializer.data)
     elif request.method == 'PUT':
         # Only allow editing draft invoices (pending type)

@@ -1,6 +1,7 @@
 from decimal import Decimal
 from rest_framework import serializers
 from django.db.models import Q, F, Value, Case, When, Sum, DecimalField, ExpressionWrapper
+from django.db.models.functions import Coalesce
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair, Expenses
 
 
@@ -207,6 +208,8 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
     barcode_value = serializers.SerializerMethodField()  # Display: short_code or barcode for UI
     barcode_full = serializers.SerializerMethodField()
     barcode_id = serializers.IntegerField(source='barcode.id', read_only=True)
+    barcode_tag = serializers.SerializerMethodField()
+    replacement_ref = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
 
     def get_barcode_value(self, obj):
@@ -222,6 +225,40 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
             return obj.barcode.barcode
         snap = (getattr(obj, 'sold_barcode_value', None) or '').strip()
         return snap or None
+
+    def get_barcode_tag(self, obj):
+        """Return current catalog tag for this item's barcode when available."""
+        if obj.barcode:
+            return obj.barcode.tag
+        return None
+
+    def get_replacement_ref(self, obj):
+        """
+        For original sale lines, expose latest replacement-return linkage (if any):
+        replacement invoice id/number/status/mode and per-line return tag/accepted amount.
+        """
+        rep = (
+            InvoiceItem.objects.filter(
+                original_invoice_item_id=obj.id,
+                invoice__is_replacement_return=True,
+            )
+            .exclude(invoice__status='void')
+            .select_related('invoice')
+            .order_by('-invoice__created_at', '-id')
+            .first()
+        )
+        if not rep or not rep.invoice:
+            return None
+        inv = rep.invoice
+        return {
+            'invoice_id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'invoice_status': inv.status,
+            'replacement_mode': inv.replacement_mode,
+            'return_tag': rep.replacement_return_tag or None,
+            'accepted_return_price': str(rep.accepted_return_price) if rep.accepted_return_price is not None else None,
+            'line_total': str(rep.line_total) if rep.line_total is not None else None,
+        }
 
     def get_available_quantity(self, obj):
         """Calculate available quantity for replacement (quantity - replaced_quantity)"""
@@ -254,7 +291,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity']
+        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'barcode_tag', 'replacement_ref', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity', 'original_invoice', 'original_invoice_item', 'replacement_return_tag', 'accepted_return_price', 'original_sold_unit_price', 'original_sold_line_total', 'original_invoice_number', 'original_customer_name']
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -312,6 +349,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     display_total = serializers.SerializerMethodField()
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
+    replacement_summary = serializers.SerializerMethodField()
 
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Invoice._meta.get_field('customer').related_model.objects.all(),
@@ -325,6 +363,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'id', 'invoice_number', 'cart', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name', 'status',
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
             'trade_in_credit', 'pos_trade_ins', 'exchange_snapshots',
+            'is_replacement_return', 'replacement_mode', 'replacement_customer_warning', 'replacement_source_customers',
+            'replacement_summary',
             'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
             'is_edited', 'edited_on', 'items', 'payments'
         ]
@@ -392,6 +432,74 @@ class InvoiceSerializer(serializers.ModelSerializer):
             if paid_amount > 0:
                 return float(paid_amount)
         return float(obj.total or Decimal('0.00'))
+
+    def get_replacement_summary(self, obj):
+        """
+        For original invoices, summarize replacement-return impact
+        without mutating historical totals.
+        """
+        if obj.is_replacement_return:
+            return None
+
+        qs = InvoiceItem.objects.filter(
+            original_invoice_id=obj.id,
+            invoice__is_replacement_return=True,
+        ).exclude(invoice__status='void')
+        if not qs.exists():
+            return None
+
+        money_field = DecimalField(max_digits=18, decimal_places=2)
+        original_item_purchase_rate = Coalesce(
+            F('original_invoice_item__purchase_price'),
+            F('original_invoice_item__barcode__purchase_item__unit_price'),
+            Value(Decimal('0.00')),
+            output_field=money_field,
+        )
+        cost_expr = ExpressionWrapper(
+            F('quantity') * original_item_purchase_rate,
+            output_field=money_field,
+        )
+        agg = qs.aggregate(
+            total_credit=Sum('line_total'),
+            total_cost_credit=Sum(cost_expr, output_field=money_field),
+        )
+        total_credit = agg.get('total_credit') or Decimal('0.00')
+        total_cost_credit = agg.get('total_cost_credit') or Decimal('0.00')
+        historical_total = obj.total or Decimal('0.00')
+        adjusted_total = historical_total - total_credit
+        if adjusted_total < Decimal('0.00'):
+            adjusted_total = Decimal('0.00')
+
+        historical_cost_total = getattr(obj, '_items_total_agg', None)
+        if historical_cost_total is None:
+            invoice_item_purchase_rate = Coalesce(
+                F('purchase_price'),
+                F('barcode__purchase_item__unit_price'),
+                Value(Decimal('0.00')),
+                output_field=money_field,
+            )
+            historical_cost_total = InvoiceItem.objects.filter(invoice=obj).aggregate(
+                total=Sum(
+                    ExpressionWrapper(
+                        F('quantity') * invoice_item_purchase_rate,
+                        output_field=money_field,
+                    ),
+                    output_field=money_field,
+                )
+            ).get('total') or Decimal('0.00')
+        adjusted_cost_total = historical_cost_total - total_cost_credit
+        if adjusted_cost_total < Decimal('0.00'):
+            adjusted_cost_total = Decimal('0.00')
+
+        return {
+            'total_credit': str(total_credit),
+            'historical_total': str(historical_total),
+            'adjusted_total': str(adjusted_total),
+            'total_cost_credit': str(total_cost_credit),
+            'historical_cost_total': str(historical_cost_total),
+            'adjusted_cost_total': str(adjusted_cost_total),
+            'lines_count': qs.count(),
+        }
 
 
 class RepairInvoiceListSerializer(serializers.ModelSerializer):

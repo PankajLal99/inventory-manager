@@ -96,6 +96,16 @@ function formatTradeInReturnTag(tag: unknown): string {
   return String(tag);
 }
 
+function getInvoiceAdjustedTotalValue(invoice: any): number {
+  const adjusted = invoice?.replacement_summary?.adjusted_total;
+  if (adjusted !== undefined && adjusted !== null && adjusted !== '') {
+    const n = parseFloat(String(adjusted));
+    if (Number.isFinite(n)) return n;
+  }
+  const base = parseFloat(String(invoice?.total ?? '0'));
+  return Number.isFinite(base) ? base : 0;
+}
+
 /** Extra table rows for A4 print after trade-in total line */
 function buildTradeInDetailRowsA4Html(inv: { pos_trade_ins?: unknown }): string {
   const rows = inv?.pos_trade_ins;
@@ -221,6 +231,10 @@ export default function InvoiceDetail() {
   const [checkoutDeliveryDate, setCheckoutDeliveryDate] = useState<string>('');
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
+  // Replacement-return finalize modal state
+  const [replSettlementType, setReplSettlementType] = useState<'cash' | 'upi' | 'mixed' | 'credit'>('cash');
+  const [replCashAmount, setReplCashAmount] = useState('');
+  const [replUpiAmount, setReplUpiAmount] = useState('');
 
   // Debounce customer search input
   useEffect(() => {
@@ -248,6 +262,10 @@ export default function InvoiceDetail() {
   });
 
   const inv = invoice?.data;
+  const visibleInvoiceItems = useMemo(
+    () => (Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : []),
+    [inv?.items]
+  );
 
   const getEffectiveInvoiceTypeFromPayments = (payments: any[]): 'cash' | 'upi' | 'mixed' | null => {
     if (!Array.isArray(payments) || payments.length === 0) return null;
@@ -524,6 +542,35 @@ export default function InvoiceDetail() {
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to mark invoice as credit';
       alert(errorMsg);
+    },
+  });
+
+  // Finalize a pending replacement-return invoice (settlement only — no price editing)
+  const finalizeReplacementMutation = useMutation({
+    mutationFn: (payload: { settlement_invoice_type: string; cash_amount?: string | null; upi_amount?: string | null }) =>
+      posApi.replacement.replacementPos.finalize(invoiceId, payload),
+    onSuccess: async () => {
+      try {
+        await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+        await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+        queryClient.invalidateQueries({ queryKey: ['invoices'] });
+        queryClient.invalidateQueries({ queryKey: ['ledger-entries'] });
+        queryClient.invalidateQueries({ queryKey: ['ledger-summary'] });
+        if (invoice?.data?.customer) {
+          queryClient.invalidateQueries({ queryKey: ['customer', invoice.data.customer] });
+        }
+      } catch {
+        // Do not treat post-success refetch/cache issues as finalize failure.
+      }
+      setShowCheckoutModal(false);
+      setReplSettlementType('cash');
+      setReplCashAmount('');
+      setReplUpiAmount('');
+      toast.success('Replacement invoice finalized successfully!');
+    },
+    onError: (error: any) => {
+      const msg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to finalize replacement invoice';
+      alert(msg);
     },
   });
 
@@ -1064,7 +1111,8 @@ export default function InvoiceDetail() {
   };
 
   // Edit invoice (cart): show for non-void
-  const canEditItems = inv.status !== 'void';
+  const isReplacementReturn = inv?.is_replacement_return === true;
+  const canEditItems = inv.status !== 'void' && !isReplacementReturn;
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
   const isDraftPendingCheckout = inv.status === 'draft' && checkoutInvoiceType === 'pending';
@@ -1616,14 +1664,13 @@ export default function InvoiceDetail() {
   const generateInvoiceHTML = () => {
     const isRepairInvoice = !!inv?.repair;
     const printableInvoiceTitle = isRepairInvoice ? 'Repair Invoice' : 'Invoice';
+    const printableItems = Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : [];
 
     // Calculate total PCS
-    const totalPcs = inv.items && Array.isArray(inv.items)
-      ? inv.items.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0)
-      : 0;
+    const totalPcs = printableItems.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0);
 
-    // Get total amount
-    const totalAmount = parseFloat(inv.total || '0');
+    // Get total amount (use replacement-adjusted total when available for sharing/print)
+    const totalAmount = getInvoiceAdjustedTotalValue(inv);
     const amountInWords = numberToWords(totalAmount);
 
     // Format date
@@ -1787,7 +1834,7 @@ export default function InvoiceDetail() {
               </thead>
               <tbody>
                 ${(() => {
-        if (!inv.items || !Array.isArray(inv.items) || inv.items.length === 0) {
+        if (!printableItems || printableItems.length === 0) {
           return '<tr><td colspan="5" style="border-bottom: 1px solid #000;">No items</td></tr>';
         }
 
@@ -1800,7 +1847,7 @@ export default function InvoiceDetail() {
           items: any[];
         }> = {};
 
-        inv.items.forEach((item: any) => {
+        printableItems.forEach((item: any) => {
           const name = item.product_name || '-';
           const brand = item.product_brand_name || item.brand_name || '';
           // Create unique key combining name and brand
@@ -1884,12 +1931,18 @@ export default function InvoiceDetail() {
                 ` : ''}
                 <!-- Total Row -->
                 <tr class="total-row">
-                  <td><strong>${tradeInCreditAmount > 0 ? 'Net total' : 'Total'}</strong></td>
+                  <td><strong>${tradeInCreditAmount > 0 ? 'Net total' : 'Total'}${inv.replacement_summary ? ' (Adj.)' : ''}</strong></td>
                   <td style="text-align: center;"><strong>${formatNumber(totalPcs, 3)}</strong></td>
                   <td></td>
                   <td></td>
                   <td style="text-align: right;"><strong>${formatNumber(totalAmount, 2)}</strong></td>
                 </tr>
+                ${inv.replacement_summary ? `
+                <tr>
+                  <td colspan="4" style="text-align: right; font-size: 11px; color: #374151;">Original invoice total</td>
+                  <td style="text-align: right; font-size: 11px; color: #374151;">₹${formatNumber(inv.total || '0', 2)}</td>
+                </tr>
+                ` : ''}
                 ${inv.customer && customerHasCreditInvoice && inv.status !== 'paid' ? `
                 <tr style="border-top: 1px dashed #000;">
                   <td style="padding-top: 8px;">Old Balance</td>
@@ -2017,6 +2070,9 @@ export default function InvoiceDetail() {
   };
 
   const generateThermalInvoiceHTML = (invoice: any) => {
+    const printableItems = Array.isArray(invoice?.items)
+      ? invoice.items.filter((item: any) => !item?.replacement_ref)
+      : [];
 
     const formatDate = (dateString: string) => {
       const date = new Date(dateString);
@@ -2128,7 +2184,7 @@ export default function InvoiceDetail() {
             </tr>
           </thead>
           <tbody>
-            ${invoice.items && Array.isArray(invoice.items) ? (() => {
+            ${printableItems.length > 0 ? (() => {
         // Group items by product name AND brand for thermal layout
         const groupedItems: Record<string, {
           name: string;
@@ -2139,7 +2195,7 @@ export default function InvoiceDetail() {
           items: any[];
         }> = {};
 
-        invoice.items.forEach((item: any) => {
+        printableItems.forEach((item: any) => {
           const name = item.product_name || '-';
           const brand = item.product_brand_name || item.brand_name || '';
           const groupKey = brand ? `${name}::${brand}` : name;
@@ -2186,6 +2242,15 @@ export default function InvoiceDetail() {
               return `<tr><td colspan="4" style="font-size:8px;padding-top:0;padding-bottom:4px;line-height:1.25;">${escapeHtml(note)}</td></tr>`;
             })
             .join('');
+          const replacementRows = group.items
+            .map((item: any) => {
+              const rep = item?.replacement_ref;
+              if (!rep) return '';
+              const tag = rep?.return_tag ? escapeHtml(formatTradeInReturnTag(rep.return_tag)) : '—';
+              const ref = rep?.invoice_number || rep?.invoice_id || '—';
+              return `<tr><td colspan="4" style="font-size:8px;padding-top:0;padding-bottom:4px;line-height:1.25;color:#065f46;">Replacement ${escapeHtml(String(ref))} · ${tag}</td></tr>`;
+            })
+            .join('');
 
           return `
                     <tr>
@@ -2194,7 +2259,7 @@ export default function InvoiceDetail() {
                       <td class="text-right">₹${formatNumber(group.avgPrice)}</td>
                       <td class="text-right">₹${formatNumber(group.totalAmount)}</td>
                 </tr>
-                  ${exchangeRows}`;
+                  ${exchangeRows}${replacementRows}`;
         }).join('');
       })() : '<tr><td colspan="4">No items</td></tr>'}
           </tbody>
@@ -2229,7 +2294,7 @@ export default function InvoiceDetail() {
           </div>
           <div class="summary-row summary-total">
             <span>TOTAL:</span>
-            <span>₹${formatNumber(invoice.total || '0')}</span>
+            <span>₹${formatNumber(getInvoiceAdjustedTotalValue(invoice))}</span>
           </div>
           ${invoice.customer && customerHasCreditInvoice && invoice.status !== 'paid' ? `
           <div class="summary-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px dotted #ccc;">
@@ -2362,7 +2427,7 @@ export default function InvoiceDetail() {
                 </Button>
               )}
               {/* Move to Ledger: show when bill is paid (to move paid bill to ledger or mark as credit) */}
-              {inv.status === 'paid' && (
+              {inv.status === 'paid' && !isReplacementReturn && (
                 <Button
                   variant="primary"
                   onClick={handleMoveToLedger}
@@ -2422,7 +2487,7 @@ export default function InvoiceDetail() {
                 </div>
 
                 {/* Delete */}
-                {!isRestrictedUser && (
+                {!isRestrictedUser && !isReplacementReturn && (
                   <Button
                     variant="danger"
                     size="sm"
@@ -2782,8 +2847,32 @@ export default function InvoiceDetail() {
                 </div>
                 <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
                   <span className="text-base font-semibold text-gray-900">Total</span>
-                  <span className="text-lg font-bold text-gray-900">₹{formatNumber(inv.total || '0')}</span>
+                  <span className="text-lg font-bold text-gray-900">
+                    ₹{formatNumber(inv.replacement_summary?.adjusted_total ?? inv.total ?? '0')}
+                  </span>
                 </div>
+                {inv.replacement_summary && (
+                  <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium text-emerald-900">Replacement credit impact</span>
+                      <span className="text-sm font-semibold text-emerald-900">
+                        -₹{formatNumber(inv.replacement_summary.total_credit || '0')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-emerald-900/80">Original invoice total</span>
+                      <span className="text-sm font-semibold text-emerald-900">
+                        ₹{formatNumber(inv.total || '0')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-emerald-900/80">Adjusted total (for reshare)</span>
+                      <span className="text-sm font-bold text-emerald-900">
+                        ₹{formatNumber(inv.replacement_summary.adjusted_total || '0')}
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {inv.customer && customerHasCreditInvoice && inv.status !== 'paid' && (
                   <>
                     <div className="flex justify-between items-center py-2 border-t border-dashed border-gray-200 mt-2 pt-2">
@@ -2826,19 +2915,19 @@ export default function InvoiceDetail() {
       </div>
 
       {/* Invoice Items */}
-      {inv.items && Array.isArray(inv.items) && inv.items.length > 0 && (
+      {visibleInvoiceItems.length > 0 && (
         <Card className="print-area">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
             <ShoppingBag className="h-5 w-5 text-gray-400" />
             Invoice Items ({(() => {
-              if (!inv.items || !Array.isArray(inv.items) || inv.items.length === 0) return 0;
-              return groupItemsByProduct(inv.items).length;
+              if (visibleInvoiceItems.length === 0) return 0;
+              return groupItemsByProduct(visibleInvoiceItems).length;
             })()})
           </h3>
           {/* Desktop Table View */}
           <div className="hidden md:block">
             {(() => {
-              const groupedItems = groupItemsByProduct(inv.items);
+              const groupedItems = groupItemsByProduct(visibleInvoiceItems);
 
               if (isPending) {
                 // For pending invoices, show only Product, SKU, and Quantity
@@ -2992,7 +3081,7 @@ export default function InvoiceDetail() {
           {/* Mobile Card View */}
           <div className="md:hidden space-y-3">
             {(() => {
-              const groupedItems = groupItemsByProduct(inv.items);
+              const groupedItems = groupItemsByProduct(visibleInvoiceItems);
               return groupedItems.map((group, groupIndex) => {
                 const groupKey = `invoice_group_${group.productId}_${groupIndex} `;
                 const isExpanded = expandedInvoiceItems[groupKey] || false;
@@ -3123,7 +3212,9 @@ export default function InvoiceDetail() {
                   </div>
                   <div className="flex justify-between font-semibold border-t border-slate-200 pt-2 mt-2">
                     <span>Invoice total</span>
-                    <span className="tabular-nums">₹{formatNumber(inv.total || '0')}</span>
+                    <span className="tabular-nums">
+                      ₹{formatNumber(inv.replacement_summary?.adjusted_total ?? inv.total ?? '0')}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -3328,6 +3419,161 @@ export default function InvoiceDetail() {
         closeOnBackdropClick={false}
       >
           <div className="space-y-6">
+            {/* ---- Replacement-return finalize UI (pending mode settlement) ---- */}
+            {inv?.is_replacement_return && inv?.replacement_mode === 'pending' && inv?.status === 'draft' ? (
+              <div className="space-y-5">
+                {/* Info banner */}
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 flex items-start gap-3">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">Finalizing Replacement Return Invoice</p>
+                    <p className="text-xs text-amber-700 mt-1">
+                      This invoice was created in <strong>pending</strong> mode — prices were saved but stock/barcode updates
+                      and the customer ledger credit have not been applied yet. Choose how this replacement is being settled
+                      and click <strong>Finalize Return</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Invoice summary */}
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1.5">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Items returned</span>
+                    <span className="font-semibold">{Array.isArray(inv?.items) ? inv.items.length : '—'}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Total credit value</span>
+                    <span className="font-semibold text-green-700">
+                      ₹{formatNumber(inv?.total ?? '0')}
+                    </span>
+                  </div>
+                  {inv?.replacement_source_customers && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Credit goes to</span>
+                      <span className="font-semibold">{inv.customer_name || 'Customer'}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Settlement type */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                  <label className="block text-sm font-semibold text-gray-900">
+                    <Coins className="h-4 w-4 inline mr-2" />
+                    Settlement Type
+                  </label>
+                  <Select
+                    value={replSettlementType}
+                    onChange={(e) => {
+                      setReplSettlementType(e.target.value as 'cash' | 'upi' | 'mixed' | 'credit');
+                      setReplCashAmount('');
+                      setReplUpiAmount('');
+                    }}
+                    className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 bg-white"
+                  >
+                    <option value="cash">CASH — Customer paid in cash</option>
+                    <option value="upi">UPI — Customer paid via UPI</option>
+                    <option value="mixed">CASH + UPI — Split payment</option>
+                    <option value="credit">CREDIT — Add credit to customer ledger</option>
+                  </Select>
+                  <p className="text-xs text-blue-700 font-medium">
+                    {replSettlementType === 'cash' && '✓ Replacement credit settled in cash. Barcodes tagged & stock updated.'}
+                    {replSettlementType === 'upi' && '✓ Replacement credit settled via UPI. Barcodes tagged & stock updated.'}
+                    {replSettlementType === 'mixed' && '✓ Split payment. Enter amounts below. Barcodes tagged & stock updated.'}
+                    {replSettlementType === 'credit' && '✓ Credit added to customer ledger (balance goes up). Barcodes tagged & stock updated.'}
+                  </p>
+
+                  {/* Split payment inputs */}
+                  {replSettlementType === 'mixed' && (
+                    <div className="mt-2 space-y-2">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Cash Amount (₹)</label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0.00"
+                            value={replCashAmount}
+                            onChange={(e) => {
+                              setReplCashAmount(e.target.value);
+                              const total = parseFloat(String(inv?.total ?? '0')) || 0;
+                              const cash = parseFloat(e.target.value) || 0;
+                              setReplUpiAmount(String(Math.max(0, total - cash)));
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">UPI Amount (₹)</label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0.00"
+                            value={replUpiAmount}
+                            onChange={(e) => {
+                              setReplUpiAmount(e.target.value);
+                              const total = parseFloat(String(inv?.total ?? '0')) || 0;
+                              const upi = parseFloat(e.target.value) || 0;
+                              setReplCashAmount(String(Math.max(0, total - upi)));
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {replCashAmount && replUpiAmount && (
+                        <p className="text-xs text-gray-600">
+                          Total entered: ₹{formatNumber(
+                            (parseFloat(replCashAmount) || 0) + (parseFloat(replUpiAmount) || 0)
+                          )} / Invoice: ₹{formatNumber(inv?.total ?? '0')}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2 border-t border-gray-200">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowCheckoutModal(false);
+                      setReplSettlementType('cash');
+                      setReplCashAmount('');
+                      setReplUpiAmount('');
+                    }}
+                    disabled={finalizeReplacementMutation.isPending}
+                    className="w-full sm:w-auto"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      if (replSettlementType === 'mixed') {
+                        const total = parseFloat(String(inv?.total ?? '0')) || 0;
+                        const cash = parseFloat(replCashAmount) || 0;
+                        const upi = parseFloat(replUpiAmount) || 0;
+                        if (cash <= 0 && upi <= 0) {
+                          alert('Please enter cash and UPI amounts for mixed settlement.');
+                          return;
+                        }
+                        if (Math.abs(cash + upi - total) > 0.5) {
+                          if (!window.confirm(`Split total ₹${formatNumber(cash + upi)} doesn't match invoice total ₹${formatNumber(total)}. Continue anyway?`)) return;
+                        }
+                      }
+                      finalizeReplacementMutation.mutate({
+                        settlement_invoice_type: replSettlementType,
+                        cash_amount: replSettlementType === 'mixed' ? replCashAmount || null : null,
+                        upi_amount: replSettlementType === 'mixed' ? replUpiAmount || null : null,
+                      });
+                    }}
+                    disabled={finalizeReplacementMutation.isPending}
+                    className="w-full sm:w-auto bg-green-600 hover:bg-green-700"
+                  >
+                    {finalizeReplacementMutation.isPending ? 'Finalizing...' : 'Finalize Return'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
             {/* Show/hide purchase price toggle - same as POS */}
             <div className="flex items-center justify-end">
               <button
@@ -4929,6 +5175,8 @@ export default function InvoiceDetail() {
                 {checkoutMutation.isPending ? 'Processing...' : 'Complete Checkout'}
               </Button>
             </div>
+            </>
+            )}
           </div>
       </Modal>
 
@@ -5521,7 +5769,38 @@ export default function InvoiceDetail() {
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
                             <h5 className="font-semibold text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</h5>
-                            <p className="text-sm text-gray-600">SKU: {item.barcode_value || item.product_sku || 'N/A'}</p>
+                            <div className="text-sm text-gray-600 flex items-center gap-2 flex-wrap">
+                              <span>SKU: {item.barcode_value || item.product_sku || 'N/A'}</span>
+                              {(item.replacement_ref?.return_tag || item.barcode_tag) && (
+                                <span
+                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold border ${
+                                    String(item.replacement_ref?.return_tag || item.barcode_tag).toLowerCase() === 'returned'
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                      : String(item.replacement_ref?.return_tag || item.barcode_tag).toLowerCase() === 'defective'
+                                        ? 'bg-red-50 text-red-800 border-red-200'
+                                        : String(item.replacement_ref?.return_tag || item.barcode_tag).toLowerCase() === 'unknown'
+                                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                          : 'bg-slate-50 text-slate-700 border-slate-200'
+                                  }`}
+                                  title="Current barcode status (may change after returns/replacements)"
+                                >
+                                  {String(item.replacement_ref?.return_tag || item.barcode_tag).toUpperCase()}
+                                </span>
+                              )}
+                              {item.replacement_ref?.invoice_id && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    navigate(`/invoices/${item.replacement_ref.invoice_id}`);
+                                  }}
+                                  className="inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+                                  title="Open replacement invoice"
+                                >
+                                  Replacement #{item.replacement_ref.invoice_number || item.replacement_ref.invoice_id}
+                                </button>
+                              )}
+                            </div>
                             <div className="mt-2 space-y-2">
                               {isEditingPrice ? (
                                 <div className="flex items-center gap-2">

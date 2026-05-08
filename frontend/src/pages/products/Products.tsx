@@ -4,7 +4,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { getStockInfo, getProductNameColor } from '../../lib/utils';
-import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X } from 'lucide-react';
+import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X, Image as ImageIcon } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
@@ -35,6 +35,7 @@ export default function Products() {
   const [adjustingProduct, setAdjustingProduct] = useState<number | undefined>();
   const [showViewSKUsModal, setShowViewSKUsModal] = useState(false);
   const [viewingProduct, setViewingProduct] = useState<any>(null);
+  const [productImagePreview, setProductImagePreview] = useState<{ src: string; title: string } | null>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<number, { all_generated: boolean; generating: boolean }>>({});
   // Barcode-level selection for defective move-out.
@@ -1439,6 +1440,29 @@ export default function Products() {
     setShowViewSKUsModal(true);
   };
 
+  const openProductImagePreview = (product: any) => {
+    const src = String(product?.image || '').trim();
+    if (!src) return;
+    setProductImagePreview({ src, title: String(product?.name || 'Product Image') });
+  };
+
+  const renderProductImageAction = (product: any, mobile = false) => {
+    if (!product?.image) return null;
+    return (
+      <button
+        onClick={() => openProductImagePreview(product)}
+        className={
+          mobile
+            ? 'flex items-center justify-center w-7 h-7 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors'
+            : 'flex items-center justify-center w-8 h-8 text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200'
+        }
+        title="View product image"
+      >
+        <ImageIcon className="h-3.5 w-3.5" />
+      </button>
+    );
+  };
+
   const handleAdjustmentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const submitData: any = {
@@ -2047,6 +2071,7 @@ export default function Products() {
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </button>
+                            {renderProductImageAction(product)}
                           {tagFilter === 'sold' && !isRetailUser && (
                             <button
                               onClick={() => handleDeleteProduct(product.id, product.name)}
@@ -2259,6 +2284,7 @@ export default function Products() {
                                 >
                                   <Eye className="h-3.5 w-3.5" />
                                 </button>
+                                {renderProductImageAction(product)}
                                 {(() => {
                                   const hasBarcodes = product.barcodes && product.barcodes.length > 0;
                                   const status = labelStatuses[product.id];
@@ -2318,6 +2344,7 @@ export default function Products() {
                                 >
                                   <Eye className="h-3.5 w-3.5" />
                                 </button>
+                                {renderProductImageAction(product)}
                                 {!isRetailUser && (
                                   <button
                                     onClick={() => handleDeleteProduct(product.id, product.name)}
@@ -2331,13 +2358,16 @@ export default function Products() {
                               </>
                             )}
                             {(currentTagFilter === 'unknown' || currentTagFilter === 'returned' || currentTagFilter === 'defective' || currentTagFilter === 'in-cart') && (
-                              <button
-                                onClick={() => handleViewSKUs(product)}
-                                className="flex items-center justify-center w-8 h-8 text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
-                                title="View SKUs"
-                              >
-                                <Eye className="h-3.5 w-3.5" />
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => handleViewSKUs(product)}
+                                  className="flex items-center justify-center w-8 h-8 text-purple-700 bg-purple-50 border border-purple-200 rounded-md hover:bg-purple-100 hover:border-purple-300 transition-all duration-200"
+                                  title="View SKUs"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                </button>
+                                {renderProductImageAction(product)}
+                              </>
                             )}
                           </div>
                         </td>
@@ -2564,6 +2594,7 @@ export default function Products() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {renderProductImageAction(product, true)}
                       {hasBarcodes && (
                         <>
                           {isGenerating ? (
@@ -2616,6 +2647,7 @@ export default function Products() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {renderProductImageAction(product, true)}
                       {!isRetailUser && (
                         <button
                           onClick={() => handleDeleteProduct(product.id, product.name)}
@@ -2639,6 +2671,7 @@ export default function Products() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {renderProductImageAction(product, true)}
                       <button
                         onClick={() => handleMarkAsReturned(product)}
                         className="flex items-center justify-center w-7 h-7 text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2678,6 +2711,7 @@ export default function Products() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {renderProductImageAction(product, true)}
                       <button
                         onClick={() => handleMarkAsFresh(product, 'returned')}
                         className="flex items-center justify-center w-7 h-7 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2709,6 +2743,7 @@ export default function Products() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {renderProductImageAction(product, true)}
                       <button
                         onClick={() => handleMarkAsFresh(product, 'defective')}
                         className="flex items-center justify-center w-7 h-7 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2732,7 +2767,10 @@ export default function Products() {
 
                   {/* In-Cart products - no actions */}
                   {tagFilter === 'in-cart' && (
-                    <span className="text-xs text-gray-400">-</span>
+                    <>
+                      {renderProductImageAction(product, true)}
+                      {!product?.image && <span className="text-xs text-gray-400">-</span>}
+                    </>
                   )}
                 </div>
               </div>
@@ -2876,6 +2914,23 @@ export default function Products() {
           onMarkAsDefective={handleMarkAsDefective}
           onMarkAsFresh={handleMarkAsFresh}
         />
+      )}
+
+      {productImagePreview && (
+        <Modal
+          isOpen={Boolean(productImagePreview)}
+          onClose={() => setProductImagePreview(null)}
+          title={productImagePreview.title}
+          size="lg"
+        >
+          <div className="flex justify-center p-1">
+            <img
+              src={productImagePreview.src}
+              alt=""
+              className="max-h-[72vh] w-auto max-w-full rounded-md object-contain"
+            />
+          </div>
+        </Modal>
       )}
 
       {/* Barcode Scanner Modal for Defective Products */}

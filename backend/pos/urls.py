@@ -1,4 +1,5 @@
 from django.urls import path
+from .replacement_pos import replacement_pos_create, replacement_pos_finalize, replacement_pos_lookup
 from .views import (
     pos_session_list_create, pos_session_detail, pos_session_close,
     active_carts_overview,
@@ -79,6 +80,10 @@ urlpatterns = [
     path('pos/replacement/search-invoices/', search_invoices_by_number, name='search-invoices-by-number'),
     path('pos/replacement/<int:invoice_id>/process/', process_replacement, name='process-replacement'),
     path('pos/replacement/<int:invoice_id>/credit-note/', replacement_credit_note, name='replacement-credit-note'),
+
+    path('pos/replacement-pos/lookup/', replacement_pos_lookup, name='replacement-pos-lookup'),
+    path('pos/replacement-pos/create/', replacement_pos_create, name='replacement-pos-create'),
+    path('pos/replacement-pos/<int:pk>/finalize/', replacement_pos_finalize, name='replacement-pos-finalize'),
     
     # Repair endpoints
     path('pos/repair/invoices/', repair_invoices_list, name='repair-invoices-list'),

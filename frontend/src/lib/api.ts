@@ -38,6 +38,9 @@ const api = axios.create({
 // Request interceptor to add auth token
 api.interceptors.request.use(
   (config) => {
+    if (config.data instanceof FormData && config.headers) {
+      delete (config.headers as any)['Content-Type'];
+    }
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -112,8 +115,22 @@ export const authApi = {
 export const productsApi = {
   list: (params?: any) => api.get('/products/', { params }),
   get: (id: number) => api.get(`/products/${id}/`),
-  create: (data: any) => api.post('/products/', data),
-  update: (id: number, data: any) => api.patch(`/products/${id}/`, data),
+  create: (data: any) => {
+    if (data instanceof FormData) {
+      return api.post('/products/', data, {
+        headers: { 'Content-Type': undefined as any },
+      });
+    }
+    return api.post('/products/', data);
+  },
+  update: (id: number, data: any) => {
+    if (data instanceof FormData) {
+      return api.patch(`/products/${id}/`, data, {
+        headers: { 'Content-Type': undefined as any },
+      });
+    }
+    return api.patch(`/products/${id}/`, data);
+  },
   delete: (id: number) => api.delete(`/products/${id}/`),
   variants: (id: number) => api.get(`/products/${id}/variants/`),
   barcodes: (id: number, params?: any) => api.get(`/products/${id}/barcodes/`, { params }),
@@ -237,6 +254,12 @@ export const posApi = {
   replacement: {
     check: (data: any) => api.post('/pos/replacement/check/', data),
     create: (data: any) => api.post('/pos/replacement/create/', data),
+    replacementPos: {
+      lookup: (data: { barcode: string }) => api.post('/pos/replacement-pos/lookup/', data),
+      create: (data: any) => api.post('/pos/replacement-pos/create/', data),
+      finalize: (id: number, data: { settlement_invoice_type: string; cash_amount?: string | null; upi_amount?: string | null }) =>
+        api.post(`/pos/replacement-pos/${id}/finalize/`, data),
+    },
     reserveBarcode: (data: { barcode_id: number; action?: 'reserve' | 'release'; restore_tag?: 'new' | 'returned' }) =>
       api.post('/pos/replacement/reserve-barcode/', data),
     updateTag: (barcodeId: number, data: any) => api.post(`/pos/replacement/barcode/${barcodeId}/update-tag/`, data),
