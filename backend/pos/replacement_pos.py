@@ -276,8 +276,10 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
     else:
         invoice.invoice_type = st
 
-    invoice.status = 'paid'
-    invoice.paid_amount = total
+    # Credit settlement is already posted to customer ledger in this flow,
+    # so invoice should be CREDIT (not PAID) to avoid extra "Move to Ledger".
+    invoice.status = 'credit' if st == 'credit' else 'paid'
+    invoice.paid_amount = Decimal('0.00') if st == 'credit' else total
     invoice.due_amount = Decimal('0.00')
     invoice.save(update_fields=['invoice_type', 'status', 'paid_amount', 'due_amount'])
 

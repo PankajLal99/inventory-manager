@@ -1111,7 +1111,8 @@ export default function InvoiceDetail() {
   };
 
   // Edit invoice (cart): show for non-void
-  const canEditItems = inv.status !== 'void';
+  const isReplacementReturn = inv?.is_replacement_return === true;
+  const canEditItems = inv.status !== 'void' && !isReplacementReturn;
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
   const isDraftPendingCheckout = inv.status === 'draft' && checkoutInvoiceType === 'pending';
@@ -2426,7 +2427,7 @@ export default function InvoiceDetail() {
                 </Button>
               )}
               {/* Move to Ledger: show when bill is paid (to move paid bill to ledger or mark as credit) */}
-              {inv.status === 'paid' && (
+              {inv.status === 'paid' && !isReplacementReturn && (
                 <Button
                   variant="primary"
                   onClick={handleMoveToLedger}
@@ -2486,7 +2487,7 @@ export default function InvoiceDetail() {
                 </div>
 
                 {/* Delete */}
-                {!isRestrictedUser && (
+                {!isRestrictedUser && !isReplacementReturn && (
                   <Button
                     variant="danger"
                     size="sm"

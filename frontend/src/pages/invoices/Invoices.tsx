@@ -53,6 +53,9 @@ interface Invoice {
     total_credit?: string | number;
     historical_total?: string | number;
     adjusted_total?: string | number;
+    total_cost_credit?: string | number;
+    historical_cost_total?: string | number;
+    adjusted_cost_total?: string | number;
     lines_count?: number;
   } | null;
   paid_amount: string;
@@ -129,6 +132,11 @@ const invoiceDisplayPaid = (invoice: Invoice) =>
   invoice?.replacement_summary?.adjusted_total != null
     ? parseAmount(invoice.replacement_summary.adjusted_total)
     : parseAmount(invoice.computed_paid);
+
+const invoiceDisplayTotal = (invoice: Invoice) =>
+  invoice?.replacement_summary?.adjusted_cost_total != null
+    ? parseAmount(invoice.replacement_summary.adjusted_cost_total)
+    : parseAmount(invoice.computed_total);
 
 const invoiceTypeLabel: Record<string, string> = {
   cash: 'Cash',
@@ -403,10 +411,10 @@ export default function Invoices() {
     .reduce((s, inv) => s + invoiceDisplayPaid(inv), 0);
   const paidDifference = footerTotalsInvoices
     .filter((inv) => !isCreditInvoice(inv))
-    .reduce((s, inv) => s + (invoiceDisplayPaid(inv) - parseAmount(inv.computed_total)), 0);
+    .reduce((s, inv) => s + (invoiceDisplayPaid(inv) - invoiceDisplayTotal(inv)), 0);
   const creditDifference = footerTotalsInvoices
     .filter((inv) => isCreditInvoice(inv))
-    .reduce((s, inv) => s + (invoiceDisplayPaid(inv) - parseAmount(inv.computed_total)), 0);
+    .reduce((s, inv) => s + (invoiceDisplayPaid(inv) - invoiceDisplayTotal(inv)), 0);
   const pendingAmount = filteredInvoices
     .filter((inv) => String(inv.invoice_type || '').toLowerCase() === 'pending')
     .reduce((s, inv) => s + parseAmount(inv.display_total ?? inv.total), 0);
@@ -765,7 +773,7 @@ export default function Invoices() {
                     {canSeeTotalColumn && (
                       <TableCell align="right">
                         <span className="font-semibold text-gray-900">
-                          ₹{formatNumber(parseAmount(invoice.computed_total))}
+                          ₹{formatNumber(invoiceDisplayTotal(invoice))}
                         </span>
                       </TableCell>
                     )}
@@ -893,7 +901,7 @@ export default function Invoices() {
                         {canSeeTotalColumn && (
                           <div>
                             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
-                            <div className="text-base font-bold text-gray-900">₹{formatNumber(parseAmount(invoice.computed_total))}</div>
+                            <div className="text-base font-bold text-gray-900">₹{formatNumber(invoiceDisplayTotal(invoice))}</div>
                           </div>
                         )}
                         <div>

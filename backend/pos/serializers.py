@@ -1,6 +1,7 @@
 from decimal import Decimal
 from rest_framework import serializers
 from django.db.models import Q, F, Value, Case, When, Sum, DecimalField, ExpressionWrapper
+from django.db.models.functions import Coalesce
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair, Expenses
 
 
@@ -447,17 +448,56 @@ class InvoiceSerializer(serializers.ModelSerializer):
         if not qs.exists():
             return None
 
-        agg = qs.aggregate(total_credit=Sum('line_total'))
+        money_field = DecimalField(max_digits=18, decimal_places=2)
+        original_item_purchase_rate = Coalesce(
+            F('original_invoice_item__purchase_price'),
+            F('original_invoice_item__barcode__purchase_item__unit_price'),
+            Value(Decimal('0.00')),
+            output_field=money_field,
+        )
+        cost_expr = ExpressionWrapper(
+            F('quantity') * original_item_purchase_rate,
+            output_field=money_field,
+        )
+        agg = qs.aggregate(
+            total_credit=Sum('line_total'),
+            total_cost_credit=Sum(cost_expr, output_field=money_field),
+        )
         total_credit = agg.get('total_credit') or Decimal('0.00')
+        total_cost_credit = agg.get('total_cost_credit') or Decimal('0.00')
         historical_total = obj.total or Decimal('0.00')
         adjusted_total = historical_total - total_credit
         if adjusted_total < Decimal('0.00'):
             adjusted_total = Decimal('0.00')
 
+        historical_cost_total = getattr(obj, '_items_total_agg', None)
+        if historical_cost_total is None:
+            invoice_item_purchase_rate = Coalesce(
+                F('purchase_price'),
+                F('barcode__purchase_item__unit_price'),
+                Value(Decimal('0.00')),
+                output_field=money_field,
+            )
+            historical_cost_total = InvoiceItem.objects.filter(invoice=obj).aggregate(
+                total=Sum(
+                    ExpressionWrapper(
+                        F('quantity') * invoice_item_purchase_rate,
+                        output_field=money_field,
+                    ),
+                    output_field=money_field,
+                )
+            ).get('total') or Decimal('0.00')
+        adjusted_cost_total = historical_cost_total - total_cost_credit
+        if adjusted_cost_total < Decimal('0.00'):
+            adjusted_cost_total = Decimal('0.00')
+
         return {
             'total_credit': str(total_credit),
             'historical_total': str(historical_total),
             'adjusted_total': str(adjusted_total),
+            'total_cost_credit': str(total_cost_credit),
+            'historical_cost_total': str(historical_cost_total),
+            'adjusted_cost_total': str(adjusted_cost_total),
             'lines_count': qs.count(),
         }
 
