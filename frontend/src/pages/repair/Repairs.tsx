@@ -179,7 +179,6 @@ export default function Repairs() {
   const queryClient = useQueryClient();
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const listSearchDebounceRef = useRef<number | null>(null);
-  const [autoLoadRemainingPages, setAutoLoadRemainingPages] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [user, setUser] = useState<any>(null);
@@ -374,13 +373,12 @@ export default function Repairs() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-    setAutoLoadRemainingPages(true);
     setLoadedRepairs([]);
     setVisibleRepairs([]);
-  }, [statusFilter, defaultStore?.id, debouncedSearch]);
+  }, [statusFilter, repairStore?.id, debouncedSearch]);
 
   useEffect(() => {
-    if (!data) return;
+    if (!data || isFetching) return;
     const page = Number(data.page || 1);
     const pageRows: RepairInvoice[] = Array.isArray(data.results) ? data.results : [];
     setLoadedRepairs((prev) => {
@@ -392,53 +390,11 @@ export default function Repairs() {
       });
       return merged;
     });
-  }, [data]);
+  }, [data, isFetching]);
 
   useEffect(() => {
-    if (!data || isFetching) return;
-    const hasMore = Number(data.page || 1) < Number(data.total_pages || 1);
-    if (!hasMore) {
-      setAutoLoadRemainingPages(false);
-      return;
-    }
-    // Keep typing/search responsive and avoid endless background fetches when user is filtering.
-    if (debouncedSearch || statusFilter || !autoLoadRemainingPages) return;
-    // Wait for KPI totals before deciding whether we've loaded enough rows.
-    if (!wipKpiData || !receivedKpiData) return;
-
-    const loadedWip = loadedRepairs.filter((inv) => inv.repair?.status === 'work_in_progress').length;
-    const loadedReceived = loadedRepairs.filter((inv) => inv.repair?.status === 'received').length;
-    const needMoreWip = loadedWip < Number(wipKpiData?.count || 0);
-    const needMoreReceived = loadedReceived < Number(receivedKpiData?.count || 0);
-
-    // Auto-load next page only until WIP/Received sections are fully populated.
-    if (needMoreWip || needMoreReceived) {
-      setCurrentPage((p) => p + 1);
-      return;
-    }
-    setAutoLoadRemainingPages(false);
-  }, [
-    data,
-    isFetching,
-    debouncedSearch,
-    statusFilter,
-    autoLoadRemainingPages,
-    loadedRepairs,
-    wipKpiData,
-    receivedKpiData,
-  ]);
-
-  useEffect(() => {
-    // In filtered/search mode, update rows immediately.
-    if (debouncedSearch || statusFilter) {
-      setVisibleRepairs(loadedRepairs);
-      return;
-    }
-    // In default view, reveal rows only after background preload completes.
-    if (!autoLoadRemainingPages) {
-      setVisibleRepairs(loadedRepairs);
-    }
-  }, [loadedRepairs, debouncedSearch, statusFilter, autoLoadRemainingPages]);
+    setVisibleRepairs(loadedRepairs);
+  }, [loadedRepairs]);
 
   // Sync edit form when opening edit modal
   useEffect(() => {
@@ -679,10 +635,7 @@ export default function Repairs() {
   const workInProgressRepairs = Number(wipKpiData?.count || 0);
   const notRepairedRepairs = Number(notRepairedKpiData?.count || 0);
 
-  const waitingForInitialRows =
-    !debouncedSearch && !statusFilter && autoLoadRemainingPages && visibleRepairs.length === 0;
-
-  if (isLoading || waitingForInitialRows) {
+  if (isLoading) {
     return <LoadingState message="Loading repairs..." />;
   }
 
