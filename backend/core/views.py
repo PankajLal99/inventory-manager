@@ -353,7 +353,7 @@ def global_search(request):
         CategorySerializer, BrandSerializer
     )
     from backend.parties.serializers import CustomerSerializer, SupplierSerializer
-    from backend.pos.serializers import InvoiceSerializer, CartSerializer
+    from backend.pos.serializers import InvoiceSearchSerializer, CartSerializer
     from backend.locations.serializers import StoreSerializer, WarehouseSerializer
     from backend.purchasing.serializers import PurchaseSerializer
     
@@ -367,7 +367,6 @@ def global_search(request):
     # Search Products: use name_only so "FOLDER BKC" matches "FOLDER BKC 8A" (all words in name)
     if search_type in ['all', 'product']:
         from backend.catalog.filters import ProductFilter
-        from backend.pos.models import CartItem
         from django.db.models import Case, When, Value, IntegerField
 
         # Lean queryset for search + ranking (id/name only); prefetches only on the final page.
@@ -402,17 +401,10 @@ def global_search(request):
             .order_by('_search_order')
         )
 
-        # Pass active_cart_barcodes so available_quantity matches Products page (barcode count is source of truth)
-        active_cart_barcodes = set()
-        for item in CartItem.objects.filter(cart__status='active').exclude(
-            scanned_barcodes__isnull=True
-        ).exclude(scanned_barcodes=[]).only('scanned_barcodes'):
-            if item.scanned_barcodes:
-                active_cart_barcodes.update(item.scanned_barcodes)
-
         product_context = {
             'request': request,
-            'active_cart_barcodes': active_cart_barcodes,
+            # Search does not request per-barcode payloads, so avoid scanning active carts.
+            'active_cart_barcodes': set(),
         }
         add_to_results('products', products, ProductListSerializer, context=product_context)
     
@@ -436,8 +428,11 @@ def global_search(request):
         if search_type == 'barcode_status':
             # Also search by tag (exact match, e.g. "sold", "new", "defective", "returned")
             barcode_q |= Q(tag__iexact=query_clean.lower())
-        barcodes = Barcode.objects.filter(barcode_q).select_related('product').prefetch_related(
-            'invoice_items__invoice', 'invoice_items__invoice__customer'
+        barcodes = (
+            Barcode.objects
+            .filter(barcode_q)
+            .select_related('product', 'purchase__supplier', 'purchase_item__purchase__supplier')
+            .prefetch_related('invoice_items__invoice', 'invoice_items__invoice__customer')
         )[:20]
         add_to_results('barcodes', barcodes, BarcodeSerializer)
     
@@ -454,8 +449,8 @@ def global_search(request):
     if search_type in ['all']: # Invoices only in 'all' for now unless requested
         invoices = Invoice.objects.filter(
             Q(invoice_number__icontains=query)
-        )[:20]
-        add_to_results('invoices', invoices, InvoiceSerializer)
+        ).select_related('customer')[:20]
+        add_to_results('invoices', invoices, InvoiceSearchSerializer)
     
     # Search Carts
     if search_type in ['all']:

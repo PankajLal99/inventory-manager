@@ -31,7 +31,8 @@ from backend.parties.internal_ledger_utils import (
 )
 from .serializers import (
     POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
-    RepairInvoiceListSerializer, InvoiceItemSerializer, PaymentSerializer, ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
+    InvoiceListSerializer, RepairInvoiceListSerializer, InvoiceItemSerializer, PaymentSerializer,
+    ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
 )
 from backend.catalog.label_generator import generate_label_image
 
@@ -142,8 +143,8 @@ def annotate_invoice_list_profit(queryset, profile='invoice_list'):
 
 def _with_invoice_list_prefetches(queryset):
     """
-    Preload nested relations used by InvoiceSerializer list payloads.
-    This avoids N+1 lookups for invoice items -> product/brand/barcode pricing.
+    Preload nested relations used by InvoiceSerializer (detail/create) payloads.
+    Not used by InvoiceListSerializer — the list endpoint uses bulk context instead.
     """
     items_qs = InvoiceItem.objects.select_related(
         'product__brand',
@@ -154,6 +155,79 @@ def _with_invoice_list_prefetches(queryset):
         Prefetch('items', queryset=items_qs),
         Prefetch('payments', queryset=payments_qs),
     )
+
+
+def _build_invoice_list_context(invoice_ids):
+    """
+    Pre-compute replacement summaries and pending totals in bulk for the invoice list.
+    Returns a context dict to pass to InvoiceListSerializer, replacing per-invoice DB queries.
+
+    Replaces two N+1 patterns in the original InvoiceSerializer:
+    - get_replacement_summary: was 2 queries per invoice (exists + aggregate)
+    - get_display_total (pending): was 1 aggregate query per pending invoice
+    """
+    if not invoice_ids:
+        return {'replacement_summaries_map': {}, 'pending_totals_map': {}}
+
+    money_field = DecimalField(max_digits=18, decimal_places=2)
+
+    original_item_purchase_rate = Coalesce(
+        F('original_invoice_item__purchase_price'),
+        F('original_invoice_item__barcode__purchase_item__unit_price'),
+        Value(Decimal('0.00')),
+        output_field=money_field,
+    )
+    cost_expr = ExpressionWrapper(
+        F('quantity') * original_item_purchase_rate,
+        output_field=money_field,
+    )
+    replacement_rows = (
+        InvoiceItem.objects
+        .filter(original_invoice_id__in=invoice_ids, invoice__is_replacement_return=True)
+        .exclude(invoice__status='void')
+        .values('original_invoice_id')
+        .annotate(
+            total_credit=Sum('line_total', output_field=money_field),
+            total_cost_credit=Sum(cost_expr, output_field=money_field),
+            lines_count=Count('id'),
+        )
+    )
+    replacement_summaries_map = {
+        row['original_invoice_id']: row for row in replacement_rows
+    }
+
+    effective_pending_purchase_price = Case(
+        When(purchase_price__gt=0, then=F('purchase_price')),
+        When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
+        default=Value(Decimal('0.00')),
+        output_field=DecimalField(max_digits=12, decimal_places=2),
+    )
+    pending_item_amount_expr = ExpressionWrapper(
+        F('quantity') * effective_pending_purchase_price,
+        output_field=money_field,
+    )
+    pending_rows = (
+        InvoiceItem.objects
+        .filter(
+            invoice_id__in=invoice_ids,
+            quantity__gt=0,
+        )
+        .filter(
+            Q(manual_unit_price__isnull=True) | Q(manual_unit_price__lte=0),
+            Q(unit_price__isnull=True) | Q(unit_price__lte=0),
+        )
+        .values('invoice_id')
+        .annotate(
+            total=Sum(pending_item_amount_expr, output_field=money_field),
+        )
+    )
+    pending_totals_map = {row['invoice_id']: row['total'] for row in pending_rows}
+
+    return {
+        'replacement_summaries_map': replacement_summaries_map,
+        'pending_totals_map': pending_totals_map,
+        'amount_profile': 'invoice_list',
+    }
 
 
 def filter_repair_invoices_by_list_date(queryset, date_from, date_to):
@@ -3275,8 +3349,9 @@ def cart_checkout(request, pk):
 def invoice_list_create(request):
     """List all invoices or create a new invoice"""
     if request.method == 'GET':
-        queryset = Invoice.objects.select_related('customer', 'store', 'created_by').all()
-        queryset = _with_invoice_list_prefetches(queryset)
+        queryset = Invoice.objects.select_related(
+            'customer__customer_group', 'store', 'created_by'
+        ).all()
         date = request.query_params.get('date', None)
         store = request.query_params.get('store', None)
         customer = request.query_params.get('customer', None)
@@ -3310,7 +3385,7 @@ def invoice_list_create(request):
         # Opt-in: include_replacement=true/1/yes
         if include_replacement not in ('1', 'true', 'yes', 'y'):
             queryset = queryset.exclude(is_replacement_return=True)
-        
+
         # Exclude defective invoices from regular invoice list (they appear in defective move-outs page)
         # Only exclude if not explicitly filtering by defective type
         if invoice_type_filter != 'defective':
@@ -3335,13 +3410,10 @@ def invoice_list_create(request):
         ])
 
         if has_active_filters:
-            order_by = 'created_at'
-            queryset = queryset.order_by(order_by)
-            serializer = InvoiceSerializer(
-                queryset,
-                many=True,
-                context={'amount_profile': 'invoice_list'},
-            )
+            queryset = queryset.order_by('created_at')
+            invoice_ids = list(queryset.values_list('id', flat=True))
+            context = _build_invoice_list_context(invoice_ids)
+            serializer = InvoiceListSerializer(queryset, many=True, context=context)
             return Response({
                 'results': serializer.data,
                 'count': len(serializer.data),
@@ -3373,11 +3445,9 @@ def invoice_list_create(request):
             page_date = dates_list[page - 1]
             queryset = queryset.filter(created_at__date=page_date)
 
-        serializer = InvoiceSerializer(
-            queryset,
-            many=True,
-            context={'amount_profile': 'invoice_list'},
-        )
+        invoice_ids = list(queryset.values_list('id', flat=True))
+        context = _build_invoice_list_context(invoice_ids)
+        serializer = InvoiceListSerializer(queryset, many=True, context=context)
         return Response({
             'results': serializer.data,
             'count': len(serializer.data),

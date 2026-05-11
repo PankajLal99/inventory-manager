@@ -537,6 +537,162 @@ class RepairInvoiceListSerializer(serializers.ModelSerializer):
         return float(obj.total or Decimal('0.00'))
 
 
+class InvoiceSearchSerializer(serializers.ModelSerializer):
+    """Lean invoice shape for global search results."""
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = ['id', 'invoice_number', 'status', 'total', 'created_at', 'customer_name']
+
+
+class InvoiceListSerializer(serializers.ModelSerializer):
+    """
+    Lean serializer for the Invoices list page.
+    Excludes nested items and payments (not rendered in the list UI) to eliminate:
+    - Large payload (30+ fields per line item shipped but never displayed)
+    - N+1 queries from InvoiceItemSerializer.get_replacement_ref (one query per line)
+    - N+1 queries from the items/payments prefetch overhead
+    Replacement summaries are pre-computed in bulk by the view and passed via context
+    (replacement_summaries_map) to avoid per-invoice DB round-trips.
+    """
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
+    store_name = serializers.CharField(source='store.name', read_only=True)
+    display_total = serializers.SerializerMethodField()
+    computed_total = serializers.SerializerMethodField()
+    computed_paid = serializers.SerializerMethodField()
+    replacement_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Invoice
+        fields = [
+            'id', 'invoice_number', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name',
+            'status', 'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total',
+            'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
+            'is_replacement_return', 'replacement_summary',
+            'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on',
+        ]
+
+    def get_display_total(self, obj):
+        if obj.invoice_type != 'pending':
+            return float(obj.total or Decimal('0.00'))
+
+        pending_totals_map = self.context.get('pending_totals_map')
+        if pending_totals_map is not None:
+            return float(pending_totals_map.get(obj.id) or Decimal('0.00'))
+
+        effective_pending_purchase_price = Case(
+            When(purchase_price__gt=0, then=F('purchase_price')),
+            When(barcode__purchase_item__unit_price__isnull=False, then=F('barcode__purchase_item__unit_price')),
+            default=Value(Decimal('0.00')),
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        )
+        pending_item_amount_expr = ExpressionWrapper(
+            F('quantity') * effective_pending_purchase_price,
+            output_field=DecimalField(max_digits=18, decimal_places=2),
+        )
+        pending_total = InvoiceItem.objects.filter(
+            invoice=obj,
+            quantity__gt=0
+        ).filter(
+            Q(manual_unit_price__isnull=True) | Q(manual_unit_price__lte=0),
+            Q(unit_price__isnull=True) | Q(unit_price__lte=0),
+        ).aggregate(
+            total=Sum(pending_item_amount_expr, output_field=DecimalField(max_digits=18, decimal_places=2))
+        )['total'] or Decimal('0.00')
+        return float(pending_total)
+
+    def get_computed_total(self, obj):
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_total_agg', Decimal('0.00')) or Decimal('0.00'))
+        return 0.0
+
+    def get_computed_paid(self, obj):
+        item_count = getattr(obj, '_items_count', None)
+        if item_count is not None and int(item_count) > 0:
+            return float(getattr(obj, '_items_paid_agg', Decimal('0.00')) or Decimal('0.00'))
+        return float(obj.total or Decimal('0.00'))
+
+    def get_replacement_summary(self, obj):
+        if obj.is_replacement_return:
+            return None
+
+        replacement_summaries_map = self.context.get('replacement_summaries_map')
+        if replacement_summaries_map is not None:
+            data = replacement_summaries_map.get(obj.id)
+            if data is None:
+                return None
+            historical_total = obj.total or Decimal('0.00')
+            total_credit = data.get('total_credit') or Decimal('0.00')
+            total_cost_credit = data.get('total_cost_credit') or Decimal('0.00')
+            lines_count = data.get('lines_count', 0)
+            historical_cost_total = getattr(obj, '_items_total_agg', None) or data.get('historical_cost_total') or Decimal('0.00')
+            adjusted_total = max(historical_total - total_credit, Decimal('0.00'))
+            adjusted_cost_total = max(historical_cost_total - total_cost_credit, Decimal('0.00'))
+            return {
+                'total_credit': str(total_credit),
+                'historical_total': str(historical_total),
+                'adjusted_total': str(adjusted_total),
+                'total_cost_credit': str(total_cost_credit),
+                'historical_cost_total': str(historical_cost_total),
+                'adjusted_cost_total': str(adjusted_cost_total),
+                'lines_count': lines_count,
+            }
+
+        qs = InvoiceItem.objects.filter(
+            original_invoice_id=obj.id,
+            invoice__is_replacement_return=True,
+        ).exclude(invoice__status='void')
+        if not qs.exists():
+            return None
+
+        money_field = DecimalField(max_digits=18, decimal_places=2)
+        original_item_purchase_rate = Coalesce(
+            F('original_invoice_item__purchase_price'),
+            F('original_invoice_item__barcode__purchase_item__unit_price'),
+            Value(Decimal('0.00')),
+            output_field=money_field,
+        )
+        cost_expr = ExpressionWrapper(
+            F('quantity') * original_item_purchase_rate,
+            output_field=money_field,
+        )
+        agg = qs.aggregate(
+            total_credit=Sum('line_total'),
+            total_cost_credit=Sum(cost_expr, output_field=money_field),
+        )
+        total_credit = agg.get('total_credit') or Decimal('0.00')
+        total_cost_credit = agg.get('total_cost_credit') or Decimal('0.00')
+        historical_total = obj.total or Decimal('0.00')
+        adjusted_total = max(historical_total - total_credit, Decimal('0.00'))
+        historical_cost_total = getattr(obj, '_items_total_agg', None)
+        if historical_cost_total is None:
+            invoice_item_purchase_rate = Coalesce(
+                F('purchase_price'),
+                F('barcode__purchase_item__unit_price'),
+                Value(Decimal('0.00')),
+                output_field=money_field,
+            )
+            historical_cost_total = InvoiceItem.objects.filter(invoice=obj).aggregate(
+                total=Sum(
+                    ExpressionWrapper(F('quantity') * invoice_item_purchase_rate, output_field=money_field),
+                    output_field=money_field,
+                )
+            ).get('total') or Decimal('0.00')
+        adjusted_cost_total = max(historical_cost_total - total_cost_credit, Decimal('0.00'))
+        return {
+            'total_credit': str(total_credit),
+            'historical_total': str(historical_total),
+            'adjusted_total': str(adjusted_total),
+            'total_cost_credit': str(total_cost_credit),
+            'historical_cost_total': str(historical_cost_total),
+            'adjusted_cost_total': str(adjusted_cost_total),
+            'lines_count': qs.count(),
+        }
+
+
 class ReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
     product_sku = serializers.SerializerMethodField()

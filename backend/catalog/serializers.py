@@ -470,6 +470,30 @@ class ProductListSerializer(serializers.ModelSerializer):
         tag = self._get_tag_filter()
         return tag in ['defective', 'returned', 'unknown', 'in-cart']
 
+    def _get_supplier_breakdown_cached(self, obj, exclude_fully_zero_rows=False):
+        """
+        Product search displays supplier stock/price breakdown in several fields.
+        Cache it per product instance so serialization does not repeat the same
+        PurchaseItem/barcode aggregation for shop stock, warehouse stock, prices,
+        and the visible breakdown table.
+        """
+        cache = getattr(obj, '_supplier_breakdown_cache', None)
+        if cache is None:
+            cache = {}
+            setattr(obj, '_supplier_breakdown_cache', cache)
+
+        key = bool(exclude_fully_zero_rows)
+        if key not in cache:
+            cache[key] = _get_supplier_breakdown_for_product(
+                obj,
+                exclude_fully_zero_rows=exclude_fully_zero_rows,
+            )
+        return cache[key]
+
+    def _get_prefetched_barcodes(self, obj):
+        cache = getattr(obj, '_prefetched_objects_cache', {})
+        return cache.get('barcodes')
+
     def get_barcodes(self, obj):
         """
         PERFORMANCE OPTIMIZATION: Only include barcode data when explicitly requested.
@@ -575,6 +599,9 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def _get_new_returned_count(self, obj):
         """Count of barcodes with tag 'new' or 'returned' (available to sell)."""
+        prefetched_barcodes = self._get_prefetched_barcodes(obj)
+        if prefetched_barcodes is not None:
+            return float(sum(1 for barcode in prefetched_barcodes if barcode.tag in ['new', 'returned']))
         return float(obj.barcodes.filter(tag__in=['new', 'returned']).count())
 
     def _get_shop_from_purchase(self, obj):
@@ -589,13 +616,8 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def _get_warehouse_from_purchase(self, obj):
         """Warehouse qty from purchase only: sum of PurchaseItem.warehouse_quantity (no addition/subtraction)."""
-        from backend.purchasing.models import PurchaseItem
-        total = PurchaseItem.objects.filter(
-            product=obj,
-            purchase__status='finalized',
-            purchase__deleted_at__isnull=True,
-        ).aggregate(s=Sum('warehouse_quantity'))['s']
-        return float(total or 0)
+        breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
+        return float(sum(row.get('warehouse_stock') or 0 for row in breakdown))
 
     def get_available_quantity(self, obj):
         """Available in shop view: (new+returned barcodes) minus warehouse qty from finalized purchases (floored at 0)."""
@@ -605,12 +627,12 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_shop_stock(self, obj):
         """Shop available = sum of shop_barcode_count from supplier breakdown (accounts for sales)."""
-        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
+        breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         return float(sum(b['shop_barcode_count'] for b in breakdown))
 
     def get_warehouse_stock(self, obj):
         """Warehouse available = sum of warehouse_available from supplier breakdown (accounts for sales)."""
-        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
+        breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         return float(sum(b.get('warehouse_available', b['warehouse_stock']) for b in breakdown))
 
     def get_stock_quantity(self, obj):
@@ -625,6 +647,10 @@ class ProductListSerializer(serializers.ModelSerializer):
             
         # Fallback for other views
         # Count ALL barcodes, excluding sold
+        prefetched_barcodes = self._get_prefetched_barcodes(obj)
+        if prefetched_barcodes is not None:
+            return float(sum(1 for barcode in prefetched_barcodes if barcode.tag != 'sold'))
+
         barcode_count = obj.barcodes.exclude(tag='sold').count()
         return float(barcode_count)
 
@@ -652,6 +678,10 @@ class ProductListSerializer(serializers.ModelSerializer):
             return float(total_sold)
         
         # For tracked inventory products, count barcodes with 'sold' tag
+        prefetched_barcodes = self._get_prefetched_barcodes(obj)
+        if prefetched_barcodes is not None:
+            return sum(1 for barcode in prefetched_barcodes if barcode.tag == 'sold')
+
         sold_barcodes = obj.barcodes.filter(tag='sold')
         return sold_barcodes.count()
 
@@ -668,7 +698,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
         # Fallback for tracked products / empty barcode payloads in search:
         # derive a representative purchase price from supplier breakdown rows.
-        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
+        breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         max_purchase = 0.0
         for row in breakdown:
             value = float(row.get('purchase_price_value') or 0)
@@ -692,7 +722,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
         # Fallback for tracked products / empty barcode payloads in search:
         # prefer max selling price from supplier rows, then purchase price row value.
-        breakdown = _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False)
+        breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         max_selling = 0.0
         max_purchase = 0.0
         for row in breakdown:
@@ -774,7 +804,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         include_zero = False
         if request:
             include_zero = str(request.query_params.get('include_zero_shop_rows', '')).lower() in ('1', 'true', 'yes', 'y')
-        return _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=not include_zero)
+        return self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=not include_zero)
 
     class Meta:
         model = Product
