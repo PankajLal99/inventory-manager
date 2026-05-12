@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, Exists, OuterRef
+from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, Exists, OuterRef, IntegerField
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
@@ -347,9 +347,20 @@ def repair_invoices_list(request):
         repair__isnull=False  # Only invoices with Repair records
     ).select_related('customer', 'store', 'created_by', 'repair')
 
-    ordering_param = request.query_params.get('ordering', '-repair__updated_at')
+    ordering_param = request.query_params.get('ordering', 'repair_status_priority')
     if ordering_param == 'created_at':
         queryset = queryset.order_by('created_at')
+    elif ordering_param in ('repair_status_priority', 'status_priority'):
+        queryset = queryset.annotate(
+            _repair_status_order=Case(
+                When(repair__status='work_in_progress', then=Value(0)),
+                When(repair__status='received', then=Value(1)),
+                When(repair__status='delivered', then=Value(2)),
+                When(repair__status='not_repaired', then=Value(3)),
+                default=Value(4),
+                output_field=IntegerField(),
+            )
+        ).order_by('_repair_status_order', '-repair__updated_at', '-created_at')
     else:
         queryset = queryset.order_by(ordering_param, '-created_at')
 
@@ -384,6 +395,9 @@ def repair_invoices_list(request):
             | Q(repair__updated_at__date__lte=date_to)
             | Q(repair__delivery_date__lte=date_to)
         )
+    delivery_date = request.query_params.get('delivery_date', None)
+    if delivery_date:
+        queryset = queryset.filter(repair__delivery_date=delivery_date)
 
     # Filter by repair status if provided
     repair_status = request.query_params.get('repair_status', None)

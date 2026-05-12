@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
@@ -137,7 +137,7 @@ const STATUS_BAR_CLASS: Record<string, string> = {
   cancelled: 'bg-red-600',
   other: 'bg-gray-400',
 };
-const NOT_REPAIRED_DISPLAY_LIMIT = 20;
+const NOT_REPAIRED_DISPLAY_LIMIT = 50;
 
 /** Sort repair invoices by status for table display, then by most recently updated within each status. */
 function sortRepairsByRowStatusOrder<T extends { repair?: { status: string; updated_at?: string } | null; created_at?: string }>(items: T[]): T[] {
@@ -180,7 +180,6 @@ export default function Repairs() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const listSearchDebounceRef = useRef<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
-  const [currentPage, setCurrentPage] = useState(1);
   const [user, setUser] = useState<any>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<RepairInvoice | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -202,8 +201,6 @@ export default function Repairs() {
   const [groupDateFilters, setGroupDateFilters] = useState<Record<string, string>>(() => ({
     delivered: toLocalDateString(new Date()),
   }));
-  const [loadedRepairs, setLoadedRepairs] = useState<RepairInvoice[]>([]);
-  const [visibleRepairs, setVisibleRepairs] = useState<RepairInvoice[]>([]);
 
   useEffect(() => {
     const loadUser = async () => {
@@ -259,34 +256,11 @@ export default function Repairs() {
   const repairStores = stores.filter((s: any) => String(s.shop_type || '').toLowerCase() === 'repair');
   const repairStore = repairStores.find((s: any) => s.id === defaultStore?.id) || repairStores[0];
 
-  const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['repair-invoices', statusFilter, repairStore?.id, currentPage, debouncedSearch],
-    queryFn: async () => {
-      const params: any = {};
-      params.page = currentPage;
-      if (statusFilter) {
-        params.repair_status = statusFilter;
-      }
-      if (debouncedSearch) {
-        params.search = debouncedSearch;
-      }
-      // When searching by text, show results across all repair stores.
-      // Only apply store filter when there is no search input.
-      if (!debouncedSearch && repairStore?.id) {
-        params.store = repairStore.id;
-      }
-      const response = await posApi.repair.invoices.list(params);
-      return response.data;
-    },
-    // Avoid an initial unscoped fetch before repair store is resolved.
-    // Allow fetch without store only when user is actively searching by text.
-    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
-    placeholderData: keepPreviousData,
-    retry: false,
-  });
+  const repairQueriesEnabled = Boolean(repairStore?.id) || Boolean(debouncedSearch);
+  const deliveredDateFilter = groupDateFilters.delivered || toLocalDateString(new Date());
 
-  const buildKpiParams = (extra: Record<string, any> = {}) => {
-    const params: any = { limit: 1, ...extra };
+  const buildRepairParams = (extra: Record<string, any> = {}) => {
+    const params: any = { ...extra };
     if (debouncedSearch) {
       params.search = debouncedSearch;
     }
@@ -299,50 +273,64 @@ export default function Repairs() {
   const { data: totalKpiData } = useQuery({
     queryKey: ['repair-invoices-kpi-total', repairStore?.id, debouncedSearch],
     queryFn: async () => {
-      const response = await posApi.repair.invoices.list(buildKpiParams());
+      const response = await posApi.repair.invoices.list(buildRepairParams({ limit: 1 }));
       return response.data;
     },
-    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    enabled: repairQueriesEnabled,
     retry: false,
   });
 
-  const { data: receivedKpiData } = useQuery({
-    queryKey: ['repair-invoices-kpi-received', repairStore?.id, debouncedSearch],
+  const { data: receivedKpiData, isLoading: isReceivedLoading, error: receivedError } = useQuery({
+    queryKey: ['repair-invoices-section-received', repairStore?.id, debouncedSearch, statusFilter],
     queryFn: async () => {
-      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'received' }));
+      const response = await posApi.repair.invoices.list(buildRepairParams({
+        repair_status: 'received',
+        unpaginated: 'true',
+      }));
       return response.data;
     },
-    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'received'),
     retry: false,
   });
 
-  const { data: deliveredKpiData } = useQuery({
-    queryKey: ['repair-invoices-kpi-delivered', repairStore?.id, debouncedSearch],
+  const { data: deliveredKpiData, isLoading: isDeliveredLoading, error: deliveredError } = useQuery({
+    queryKey: ['repair-invoices-section-delivered', repairStore?.id, debouncedSearch, statusFilter, deliveredDateFilter],
     queryFn: async () => {
-      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'delivered' }));
+      const response = await posApi.repair.invoices.list(buildRepairParams({
+        repair_status: 'delivered',
+        delivery_date: deliveredDateFilter,
+        unpaginated: 'true',
+      }));
       return response.data;
     },
-    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'delivered'),
     retry: false,
   });
 
-  const { data: wipKpiData } = useQuery({
-    queryKey: ['repair-invoices-kpi-wip', repairStore?.id, debouncedSearch],
+  const { data: wipKpiData, isLoading: isWipLoading, error: wipError } = useQuery({
+    queryKey: ['repair-invoices-section-wip', repairStore?.id, debouncedSearch, statusFilter],
     queryFn: async () => {
-      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'work_in_progress' }));
+      const response = await posApi.repair.invoices.list(buildRepairParams({
+        repair_status: 'work_in_progress',
+        unpaginated: 'true',
+      }));
       return response.data;
     },
-    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'work_in_progress'),
     retry: false,
   });
 
-  const { data: notRepairedKpiData } = useQuery({
-    queryKey: ['repair-invoices-kpi-not-repaired', repairStore?.id, debouncedSearch],
+  const { data: notRepairedKpiData, isLoading: isNotRepairedLoading, error: notRepairedError } = useQuery({
+    queryKey: ['repair-invoices-section-not-repaired', repairStore?.id, debouncedSearch, statusFilter],
     queryFn: async () => {
-      const response = await posApi.repair.invoices.list(buildKpiParams({ repair_status: 'not_repaired' }));
+      const response = await posApi.repair.invoices.list(buildRepairParams({
+        repair_status: 'not_repaired',
+        limit: 50,
+        ordering: '-repair__updated_at',
+      }));
       return response.data;
     },
-    enabled: Boolean(repairStore?.id) || Boolean(debouncedSearch),
+    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'not_repaired'),
     retry: false,
   });
 
@@ -369,32 +357,6 @@ export default function Repairs() {
     enabled: false, // Don't auto-fetch, only on button click
     retry: false,
   });
-
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-    setLoadedRepairs([]);
-    setVisibleRepairs([]);
-  }, [statusFilter, repairStore?.id, debouncedSearch]);
-
-  useEffect(() => {
-    if (!data || isFetching) return;
-    const page = Number(data.page || 1);
-    const pageRows: RepairInvoice[] = Array.isArray(data.results) ? data.results : [];
-    setLoadedRepairs((prev) => {
-      if (page <= 1) return pageRows;
-      const existing = new Set(prev.map((r) => r.id));
-      const merged = [...prev];
-      pageRows.forEach((row) => {
-        if (!existing.has(row.id)) merged.push(row);
-      });
-      return merged;
-    });
-  }, [data, isFetching]);
-
-  useEffect(() => {
-    setVisibleRepairs(loadedRepairs);
-  }, [loadedRepairs]);
 
   // Sync edit form when opening edit modal
   useEffect(() => {
@@ -525,7 +487,10 @@ export default function Repairs() {
     onSuccess: () => {
       showToast('Repair registration updated', 'success');
       setEditingInvoice(null);
-      queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+      queryClient.invalidateQueries({
+        predicate: (query) => String(query.queryKey[0] || '').startsWith('repair-invoices-section'),
+      });
+      queryClient.invalidateQueries({ queryKey: ['repair-invoices-kpi-total'] });
     },
     onError: (error: any) => {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to update repair';
@@ -533,10 +498,26 @@ export default function Repairs() {
     },
   });
 
-  const repairInvoices: RepairInvoice[] = visibleRepairs;
-  const hasMoreRepairs =
-    Boolean(data) && Number(data.page || 1) < Number(data.total_pages || 1);
+  const getRepairResults = (payload: any): RepairInvoice[] =>
+    Array.isArray(payload?.results) ? payload.results : [];
 
+  const workInProgressItems = getRepairResults(wipKpiData);
+  const receivedItems = getRepairResults(receivedKpiData);
+  const deliveredItems = getRepairResults(deliveredKpiData);
+  const notRepairedItems = getRepairResults(notRepairedKpiData);
+
+  const repairInvoices: RepairInvoice[] = (() => {
+    if (statusFilter === 'work_in_progress') return workInProgressItems;
+    if (statusFilter === 'received') return receivedItems;
+    if (statusFilter === 'delivered') return deliveredItems;
+    if (statusFilter === 'not_repaired') return notRepairedItems;
+    return [
+      ...workInProgressItems,
+      ...receivedItems,
+      ...deliveredItems,
+      ...notRepairedItems,
+    ];
+  })();
 
   // Search is applied server-side (invoice_number + customer_name)
   const filteredRepairs = repairInvoices;
@@ -630,16 +611,18 @@ export default function Repairs() {
   };
 
   const totalRepairs = Number(totalKpiData?.count || 0);
-  const receivedRepairs = Number(receivedKpiData?.count || 0);
-  const deliveredRepairs = Number(deliveredKpiData?.count || 0);
-  const workInProgressRepairs = Number(wipKpiData?.count || 0);
-  const notRepairedRepairs = Number(notRepairedKpiData?.count || 0);
+  const receivedRepairs = receivedItems.length;
+  const deliveredRepairs = deliveredItems.length;
+  const workInProgressRepairs = workInProgressItems.length;
+  const notRepairedRepairs = notRepairedItems.length;
+  const isRepairsLoading = isWipLoading || isReceivedLoading || isDeliveredLoading || isNotRepairedLoading;
+  const repairsError = wipError || receivedError || deliveredError || notRepairedError;
 
-  if (isLoading) {
+  if (isRepairsLoading) {
     return <LoadingState message="Loading repairs..." />;
   }
 
-  if (error) {
+  if (repairsError) {
     return (
       <ErrorState
         message="Error loading repairs. Please try again."
@@ -1546,20 +1529,6 @@ export default function Repairs() {
 
       {/* Toast Container */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />
-
-      {hasMoreRepairs && (
-        <Card>
-          <div className="flex justify-center">
-            <Button
-              variant="outline"
-              onClick={() => setCurrentPage((p) => p + 1)}
-              disabled={isFetching}
-            >
-              {isFetching ? 'Loading...' : 'Load more'}
-            </Button>
-          </div>
-        </Card>
-      )}
     </div>
   );
 }
