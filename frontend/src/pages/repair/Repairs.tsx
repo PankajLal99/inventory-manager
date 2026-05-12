@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
 import { posApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
@@ -177,6 +177,7 @@ function parseAmount(value: unknown): number {
 export default function Repairs() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [listSearch, setListSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const listSearchDebounceRef = useRef<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -223,6 +224,7 @@ export default function Repairs() {
   }, []);
 
   const handleListSearchChange = (value: string) => {
+    setListSearch(value);
     if (listSearchDebounceRef.current) {
       window.clearTimeout(listSearchDebounceRef.current);
     }
@@ -277,6 +279,7 @@ export default function Repairs() {
       return response.data;
     },
     enabled: repairQueriesEnabled,
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -290,6 +293,7 @@ export default function Repairs() {
       return response.data;
     },
     enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'received'),
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -304,6 +308,7 @@ export default function Repairs() {
       return response.data;
     },
     enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'delivered'),
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -317,6 +322,7 @@ export default function Repairs() {
       return response.data;
     },
     enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'work_in_progress'),
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -331,6 +337,7 @@ export default function Repairs() {
       return response.data;
     },
     enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'not_repaired'),
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -749,6 +756,7 @@ export default function Repairs() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
                   type="text"
+                  value={listSearch}
                   placeholder="Invoice #, customer, contact, model, barcode, short code..."
                   onChange={(e) => handleListSearchChange(e.target.value)}
                   className="pl-10"
