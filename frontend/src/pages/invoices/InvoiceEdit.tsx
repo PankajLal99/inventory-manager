@@ -488,27 +488,8 @@ export default function InvoiceEdit() {
     }
   };
 
-  if (!cartId) {
-    return (
-      <div className="max-w-2xl mx-auto p-6">
-        <ErrorState message="Edit session missing. Start edit from the invoice detail page." onRetry={() => navigate(`/invoices/${invoiceId}`)} />
-      </div>
-    );
-  }
-
-  if (cartLoading || !cart) {
-    return <LoadingState message="Loading edit cart..." />;
-  }
-
-  if (cartError) {
-    return (
-      <div className="max-w-2xl mx-auto p-6">
-        <ErrorState message="Failed to load edit cart" onRetry={() => navigate(`/invoices/${invoiceId}`)} />
-      </div>
-    );
-  }
-
   // Match POS/checkout: inclusive GST is in unit price; only exclusive tax is added on top.
+  // Must run before any early return (Rules of Hooks — React error #310).
   const editGrossSubtotal = useMemo(() => {
     return items.reduce((sum: number, item: any) => {
       const qty = parseFloat(itemQuantities[item.id] ?? item.quantity) || 0;
@@ -529,6 +510,26 @@ export default function InvoiceEdit() {
   }, [items, itemQuantities]);
 
   const total = editGrossSubtotal + exclusiveTaxTotal;
+
+  if (!cartId) {
+    return (
+      <div className="max-w-2xl mx-auto p-6">
+        <ErrorState message="Edit session missing. Start edit from the invoice detail page." onRetry={() => navigate(`/invoices/${invoiceId}`)} />
+      </div>
+    );
+  }
+
+  if (cartLoading || !cart) {
+    return <LoadingState message="Loading edit cart..." />;
+  }
+
+  if (cartError) {
+    return (
+      <div className="max-w-2xl mx-auto p-6">
+        <ErrorState message="Failed to load edit cart" onRetry={() => navigate(`/invoices/${invoiceId}`)} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto p-4 sm:p-6">
