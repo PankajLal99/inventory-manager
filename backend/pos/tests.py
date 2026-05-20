@@ -913,6 +913,67 @@ class InvoiceEditTests(APITestCase):
         invoice.refresh_from_db()
         self.assertEqual(invoice.total, Decimal('300.00'))  # 2 * 150
         self.assertEqual(invoice.items.count(), 2)
+
+    def test_invoice_edit_preserves_inclusive_gst_total(self):
+        """Apply-from-cart must not double-count GST on inclusive (tax-in-price) lines."""
+        supplier = TestDataFactory.create_supplier()
+        purchase = TestDataFactory.create_purchase(
+            user=self.user,
+            supplier=supplier,
+            store=self.store,
+            status='finalized',
+        )
+        purchase_item = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product1,
+            quantity=Decimal('1.00'),
+            unit_price=Decimal('100.00'),
+        )
+        purchase_item.gst_percent = Decimal('18.00')
+        purchase_item.gst_inclusive = True
+        purchase_item.save(update_fields=['gst_percent', 'gst_inclusive'])
+        gst_barcode = self.barcodes1[0]
+        gst_barcode.purchase_item = purchase_item
+        gst_barcode.save(update_fields=['purchase_item'])
+
+        cart = Cart.objects.create(
+            retailer=self.retailer,
+            cart_number=f'GST-EDIT-CART-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            created_by=self.user,
+            invoice_type='cash',
+        )
+        CartItem.objects.create(
+            cart=cart,
+            product=self.product1,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            manual_unit_price=Decimal('118.00'),
+            tax_amount=Decimal('18.00'),
+            scanned_barcodes=[gst_barcode.barcode],
+        )
+
+        checkout_url = reverse('cart-checkout', args=[cart.id])
+        response = self.client.post(checkout_url, {'invoice_type': 'cash'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        invoice_id = response.data['id']
+        invoice = Invoice.objects.get(id=invoice_id)
+        self.assertEqual(invoice.total, Decimal('118.00'))
+
+        edit_url = reverse('invoice-edit', args=[invoice_id])
+        response = self.client.post(edit_url, format='json')
+        edit_cart_id = response.data['cart_id']
+
+        update_url = reverse('invoice-update', args=[invoice_id])
+        response = self.client.post(update_url, {'cart_id': edit_cart_id}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.total, Decimal('118.00'))
+        item = invoice.items.get()
+        self.assertEqual(item.line_total, Decimal('118.00'))
+        self.assertEqual(item.tax_amount, Decimal('18.00'))
     
     def test_invoice_edit_barcode_status_consistency(self):
         """Test that barcode statuses are correctly managed during edits"""

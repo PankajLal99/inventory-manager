@@ -3553,8 +3553,11 @@ def cart_item_update(request, pk, item_id):
             except (ValueError, TypeError):
                 pass  # Invalid format, let it through (serializer will handle)
         
-        serializer.save()
-        return Response(serializer.data)
+        cart_item = serializer.save()
+        if 'manual_unit_price' in request.data or 'unit_price' in request.data:
+            recompute_cart_item_tax(cart_item)
+            cart_item.refresh_from_db()
+        return Response(CartItemSerializer(cart_item).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -5899,17 +5902,25 @@ def invoice_update(request, pk):
         for cart_item in cart.items.select_related('product', 'variant').all():
             if cart_item.quantity <= Decimal('0.000'):
                 continue
-            effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0.00')
-            per_unit_discount = cart_item.discount_amount / cart_item.quantity if cart_item.quantity > 0 else Decimal('0.00')
-            per_unit_tax = cart_item.tax_amount / cart_item.quantity if cart_item.quantity > 0 else Decimal('0.00')
-            unit_line_total = effective_price - per_unit_discount + per_unit_tax
+            recompute_cart_item_tax(cart_item)
+            cart_item.refresh_from_db()
+            per_unit_discount = (
+                cart_item.discount_amount / cart_item.quantity
+                if cart_item.quantity > 0
+                else Decimal('0.00')
+            )
+            per_unit_tax = (
+                cart_item.tax_amount / cart_item.quantity
+                if cart_item.quantity > 0
+                else Decimal('0.00')
+            )
             # Custom products ("Other - ...") and non-tracked products: no barcode required
             is_custom_or_non_tracked = (
                 not cart_item.product.track_inventory
                 or (cart_item.product.name and cart_item.product.name.startswith('Other -'))
             )
             if is_custom_or_non_tracked:
-                line_total = unit_line_total * cart_item.quantity
+                line_total, sub_part, disc_part, tax_part = _invoice_amounts_for_cart_item(cart_item)
                 InvoiceItem.objects.create(
                     invoice=invoice,
                     product=cart_item.product,
@@ -5932,10 +5943,9 @@ def invoice_update(request, pk):
                     'quantity': str(cart_item.quantity),
                     'unit_price': str(cart_item.manual_unit_price or cart_item.unit_price or '0'),
                 })
-                # subtotal = pre-tax, net-of-discount base (up * qty - discount)
-                subtotal += (effective_price - per_unit_discount) * cart_item.quantity
-                discount_total += cart_item.discount_amount
-                tax_total += cart_item.tax_amount
+                subtotal += sub_part
+                discount_total += disc_part
+                tax_total += tax_part
                 continue
             scanned = list(cart_item.scanned_barcodes) if cart_item.scanned_barcodes else []
             barcodes_to_assign = list(
@@ -5957,7 +5967,12 @@ def invoice_update(request, pk):
             elif len(barcodes_to_assign) > quantity_needed:
                  barcodes_to_assign = barcodes_to_assign[:quantity_needed]
             for barcode_obj in barcodes_to_assign:
-                line_total = unit_line_total
+                line_total, sub_part, disc_part, tax_part = _invoice_amounts_for_cart_item(
+                    cart_item,
+                    quantity=Decimal('1.000'),
+                    per_unit_discount=per_unit_discount,
+                    per_unit_tax=per_unit_tax,
+                )
                 inv_item = InvoiceItem.objects.create(
                     invoice=invoice,
                     product=cart_item.product,
@@ -5982,10 +5997,9 @@ def invoice_update(request, pk):
                 else:
                     barcode_obj.tag = 'sold'
                 barcode_obj.save(update_fields=['tag'])
-                # subtotal = pre-tax, net-of-discount base (up - discount per unit)
-                subtotal += (effective_price - per_unit_discount)
-                discount_total += inv_item.discount_amount
-                tax_total += inv_item.tax_amount
+                subtotal += sub_part
+                discount_total += disc_part
+                tax_total += tax_part
             # One audit entry per product line (tracked: multiple barcode rows = one line)
             new_items_for_audit.append({
                 'product_id': cart_item.product_id,
@@ -6760,6 +6774,134 @@ def invoice_item_restore_barcode(request, pk, item_id):
         'message': 'Barcode linked to invoice line',
         'invoice_item': InvoiceItemSerializer(item).data,
     })
+
+
+def _resolve_cart_item_barcode(cart_item):
+    """First scanned barcode on a cart line, or representative barcode for non-tracked products."""
+    if cart_item.scanned_barcodes:
+        b_upper = str(cart_item.scanned_barcodes[0] or '').strip().upper()
+        if not b_upper:
+            return None
+        retailer_id = getattr(getattr(cart_item, 'cart', None), 'retailer_id', None)
+        barcode_qs = Barcode.objects.all()
+        if retailer_id:
+            barcode_qs = barcode_qs.filter(retailer_id=retailer_id)
+        try:
+            return barcode_qs.get(barcode=b_upper)
+        except Barcode.DoesNotExist:
+            try:
+                return barcode_qs.get(short_code=b_upper)
+            except Barcode.DoesNotExist:
+                return None
+    if cart_item.product and not cart_item.product.track_inventory:
+        return single_barcode_for_untracked_product(cart_item.product)
+    return None
+
+
+def _is_cart_item_inclusive(cart_item):
+    """Whether GST is included in manual_unit_price (matches cart checkout)."""
+    try:
+        barcode_obj = _resolve_cart_item_barcode(cart_item)
+        if barcode_obj and barcode_obj.purchase_item is not None:
+            return bool(barcode_obj.purchase_item.gst_inclusive)
+    except Exception:
+        pass
+    return bool(
+        cart_item.unit_price
+        and cart_item.manual_unit_price
+        and cart_item.tax_amount
+        and cart_item.tax_amount > Decimal('0')
+        and cart_item.unit_price < cart_item.manual_unit_price
+    )
+
+
+def _cart_item_tax_rate(cart_item):
+    """GST rate percent for a cart line (0 if none)."""
+    try:
+        barcode_obj = _resolve_cart_item_barcode(cart_item)
+        if barcode_obj and barcode_obj.purchase_item and barcode_obj.purchase_item.gst_percent is not None:
+            return Decimal(str(barcode_obj.purchase_item.gst_percent))
+    except Exception:
+        pass
+    try:
+        if cart_item.product and cart_item.product.tax_rate and cart_item.product.tax_rate.rate is not None:
+            return Decimal(str(cart_item.product.tax_rate.rate))
+    except Exception:
+        pass
+    return Decimal('0')
+
+
+def recompute_cart_item_tax(cart_item):
+    """
+    Recompute tax_amount (and ex-tax unit_price for inclusive items) from the current selling price.
+    Keeps cart/invoice rupee fields aligned when unit prices change during edit.
+    """
+    tax_rate = _cart_item_tax_rate(cart_item)
+    if tax_rate <= 0:
+        if (cart_item.tax_amount or Decimal('0')) != Decimal('0'):
+            cart_item.tax_amount = Decimal('0.00')
+            cart_item.save(update_fields=['tax_amount'])
+        return cart_item
+
+    effective_price = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0')
+    if effective_price <= 0:
+        return cart_item
+
+    is_inclusive = _is_cart_item_inclusive(cart_item)
+    qty = Decimal(str(cart_item.quantity or 1))
+    discount = Decimal(str(cart_item.discount_amount or 0))
+
+    if is_inclusive:
+        gross_total = effective_price * qty - discount
+        base_total = (gross_total * Decimal('100') / (Decimal('100') + tax_rate)).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+        computed_tax = (gross_total - base_total).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        base_unit = (base_total / qty).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) if qty > 0 else Decimal('0')
+        cart_item.unit_price = base_unit
+        cart_item.manual_unit_price = effective_price
+        cart_item.tax_amount = computed_tax
+        cart_item.save(update_fields=['tax_amount', 'unit_price', 'manual_unit_price'])
+    else:
+        taxable_base = effective_price * qty - discount
+        computed_tax = (taxable_base * tax_rate / Decimal('100')).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+        cart_item.tax_amount = computed_tax
+        cart_item.save(update_fields=['tax_amount'])
+
+    return cart_item
+
+
+def _invoice_amounts_for_cart_item(cart_item, *, quantity=None, per_unit_discount=None, per_unit_tax=None):
+    """
+    Line totals for applying an edit cart to an invoice (same rules as cart checkout).
+    Returns (line_total, subtotal_part, discount_part, tax_part).
+    """
+    is_incl = _is_cart_item_inclusive(cart_item)
+    display_up = cart_item.manual_unit_price or cart_item.unit_price or Decimal('0.00')
+    qty = quantity if quantity is not None else cart_item.quantity
+    qty = Decimal(str(qty))
+    if qty <= 0:
+        return Decimal('0.00'), Decimal('0.00'), Decimal('0.00'), Decimal('0.00')
+
+    if per_unit_discount is not None:
+        line_discount = per_unit_discount * qty
+    else:
+        line_discount = cart_item.discount_amount
+
+    if per_unit_tax is not None:
+        line_tax = per_unit_tax * qty
+    else:
+        line_tax = cart_item.tax_amount
+
+    if is_incl:
+        line_total = display_up * qty - line_discount
+    else:
+        line_total = display_up * qty - line_discount + line_tax
+
+    subtotal_part = line_total - line_tax
+    return line_total, subtotal_part, line_discount, line_tax
 
 
 def update_invoice_totals(invoice):

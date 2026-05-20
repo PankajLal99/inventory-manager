@@ -508,11 +508,27 @@ export default function InvoiceEdit() {
     );
   }
 
-  const total = items.reduce((sum: number, item: any) => {
-    const qty = parseFloat(itemQuantities[item.id] ?? item.quantity) || 0;
-    const price = parseFloat(itemPrices[item.id] ?? item.manual_unit_price ?? item.unit_price ?? 0) || 0;
-    return sum + qty * price;
-  }, 0);
+  // Match POS/checkout: inclusive GST is in unit price; only exclusive tax is added on top.
+  const editGrossSubtotal = useMemo(() => {
+    return items.reduce((sum: number, item: any) => {
+      const qty = parseFloat(itemQuantities[item.id] ?? item.quantity) || 0;
+      const price = parseFloat(itemPrices[item.id] ?? item.manual_unit_price ?? item.unit_price ?? 0) || 0;
+      const discount = parseFloat(item.discount_amount || 0) || 0;
+      return sum + (qty * price - discount);
+    }, 0);
+  }, [items, itemQuantities, itemPrices]);
+
+  const exclusiveTaxTotal = useMemo(() => {
+    return items.reduce((sum: number, item: any) => {
+      if (item.tax_is_inclusive === true) return sum;
+      const qty = parseFloat(itemQuantities[item.id] ?? item.quantity) || 0;
+      const baseQty = parseFloat(item.quantity) || 1;
+      const tax = parseFloat(item.tax_amount || 0) || 0;
+      return sum + tax * (qty / baseQty);
+    }, 0);
+  }, [items, itemQuantities]);
+
+  const total = editGrossSubtotal + exclusiveTaxTotal;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto p-4 sm:p-6">
