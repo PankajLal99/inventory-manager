@@ -28,6 +28,41 @@ import {
   BarChart2,
 } from 'lucide-react';
 import { formatNumber, toLocalDateString } from '../../lib/utils';
+
+/** Invoice list items expose line_total + tax_bifurcation (not tax_percent / tax_is_inclusive). */
+function salesExportLineTotal(item: {
+  line_total?: string | number | null;
+  quantity?: string | number | null;
+  manual_unit_price?: string | number | null;
+  unit_price?: string | number | null;
+  discount_amount?: string | number | null;
+  tax_amount?: string | number | null;
+  tax_bifurcation?: { is_inclusive?: boolean } | null;
+}): number {
+  if (item.line_total != null && item.line_total !== '') {
+    const n = parseFloat(String(item.line_total));
+    if (!Number.isNaN(n)) return n;
+  }
+  const qty = parseFloat(String(item.quantity ?? 1)) || 1;
+  const unit = parseFloat(String(item.manual_unit_price ?? item.unit_price ?? 0)) || 0;
+  const discount = parseFloat(String(item.discount_amount ?? 0)) || 0;
+  const tax = parseFloat(String(item.tax_amount ?? 0)) || 0;
+  const gross = qty * unit - discount;
+  return item.tax_bifurcation?.is_inclusive === true ? gross : gross + tax;
+}
+
+function salesExportTaxPercent(item: {
+  tax_bifurcation?: { rate?: number } | null;
+}): number {
+  const rate = item.tax_bifurcation?.rate;
+  return rate != null && !Number.isNaN(Number(rate)) ? Number(rate) : 0;
+}
+
+function salesExportTaxInclusiveLabel(item: {
+  tax_bifurcation?: { is_inclusive?: boolean } | null;
+}): string {
+  return item.tax_bifurcation?.is_inclusive === true ? 'Inclusive' : 'Exclusive';
+}
 import RevenueChart from './RevenueChart';
 import StoreComparisonPanel from './StoreComparisonPanel';
 import CategoryBrandChart from './CategoryBrandChart';
@@ -599,10 +634,10 @@ export default function Reports() {
               invoiceNo,
               customerName,
               item.product_name ?? '',
-              item.tax_percent ?? 0,
-              item.tax_is_inclusive ? 'Inclusive' : 'Exclusive',
+              salesExportTaxPercent(item),
+              salesExportTaxInclusiveLabel(item),
               parseFloat(item.tax_amount || 0),
-              invTotal,
+              salesExportLineTotal(item),
               cashTotal,
               upiTotal,
               cardTotal,
