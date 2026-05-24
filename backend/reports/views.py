@@ -509,6 +509,7 @@ def stock_ordering_report(request):
         if cart_item.scanned_barcodes:
             active_carts_barcodes.update(cart_item.scanned_barcodes)
     
+    in_stock = []
     out_of_stock = []
     low_stock = []
     products_needing_order = []
@@ -576,24 +577,37 @@ def stock_ordering_report(request):
             'product__id': product.id,
             'product__name': product.name,
             'product__sku': product.sku or 'N/A',
+            'product__category__name': product.category.name if product.category_id else None,
+            'product__brand__name': product.brand.name if product.brand_id else None,
             'product__low_stock_threshold': low_stock_threshold,
             'product__cost_price': float(cost_price),
             'store__name': store_name or 'N/A',
-            'available_quantity': available_count
+            'available_quantity': available_count,
         }
         
-        # Categorize products
+        # Categorize products (purchased = has barcodes; in_stock before out_of_stock in exports)
         if available_count == 0:
             out_of_stock.append(product_data)
             products_needing_order.append(product_data)
-        elif low_stock_threshold > 0 and available_count > 0 and available_count <= low_stock_threshold:
-            low_stock.append(product_data)
-            products_needing_order.append(product_data)
+        else:
+            in_stock.append(product_data)
+            if low_stock_threshold > 0 and available_count <= low_stock_threshold:
+                low_stock.append(product_data)
+                products_needing_order.append(product_data)
+
+    in_stock.sort(
+        key=lambda x: (-int(x['available_quantity'] or 0), (x['product__name'] or '').lower())
+    )
+    out_of_stock.sort(key=lambda x: (x['product__name'] or '').lower())
+    low_stock.sort(
+        key=lambda x: (int(x['available_quantity'] or 0), (x['product__name'] or '').lower())
+    )
     
     return Response({
+        'in_stock': in_stock,
         'out_of_stock': out_of_stock,
         'low_stock': low_stock,
-        'products_needing_order': products_needing_order
+        'products_needing_order': products_needing_order,
     })
 
 

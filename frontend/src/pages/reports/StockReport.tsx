@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { reportsApi, catalogApi } from '../../lib/api';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -15,9 +15,65 @@ import {
 } from 'lucide-react';
 import { formatNumber, toLocalDateString } from '../../lib/utils';
 import { isPosAdminContext } from '../../lib/access';
-import { auth } from '../../lib/auth';
+import { auth, type User } from '../../lib/auth';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Primary shop for exports: admin picker, else user's default_store / store. */
+function resolvePrimaryStore(
+  stores: any[],
+  user: User | null,
+  selectedStoreId: number | null,
+  isAdmin: boolean,
+): any | null {
+  if (!stores.length) return null;
+  if (isAdmin && selectedStoreId) {
+    return stores.find((s: any) => s.id === selectedStoreId) ?? null;
+  }
+  const preferredId = user?.default_store?.id ?? user?.store?.id;
+  if (preferredId) {
+    return stores.find((s: any) => s.id === preferredId) ?? null;
+  }
+  return stores.find((s: any) => s.is_active) ?? stores[0] ?? null;
+}
+
+type StockExportRow = (string | number)[];
+
+function buildPurchasedStockExportRows(data: {
+  in_stock?: any[];
+  out_of_stock?: any[];
+}): { headers: StockExportRow; rows: StockExportRow[] } {
+  const headers: StockExportRow = [
+    '#', 'Status', 'Product', 'SKU', 'Category', 'Brand', 'Store',
+    'Qty Available', 'Threshold', 'Cost (Rs.)',
+  ];
+  const rows: StockExportRow[] = [];
+  let n = 0;
+  const push = (p: any, status: string) => {
+    n += 1;
+    rows.push([
+      n,
+      status,
+      p.product__name || '',
+      p.product__sku || 'N/A',
+      p.product__category__name || '—',
+      p.product__brand__name || '—',
+      p.store__name || '—',
+      Math.round(p.available_quantity || 0),
+      p.product__low_stock_threshold || 0,
+      Number(p.product__cost_price || 0),
+    ]);
+  };
+  for (const p of data.in_stock || []) {
+    const qty = Number(p.available_quantity || 0);
+    const th = Number(p.product__low_stock_threshold || 0);
+    push(p, th > 0 && qty <= th ? 'Low Stock' : 'In Stock');
+  }
+  for (const p of data.out_of_stock || []) {
+    push(p, 'Out of Stock');
+  }
+  return { headers, rows };
+}
 
 function addDays(dateStr: string, n: number): string {
   const d = new Date(dateStr);
@@ -104,11 +160,15 @@ export default function StockReport() {
     return [];
   })();
 
-  const currentStore = stores.find((s: any) => s.id === selectedStoreId)
-    || stores.find((s: any) => s.is_active)
-    || stores[0];
+  const primaryStore = resolvePrimaryStore(stores, user, selectedStoreId, isAdmin);
+  const storeId = primaryStore?.id;
 
-  const storeId = currentStore?.id;
+  useEffect(() => {
+    if (isAdmin && !selectedStoreId && stores.length > 0) {
+      const first = stores.find((s: any) => s.is_active) || stores[0];
+      if (first) setSelectedStoreId(first.id);
+    }
+  }, [isAdmin, selectedStoreId, stores]);
 
   // ── Quick date filter handler ──
   const setDateFilter = useCallback((filter: string) => {
@@ -175,7 +235,7 @@ export default function StockReport() {
   const { data: stockOrderingData, isLoading: stockOrderingLoading } = useQuery({
     queryKey: ['stock-ordering', storeId],
     queryFn: async () => (await reportsApi.stockOrdering({ store: storeId || undefined })).data,
-    enabled: !!storeId && (activeTab === 'out_of_stock' || activeTab === 'low_stock'),
+    enabled: !!storeId,
     retry: false,
   });
 
@@ -237,84 +297,59 @@ export default function StockReport() {
 
   // ── Excel Export ──
   const handleExportExcel = useCallback(async () => {
+    if (!storeId) return;
     setExcelExporting(true);
     try {
-      // Sheet 1: Sold Products
-      const soldHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Invoices'];
-      const soldRows = fastSelling.map((p: any) => [
-        p.product__name || '',
-        p.product__sku || 'N/A',
-        p.product__category__name || '—',
-        p.product__brand__name || '—',
-        Math.round(p.total_quantity || 0),
-        Number(p.total_revenue || 0),
-        p.order_count || 0,
-      ]);
-
-      // Sheet 2: Slow Moving
-      const slowHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Invoices'];
-      const slowRows = slowMoving.map((p: any) => [
-        p.product__name || '',
-        p.product__sku || 'N/A',
-        p.product__category__name || '—',
-        p.product__brand__name || '—',
-        Math.round(p.total_quantity || 0),
-        Number(p.total_revenue || 0),
-        p.order_count || 0,
-      ]);
-
-      // Sheet 3: Out of Stock
-      const oosHeaders = ['Product', 'SKU', 'Store', 'Qty Available'];
-      const oosRows = outOfStock.map((p: any) => [
-        p.product__name || '',
-        p.product__sku || 'N/A',
-        p.store__name || '—',
-        Math.round(p.available_quantity || 0),
-      ]);
-
-      // Sheet 4: Low Stock
-      const lowHeaders = ['Product', 'SKU', 'Store', 'Qty Available', 'Threshold'];
-      const lowRows = lowStock.map((p: any) => [
-        p.product__name || '',
-        p.product__sku || 'N/A',
-        p.store__name || '—',
-        Math.round(p.available_quantity || 0),
-        p.product__low_stock_threshold || 0,
-      ]);
+      const orderingRes = await reportsApi.stockOrdering({ store: storeId });
+      const ordering = orderingRes.data || {};
+      const { headers: invHeaders, rows: invRows } = buildPurchasedStockExportRows(ordering);
 
       const wb = XLSX.utils.book_new();
+      const wsInv = XLSX.utils.aoa_to_sheet([invHeaders, ...invRows]);
+      wsInv['!cols'] = [
+        { wch: 5 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 16 }, { wch: 16 },
+        { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 },
+      ];
+      XLSX.utils.book_append_sheet(wb, wsInv, 'Stock Inventory');
 
-      const ws1 = XLSX.utils.aoa_to_sheet([soldHeaders, ...soldRows]);
-      ws1['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 }];
-      XLSX.utils.book_append_sheet(wb, ws1, 'Fast Selling Products');
+      const soldHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Invoices', 'Remaining Stock'];
+      const soldRows = soldProducts.map((p: any) => [
+        p.product__name || '',
+        p.product__sku || 'N/A',
+        p.product__category__name || '—',
+        p.product__brand__name || '—',
+        Math.round(p.total_quantity || 0),
+        Number(p.total_revenue || 0),
+        p.order_count || 0,
+        p.available_quantity != null ? Math.round(p.available_quantity) : '—',
+      ]);
+      if (soldRows.length > 0) {
+        const wsSold = XLSX.utils.aoa_to_sheet([soldHeaders, ...soldRows]);
+        wsSold['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 }, { wch: 14 }];
+        XLSX.utils.book_append_sheet(wb, wsSold, `Sold ${dateFrom} to ${dateTo}`);
+      }
 
-      const ws2 = XLSX.utils.aoa_to_sheet([slowHeaders, ...slowRows]);
-      ws2['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 }];
-      XLSX.utils.book_append_sheet(wb, ws2, 'Slow Moving Products');
-
-      const ws3 = XLSX.utils.aoa_to_sheet([oosHeaders, ...oosRows]);
-      ws3['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 20 }, { wch: 14 }];
-      XLSX.utils.book_append_sheet(wb, ws3, 'Out of Stock');
-
-      const ws4 = XLSX.utils.aoa_to_sheet([lowHeaders, ...lowRows]);
-      ws4['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 20 }, { wch: 14 }, { wch: 12 }];
-      XLSX.utils.book_append_sheet(wb, ws4, 'Low Stock');
-
-      XLSX.writeFile(wb, `stock-report-${dateFrom}-to-${dateTo}.xlsx`);
+      const storeSlug = (primaryStore?.name || 'store').replace(/\s+/g, '-').slice(0, 24);
+      XLSX.writeFile(wb, `stock-report-${storeSlug}-${dateFrom}-to-${dateTo}.xlsx`);
     } finally {
       setExcelExporting(false);
     }
-  }, [fastSelling, slowMoving, outOfStock, lowStock, dateFrom, dateTo]);
+  }, [storeId, primaryStore?.name, soldProducts, dateFrom, dateTo]);
 
   // ── PDF Export ──
   const handleExportPdf = useCallback(async () => {
+    if (!storeId) return;
     setPdfExporting(true);
     try {
+      const orderingRes = await reportsApi.stockOrdering({ store: storeId });
+      const { rows: invRows } = buildPurchasedStockExportRows(orderingRes.data || {});
+      const inCount = (orderingRes.data?.in_stock || []).length;
+      const oosCount = (orderingRes.data?.out_of_stock || []).length;
+
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const pageW = doc.internal.pageSize.getWidth();
       let y = 14;
 
-      // ── Title block ──
       doc.setFillColor(59, 130, 246);
       doc.rect(0, 0, pageW, 28, 'F');
       doc.setTextColor(255, 255, 255);
@@ -324,20 +359,18 @@ export default function StockReport() {
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
       doc.text(
-        `${currentStore?.name || 'All Stores'}  |  ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}`,
+        `${primaryStore?.name || 'Store'}  |  Purchased inventory  |  Sales: ${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`,
         pageW / 2, 22, { align: 'center' }
       );
       doc.setTextColor(0, 0, 0);
       y = 36;
 
-      // ── KPI Cards ──
       const kpis = [
-        { label: 'Total Revenue', value: `Rs.${formatNumber(curr.total_sales || 0)}`, color: [16, 185, 129] as [number,number,number] },
-        { label: 'Total Invoices', value: String(curr.total_invoices || 0), color: [59, 130, 246] as [number,number,number] },
-        { label: 'Items Sold', value: String(Math.round(curr.items_sold || 0)), color: [139, 92, 246] as [number,number,number] },
-        { label: 'Avg Order Value', value: `Rs.${formatNumber(curr.avg_order_value || 0)}`, color: [245, 158, 11] as [number,number,number] },
+        { label: 'In Stock', value: String(inCount), color: [16, 185, 129] as [number, number, number] },
+        { label: 'Out of Stock', value: String(oosCount), color: [239, 68, 68] as [number, number, number] },
+        { label: 'Items Sold', value: String(Math.round(curr.items_sold || 0)), color: [139, 92, 246] as [number, number, number] },
+        { label: 'Revenue', value: `Rs.${formatNumber(curr.total_sales || 0)}`, color: [245, 158, 11] as [number, number, number] },
       ];
-
       const cardW = (pageW - 28) / 4;
       const cardH = 20;
       kpis.forEach((kpi, i) => {
@@ -355,144 +388,63 @@ export default function StockReport() {
       doc.setTextColor(0, 0, 0);
       y += cardH + 10;
 
-      // ── All Products Sold ──
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Purchased products — in stock first, out of stock last', 14, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [['#', 'Status', 'Product', 'SKU', 'Category', 'Qty', 'Store']],
+        body: invRows.map((r) => [
+          r[0],
+          r[1],
+          r[2],
+          r[3],
+          r[4],
+          r[7],
+          r[6],
+        ]),
+        styles: { fontSize: 7 },
+        headStyles: { fillColor: [99, 102, 241] },
+        didParseCell: (data) => {
+          if (data.section !== 'body' || data.column.index !== 1) return;
+          const status = String(data.cell.raw || '');
+          if (status === 'Out of Stock') {
+            data.cell.styles.textColor = [220, 38, 38];
+          } else if (status === 'Low Stock') {
+            data.cell.styles.textColor = [234, 88, 12];
+          }
+        },
+      });
+      y = (doc as any).lastAutoTable.finalY + 8;
+
       if (soldProducts.length > 0) {
+        if (y > 230) { doc.addPage(); y = 14; }
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text('All Products Sold', 14, y);
+        doc.text(`Products sold (${fmtDate(dateFrom)} – ${fmtDate(dateTo)})`, 14, y);
         y += 4;
         autoTable(doc, {
           startY: y,
-          head: [['Product', 'SKU', 'Qty Sold', 'Revenue', 'Invoices', 'Remaining Stock']],
+          head: [['Product', 'SKU', 'Qty Sold', 'Revenue', 'Remaining Stock']],
           body: soldProducts.map((p: any) => [
             p.product__name || '',
             p.product__sku || 'N/A',
             Math.round(p.total_quantity || 0),
             `Rs.${formatNumber(p.total_revenue || 0)}`,
-            p.order_count || 0,
             p.available_quantity != null ? Math.round(p.available_quantity) : '—',
           ]),
           styles: { fontSize: 8 },
-          headStyles: { fillColor: [99, 102, 241] },
-        });
-        y = (doc as any).lastAutoTable.finalY + 8;
-      }
-
-      // ── Fast Selling Products ──
-      if (fastSelling.length > 0) {
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Fast Selling Products', 14, y);
-        y += 4;
-        autoTable(doc, {
-          startY: y,
-          head: [['Product', 'Category', 'Brand', 'Qty Sold', 'Revenue']],
-          body: fastSelling.slice(0, 15).map((p: any) => [
-            p.product__name || '',
-            p.product__category__name || '—',
-            p.product__brand__name || '—',
-            Math.round(p.total_quantity || 0),
-            `Rs.${formatNumber(p.total_revenue || 0)}`,
-          ]),
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [99, 102, 241] },
-        });
-        y = (doc as any).lastAutoTable.finalY + 8;
-      }
-
-      // ── Slow Moving Products ──
-      if (slowMoving.length > 0) {
-        if (y > 230) { doc.addPage(); y = 14; }
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Slow Moving Products', 14, y);
-        y += 4;
-        autoTable(doc, {
-          startY: y,
-          head: [['Product', 'Category', 'Brand', 'Qty Sold', 'Revenue']],
-          body: slowMoving.slice(0, 15).map((p: any) => [
-            p.product__name || '',
-            p.product__category__name || '—',
-            p.product__brand__name || '—',
-            Math.round(p.total_quantity || 0),
-            `Rs.${formatNumber(p.total_revenue || 0)}`,
-          ]),
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [249, 115, 22] },
-        });
-        y = (doc as any).lastAutoTable.finalY + 8;
-      }
-
-      // ── Out of Stock ──
-      if (outOfStock.length > 0) {
-        if (y > 230) { doc.addPage(); y = 14; }
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Out of Stock', 14, y);
-        y += 4;
-        autoTable(doc, {
-          startY: y,
-          head: [['Product', 'SKU', 'Store', 'Qty']],
-          body: outOfStock.slice(0, 20).map((p: any) => [
-            p.product__name || '',
-            p.product__sku || 'N/A',
-            p.store__name || '—',
-            Math.round(p.available_quantity || 0),
-          ]),
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [239, 68, 68] },
-        });
-        y = (doc as any).lastAutoTable.finalY + 8;
-      }
-
-      // ── Low Stock ──
-      if (lowStock.length > 0) {
-        if (y > 230) { doc.addPage(); y = 14; }
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Low Stock Items', 14, y);
-        y += 4;
-        autoTable(doc, {
-          startY: y,
-          head: [['Product', 'SKU', 'Store', 'Qty', 'Threshold']],
-          body: lowStock.slice(0, 20).map((p: any) => [
-            p.product__name || '',
-            p.product__sku || 'N/A',
-            p.store__name || '—',
-            Math.round(p.available_quantity || 0),
-            p.product__low_stock_threshold || 0,
-          ]),
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [245, 158, 11] },
+          headStyles: { fillColor: [59, 130, 246] },
         });
       }
 
-      // ── Top Categories ──
-      if (topCategories.length > 0) {
-        if (y > 230) { doc.addPage(); y = 14; }
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Top Categories', 14, y);
-        y += 4;
-        autoTable(doc, {
-          startY: y,
-          head: [['Category', 'Revenue', 'Qty', 'Invoices']],
-          body: topCategories.map((c: any) => [
-            c.product__category__name || 'Unknown',
-            `Rs.${formatNumber(c.total_revenue || 0)}`,
-            Math.round(c.total_quantity || 0),
-            c.order_count || 0,
-          ]),
-          styles: { fontSize: 8 },
-          headStyles: { fillColor: [16, 185, 129] },
-        });
-      }
-
-      doc.save(`stock-report-${dateFrom}-to-${dateTo}.pdf`);
+      const storeSlug = (primaryStore?.name || 'store').replace(/\s+/g, '-').slice(0, 24);
+      doc.save(`stock-report-${storeSlug}-${dateFrom}-to-${dateTo}.pdf`);
     } finally {
       setPdfExporting(false);
     }
-  }, [curr, soldProducts, fastSelling, slowMoving, outOfStock, lowStock, topCategories, dateFrom, dateTo, currentStore]);
+  }, [storeId, primaryStore?.name, curr, soldProducts, dateFrom, dateTo]);
 
   // ── Tab columns ──
   const renderTable = () => {
@@ -676,7 +628,7 @@ export default function StockReport() {
               <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm hover:border-indigo-400 transition-colors cursor-pointer">
                 <Store className="h-4 w-4 text-indigo-500" />
                 <span className="text-sm font-medium text-gray-800 truncate max-w-[140px]">
-                  {currentStore?.name || 'Select Store'}
+                  {primaryStore?.name || 'Select Store'}
                 </span>
                 <ChevronDown className="h-4 w-4 text-gray-400" />
               </div>
@@ -748,7 +700,9 @@ export default function StockReport() {
           </div>
         )}
         <p className="text-xs text-gray-400">
-          Showing: <strong>{fmtDate(dateFrom)}</strong> – <strong>{fmtDate(dateTo)}</strong>
+          Store: <strong>{primaryStore?.name || '—'}</strong>
+          {' · '}
+          Sales period: <strong>{fmtDate(dateFrom)}</strong> – <strong>{fmtDate(dateTo)}</strong>
         </p>
       </div>
 
