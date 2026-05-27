@@ -628,7 +628,9 @@ export default function Reports() {
             '', '',
           ]);
         } else {
-          for (const item of items) {
+          for (let idx = 0; idx < items.length; idx += 1) {
+            const item = items[idx];
+            const isFirstItemRow = idx === 0;
             group.rows.push([
               dateLabel,
               invoiceNo,
@@ -638,11 +640,13 @@ export default function Reports() {
               salesExportTaxInclusiveLabel(item),
               parseFloat(item.tax_amount || 0),
               salesExportLineTotal(item),
-              cashTotal,
-              upiTotal,
-              cardTotal,
-              pendingTotal,
-              grandTotal,
+              // Payment totals are invoice-level values: keep only on first line
+              // to avoid multiplying totals by number of line items.
+              isFirstItemRow ? cashTotal : '',
+              isFirstItemRow ? upiTotal : '',
+              isFirstItemRow ? cardTotal : '',
+              isFirstItemRow ? pendingTotal : '',
+              isFirstItemRow ? grandTotal : '',
               '',
               '',
             ]);
