@@ -570,7 +570,7 @@ export default function Reports() {
       const invoices: any[] = res.data?.results ?? res.data ?? [];
 
       // Numeric column indices (0-based, within the row array)
-      // 6=Tax, 7=Total, 8=Cash, 9=UPI, 10=Card, 11=Pending, 12=Grand
+      // 7=Tax, 8=Total, 9=Cash, 10=UPI, 11=Card, 12=Pending, 13=Grand
 
       type Row = (string | number)[];
 
@@ -579,17 +579,17 @@ export default function Reports() {
       type Acc = ReturnType<typeof zeroAcc>;
 
       const addToAcc = (acc: Acc, row: Row) => {
-        acc.tax    += Number(row[6])  || 0;
-        acc.total  += Number(row[7])  || 0;
-        acc.cash   += Number(row[8])  || 0;
-        acc.upi    += Number(row[9])  || 0;
-        acc.card   += Number(row[10]) || 0;
-        acc.pending+= Number(row[11]) || 0;
-        acc.grand  += Number(row[12]) || 0;
+        acc.tax    += Number(row[7])  || 0;
+        acc.total  += Number(row[8])  || 0;
+        acc.cash   += Number(row[9])  || 0;
+        acc.upi    += Number(row[10]) || 0;
+        acc.card   += Number(row[11]) || 0;
+        acc.pending+= Number(row[12]) || 0;
+        acc.grand  += Number(row[13]) || 0;
       };
 
       const subtotalRow = (label: string, acc: Acc): Row => [
-        label, '', '', '', '', '',
+        label, '', '', '', '', '', '',
         acc.tax, acc.total, acc.cash, acc.upi, acc.card, acc.pending, acc.grand,
         '', '',
       ];
@@ -623,23 +623,58 @@ export default function Reports() {
         if (items.length === 0) {
           group.rows.push([
             dateLabel, invoiceNo, customerName,
-            '', '', '', parseFloat(inv.tax_amount || 0), invTotal,
+            '', '', '', '', parseFloat(inv.tax_amount || 0), invTotal,
             cashTotal, upiTotal, cardTotal, pendingTotal, grandTotal,
             '', '',
           ]);
         } else {
-          for (let idx = 0; idx < items.length; idx += 1) {
-            const item = items[idx];
+          // Consolidate same product/tax rows inside each invoice so barcode-level
+          // lines (qty split as 1 each) don't create repeated rows in export.
+          const groupedItems = new Map<string, {
+            productName: string;
+            taxPercent: number;
+            taxMode: string;
+            qty: number;
+            taxTotal: number;
+            lineTotal: number;
+          }>();
+
+          for (const item of items) {
+            const productName = item.product_name ?? '';
+            const taxPercent = salesExportTaxPercent(item);
+            const taxMode = salesExportTaxInclusiveLabel(item);
+            const key = `${productName}__${taxPercent}__${taxMode}`;
+            const existing = groupedItems.get(key);
+            if (existing) {
+              existing.qty += parseFloat(item.quantity || 0) || 0;
+              existing.taxTotal += parseFloat(item.tax_amount || 0) || 0;
+              existing.lineTotal += salesExportLineTotal(item);
+            } else {
+              groupedItems.set(key, {
+                productName,
+                taxPercent,
+                taxMode,
+                qty: parseFloat(item.quantity || 0) || 0,
+                taxTotal: parseFloat(item.tax_amount || 0) || 0,
+                lineTotal: salesExportLineTotal(item),
+              });
+            }
+          }
+
+          const groupedRows = [...groupedItems.values()];
+          for (let idx = 0; idx < groupedRows.length; idx += 1) {
+            const row = groupedRows[idx];
             const isFirstItemRow = idx === 0;
             group.rows.push([
               dateLabel,
               invoiceNo,
               customerName,
-              item.product_name ?? '',
-              salesExportTaxPercent(item),
-              salesExportTaxInclusiveLabel(item),
-              parseFloat(item.tax_amount || 0),
-              salesExportLineTotal(item),
+              row.productName,
+              row.taxPercent,
+              row.taxMode,
+              row.qty,
+              row.taxTotal,
+              row.lineTotal,
               // Payment totals are invoice-level values: keep only on first line
               // to avoid multiplying totals by number of line items.
               isFirstItemRow ? cashTotal : '',
@@ -669,7 +704,7 @@ export default function Reports() {
           group.rows.forEach(r => addToAcc(dayAcc, r));
           allRows.push(subtotalRow(`Day Total – ${group.dateLabel}`, dayAcc));
           // blank separator
-          allRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+          allRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
         }
 
         group.rows.forEach(r => addToAcc(grandAcc, r));
@@ -685,6 +720,7 @@ export default function Reports() {
         'Product',
         'Tax %',
         'Inclusive or Exclusive',
+        'Qty',
         'Tax',
         'Total',
         'Cash Amount Total',
@@ -725,7 +761,7 @@ export default function Reports() {
       // Column widths
       ws['!cols'] = [
         { wch: 14 }, { wch: 16 }, { wch: 22 }, { wch: 30 },
-        { wch: 8 },  { wch: 18 }, { wch: 12 }, { wch: 14 },
+        { wch: 8 },  { wch: 18 }, { wch: 8 },  { wch: 12 }, { wch: 14 },
         { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 16 },
         { wch: 26 }, { wch: 24 }, { wch: 16 },
       ];
