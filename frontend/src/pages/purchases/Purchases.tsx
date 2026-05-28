@@ -1232,7 +1232,8 @@ export default function Purchases() {
           await handlePrintLabels(productId, purchaseId);
         } else {
           const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
-          toast(`Status: ${generated} of ${total} printable label(s) generated${excludedText}.`, 'info');
+          toast(`Status: ${generated} of ${total} generated. Generating missing labels and opening print...${excludedText}`, 'info');
+          await triggerGenerateAndWait(productId, purchaseId);
         }
       } else {
         await triggerGenerateAndWait(productId, purchaseId);
@@ -1552,6 +1553,47 @@ export default function Purchases() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queriesDependencyString]);
+
+  // Sync preloaded label_status from backend serialization into local React state
+  useEffect(() => {
+    if (!purchases || purchases.length === 0) return;
+    
+    const nextStatuses: Record<string, LabelStatusState> = {};
+    let hasChanges = false;
+    
+    purchases.forEach((purchase: any) => {
+      if (purchase.items && purchase.items.length > 0) {
+        purchase.items.forEach((item: any) => {
+          if (item.product && item.product_track_inventory && item.label_status) {
+            const labelKey = getLabelKey(item.product, purchase.id);
+            const val = item.label_status;
+            const current = labelStatuses[labelKey];
+            
+            // Only update if it represents a change and we are not currently generating or checking
+            if (
+              !current ||
+              (current.all_generated !== val.all_generated && !current.generating) ||
+              (current.excluded_non_printable_count !== val.excluded_non_printable_count)
+            ) {
+              nextStatuses[labelKey] = {
+                all_generated: val.all_generated || false,
+                generating: current?.generating || false,
+                excluded_non_printable_count: Number(val.excluded_non_printable_count || 0),
+              };
+              hasChanges = true;
+            }
+          }
+        });
+      }
+    });
+    
+    if (hasChanges) {
+      setLabelStatuses(prev => ({
+        ...prev,
+        ...nextStatuses,
+      }));
+    }
+  }, [purchases]);
 
   // Handle supplier selection in modal
   const handleSupplierSelect = (supplierId: string) => {
@@ -1949,26 +1991,17 @@ export default function Purchases() {
                                                       size="sm"
                                                       onClick={() => handleCheckLabelStatus(productId, purchase.id)}
                                                       disabled={isChecking || isGenerating}
-                                                      className="flex items-center gap-1.5 text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
-                                                      title="Check label status via API"
+                                                      className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
+                                                      title="Print barcodes"
                                                     >
                                                       {isChecking ? (
                                                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                                       ) : (
-                                                        <FileText className="h-3.5 w-3.5" />
+                                                        <Printer className="h-3.5 w-3.5" />
                                                       )}
-                                                      <span className="hidden sm:inline">{isChecking ? 'Checking...' : 'Check status'}</span>
-                                                    </Button>
-                                                    <Button
-                                                      variant="outline"
-                                                      size="sm"
-                                                      onClick={() => handlePrintLabels(productId, purchase.id)}
-                                                      disabled={isGenerating}
-                                                      className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                                      title="Get barcodes and open print dialog"
-                                                    >
-                                                      <Printer className="h-3.5 w-3.5" />
-                                                      <span className="hidden sm:inline">Get barcodes & Print</span>
+                                                      <span className="hidden sm:inline">
+                                                        {isChecking ? 'Checking...' : 'Print'}
+                                                      </span>
                                                     </Button>
                                                     {excludedCount > 0 && (
                                                       <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
@@ -2243,26 +2276,15 @@ export default function Purchases() {
                                             size="sm"
                                             onClick={() => handleCheckLabelStatus(productId, purchase.id)}
                                             disabled={isChecking || isGenerating}
-                                            className="flex items-center gap-1.5 w-full text-gray-700 bg-gray-50 border-gray-200 hover:bg-gray-100"
-                                            title="Check label status via API"
+                                            className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
+                                            title="Print barcodes"
                                           >
                                             {isChecking ? (
                                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                             ) : (
-                                              <FileText className="h-3.5 w-3.5" />
+                                              <Printer className="h-3.5 w-3.5" />
                                             )}
-                                            <span>{isChecking ? 'Checking...' : 'Check status'}</span>
-                                          </Button>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => handlePrintLabels(productId, purchase.id)}
-                                            disabled={isGenerating}
-                                            className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                            title="Get barcodes and open print dialog"
-                                          >
-                                            <Printer className="h-3.5 w-3.5" />
-                                            <span>Get barcodes & Print</span>
+                                            <span>{isChecking ? 'Checking...' : 'Print'}</span>
                                           </Button>
                                           {excludedCount > 0 && (
                                             <div className="text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 text-center">

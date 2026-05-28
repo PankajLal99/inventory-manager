@@ -46,7 +46,12 @@ def purchase_list_create(request):
         paginator = Paginator(queryset, limit)
         page_obj = paginator.get_page(page)
         
-        serializer = PurchaseSerializer(page_obj, many=True)
+        # BULK GET LABEL STATUSES
+        from .serializers import bulk_get_label_statuses
+        purchase_ids = [p.id for p in page_obj]
+        bulk_statuses = bulk_get_label_statuses(purchase_ids)
+        
+        serializer = PurchaseSerializer(page_obj, many=True, context={'bulk_label_statuses': bulk_statuses})
         response = Response({
             'results': serializer.data,
             'count': paginator.count,
@@ -86,7 +91,9 @@ def purchase_detail(request, pk):
     purchase = get_object_or_404(Purchase.objects.prefetch_related('items', 'items__product'), pk=pk)
     
     if request.method == 'GET':
-        serializer = PurchaseSerializer(purchase)
+        from .serializers import bulk_get_label_statuses
+        bulk_statuses = bulk_get_label_statuses([purchase.id])
+        serializer = PurchaseSerializer(purchase, context={'bulk_label_statuses': bulk_statuses})
         return Response(serializer.data)
     elif request.method == 'PUT':
         data = request.data.copy()
@@ -101,6 +108,9 @@ def purchase_detail(request, pk):
             serializer.save()
             # Refresh so reverse relation (items) is correct after deletes
             serializer.instance.refresh_from_db()
+            from .serializers import bulk_get_label_statuses
+            bulk_statuses = bulk_get_label_statuses([serializer.instance.id])
+            serializer.context['bulk_label_statuses'] = bulk_statuses
             return Response(PurchaseSerializer(serializer.instance, context=serializer.context).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     elif request.method == 'PATCH':
@@ -116,6 +126,9 @@ def purchase_detail(request, pk):
         if serializer.is_valid():
             serializer.save()
             serializer.instance.refresh_from_db()
+            from .serializers import bulk_get_label_statuses
+            bulk_statuses = bulk_get_label_statuses([serializer.instance.id])
+            serializer.context['bulk_label_statuses'] = bulk_statuses
             return Response(PurchaseSerializer(serializer.instance, context=serializer.context).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE
@@ -384,7 +397,12 @@ def vendor_purchases(request):
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         
-        serializer = PurchaseSerializer(queryset, many=True)
+        # BULK GET LABEL STATUSES
+        from .serializers import bulk_get_label_statuses
+        purchase_ids = [p.id for p in queryset]
+        bulk_statuses = bulk_get_label_statuses(purchase_ids)
+        
+        serializer = PurchaseSerializer(queryset, many=True, context={'bulk_label_statuses': bulk_statuses})
         
         # Audit log for vendor viewing purchases
         try:
@@ -457,7 +475,9 @@ def vendor_purchases(request):
             except Exception:
                 pass  # Don't fail if audit log fails
             
-            return Response(PurchaseSerializer(purchase).data, status=status.HTTP_201_CREATED)
+            from .serializers import bulk_get_label_statuses
+            bulk_statuses = bulk_get_label_statuses([purchase.id])
+            return Response(PurchaseSerializer(purchase, context={'bulk_label_statuses': bulk_statuses}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -484,7 +504,9 @@ def vendor_purchase_detail(request, pk):
         )
     
     if request.method == 'GET':
-        serializer = PurchaseSerializer(purchase)
+        from .serializers import bulk_get_label_statuses
+        bulk_statuses = bulk_get_label_statuses([purchase.id])
+        serializer = PurchaseSerializer(purchase, context={'bulk_label_statuses': bulk_statuses})
         return Response(serializer.data)
     else:  # PATCH
         data = request.data.copy()
@@ -502,7 +524,10 @@ def vendor_purchase_detail(request, pk):
         )
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            from .serializers import bulk_get_label_statuses
+            bulk_statuses = bulk_get_label_statuses([serializer.instance.id])
+            serializer.context['bulk_label_statuses'] = bulk_statuses
+            return Response(PurchaseSerializer(serializer.instance, context=serializer.context).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -563,7 +588,9 @@ def purchase_finalize(request, pk):
             }
         )
     
-    return Response(PurchaseSerializer(purchase).data, status=status.HTTP_200_OK)
+    from .serializers import bulk_get_label_statuses
+    bulk_statuses = bulk_get_label_statuses([purchase.id])
+    return Response(PurchaseSerializer(purchase, context={'bulk_label_statuses': bulk_statuses}).data, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -778,4 +805,6 @@ def purchase_redistribute_stock(request, pk):
             changes={'items': items_distribution}
         )
         
-    return Response(PurchaseSerializer(purchase).data)
+    from .serializers import bulk_get_label_statuses
+    bulk_statuses = bulk_get_label_statuses([purchase.id])
+    return Response(PurchaseSerializer(purchase, context={'bulk_label_statuses': bulk_statuses}).data)

@@ -328,6 +328,78 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
         thread.start()
 
 
+def bulk_get_label_statuses(purchase_ids):
+    """Bulk queries label status information for a list of purchase IDs to avoid N+1 queries.
+    Returns a dictionary mapping (purchase_id, product_id) -> status_dict.
+    """
+    if not purchase_ids:
+        return {}
+        
+    from backend.catalog.models import Barcode, BarcodeLabel
+    from django.db.models import Q
+    
+    # Fetch all barcodes for these purchases
+    barcodes = Barcode.objects.filter(purchase_id__in=purchase_ids).only('id', 'purchase_id', 'product_id', 'tag')
+    
+    # Fetch all valid label barcode_ids for these purchases
+    valid_label_barcode_ids = set(BarcodeLabel.objects.filter(
+        barcode__purchase_id__in=purchase_ids
+    ).exclude(
+        label_image=''
+    ).exclude(
+        label_image__isnull=True
+    ).filter(
+        Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
+    ).values_list('barcode_id', flat=True))
+    
+    # Map (purchase_id, product_id) -> stats
+    status_map = {}
+    for barcode in barcodes:
+        key = (barcode.purchase_id, barcode.product_id)
+        if key not in status_map:
+            status_map[key] = {
+                'total_barcodes': 0,
+                'generated_labels': 0,
+                'total_printable_barcodes': 0,
+                'generated_printable_labels': 0,
+                'excluded_non_printable_count': 0,
+            }
+        
+        stats = status_map[key]
+        stats['total_barcodes'] += 1
+        
+        is_generated = barcode.id in valid_label_barcode_ids
+        if is_generated:
+            stats['generated_labels'] += 1
+            
+        is_printable = barcode.tag not in ['sold', 'defective']
+        if is_printable:
+            stats['total_printable_barcodes'] += 1
+            if is_generated:
+                stats['generated_printable_labels'] += 1
+        else:
+            stats['excluded_non_printable_count'] += 1
+            
+    # Format mapped stats
+    formatted_status = {}
+    for key, stats in status_map.items():
+        purchase_id, product_id = key
+        total_printable = stats['total_printable_barcodes']
+        gen_printable = stats['generated_printable_labels']
+        formatted_status[key] = {
+            'product_id': product_id,
+            'total_barcodes': stats['total_barcodes'],
+            'generated_labels': stats['generated_labels'],
+            'all_generated': gen_printable == total_printable and total_printable > 0,
+            'needs_generation': gen_printable < total_printable,
+            'total_printable_barcodes': total_printable,
+            'generated_printable_labels': gen_printable,
+            'excluded_non_printable_count': stats['excluded_non_printable_count'],
+            'purchase_id': purchase_id
+        }
+    return formatted_status
+
+
 class PurchaseItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_sku = serializers.CharField(source='product.sku', read_only=True)
@@ -337,10 +409,11 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     line_total = serializers.SerializerMethodField()
     sold_count = serializers.SerializerMethodField()
     printed = serializers.BooleanField(source='is_printed', read_only=True)
+    label_status = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_track_inventory', 'variant', 'variant_name', 'variant_sku', 'quantity', 'shop_quantity', 'warehouse_quantity', 'unit_price', 'selling_price', 'line_total', 'sold_count', 'printed', 'printed_at']
+        fields = ['id', 'product', 'product_name', 'product_sku', 'product_track_inventory', 'variant', 'variant_name', 'variant_sku', 'quantity', 'shop_quantity', 'warehouse_quantity', 'unit_price', 'selling_price', 'line_total', 'sold_count', 'printed', 'printed_at', 'label_status']
     
     def get_line_total(self, obj):
         return float(obj.get_line_total())
@@ -360,6 +433,56 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
         else:
             # For non-tracked products, sold count is 0 (they don't have individual barcodes)
             return 0
+
+    def get_label_status(self, obj):
+        """Get label status for this purchase item, utilizing preloaded bulk context if available."""
+        bulk_statuses = self.context.get('bulk_label_statuses', None)
+        purchase_id = obj.purchase_id
+        product_id = obj.product_id
+        
+        if bulk_statuses is not None:
+            return bulk_statuses.get((purchase_id, product_id), None)
+            
+        # Fallback to single-item calculation
+        from backend.catalog.models import Barcode, BarcodeLabel
+        from django.db.models import Q
+        
+        barcodes = Barcode.objects.filter(purchase_id=purchase_id, product_id=product_id).only('id', 'tag')
+        if not barcodes.exists():
+            return None
+            
+        valid_labels = set(BarcodeLabel.objects.filter(
+            barcode__purchase_id=purchase_id,
+            barcode__product_id=product_id
+        ).exclude(
+            label_image=''
+        ).exclude(
+            label_image__isnull=True
+        ).filter(
+            Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
+        ).values_list('barcode_id', flat=True))
+        
+        total_barcodes = barcodes.count()
+        printable_barcodes = [b for b in barcodes if b.tag not in ['sold', 'defective']]
+        total_printable = len(printable_barcodes)
+        excluded_non_printable_count = total_barcodes - total_printable
+        
+        generated_count = len([b for b in barcodes if b.id in valid_labels])
+        generated_printable_count = len([b for b in printable_barcodes if b.id in valid_labels])
+        
+        all_generated = generated_printable_count == total_printable and total_printable > 0
+        
+        return {
+            'product_id': product_id,
+            'total_barcodes': total_barcodes,
+            'generated_labels': generated_count,
+            'all_generated': all_generated,
+            'needs_generation': generated_printable_count < total_printable,
+            'total_printable_barcodes': total_printable,
+            'generated_printable_labels': generated_printable_count,
+            'excluded_non_printable_count': excluded_non_printable_count,
+            'purchase_id': purchase_id
+        }
 
 
 def reconcile_purchase_item_shop_warehouse(old_quantity, new_quantity, old_shop, old_wh):
