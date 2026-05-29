@@ -1033,6 +1033,51 @@ class PurchaseBarcodeSyncApiTests(TestCase):
         self.assertGreaterEqual(result['barcodes_added'], 3)
         self.assertEqual(Barcode.objects.filter(purchase_item=item).count(), 5)
 
+    def test_duplicate_purchase_lines_consolidate_and_print_scope(self):
+        """Two DB lines for same product should merge; print uses purchase_item_id (qty 10 -> 10 labels)."""
+        from backend.purchasing.barcode_sync import consolidate_duplicate_purchase_items, ensure_purchase_barcodes_on_save
+
+        purchase = TestDataFactory.create_purchase(
+            user=self.user, supplier=self.supplier, store=self.store
+        )
+        item_a = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('10.00'),
+            unit_price=Decimal('100.00'),
+        )
+        item_b = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('10.00'),
+            unit_price=Decimal('100.00'),
+        )
+        for _ in range(10):
+            TestDataFactory.create_barcode(product=self.product, purchase_item=item_a, tag='new')
+        for _ in range(10):
+            TestDataFactory.create_barcode(product=self.product, purchase_item=item_b, tag='new')
+
+        merged = consolidate_duplicate_purchase_items(purchase)
+        self.assertEqual(merged, 1)
+        ensure_purchase_barcodes_on_save(purchase)
+
+        self.assertEqual(purchase.items.count(), 1)
+        keeper = purchase.items.first()
+        self.assertEqual(Barcode.objects.filter(purchase_item=keeper).count(), 10)
+
+        status_line = self.client.get(
+            f'/api/v1/products/{self.product.id}/labels-status/',
+            {'purchase_item_id': keeper.id},
+        )
+        self.assertEqual(status_line.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_line.data['total_printable_barcodes'], 10)
+
+        status_purchase = self.client.get(
+            f'/api/v1/products/{self.product.id}/labels-status/',
+            {'purchase_id': purchase.id},
+        )
+        self.assertEqual(status_purchase.data['total_printable_barcodes'], 10)
+
     def test_draft_save_with_qty_and_price_runs_barcode_sync(self):
         response = self.client.post(
             '/api/v1/purchases/',

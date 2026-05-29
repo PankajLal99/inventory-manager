@@ -926,24 +926,46 @@ def product_generate_label(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-def _ensure_purchase_barcodes_for_product(product, purchase_id):
-    """Ensure purchase-scoped barcodes exist before generating labels."""
-    if not purchase_id:
-        return 0
+def _filter_product_barcodes_queryset(product, purchase_id=None, purchase_item_id=None):
+    """Scope barcodes for label print/generate/status (prefer purchase_item_id)."""
+    qs = product.barcodes.all()
+    if purchase_item_id is not None:
+        try:
+            return qs.filter(purchase_item_id=int(purchase_item_id))
+        except (ValueError, TypeError):
+            return qs.none()
+    if purchase_id is not None:
+        try:
+            pid = int(purchase_id)
+            return qs.filter(Q(purchase_id=pid) | Q(purchase_item__purchase_id=pid))
+        except (ValueError, TypeError):
+            pass
+    return qs
 
-    try:
-        purchase_id_int = int(purchase_id)
-    except (ValueError, TypeError):
+
+def _ensure_purchase_barcodes_for_product(product, purchase_id, purchase_item_id=None):
+    """Ensure purchase-scoped barcodes exist before generating labels."""
+    if not purchase_id and not purchase_item_id:
         return 0
 
     from backend.purchasing.models import PurchaseItem
     from backend.purchasing.serializers import generate_barcodes_for_purchase_item
 
     created_total = 0
-    purchase_items = PurchaseItem.objects.filter(
-        purchase_id=purchase_id_int,
-        product=product
-    ).select_related('purchase', 'product', 'variant')
+    purchase_items = PurchaseItem.objects.select_related('purchase', 'product', 'variant')
+    if purchase_item_id is not None:
+        try:
+            purchase_items = purchase_items.filter(pk=int(purchase_item_id), product=product)
+        except (ValueError, TypeError):
+            return 0
+    elif purchase_id:
+        try:
+            purchase_id_int = int(purchase_id)
+            purchase_items = purchase_items.filter(purchase_id=purchase_id_int, product=product)
+        except (ValueError, TypeError):
+            return 0
+    else:
+        return 0
 
     for purchase_item in purchase_items:
         try:
@@ -991,21 +1013,16 @@ def product_generate_labels(request, pk):
     """
     product = get_object_or_404(Product, pk=pk)
     
-    # Get purchase_id from request body if provided
+    # Get purchase_id / purchase_item_id from request body if provided
     purchase_id = request.data.get('purchase_id', None)
+    purchase_item_id = request.data.get('purchase_item_id', None)
     
     # If purchase-scoped request has missing rows, auto-create barcodes first.
-    _ensure_purchase_barcodes_for_product(product, purchase_id)
+    _ensure_purchase_barcodes_for_product(product, purchase_id, purchase_item_id)
 
-    # Filter barcodes by product and optionally by purchase
-    # OPTIMIZATION: Prefetch all related data upfront to avoid N+1 queries
-    barcodes_query = product.barcodes.select_related('purchase', 'purchase__supplier').all()
-    if purchase_id:
-        try:
-            purchase_id_int = int(purchase_id)
-            barcodes_query = barcodes_query.filter(purchase_id=purchase_id_int)
-        except (ValueError, TypeError):
-            pass  # Invalid purchase_id, ignore filter
+    barcodes_query = _filter_product_barcodes_queryset(
+        product, purchase_id, purchase_item_id
+    ).select_related('purchase', 'purchase__supplier')
     
     barcodes = list(barcodes_query)
     
@@ -1300,13 +1317,14 @@ def product_get_labels(request, pk):
     
     Query parameters:
         purchase_id: Optional. Filter barcodes by purchase ID
+        purchase_item_id: Optional. Filter barcodes by purchase line (preferred for print)
         printable_only: Optional. When true, excludes sold/defective tags
         exclude_tags: Optional CSV list of barcode tags to exclude (e.g. sold,defective)
     """
     product = get_object_or_404(Product, pk=pk)
     
-    # Get purchase_id from query parameters if provided
     purchase_id = request.query_params.get('purchase_id', None)
+    purchase_item_id = request.query_params.get('purchase_item_id', None)
     
     printable_only = str(request.query_params.get('printable_only', '')).lower() in ('1', 'true', 'yes', 'y')
     exclude_tags_raw = request.query_params.get('exclude_tags', None)
@@ -1319,17 +1337,8 @@ def product_get_labels(request, pk):
             tag.strip() for tag in (exclude_tags_raw or '').split(',') if tag and tag.strip()
         ]
 
-    # Filter barcodes by product and optionally by purchase.
-    # Order by short_code so labels print in human-friendly short-code sequence.
-    base_barcodes_query = product.barcodes.all()
+    base_barcodes_query = _filter_product_barcodes_queryset(product, purchase_id, purchase_item_id)
     barcodes_query = base_barcodes_query
-    if purchase_id:
-        try:
-            purchase_id_int = int(purchase_id)
-            base_barcodes_query = base_barcodes_query.filter(purchase_id=purchase_id_int)
-            barcodes_query = barcodes_query.filter(purchase_id=purchase_id_int)
-        except (ValueError, TypeError):
-            pass  # Invalid purchase_id, ignore filter
 
     if exclude_tags:
         barcodes_query = barcodes_query.exclude(tag__in=exclude_tags)
@@ -1373,6 +1382,7 @@ def product_get_labels(request, pk):
         'total_labels': len(labels_list),
         'labels': labels_list,
         'purchase_id': purchase_id,
+        'purchase_item_id': purchase_item_id,
         'printable_only': printable_only,
         'exclude_tags': exclude_tags,
         'excluded_non_printable_count': excluded_non_printable_count,
@@ -1386,21 +1396,14 @@ def product_labels_status(request, pk):
     
     Query parameters:
         purchase_id: Optional. Filter barcodes by purchase ID
+        purchase_item_id: Optional. Filter barcodes by purchase line (preferred)
     """
     product = get_object_or_404(Product, pk=pk)
     
-    # Get purchase_id from query parameters if provided
     purchase_id = request.query_params.get('purchase_id', None)
+    purchase_item_id = request.query_params.get('purchase_item_id', None)
     
-    # Filter barcodes by product and optionally by purchase
-    barcodes_query = product.barcodes.all()
-    if purchase_id:
-        try:
-            purchase_id_int = int(purchase_id)
-            barcodes_query = barcodes_query.filter(purchase_id=purchase_id_int)
-        except (ValueError, TypeError):
-            pass  # Invalid purchase_id, ignore filter
-    
+    barcodes_query = _filter_product_barcodes_queryset(product, purchase_id, purchase_item_id)
     barcodes = barcodes_query
     printable_barcodes = barcodes.exclude(tag__in=['sold', 'defective'])
 
@@ -1443,7 +1446,8 @@ def product_labels_status(request, pk):
         'total_printable_barcodes': total_printable_barcodes,
         'generated_printable_labels': generated_printable_count,
         'excluded_non_printable_count': excluded_non_printable_count,
-        'purchase_id': purchase_id
+        'purchase_id': purchase_id,
+        'purchase_item_id': purchase_item_id,
     }, status=status.HTTP_200_OK)
 
 
@@ -1454,25 +1458,20 @@ def product_regenerate_labels(request, pk):
     
     Request body:
         purchase_id: Optional. Filter barcodes by purchase ID
+        purchase_item_id: Optional. Filter barcodes by purchase line (preferred)
     """
     from .azure_label_service import queue_bulk_label_generation_via_azure
     
     product = get_object_or_404(Product, pk=pk)
     
-    # Get purchase_id from request body if provided
     purchase_id = request.data.get('purchase_id', None)
+    purchase_item_id = request.data.get('purchase_item_id', None)
     
-    # If purchase-scoped request has missing rows, auto-create barcodes first.
-    _ensure_purchase_barcodes_for_product(product, purchase_id)
+    _ensure_purchase_barcodes_for_product(product, purchase_id, purchase_item_id)
 
-    # Filter barcodes by product and optionally by purchase
-    barcodes_query = product.barcodes.select_related('product', 'purchase', 'purchase__supplier').all()
-    if purchase_id:
-        try:
-            purchase_id_int = int(purchase_id)
-            barcodes_query = barcodes_query.filter(purchase_id=purchase_id_int)
-        except (ValueError, TypeError):
-            pass  # Invalid purchase_id, ignore filter
+    barcodes_query = _filter_product_barcodes_queryset(
+        product, purchase_id, purchase_item_id
+    ).select_related('product', 'purchase', 'purchase__supplier')
     
     barcodes = list(barcodes_query)
     

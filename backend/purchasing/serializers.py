@@ -327,34 +327,60 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
         thread.start()
 
 
+def merge_purchase_items_payload(items_data):
+    """Merge duplicate product+variant rows in a purchase payload (matches frontend submit merge)."""
+    if not items_data:
+        return items_data
+
+    merged = {}
+    order = []
+    for item in items_data:
+        product_id = item.get('product')
+        variant_id = item.get('variant')
+        variant_key = variant_id if variant_id not in [None, '', 0, '0'] else None
+        key = (product_id, variant_key)
+        if key not in merged:
+            merged[key] = dict(item)
+            order.append(key)
+            continue
+        existing = merged[key]
+        existing_qty = Decimal(str(existing.get('quantity', 0) or 0))
+        incoming_qty = Decimal(str(item.get('quantity', 0) or 0))
+        existing['quantity'] = str(existing_qty + incoming_qty)
+        if not existing.get('unit_price') and item.get('unit_price'):
+            existing['unit_price'] = item.get('unit_price')
+        if not existing.get('selling_price') and item.get('selling_price'):
+            existing['selling_price'] = item.get('selling_price')
+
+    return [merged[key] for key in order]
+
+
 def bulk_get_label_statuses(purchase_ids):
-    """Bulk queries label status information for a list of purchase IDs to avoid N+1 queries.
-    Returns a dictionary mapping (purchase_id, product_id) -> status_dict.
-    """
+    """Bulk label status per purchase line (purchase_item_id -> status_dict)."""
     if not purchase_ids:
         return {}
-        
+
     from backend.catalog.models import Barcode, BarcodeLabel
     from django.db.models import Q
-    
-    # Fetch all barcodes for these purchases
-    barcodes = Barcode.objects.filter(purchase_id__in=purchase_ids).only('id', 'purchase_id', 'product_id', 'tag')
-    
-    # Fetch all valid label barcode_ids for these purchases
-    valid_label_barcode_ids = set(BarcodeLabel.objects.filter(
-        barcode__purchase_id__in=purchase_ids
-    ).exclude(
-        label_image=''
-    ).exclude(
-        label_image__isnull=True
-    ).filter(
-        Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
-    ).values_list('barcode_id', flat=True))
-    
-    # Map (purchase_id, product_id) -> stats
+
+    barcodes = Barcode.objects.filter(
+        purchase_id__in=purchase_ids,
+        purchase_item_id__isnull=False,
+    ).only('id', 'purchase_id', 'product_id', 'purchase_item_id', 'tag')
+
+    valid_label_barcode_ids = set(
+        BarcodeLabel.objects.filter(barcode__purchase_id__in=purchase_ids)
+        .exclude(label_image='')
+        .exclude(label_image__isnull=True)
+        .filter(
+            Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
+        )
+        .values_list('barcode_id', flat=True)
+    )
+
     status_map = {}
     for barcode in barcodes:
-        key = (barcode.purchase_id, barcode.product_id)
+        key = barcode.purchase_item_id
         if key not in status_map:
             status_map[key] = {
                 'total_barcodes': 0,
@@ -362,15 +388,17 @@ def bulk_get_label_statuses(purchase_ids):
                 'total_printable_barcodes': 0,
                 'generated_printable_labels': 0,
                 'excluded_non_printable_count': 0,
+                'purchase_id': barcode.purchase_id,
+                'product_id': barcode.product_id,
             }
-        
+
         stats = status_map[key]
         stats['total_barcodes'] += 1
-        
+
         is_generated = barcode.id in valid_label_barcode_ids
         if is_generated:
             stats['generated_labels'] += 1
-            
+
         is_printable = barcode.tag not in ['sold', 'defective']
         if is_printable:
             stats['total_printable_barcodes'] += 1
@@ -378,15 +406,13 @@ def bulk_get_label_statuses(purchase_ids):
                 stats['generated_printable_labels'] += 1
         else:
             stats['excluded_non_printable_count'] += 1
-            
-    # Format mapped stats
+
     formatted_status = {}
-    for key, stats in status_map.items():
-        purchase_id, product_id = key
+    for purchase_item_id, stats in status_map.items():
         total_printable = stats['total_printable_barcodes']
         gen_printable = stats['generated_printable_labels']
-        formatted_status[key] = {
-            'product_id': product_id,
+        formatted_status[purchase_item_id] = {
+            'product_id': stats['product_id'],
             'total_barcodes': stats['total_barcodes'],
             'generated_labels': stats['generated_labels'],
             'all_generated': gen_printable == total_printable and total_printable > 0,
@@ -394,7 +420,8 @@ def bulk_get_label_statuses(purchase_ids):
             'total_printable_barcodes': total_printable,
             'generated_printable_labels': gen_printable,
             'excluded_non_printable_count': stats['excluded_non_printable_count'],
-            'purchase_id': purchase_id
+            'purchase_id': stats['purchase_id'],
+            'purchase_item_id': purchase_item_id,
         }
     return formatted_status
 
@@ -438,21 +465,20 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
         bulk_statuses = self.context.get('bulk_label_statuses', None)
         purchase_id = obj.purchase_id
         product_id = obj.product_id
-        
+
         if bulk_statuses is not None:
-            return bulk_statuses.get((purchase_id, product_id), None)
-            
+            return bulk_statuses.get(obj.id, None)
+
         # Fallback to single-item calculation
         from backend.catalog.models import Barcode, BarcodeLabel
         from django.db.models import Q
-        
-        barcodes = Barcode.objects.filter(purchase_id=purchase_id, product_id=product_id).only('id', 'tag')
+
+        barcodes = Barcode.objects.filter(purchase_item=obj).only('id', 'tag')
         if not barcodes.exists():
             return None
             
         valid_labels = set(BarcodeLabel.objects.filter(
-            barcode__purchase_id=purchase_id,
-            barcode__product_id=product_id
+            barcode__purchase_item=obj
         ).exclude(
             label_image=''
         ).exclude(
@@ -480,7 +506,8 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
             'total_printable_barcodes': total_printable,
             'generated_printable_labels': generated_printable_count,
             'excluded_non_printable_count': excluded_non_printable_count,
-            'purchase_id': purchase_id
+            'purchase_id': purchase_id,
+            'purchase_item_id': obj.id,
         }
 
 
@@ -625,7 +652,9 @@ class PurchaseSerializer(serializers.ModelSerializer):
         if items_data:
             from backend.catalog.models import Barcode, Product, ProductVariant
             from decimal import Decimal
-            
+
+            items_data = merge_purchase_items_payload(items_data)
+
             for item_data in items_data:
                 product_id = item_data.get('product')
                 variant_id = item_data.get('variant')
@@ -667,8 +696,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     unit_price=item_data.get('unit_price', 0) or 0,
                     selling_price=item_data.get('selling_price', None)
                 )
-                # Generate barcodes only when quantity > 0 (no-op for 0)
-                generate_barcodes_for_purchase_item(purchase_item, quantity)
+                # Barcodes are created in _ensure_barcodes_and_queue_labels after all lines exist
                 # CRITICAL: Only update stock when purchase status is 'finalized'
                 # Stock should NEVER be affected for draft purchases
                 # Double-check status before updating stock
@@ -863,7 +891,12 @@ class PurchaseSerializer(serializers.ModelSerializer):
             from backend.inventory.models import Stock
             from backend.catalog.models import Product, ProductVariant, Barcode
             from decimal import Decimal
-            
+            from backend.purchasing.barcode_sync import consolidate_duplicate_purchase_items
+
+            items_data = merge_purchase_items_payload(items_data)
+            consolidate_duplicate_purchase_items(instance)
+            instance.refresh_from_db()
+
             # Create a map of old items by (product_id, variant_id) for comparison
             old_items_map = {}
             for old_item in old_items:

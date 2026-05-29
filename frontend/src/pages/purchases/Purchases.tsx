@@ -1160,11 +1160,24 @@ export default function Purchases() {
   };
 
 
-  const handlePrintLabels = async (productId: number, purchaseId: number) => {
-    const labelKey = getLabelKey(productId, purchaseId);
+  const handlePrintLabels = async (
+    productId: number,
+    purchaseId: number,
+    purchaseItemId?: number
+  ) => {
+    const labelKey = getLabelKey(productId, purchaseId, purchaseItemId);
     const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
+    const labelOptions = {
+      printableOnly: true as const,
+      purchaseItemId: labelScopeFallback[labelKey] ? undefined : purchaseItemId,
+    };
     try {
-      const response = await productsApi.getLabels(productId, effectivePurchaseId, undefined, { printableOnly: true });
+      const response = await productsApi.getLabels(
+        productId,
+        effectivePurchaseId,
+        undefined,
+        labelOptions
+      );
       const excludedCount = Number(response?.data?.excluded_non_printable_count || 0);
       if (response.data && response.data.labels && response.data.labels.length > 0) {
         printLabelsFromResponse(response.data);
@@ -1174,32 +1187,34 @@ export default function Purchases() {
           'info'
         );
       } else {
-        await triggerGenerateAndWait(productId, purchaseId);
+        await triggerGenerateAndWait(productId, purchaseId, purchaseItemId);
       }
     } catch (error: any) {
       const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString();
       if (backendMessage.toLowerCase().includes('no barcodes found')) {
-        await triggerGenerateAndWait(productId, purchaseId);
+        await triggerGenerateAndWait(productId, purchaseId, purchaseItemId);
         return;
       }
       toast(error?.response?.data?.error || 'Failed to print labels. Please try again.', 'error');
     }
   };
 
-  const getLabelKey = (productId: number, purchaseId?: number) => `${productId}:${purchaseId ?? 'na'}`;
+  const getLabelKey = (productId: number, purchaseId?: number, purchaseItemId?: number) =>
+    `${productId}:${purchaseId ?? 'na'}:${purchaseItemId ?? 'na'}`;
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
   const waitForLabelsToBeGenerated = async (
     productId: number,
     purchaseId?: number,
+    purchaseItemId?: number,
     maxAttempts = 12,
     intervalMs = 3000
   ) => {
-    const labelKey = getLabelKey(productId, purchaseId);
+    const labelKey = getLabelKey(productId, purchaseId, purchaseItemId);
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
-        const response = await productsApi.labelsStatus(productId, purchaseId);
+        const response = await productsApi.labelsStatus(productId, purchaseId, undefined, purchaseItemId);
         const data = response.data || {};
         const allGenerated = data.all_generated || false;
         const excludedCount = Number(data.excluded_non_printable_count || 0);
@@ -1223,8 +1238,12 @@ export default function Purchases() {
     return false;
   };
 
-  const triggerGenerateAndWait = async (productId: number, purchaseId: number) => {
-    const labelKey = getLabelKey(productId, purchaseId);
+  const triggerGenerateAndWait = async (
+    productId: number,
+    purchaseId: number,
+    purchaseItemId?: number
+  ) => {
+    const labelKey = getLabelKey(productId, purchaseId, purchaseItemId);
     setGeneratingLabelsFor(productId);
     setLabelStatuses(prev => ({
       ...prev,
@@ -1240,7 +1259,7 @@ export default function Purchases() {
       // Fallback to product-level generation if purchase linkage is missing in older data.
       let pollPurchaseId: number | undefined = purchaseId;
       try {
-        await productsApi.generateLabels(productId, purchaseId);
+        await productsApi.generateLabels(productId, purchaseId, undefined, purchaseItemId);
       } catch (error: any) {
         const backendMessage = (error?.response?.data?.error || error?.response?.data?.message || '').toString().toLowerCase();
         if (backendMessage.includes('no barcodes found')) {
@@ -1251,11 +1270,18 @@ export default function Purchases() {
           throw error;
         }
       }
-      const generated = await waitForLabelsToBeGenerated(productId, pollPurchaseId);
+      const generated = await waitForLabelsToBeGenerated(
+        productId,
+        pollPurchaseId,
+        labelScopeFallback[labelKey] ? undefined : purchaseItemId
+      );
       if (generated) {
         const generatedPurchaseId = pollPurchaseId ?? purchaseId;
         try {
-          const labelsResponse = await productsApi.getLabels(productId, generatedPurchaseId, undefined, { printableOnly: true });
+          const labelsResponse = await productsApi.getLabels(productId, generatedPurchaseId, undefined, {
+            printableOnly: true,
+            purchaseItemId: labelScopeFallback[labelKey] ? undefined : purchaseItemId,
+          });
           const excludedCount = Number(labelsResponse?.data?.excluded_non_printable_count || 0);
           if (labelsResponse.data?.labels?.length > 0) {
             printLabelsFromResponse(labelsResponse.data);
@@ -1285,12 +1311,22 @@ export default function Purchases() {
     }
   };
 
-  const handleCheckLabelStatus = async (productId: number, purchaseId: number) => {
+  const handleCheckLabelStatus = async (
+    productId: number,
+    purchaseId: number,
+    purchaseItemId?: number
+  ) => {
     setCheckingStatusFor(productId);
-    const labelKey = getLabelKey(productId, purchaseId);
+    const labelKey = getLabelKey(productId, purchaseId, purchaseItemId);
     const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
+    const effectivePurchaseItemId = labelScopeFallback[labelKey] ? undefined : purchaseItemId;
     try {
-      const response = await productsApi.labelsStatus(productId, effectivePurchaseId);
+      const response = await productsApi.labelsStatus(
+        productId,
+        effectivePurchaseId,
+        undefined,
+        effectivePurchaseItemId
+      );
       const data = response.data || {};
       const allGenerated = data.all_generated || false;
       const total = data.total_printable_barcodes ?? data.total_barcodes ?? 0;
@@ -1309,14 +1345,14 @@ export default function Purchases() {
         if (allGenerated) {
           const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
           toast(`All printable labels are ready (${generated} of ${total})${excludedText}. Opening print.`, 'success');
-          await handlePrintLabels(productId, purchaseId);
+          await handlePrintLabels(productId, purchaseId, purchaseItemId);
         } else {
           const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
           toast(`Status: ${generated} of ${total} generated. Generating missing labels and opening print...${excludedText}`, 'info');
-          await triggerGenerateAndWait(productId, purchaseId);
+          await triggerGenerateAndWait(productId, purchaseId, purchaseItemId);
         }
       } else {
-        await triggerGenerateAndWait(productId, purchaseId);
+        await triggerGenerateAndWait(productId, purchaseId, purchaseItemId);
       }
     } catch (error: any) {
       setLabelStatuses(prev => ({
@@ -1328,7 +1364,7 @@ export default function Purchases() {
         },
       }));
       if (error?.response?.status === 404) {
-        await triggerGenerateAndWait(productId, purchaseId);
+        await triggerGenerateAndWait(productId, purchaseId, purchaseItemId);
       } else {
         toast(error?.response?.data?.error || 'Failed to check label status.', 'error');
       }
@@ -1338,8 +1374,15 @@ export default function Purchases() {
   };
 
   const regenerateLabelsMutation = useMutation({
-    mutationFn: ({ productId, purchaseId }: { productId: number; purchaseId?: number }) =>
-      productsApi.regenerateLabels(productId, purchaseId),
+    mutationFn: ({
+      productId,
+      purchaseId,
+      purchaseItemId,
+    }: {
+      productId: number;
+      purchaseId?: number;
+      purchaseItemId?: number;
+    }) => productsApi.regenerateLabels(productId, purchaseId, purchaseItemId),
     onSuccess: async (data, { productId, purchaseId }) => {
       // Invalidate and refetch label status cache after regenerating labels
       await queryClient.invalidateQueries({ queryKey: ['label-status', productId, purchaseId] });
@@ -1355,10 +1398,14 @@ export default function Purchases() {
     },
   });
 
-  const handleRegenerateLabels = (productId: number, purchaseId?: number) => {
+  const handleRegenerateLabels = (
+    productId: number,
+    purchaseId?: number,
+    purchaseItemId?: number
+  ) => {
     if (window.confirm('Regenerate all labels for this product? This will replace existing labels.')) {
       setGeneratingLabelsFor(productId);
-      regenerateLabelsMutation.mutate({ productId, purchaseId });
+      regenerateLabelsMutation.mutate({ productId, purchaseId, purchaseItemId });
     }
   };
 
@@ -1509,7 +1556,12 @@ export default function Purchases() {
     if (!purchases || purchases.length === 0) return [];
 
     const seenKeys = new Set<string>();
-    const unprinted: Array<{ productId: number; purchaseId?: number; labelKey: string }> = [];
+    const unprinted: Array<{
+      productId: number;
+      purchaseId?: number;
+      purchaseItemId?: number;
+      labelKey: string;
+    }> = [];
 
     purchases.forEach((purchase: any) => {
       if (purchase.items && purchase.items.length > 0) {
@@ -1517,10 +1569,11 @@ export default function Purchases() {
           const productId = item.product;
           if (!productId || !item.product_track_inventory) return;
           const purchaseId = purchase?.id ? parseInt(purchase.id) : undefined;
-          const labelKey = getLabelKey(productId, purchaseId);
+          const purchaseItemId = item.id ? parseInt(item.id) : undefined;
+          const labelKey = getLabelKey(productId, purchaseId, purchaseItemId);
           if (seenKeys.has(labelKey)) return;
           seenKeys.add(labelKey);
-          const entry = { productId, purchaseId, labelKey };
+          const entry = { productId, purchaseId, purchaseItemId, labelKey };
           if (!item.printed) unprinted.push(entry);
         });
       }
@@ -1531,18 +1584,18 @@ export default function Purchases() {
 
   // Use React Query to cache label status checks for all products in purchases
   const labelStatusQueries = useQueries({
-    queries: labelStatusQueriesData.map(({ productId, purchaseId, labelKey }) => ({
-      queryKey: ['label-status', productId, purchaseId],
+    queries: labelStatusQueriesData.map(({ productId, purchaseId, purchaseItemId, labelKey }) => ({
+      queryKey: ['label-status', productId, purchaseId, purchaseItemId],
       queryFn: async () => {
         try {
-          const response = await productsApi.labelsStatus(productId, purchaseId);
-          return { productId, purchaseId, labelKey, data: response.data, error: null };
+          const response = await productsApi.labelsStatus(productId, purchaseId, undefined, purchaseItemId);
+          return { productId, purchaseId, purchaseItemId, labelKey, data: response.data, error: null };
         } catch (error: any) {
           // Silently handle 404 errors - endpoint may not be available or product may not have barcodes
           if (error.response?.status === 404) {
-            return { productId, purchaseId, labelKey, data: { all_generated: false }, error: null };
+            return { productId, purchaseId, purchaseItemId, labelKey, data: { all_generated: false }, error: null };
           }
-          return { productId, purchaseId, labelKey, data: { all_generated: false }, error: error.message };
+          return { productId, purchaseId, purchaseItemId, labelKey, data: { all_generated: false }, error: error.message };
         }
       },
       retry: false,
@@ -1645,7 +1698,7 @@ export default function Purchases() {
       if (purchase.items && purchase.items.length > 0) {
         purchase.items.forEach((item: any) => {
           if (item.product && item.product_track_inventory && item.label_status) {
-            const labelKey = getLabelKey(item.product, purchase.id);
+            const labelKey = getLabelKey(item.product, purchase.id, item.id);
             const val = item.label_status;
             const current = labelStatuses[labelKey];
             
@@ -1976,12 +2029,17 @@ export default function Purchases() {
                                   {purchase.items.map((item: any, idx: number) => {
                                     const productId = item.product;
                                     const trackInventory = item.product_track_inventory;
-                                    const labelKey = getLabelKey(productId, purchase.id);
-                                    const labelStatus = labelStatuses[labelKey] || {
+                                    const purchaseItemId = item.id ? parseInt(item.id) : undefined;
+                                    const labelKey = getLabelKey(productId, purchase.id, purchaseItemId);
+                                    const labelStatus = labelStatuses[labelKey] || (item.label_status ? {
+                                      all_generated: Boolean(item.label_status.all_generated),
+                                      generating: false,
+                                      excluded_non_printable_count: Number(item.label_status.excluded_non_printable_count || 0),
+                                    } : {
                                       all_generated: false,
                                       generating: false,
                                       excluded_non_printable_count: 0,
-                                    };
+                                    });
                                     const excludedCount = Number(labelStatus.excluded_non_printable_count || 0);
 
                                     return (
@@ -2039,7 +2097,7 @@ export default function Purchases() {
                                                       <Button
                                                         variant="outline"
                                                         size="sm"
-                                                        onClick={() => handlePrintLabels(productId, purchase.id)}
+                                                        onClick={() => handlePrintLabels(productId, purchase.id, purchaseItemId)}
                                                         className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                                         title="Get barcodes and open print dialog"
                                                       >
@@ -2049,7 +2107,7 @@ export default function Purchases() {
                                                       <Button
                                                         variant="outline"
                                                         size="sm"
-                                                        onClick={() => handleRegenerateLabels(productId, purchase.id)}
+                                                        onClick={() => handleRegenerateLabels(productId, purchase.id, purchaseItemId)}
                                                         className="flex items-center gap-1.5 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
                                                         title="Regenerate Labels"
                                                       >
@@ -2069,7 +2127,7 @@ export default function Purchases() {
                                                     <Button
                                                       variant="outline"
                                                       size="sm"
-                                                      onClick={() => handleCheckLabelStatus(productId, purchase.id)}
+                                                      onClick={() => handleCheckLabelStatus(productId, purchase.id, purchaseItemId)}
                                                       disabled={isChecking || isGenerating}
                                                       className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                                       title="Print barcodes"
@@ -2255,12 +2313,17 @@ export default function Purchases() {
                         {purchase.items.map((item: any, idx: number) => {
                           const productId = item.product;
                           const trackInventory = item.product_track_inventory;
-                          const labelKey = getLabelKey(productId, purchase.id);
-                          const labelStatus = labelStatuses[labelKey] || {
+                          const purchaseItemId = item.id ? parseInt(item.id) : undefined;
+                          const labelKey = getLabelKey(productId, purchase.id, purchaseItemId);
+                          const labelStatus = labelStatuses[labelKey] || (item.label_status ? {
+                            all_generated: Boolean(item.label_status.all_generated),
+                            generating: false,
+                            excluded_non_printable_count: Number(item.label_status.excluded_non_printable_count || 0),
+                          } : {
                             all_generated: false,
                             generating: false,
                             excluded_non_printable_count: 0,
-                          };
+                          });
                           const excludedCount = Number(labelStatus.excluded_non_printable_count || 0);
 
                           return (
@@ -2323,7 +2386,7 @@ export default function Purchases() {
                                             <Button
                                               variant="outline"
                                               size="sm"
-                                              onClick={() => handlePrintLabels(productId, purchase.id)}
+                                              onClick={() => handlePrintLabels(productId, purchase.id, purchaseItemId)}
                                               className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                               title="Get barcodes and open print dialog"
                                             >
@@ -2333,7 +2396,7 @@ export default function Purchases() {
                                             <Button
                                               variant="outline"
                                               size="sm"
-                                              onClick={() => handleRegenerateLabels(productId, purchase.id)}
+                                              onClick={() => handleRegenerateLabels(productId, purchase.id, purchaseItemId)}
                                               className="flex items-center gap-1.5 w-full text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
                                               title="Regenerate Labels"
                                             >
@@ -2354,7 +2417,7 @@ export default function Purchases() {
                                           <Button
                                             variant="outline"
                                             size="sm"
-                                            onClick={() => handleCheckLabelStatus(productId, purchase.id)}
+                                            onClick={() => handleCheckLabelStatus(productId, purchase.id, purchaseItemId)}
                                             disabled={isChecking || isGenerating}
                                             className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
                                             title="Print barcodes"

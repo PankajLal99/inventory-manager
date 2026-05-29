@@ -152,8 +152,15 @@ export const productsApi = {
     return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
   },
   generateLabel: (zplCode: string) => api.post('/products/generate-label/', { zpl_code: zplCode }),
-  generateLabels: (productId: number, purchaseId?: number, supplierId?: string) => {
-    const data = purchaseId ? { purchase_id: purchaseId } : {};
+  generateLabels: (
+    productId: number,
+    purchaseId?: number,
+    supplierId?: string,
+    purchaseItemId?: number
+  ) => {
+    const data: Record<string, number> = {};
+    if (purchaseId) data.purchase_id = purchaseId;
+    if (purchaseItemId) data.purchase_item_id = purchaseItemId;
     const params = supplierId ? { supplier: supplierId } : {};
     return api.post(`/products/${productId}/generate-labels/`, data, { params });
   },
@@ -161,10 +168,11 @@ export const productsApi = {
     productId: number,
     purchaseId?: number,
     supplierId?: string,
-    options?: { printableOnly?: boolean; excludeTags?: string[] }
+    options?: { printableOnly?: boolean; excludeTags?: string[]; purchaseItemId?: number }
   ) => {
     const params: Record<string, number | string> = {};
     if (purchaseId) params.purchase_id = purchaseId;
+    if (options?.purchaseItemId) params.purchase_item_id = options.purchaseItemId;
     if (supplierId) params.supplier = supplierId;
     if (options?.printableOnly) params.printable_only = 'true';
     if (options?.excludeTags && options.excludeTags.length > 0) {
@@ -172,14 +180,22 @@ export const productsApi = {
     }
     return api.get(`/products/${productId}/labels/`, { params });
   },
-  labelsStatus: (productId: number, purchaseId?: number, supplierId?: string) => {
+  labelsStatus: (
+    productId: number,
+    purchaseId?: number,
+    supplierId?: string,
+    purchaseItemId?: number
+  ) => {
     const params: Record<string, number | string> = {};
     if (purchaseId) params.purchase_id = purchaseId;
+    if (purchaseItemId) params.purchase_item_id = purchaseItemId;
     if (supplierId) params.supplier = supplierId;
     return api.get(`/products/${productId}/labels-status/`, { params });
   },
-  regenerateLabels: (productId: number, purchaseId?: number) => {
-    const data = purchaseId ? { purchase_id: purchaseId } : {};
+  regenerateLabels: (productId: number, purchaseId?: number, purchaseItemId?: number) => {
+    const data: Record<string, number> = {};
+    if (purchaseId) data.purchase_id = purchaseId;
+    if (purchaseItemId) data.purchase_item_id = purchaseItemId;
     return api.post(`/products/${productId}/regenerate-labels/`, data);
   },
 };

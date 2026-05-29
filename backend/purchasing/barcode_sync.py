@@ -127,10 +127,48 @@ def audit_purchase_barcodes(purchase) -> Dict[str, Any]:
     return {'all_complete': all_complete, 'lines': lines}
 
 
+def consolidate_duplicate_purchase_items(purchase) -> int:
+    """
+    Merge multiple DB lines for the same product+variant into one purchase item.
+    Moves barcodes to the keeper row and deletes duplicate lines (fixes 2x label print).
+    """
+    from collections import defaultdict
+
+    from backend.catalog.models import Barcode
+    from backend.purchasing.models import PurchaseItem
+
+    groups: Dict[Tuple[int, Any], List] = defaultdict(list)
+    for item in purchase.items.select_related('product', 'variant'):
+        variant_id = item.variant_id if item.variant_id else None
+        groups[(item.product_id, variant_id)].append(item)
+
+    merged_count = 0
+    for items in groups.values():
+        if len(items) <= 1:
+            continue
+
+        items.sort(
+            key=lambda i: (
+                -Barcode.objects.filter(purchase_item=i).count(),
+                i.id,
+            )
+        )
+        keeper = items[0]
+        for duplicate in items[1:]:
+            Barcode.objects.filter(purchase_item=duplicate).update(purchase_item=keeper)
+            duplicate.delete()
+            merged_count += 1
+
+    if merged_count:
+        purchase.refresh_from_db()
+    return merged_count
+
+
 def ensure_purchase_barcodes_on_save(purchase) -> Dict[str, Any]:
     """
     Run on every purchase Save: reconcile barcodes to line qty, verify, retry once if needed.
     """
+    consolidate_duplicate_purchase_items(purchase)
     added, removed = sync_all_purchase_item_barcodes(purchase)
     audit = audit_purchase_barcodes(purchase)
 
