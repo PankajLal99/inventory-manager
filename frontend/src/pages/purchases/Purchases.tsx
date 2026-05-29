@@ -38,6 +38,18 @@ interface PurchaseItem {
   printed_at?: string | null;
 }
 
+const normalizeEntityId = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const getPurchaseItemKey = (item: Pick<PurchaseItem, 'product' | 'variant'>): string => {
+  const productId = normalizeEntityId(item.product);
+  const variantId = normalizeEntityId(item.variant);
+  return `${productId ?? 'null'}::${variantId ?? 'null'}`;
+};
+
 interface LabelStatusState {
   all_generated: boolean;
   generating: boolean;
@@ -494,17 +506,18 @@ export default function Purchases() {
 
     // Add the product to purchase items using functional update
     setPurchaseItems(prev => {
-      const productId = preselectedProductData.id;
+      const productId = normalizeEntityId(preselectedProductData.id);
+      if (productId === null) return prev;
 
       // Check if product already exists
-      const alreadyExists = prev.some(item => item.product === productId);
+      const alreadyExists = prev.some(item => normalizeEntityId(item.product) === productId);
       if (alreadyExists) {
         return prev;
       }
 
       // Create new item with empty quantity and price (will show placeholders)
       const newItem: PurchaseItem = {
-        product: preselectedProductData.id,
+        product: productId,
         product_name: preselectedProductData.name || 'Unknown Product',
         product_sku: preselectedProductData.sku || '',
         quantity: '',
@@ -747,10 +760,11 @@ export default function Purchases() {
       const items = (fullPurchase.items || []).map((item: any) => {
         const qty = item.quantity != null ? Number(item.quantity) : 0;
         const price = item.unit_price != null ? Number(item.unit_price) : 0;
+        const productId = normalizeEntityId(item.product);
         return {
           id: item.id,
-          product: item.product,
-          variant: item.variant || null,
+          product: productId ?? 0,
+          variant: normalizeEntityId(item.variant),
           product_name: item.product_name,
           product_sku: item.product_sku,
           variant_name: item.variant_name || null,
@@ -788,11 +802,16 @@ export default function Purchases() {
   };
 
   const handleAddProduct = (product: any) => {
+    const incomingProductId = normalizeEntityId(product?.id);
+    const incomingVariantId = normalizeEntityId(product?.variant?.id);
+    if (incomingProductId === null) return;
+
     // Check if product already exists in purchase items (same product and variant)
-    const existingItem = purchaseItems.find(item =>
-      item.product === product.id &&
-      (item.variant === (product.variant?.id || null) || (!item.variant && !product.variant?.id))
-    );
+    const existingItem = purchaseItems.find(item => {
+      const itemProductId = normalizeEntityId(item.product);
+      const itemVariantId = normalizeEntityId(item.variant);
+      return itemProductId === incomingProductId && itemVariantId === incomingVariantId;
+    });
 
     if (existingItem) {
       // If product already exists, increase quantity by 1 instead of adding duplicate
@@ -808,8 +827,8 @@ export default function Purchases() {
     }
 
     const newItem: PurchaseItem = {
-      product: product.id,
-      variant: product.variant?.id || null,
+      product: incomingProductId,
+      variant: incomingVariantId,
       product_name: product.name,
       product_sku: product.sku,
       variant_name: product.variant?.name || null,
@@ -955,20 +974,48 @@ export default function Purchases() {
       }
     }
 
+    // Merge accidental duplicate rows for same product+variant before submit.
+    const mergedItems = Array.from(
+      purchaseItems.reduce((map, item) => {
+        const key = getPurchaseItemKey(item);
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, { ...item });
+          return map;
+        }
+
+        const existingQty = parseInt(existing.quantity) || 0;
+        const incomingQty = parseInt(item.quantity) || 0;
+        const nextQty = existingQty + incomingQty;
+        existing.quantity = nextQty > 0 ? String(nextQty) : '';
+        if ((!existing.unit_price || parseFloat(existing.unit_price) <= 0) && item.unit_price) {
+          existing.unit_price = item.unit_price;
+        }
+        if ((!existing.selling_price || parseFloat(existing.selling_price || '0') <= 0) && item.selling_price) {
+          existing.selling_price = item.selling_price;
+        }
+        existing.sold_count = (existing.sold_count || 0) + (item.sold_count || 0);
+        return map;
+      }, new Map<string, PurchaseItem>()).values()
+    );
+
     // Prepare submit data with all required fields including variants
     const submitData: any = {
       supplier: parseInt(supplierId),
       purchase_date: formData.purchase_date,
-      items: purchaseItems.map(item => {
+      items: mergedItems.map(item => {
+        const productId = normalizeEntityId(item.product);
+        if (productId === null) return null;
         const itemData: any = {
-          product: item.product,
+          product: productId,
           quantity: parseInt(item.quantity) || 0,
           unit_price: parseFloat(item.unit_price) || 0,
         };
 
         // Include variant if it exists (backend expects variant or null/undefined)
-        if (item.variant) {
-          itemData.variant = item.variant;
+        const variantId = normalizeEntityId(item.variant);
+        if (variantId !== null) {
+          itemData.variant = variantId;
         }
 
         // Include selling_price if provided
@@ -977,7 +1024,7 @@ export default function Purchases() {
         }
 
         return itemData;
-      }),
+      }).filter(Boolean),
     };
 
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
@@ -1031,22 +1078,49 @@ export default function Purchases() {
       }
     }
 
+    const mergedItems = Array.from(
+      purchaseItems.reduce((map, item) => {
+        const key = getPurchaseItemKey(item);
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, { ...item });
+          return map;
+        }
+
+        const existingQty = parseInt(existing.quantity) || 0;
+        const incomingQty = parseInt(item.quantity) || 0;
+        const nextQty = existingQty + incomingQty;
+        existing.quantity = nextQty > 0 ? String(nextQty) : '';
+        if ((!existing.unit_price || parseFloat(existing.unit_price) <= 0) && item.unit_price) {
+          existing.unit_price = item.unit_price;
+        }
+        if ((!existing.selling_price || parseFloat(existing.selling_price || '0') <= 0) && item.selling_price) {
+          existing.selling_price = item.selling_price;
+        }
+        existing.sold_count = (existing.sold_count || 0) + (item.sold_count || 0);
+        return map;
+      }, new Map<string, PurchaseItem>()).values()
+    );
+
     const submitData: any = {
       supplier: parseInt(supplierId),
       purchase_date: formData.purchase_date,
       status: 'draft',
-      items: purchaseItems.map((item) => {
+      items: mergedItems.map((item) => {
+        const productId = normalizeEntityId(item.product);
+        if (productId === null) return null;
         const itemData: any = {
-          product: item.product,
+          product: productId,
           quantity: parseInt(item.quantity) || 0,
           unit_price: parseFloat(String(item.unit_price).trim() || '0') || 0,
         };
-        if (item.variant) itemData.variant = item.variant;
+        const variantId = normalizeEntityId(item.variant);
+        if (variantId !== null) itemData.variant = variantId;
         if (item.selling_price && String(item.selling_price).trim() !== '') {
           itemData.selling_price = parseFloat(item.selling_price) || null;
         }
         return itemData;
-      }),
+      }).filter(Boolean),
     };
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
     if (formData.notes) submitData.notes = formData.notes;

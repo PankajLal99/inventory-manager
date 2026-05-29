@@ -9,6 +9,7 @@ from backend.core.cache_signals import (
     invalidate_stock_cache_manual
 )
 from backend.core.utils import create_audit_log
+from decimal import Decimal
 import uuid
 
 
@@ -529,6 +530,20 @@ def reconcile_purchase_item_shop_warehouse(old_quantity, new_quantity, old_shop,
     return old_shop + delta_up, old_wh
 
 
+def normalize_optional_decimal(val):
+    """Normalize optional price fields for comparison and DB writes."""
+    if val is None or val == '':
+        return None
+    return Decimal(str(val))
+
+
+def selling_price_from_item_data(item_data, old_item):
+    """Resolve selling price from PATCH payload, or keep existing when omitted."""
+    if 'selling_price' not in item_data:
+        return normalize_optional_decimal(old_item.selling_price)
+    return normalize_optional_decimal(item_data.get('selling_price'))
+
+
 class PurchaseSerializer(serializers.ModelSerializer):
     items = PurchaseItemSerializer(many=True, read_only=True)
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
@@ -886,9 +901,15 @@ class PurchaseSerializer(serializers.ModelSerializer):
                     old_quantity = old_item.quantity
                     new_price = Decimal(str(matching_new_item.get('unit_price', old_item.unit_price)))
                     old_price = old_item.unit_price
+                    new_selling_price = selling_price_from_item_data(matching_new_item, old_item)
+                    old_selling_price = normalize_optional_decimal(old_item.selling_price)
                     
-                    # Check if quantity or price changed
-                    if new_quantity != old_quantity or new_price != old_price:
+                    # Check if quantity, unit price, or selling price changed
+                    if (
+                        new_quantity != old_quantity
+                        or new_price != old_price
+                        or new_selling_price != old_selling_price
+                    ):
                         items_to_update.append((old_item, matching_new_item))
                     else:
                         # Nothing changed, preserve the item and its barcodes
@@ -974,7 +995,8 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 # Update item fields
                 old_item.quantity = new_quantity
                 old_item.unit_price = new_price
-                old_item.selling_price = item_data.get('selling_price', old_item.selling_price)
+                if 'selling_price' in item_data:
+                    old_item.selling_price = normalize_optional_decimal(item_data.get('selling_price'))
                 old_item.save()
                 
                 # Handle barcodes if quantity changed
