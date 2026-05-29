@@ -43,6 +43,240 @@ function escapeHtml(s: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Max cart lines per snapshot image (taller captures fade with html2canvas). */
+const SNAPSHOT_ROWS_PER_PAGE = 25;
+
+type CartSnapshotRow = {
+  idx: number;
+  name: string;
+  qty: number;
+  unitPrice: number;
+  lineTotal: number;
+};
+
+function chunkSnapshotRows<T>(rows: T[], size: number): T[][] {
+  if (size <= 0) return [rows];
+  const chunks: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    chunks.push(rows.slice(i, i + size));
+  }
+  return chunks.length > 0 ? chunks : [[]];
+}
+
+function buildCartSnapshotHtml(opts: {
+  title: string;
+  cartLabel: string;
+  headerDate: string;
+  storeName: string;
+  customerName: string;
+  rows: CartSnapshotRow[];
+  partIndex: number;
+  partCount: number;
+  totalItemCount: number;
+  showTotals: boolean;
+  subtotal: number;
+  tradeIn: number;
+  total: number;
+}): string {
+  const {
+    title,
+    cartLabel,
+    headerDate,
+    storeName,
+    customerName,
+    rows,
+    partIndex,
+    partCount,
+    totalItemCount,
+    showTotals,
+    subtotal,
+    tradeIn,
+    total,
+  } = opts;
+
+  const partLabel =
+    partCount > 1 ? `Part ${partIndex} of ${partCount}` : '';
+  const lineRange =
+    partCount > 1 && rows.length > 0
+      ? `Lines ${rows[0].idx}–${rows[rows.length - 1].idx}`
+      : '';
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      .draft-a4,
+      .draft-a4 table {
+        font-family: Arial, sans-serif;
+      }
+      .draft-a4 .items-grid {
+        width: 100%;
+        margin-top: 10px;
+        font-size: 12px;
+      }
+      .draft-a4 .items-grid-row {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr) 70px 110px 110px;
+      }
+      .draft-a4 .items-grid-cell {
+        border: 1px solid #000;
+        padding: 6px 8px;
+        display: flex;
+        align-items: center;
+        min-height: 42px;
+        line-height: 1.3;
+        box-sizing: border-box;
+      }
+      .draft-a4 .items-grid-header .items-grid-cell {
+        font-weight: 700;
+      }
+      .draft-a4 .cell-left {
+        justify-content: flex-start;
+        text-align: left;
+      }
+      .draft-a4 .cell-right {
+        justify-content: flex-end;
+        text-align: right;
+      }
+      .draft-a4 .items-grid-cell.product-cell {
+        white-space: normal;
+        word-break: break-word;
+      }
+      .draft-a4 .totals-table td {
+        border: 1px solid #000;
+        padding: 6px 8px;
+      }
+      .draft-a4 .totals-table td:first-child {
+        text-align: left;
+      }
+      .draft-a4 .totals-table td:last-child {
+        text-align: right;
+      }
+      .draft-a4 .totals-table tr {
+        height: 38px;
+      }
+      .draft-a4 .totals-table td {
+        vertical-align: middle !important;
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="draft-a4" style="font-family: Arial, sans-serif; color:#000; width: 794px; margin: 0 auto;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; border:1px solid #000; padding:10px 12px;">
+        <div>
+          <div style="font-size:18px; font-weight:700; letter-spacing:0.4px;">${escapeHtml(title)}</div>
+          <div style="font-size:12px; margin-top:2px;">${escapeHtml(cartLabel)} · ${escapeHtml(headerDate)}</div>
+          ${partLabel ? `<div style="font-size:12px; margin-top:4px; font-weight:700;">${escapeHtml(partLabel)}${lineRange ? ` · ${escapeHtml(lineRange)}` : ''}</div>` : ''}
+          <div style="font-size:12px; margin-top:6px;"><strong>Store:</strong> ${escapeHtml(storeName)}</div>
+          <div style="font-size:12px; margin-top:2px;"><strong>Customer:</strong> ${escapeHtml(customerName)}</div>
+        </div>
+        <div style="text-align:right; font-size:12px;">
+          <div><strong>Items:</strong> ${totalItemCount}</div>
+          <div style="margin-top:4px; color:#555;">(Draft copy)</div>
+        </div>
+      </div>
+
+      <div class="items-grid">
+        <div class="items-grid-row items-grid-header">
+          <div class="items-grid-cell cell-left">#</div>
+          <div class="items-grid-cell cell-left">Product</div>
+          <div class="items-grid-cell cell-right">Qty</div>
+          <div class="items-grid-cell cell-right">Price</div>
+          <div class="items-grid-cell cell-right">Total</div>
+        </div>
+        ${rows
+          .map(
+            (r) => `<div class="items-grid-row">
+          <div class="items-grid-cell cell-left">${r.idx}</div>
+          <div class="items-grid-cell cell-left product-cell">${escapeHtml(r.name)}</div>
+          <div class="items-grid-cell cell-right">${escapeHtml(formatNumber(r.qty, 3))}</div>
+          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.unitPrice))}</div>
+          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.lineTotal))}</div>
+        </div>`
+          )
+          .join('')}
+      </div>
+
+      ${
+        showTotals
+          ? `<div style="display:flex; justify-content:flex-end; margin-top:10px;">
+        <table class="totals-table" style="border-collapse:collapse; font-size:12px; min-width: 260px;">
+          <tbody>
+            <tr>
+              <td><strong>Subtotal</strong></td>
+              <td>₹${escapeHtml(formatNumber(subtotal))}</td>
+            </tr>
+            ${
+              tradeIn > 0
+                ? `<tr>
+              <td><strong>Trade-in</strong></td>
+              <td>-₹${escapeHtml(formatNumber(tradeIn))}</td>
+            </tr>`
+                : ''
+            }
+            <tr>
+              <td><strong>Total</strong></td>
+              <td><strong>₹${escapeHtml(formatNumber(total))}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`
+          : partCount > 1
+            ? `<div style="margin-top:10px; font-size:12px; text-align:right; color:#555;">Continued on next image…</div>`
+            : ''
+      }
+    </div>
+  </body>
+</html>`;
+}
+
+async function renderSnapshotHtmlToBlob(
+  iframe: HTMLIFrameElement,
+  html: string
+): Promise<Blob | null> {
+  const doc = iframe.contentDocument;
+  if (!doc) return null;
+
+  doc.open();
+  doc.write(html);
+  doc.close();
+
+  await new Promise((r) => window.setTimeout(r, 60));
+
+  const body = doc.body;
+  const el = doc.documentElement;
+  const w = el?.scrollWidth ?? 794;
+  const h = el?.scrollHeight ?? 1123;
+
+  const canvas = await html2canvas(body, {
+    scale: 2,
+    useCORS: true,
+    logging: false,
+    backgroundColor: '#ffffff',
+    windowWidth: w,
+    windowHeight: h,
+    height: h,
+    width: w,
+  });
+
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
+}
+
+async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
+  const canWriteImage =
+    typeof (window as any).ClipboardItem !== 'undefined' &&
+    !!navigator.clipboard &&
+    typeof (navigator.clipboard as any).write === 'function';
+  if (!canWriteImage) return false;
+  await (navigator.clipboard as any).write([
+    new (window as any).ClipboardItem({ 'image/png': blob }),
+  ]);
+  return true;
+}
+
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
   const [cartTabs, setCartTabs] = useState<CartTab[]>([]);
@@ -126,6 +360,9 @@ export default function POS() {
   const processingBarcodesRef = useRef<Set<string>>(new Set());
   const cartTabsRef = useRef<CartTab[]>([]);
   const draftSnapshotFrameRef = useRef<HTMLIFrameElement>(null);
+  /** Remaining snapshot PNG parts after the first was copied (25 lines per image). */
+  const snapshotPartsQueueRef = useRef<Blob[]>([]);
+  const snapshotPartsTotalRef = useRef(0);
 
   // Keep an in-memory set of barcodes known to be in cart (or just added by queue)
   // so queue processing doesn't need to block on cart refetch after every item.
@@ -2808,6 +3045,11 @@ export default function POS() {
 
   const calculateTotal = () => cartGrossSubtotal - tradeInCredit;
 
+  useEffect(() => {
+    snapshotPartsQueueRef.current = [];
+    snapshotPartsTotalRef.current = 0;
+  }, [cartId, cart?.data?.items?.length]);
+
   const copyDraftSnapshotToClipboard = useCallback(async () => {
     const cartData = cart?.data;
     const items = cartData?.items;
@@ -2816,216 +3058,114 @@ export default function POS() {
       return;
     }
 
-    const now = new Date();
-    const headerDate = now.toLocaleString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-
-    const draftItems = items.map((item: any, idx: number) => {
-      const editingPrice = editingManualPrice?.[item.id];
-      const unitPrice =
-        editingPrice !== undefined && editingPrice !== ''
-          ? (parseFloat(editingPrice) || 0)
-          : (parseFloat(item.manual_unit_price) || 0);
-      const qty = parseFloat(String(item.quantity ?? '0')) || 0;
-      const lineTotal = unitPrice * qty;
-      const name = item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : (item.product_name || 'Item');
-      return {
-        idx: idx + 1,
-        name,
-        qty,
-        unitPrice,
-        lineTotal,
-      };
-    });
-
-    const subtotal = cartGrossSubtotal || 0;
-    const tradeIn = tradeInCredit || 0;
-    const total = calculateTotal() || 0;
-
-    const title = 'DRAFT POS SNAPSHOT';
-    const storeName = defaultStore?.name || cartData?.store_name || '-';
-    const customerName = selectedCustomer?.name || cartData?.customer_name || 'Walk-in Customer';
-    const cartLabel = cartData?.cart_number || (cartId ? `CART-${cartId}` : 'Cart');
-
-    const html = `<!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>${escapeHtml(title)}</title>
-    <style>
-      .draft-a4,
-      .draft-a4 table {
-        font-family: Arial, sans-serif;
-      }
-      .draft-a4 .items-grid {
-        width: 100%;
-        margin-top: 10px;
-        font-size: 12px;
-      }
-      .draft-a4 .items-grid-row {
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) 70px 110px 110px;
-      }
-      .draft-a4 .items-grid-cell {
-        border: 1px solid #000;
-        padding: 6px 8px;
-        display: flex;
-        align-items: center;
-        min-height: 42px;
-        line-height: 1.3;
-        box-sizing: border-box;
-      }
-      .draft-a4 .items-grid-header .items-grid-cell {
-        font-weight: 700;
-      }
-      .draft-a4 .cell-left {
-        justify-content: flex-start;
-        text-align: left;
-      }
-      .draft-a4 .cell-right {
-        justify-content: flex-end;
-        text-align: right;
-      }
-      .draft-a4 .items-grid-cell.product-cell {
-        white-space: normal;
-        word-break: break-word;
-      }
-      .draft-a4 .totals-table td {
-        border: 1px solid #000;
-        padding: 6px 8px;
-      }
-      .draft-a4 .totals-table td:first-child {
-        text-align: left;
-      }
-      .draft-a4 .totals-table td:last-child {
-        text-align: right;
-      }
-      .draft-a4 .totals-table tr {
-        height: 38px;
-      }
-      .draft-a4 .totals-table td,
-      .draft-a4 .totals-table td {
-        vertical-align: middle !important;
-        line-height: 1.3;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="draft-a4" style="font-family: Arial, sans-serif; color:#000; width: 794px; margin: 0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; border:1px solid #000; padding:10px 12px;">
-        <div>
-          <div style="font-size:18px; font-weight:700; letter-spacing:0.4px;">${escapeHtml(title)}</div>
-          <div style="font-size:12px; margin-top:2px;">${escapeHtml(cartLabel)} · ${escapeHtml(headerDate)}</div>
-          <div style="font-size:12px; margin-top:6px;"><strong>Store:</strong> ${escapeHtml(storeName)}</div>
-          <div style="font-size:12px; margin-top:2px;"><strong>Customer:</strong> ${escapeHtml(customerName)}</div>
-        </div>
-        <div style="text-align:right; font-size:12px;">
-          <div><strong>Items:</strong> ${draftItems.length}</div>
-          <div style="margin-top:4px; color:#555;">(Draft copy)</div>
-        </div>
-      </div>
-
-      <div class="items-grid">
-        <div class="items-grid-row items-grid-header">
-          <div class="items-grid-cell cell-left">#</div>
-          <div class="items-grid-cell cell-left">Product</div>
-          <div class="items-grid-cell cell-right">Qty</div>
-          <div class="items-grid-cell cell-right">Price</div>
-          <div class="items-grid-cell cell-right">Total</div>
-        </div>
-        ${draftItems
-          .map(
-            (r) => `<div class="items-grid-row">
-          <div class="items-grid-cell cell-left">${r.idx}</div>
-          <div class="items-grid-cell cell-left product-cell">${escapeHtml(r.name)}</div>
-          <div class="items-grid-cell cell-right">${escapeHtml(formatNumber(r.qty, 3))}</div>
-          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.unitPrice))}</div>
-          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.lineTotal))}</div>
-        </div>`
-          )
-          .join('')}
-      </div>
-
-      <div style="display:flex; justify-content:flex-end; margin-top:10px;">
-        <table class="totals-table" style="border-collapse:collapse; font-size:12px; min-width: 260px;">
-          <tbody>
-            <tr>
-              <td><strong>Subtotal</strong></td>
-              <td>₹${escapeHtml(formatNumber(subtotal))}</td>
-            </tr>
-            ${tradeIn > 0
-              ? `<tr>
-              <td><strong>Trade-in</strong></td>
-              <td>-₹${escapeHtml(formatNumber(tradeIn))}</td>
-            </tr>`
-              : ''}
-            <tr>
-              <td><strong>Total</strong></td>
-              <td><strong>₹${escapeHtml(formatNumber(total))}</strong></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </body>
-</html>`;
+    const iframe = draftSnapshotFrameRef.current;
+    if (!iframe) {
+      showToast('Snapshot preview not ready. Please refresh and try again.', 'error');
+      return;
+    }
 
     try {
-      const iframe = draftSnapshotFrameRef.current;
-      const doc = iframe?.contentDocument;
-      if (!iframe || !doc) {
-        showToast('Snapshot preview not ready. Please refresh and try again.', 'error');
+      const pending = snapshotPartsQueueRef.current;
+      if (pending.length > 0) {
+        const blob = pending.shift()!;
+        const totalParts = snapshotPartsTotalRef.current;
+        const partNum = totalParts - pending.length;
+
+        if (!(await copyPngBlobToClipboard(blob))) {
+          pending.unshift(blob);
+          showToast('Image clipboard not supported in this browser.', 'error');
+          return;
+        }
+
+        if (pending.length > 0) {
+          showToast(
+            `Part ${partNum} of ${totalParts} copied. Click Cart Snapshot again for part ${partNum + 1}.`,
+            'success'
+          );
+        } else {
+          snapshotPartsTotalRef.current = 0;
+          showToast(`Part ${partNum} of ${totalParts} copied. All parts done.`, 'success');
+        }
         return;
       }
 
-      doc.open();
-      doc.write(html);
-      doc.close();
-
-      // Let the iframe lay out content before capturing.
-      await new Promise((r) => window.setTimeout(r, 60));
-
-      const body = doc.body;
-      const el = doc.documentElement;
-      const w = el?.scrollWidth ?? 794; // A4 width ~210mm at 96dpi
-      const h = el?.scrollHeight ?? 1123;
-
-      const canvas = await html2canvas(body, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: w,
-        windowHeight: h,
+      const headerDate = new Date().toLocaleString('en-IN', {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
       });
 
-      const blob: Blob | null = await new Promise((resolve) =>
-        canvas.toBlob((b) => resolve(b), 'image/png', 1)
-      );
+      const draftItems: CartSnapshotRow[] = items.map((item: any, idx: number) => {
+        const editingPrice = editingManualPrice?.[item.id];
+        const unitPrice =
+          editingPrice !== undefined && editingPrice !== ''
+            ? (parseFloat(editingPrice) || 0)
+            : (parseFloat(item.manual_unit_price) || 0);
+        const qty = parseFloat(String(item.quantity ?? '0')) || 0;
+        const discount = parseFloat(item.discount_amount || 0) || 0;
+        const lineTotal = unitPrice * qty - discount;
+        const name = item.product_brand_name
+          ? `${item.product_name} - ${item.product_brand_name}`
+          : (item.product_name || 'Item');
+        return { idx: idx + 1, name, qty, unitPrice, lineTotal };
+      });
 
-      if (!blob) {
-        showToast('Failed to create snapshot image.', 'error');
-        return;
+      const subtotal = cartGrossSubtotal || 0;
+      const tradeIn = tradeInCredit || 0;
+      const total = calculateTotal() || 0;
+      const title = 'DRAFT POS SNAPSHOT';
+      const storeName = defaultStore?.name || cartData?.store_name || '-';
+      const customerName = selectedCustomer?.name || cartData?.customer_name || 'Walk-in Customer';
+      const cartLabel = cartData?.cart_number || (cartId ? `CART-${cartId}` : 'Cart');
+
+      const rowChunks = chunkSnapshotRows(draftItems, SNAPSHOT_ROWS_PER_PAGE);
+      const partCount = rowChunks.length;
+      const blobs: Blob[] = [];
+
+      for (let i = 0; i < rowChunks.length; i++) {
+        const html = buildCartSnapshotHtml({
+          title,
+          cartLabel,
+          headerDate,
+          storeName,
+          customerName,
+          rows: rowChunks[i],
+          partIndex: i + 1,
+          partCount,
+          totalItemCount: draftItems.length,
+          showTotals: i === rowChunks.length - 1,
+          subtotal,
+          tradeIn,
+          total,
+        });
+        const blob = await renderSnapshotHtmlToBlob(iframe, html);
+        if (!blob) {
+          showToast(`Failed to create snapshot image (part ${i + 1}).`, 'error');
+          return;
+        }
+        blobs.push(blob);
       }
 
-      const canWriteImage =
-        typeof (window as any).ClipboardItem !== 'undefined' &&
-        !!navigator.clipboard &&
-        typeof (navigator.clipboard as any).write === 'function';
-
-      if (!canWriteImage) {
+      if (!(await copyPngBlobToClipboard(blobs[0]))) {
         showToast('Image clipboard not supported in this browser.', 'error');
         return;
       }
 
-      await (navigator.clipboard as any).write([new (window as any).ClipboardItem({ 'image/png': blob })]);
-      showToast('Draft snapshot image copied to clipboard.', 'success');
+      if (blobs.length > 1) {
+        snapshotPartsQueueRef.current = blobs.slice(1);
+        snapshotPartsTotalRef.current = blobs.length;
+        showToast(
+          `Part 1 of ${blobs.length} copied (${SNAPSHOT_ROWS_PER_PAGE} lines per image). Click Cart Snapshot for part 2.`,
+          'success'
+        );
+      } else {
+        showToast('Cart snapshot copied to clipboard.', 'success');
+      }
     } catch (e: any) {
+      snapshotPartsQueueRef.current = [];
+      snapshotPartsTotalRef.current = 0;
       showToast(e?.message || 'Failed to copy to clipboard. Please check permissions.', 'error');
     }
   }, [
@@ -4604,11 +4744,11 @@ export default function POS() {
                   onClick={copyDraftSnapshotToClipboard}
                   disabled={!cart?.data?.items || !Array.isArray(cart.data.items) || cart.data.items.length === 0}
                   className="flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50 shrink-0"
-                  title="Copy production snapshot to clipboard"
+                  title={`Copy cart snapshot (${SNAPSHOT_ROWS_PER_PAGE} lines per image; click again for next part if cart is large)`}
                 >
                   <Camera className="h-4 w-4" />
                   <span className="sm:hidden">Snapshot</span>
-                  <span className="hidden sm:inline">Production Snapshot</span>
+                  <span className="hidden sm:inline">Cart Snapshot</span>
                 </Button>
                 {!isCartLocked && ((cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer) && (
                 <Button
