@@ -429,6 +429,7 @@ export const purchasingApi = {
     delete: (id: number) => api.delete(`/purchases/${id}/`),
     finalize: (id: number, data?: any) => api.post(`/purchases/${id}/finalize/`, data || {}),
     redistributeStock: (id: number, items: any[]) => api.post(`/purchases/${id}/redistribute-stock/`, { items }),
+    generateLabels: (id: number) => api.post(`/purchases/${id}/generate-labels/`, {}),
     items: {
       list: (purchaseId: number) => api.get(`/purchases/${purchaseId}/items/`),
       create: (purchaseId: number, data: any) => api.post(`/purchases/${purchaseId}/items/`, data),

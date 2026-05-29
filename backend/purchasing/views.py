@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from .models import Purchase, PurchaseItem, PurchaseStockMovement
 from .serializers import PurchaseSerializer, PurchaseItemSerializer
+from backend.catalog.purchase_label_generation import generate_labels_for_purchase
 from backend.core.utils import create_audit_log
 from backend.inventory.models import Stock
 from decimal import Decimal
@@ -80,7 +81,12 @@ def purchase_list_create(request):
         )
         if serializer.is_valid():
             purchase = serializer.save(created_by=request.user)
-            return Response(PurchaseSerializer(purchase).data, status=status.HTTP_201_CREATED)
+            from .serializers import bulk_get_label_statuses
+            bulk_statuses = bulk_get_label_statuses([purchase.id])
+            return Response(
+                PurchaseSerializer(purchase, context={'bulk_label_statuses': bulk_statuses}).data,
+                status=status.HTTP_201_CREATED,
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -644,6 +650,17 @@ def vendor_purchase_cancel(request, pk):
         )
     
     return Response(PurchaseSerializer(purchase).data, status=status.HTTP_200_OK)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def purchase_generate_labels(request, pk):
+    """Generate/queue labels for all printable barcodes on a purchase (bulk, chunked)."""
+    purchase = get_object_or_404(Purchase, pk=pk)
+    result = generate_labels_for_purchase(purchase.id)
+    if result.get('error'):
+        return Response(result, status=status.HTTP_404_NOT_FOUND)
+    return Response(result, status=status.HTTP_200_OK)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def purchase_redistribute_stock(request, pk):

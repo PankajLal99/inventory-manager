@@ -460,11 +460,8 @@ class PurchaseBarcodeTests(TestCase):
         self.assertIsNotNone(new_purchase_item, "Purchase should have tracked product item")
         # Quantity should be updated to 8
         self.assertEqual(new_purchase_item.quantity, Decimal('8.000'))
-        # Barcode count should reflect quantity (at least 3; may be 8 if backend creates new barcodes on update)
-        barcodes = Barcode.objects.filter(
-            purchase_item=new_purchase_item
-        )
-        self.assertGreaterEqual(barcodes.count(), 3, "Should have at least 3 barcodes after increasing quantity to 8")
+        barcodes = Barcode.objects.filter(purchase_item=new_purchase_item)
+        self.assertEqual(barcodes.count(), 8, "Save should sync barcodes to match quantity 8")
     
     def test_update_purchase_decreases_barcodes_only_new_ones(self):
         """Test that decreasing purchase quantity only deletes 'new' barcodes"""
@@ -918,3 +915,137 @@ class PurchaseItemAPITests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(PurchaseItem.objects.filter(id=item.id).exists())
+
+
+class PurchaseBarcodeSyncApiTests(TestCase):
+    """Save-time barcode recheck (ensure_purchase_barcodes_on_save) via API."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.client = AuthenticatedAPIClient()
+        self.client.authenticate_user(self.user)
+        self.supplier = TestDataFactory.create_supplier()
+        self.store = TestDataFactory.create_store()
+        self.product = TestDataFactory.create_product(track_inventory=True)
+
+    def test_create_response_includes_barcode_sync_complete(self):
+        data = {
+            'supplier': self.supplier.id,
+            'purchase_date': timezone.now().date().isoformat(),
+            'store': self.store.id,
+            'items': [
+                {'product': self.product.id, 'quantity': '4.00', 'unit_price': '50.00'},
+            ],
+        }
+        response = self.client.post('/api/v1/purchases/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn('barcode_sync', response.data)
+        sync = response.data['barcode_sync']
+        self.assertTrue(sync['all_barcodes_present'])
+        self.assertEqual(len(response.data['items']), 1)
+        item = Purchase.objects.get(id=response.data['id']).items.first()
+        self.assertEqual(Barcode.objects.filter(purchase_item=item).count(), 4)
+
+    def test_save_after_qty_increase_creates_exact_barcodes(self):
+        post = self.client.post(
+            '/api/v1/purchases/',
+            {
+                'supplier': self.supplier.id,
+                'purchase_date': timezone.now().date().isoformat(),
+                'store': self.store.id,
+                'items': [{'product': self.product.id, 'quantity': '3.00', 'unit_price': '10.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(post.status_code, status.HTTP_201_CREATED)
+        purchase_id = post.data['id']
+
+        put = self.client.put(
+            f'/api/v1/purchases/{purchase_id}/',
+            {
+                'supplier': self.supplier.id,
+                'purchase_date': post.data['purchase_date'],
+                'store': self.store.id,
+                'items': [{'product': self.product.id, 'quantity': '7.00', 'unit_price': '10.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(put.status_code, status.HTTP_200_OK)
+        self.assertIn('barcode_sync', put.data)
+        self.assertTrue(put.data['barcode_sync']['all_barcodes_present'])
+
+        item = Purchase.objects.get(id=purchase_id).items.first()
+        self.assertEqual(item.quantity, Decimal('7.000'))
+        self.assertEqual(Barcode.objects.filter(purchase_item=item).count(), 7)
+
+    def test_save_after_qty_decrease_trims_barcodes(self):
+        post = self.client.post(
+            '/api/v1/purchases/',
+            {
+                'supplier': self.supplier.id,
+                'purchase_date': timezone.now().date().isoformat(),
+                'store': self.store.id,
+                'items': [{'product': self.product.id, 'quantity': '6.00', 'unit_price': '10.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(post.status_code, status.HTTP_201_CREATED)
+        purchase_id = post.data['id']
+        item = Purchase.objects.get(id=purchase_id).items.first()
+        self.assertEqual(Barcode.objects.filter(purchase_item=item).count(), 6)
+
+        put = self.client.put(
+            f'/api/v1/purchases/{purchase_id}/',
+            {
+                'supplier': self.supplier.id,
+                'purchase_date': post.data['purchase_date'],
+                'store': self.store.id,
+                'items': [{'product': self.product.id, 'quantity': '2.00', 'unit_price': '10.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(put.status_code, status.HTTP_200_OK)
+        self.assertTrue(put.data['barcode_sync']['all_barcodes_present'])
+        item.refresh_from_db()
+        self.assertEqual(Barcode.objects.filter(purchase_item=item).count(), 2)
+
+    def test_ensure_fixes_missing_barcodes_without_qty_change(self):
+        from backend.purchasing.barcode_sync import ensure_purchase_barcodes_on_save
+
+        purchase = TestDataFactory.create_purchase(
+            user=self.user, supplier=self.supplier, store=self.store
+        )
+        item = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=self.product,
+            quantity=Decimal('5.00'),
+            unit_price=Decimal('10.00'),
+        )
+        for _ in range(2):
+            TestDataFactory.create_barcode(
+                product=self.product,
+                purchase_item=item,
+                tag='new',
+            )
+
+        result = ensure_purchase_barcodes_on_save(purchase)
+        self.assertTrue(result['all_barcodes_present'])
+        self.assertGreaterEqual(result['barcodes_added'], 3)
+        self.assertEqual(Barcode.objects.filter(purchase_item=item).count(), 5)
+
+    def test_draft_save_with_qty_and_price_runs_barcode_sync(self):
+        response = self.client.post(
+            '/api/v1/purchases/',
+            {
+                'supplier': self.supplier.id,
+                'purchase_date': timezone.now().date().isoformat(),
+                'store': self.store.id,
+                'status': 'draft',
+                'items': [{'product': self.product.id, 'quantity': '3.00', 'unit_price': '12.00'}],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['status'], 'draft')
+        self.assertIn('barcode_sync', response.data)
+        self.assertTrue(response.data['barcode_sync']['all_barcodes_present'])

@@ -539,55 +539,43 @@ export default function Purchases() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProductId, preselectedProductData, isPreselectedProductLoaded, isPreselectedProductFetched, showForm]);
 
-  // Helper function to auto-generate labels for all products in a purchase (async, non-blocking)
-  const autoGenerateLabels = (items: any[], purchaseId?: number) => {
-    const productIds = items
-      .map(item => item.product || item.product_id || (typeof item === 'object' && item.product))
-      .filter((id): id is number => id !== undefined && id !== null);
-    const uniqueProductIds = [...new Set(productIds)];
+  /** True when line has qty and unit price so backend can create barcodes + labels. */
+  const itemHasQtyAndPrice = (item: PurchaseItem) => {
+    const qty = parseInt(item.quantity) || 0;
+    const price = parseFloat(String(item.unit_price).trim() || '0') || 0;
+    return qty >= 1 && price > 0;
+  };
 
-    if (uniqueProductIds.length === 0) {
-      return;
+  const purchaseHasLabelableLines = (items: PurchaseItem[]) =>
+    items.some(itemHasQtyAndPrice);
+
+  const notifyBarcodeSyncResult = (purchase: { barcode_sync?: { barcodes_added?: number; barcodes_removed?: number; all_barcodes_present?: boolean } }) => {
+    const sync = purchase?.barcode_sync;
+    if (!sync) return;
+    const added = Number(sync.barcodes_added) || 0;
+    const removed = Number(sync.barcodes_removed) || 0;
+    if (added > 0 || removed > 0) {
+      const parts: string[] = [];
+      if (added > 0) parts.push(`${added} barcode(s) created`);
+      if (removed > 0) parts.push(`${removed} removed`);
+      toast(`Barcodes checked: ${parts.join(', ')}. Labels are generating.`, 'success');
     }
+    if (sync.all_barcodes_present === false) {
+      toast('Some products are still missing barcodes. Please save again.', 'info');
+    }
+  };
 
-    // Generate labels for each product in parallel (non-blocking, fire and forget)
-    uniqueProductIds.forEach((productId) => {
-      // Fire and forget - don't await, let it run in background
-      (async () => {
-        try {
-          // Check if labels are already generated using cached query
-          // Invalidate cache first to get fresh data, then check
-          const cacheKey = ['label-status', productId, purchaseId];
-          const cachedData = queryClient.getQueryData(cacheKey);
+  /** One bulk API call per purchase (backend chunks Azure requests). */
+  const autoGenerateLabelsForPurchase = (purchaseId?: number, items?: PurchaseItem[]) => {
+    if (!purchaseId) return;
+    const lines = items ?? purchaseItems;
+    if (lines.length > 0 && !purchaseHasLabelableLines(lines)) return;
 
-          if (cachedData && (cachedData as any).data?.all_generated) {
-            // Already generated according to cache, skip
-            return;
-          }
-
-          // If not in cache or not generated, check via API (will be cached)
-          try {
-            const statusResponse = await productsApi.labelsStatus(productId, purchaseId);
-            // Update cache with the response
-            queryClient.setQueryData(cacheKey, { productId, purchaseId, data: statusResponse.data });
-            if (statusResponse.data?.all_generated) {
-              // Already generated, skip
-              return;
-            }
-          } catch (statusError) {
-            // Status check failed, try to generate anyway (barcodes might be new)
-          }
-
-          // Generate labels in background (don't await - let it run async)
-          // Pass purchaseId to filter labels by this purchase
-          productsApi.generateLabels(productId, purchaseId).catch((error) => {
-            // Log error but don't block user - labels can be generated manually
-            console.error(`Background label generation failed for product ${productId}:`, error);
-          });
-        } catch (error) {
-          // Silently fail - labels will be generated when user clicks the button
-        }
-      })();
+    purchasingApi.purchases.generateLabels(purchaseId).then(() => {
+      queryClient.invalidateQueries({ queryKey: ['label-status'] });
+      queryClient.invalidateQueries({ queryKey: ['purchases'] });
+    }).catch((error) => {
+      console.error(`Purchase label generation failed for purchase ${purchaseId}:`, error);
     });
   };
 
@@ -597,6 +585,7 @@ export default function Purchases() {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
 
       const createdPurchase = response?.data || response;
+      notifyBarcodeSyncResult(createdPurchase);
       const isDraft = createdPurchase?.status === 'draft' || variables?.status === 'draft';
 
       if (isDraft) {
@@ -625,15 +614,13 @@ export default function Purchases() {
         }));
         setPurchaseItems(items);
         setSupplierSearch(createdPurchase.supplier_name || '');
+        autoGenerateLabelsForPurchase(createdPurchase.id, items);
         return;
       }
 
       setShowForm(false);
-      const items = createdPurchase?.items || purchaseItems;
-      if (items.length > 0) {
-        const purchaseId = createdPurchase?.id ? parseInt(createdPurchase.id) : undefined;
-        setTimeout(() => autoGenerateLabels(items, purchaseId), 1000);
-      }
+      const purchaseId = createdPurchase?.id ? parseInt(createdPurchase.id) : undefined;
+      autoGenerateLabelsForPurchase(purchaseId, purchaseItems);
       resetForm();
     },
     onError: (error: any) => {
@@ -647,21 +634,40 @@ export default function Purchases() {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
 
       const updatedPurchase = response?.data || response;
+      notifyBarcodeSyncResult(updatedPurchase);
       const isDraft = updatedPurchase?.status === 'draft' || variables?.data?.status === 'draft';
 
       if (isDraft) {
-        // Stay in form so user can continue editing the draft
+        const isDraftStatus = updatedPurchase.status === 'draft';
+        const items = (updatedPurchase?.items || []).map((item: any) => {
+          const qty = item.quantity != null ? Number(item.quantity) : 0;
+          const price = item.unit_price != null ? Number(item.unit_price) : 0;
+          return {
+            id: item.id,
+            product: normalizeEntityId(item.product) ?? 0,
+            variant: normalizeEntityId(item.variant),
+            product_name: item.product_name,
+            product_sku: item.product_sku,
+            variant_name: item.variant_name || null,
+            variant_sku: item.variant_sku || null,
+            quantity: isDraftStatus && qty === 0 ? '' : formatNumber(item.quantity, 3, false),
+            unit_price: isDraftStatus && price === 0 ? '' : formatNumber(item.unit_price, 2, false),
+            selling_price: item.selling_price ? formatNumber(item.selling_price, 2, false) : '',
+            line_total: item.line_total,
+            sold_count: item.sold_count || 0,
+          };
+        });
+        if (items.length > 0) {
+          setPurchaseItems(items);
+        }
+        autoGenerateLabelsForPurchase(updatedPurchase.id, items);
         return;
       }
 
       setShowForm(false);
       setEditingPurchase(null);
       setEditingPurchaseStatus(null);
-      const items = updatedPurchase?.items || purchaseItems;
-      if (items.length > 0) {
-        const purchaseId = updatedPurchase?.id ? parseInt(updatedPurchase.id) : undefined;
-        setTimeout(() => autoGenerateLabels(items, purchaseId), 1000);
-      }
+      autoGenerateLabelsForPurchase(updatedPurchase?.id, purchaseItems);
       resetForm();
     },
     onError: (error: any) => {

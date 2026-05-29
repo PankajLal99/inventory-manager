@@ -341,11 +341,6 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
         
         formatted_barcodes_data.append(formatted_item)
     
-    # Prepare bulk request payload with formatted dates
-    payload = {
-        'barcodes': formatted_barcodes_data  # Send array of barcode data with dates formatted as dd-mm-yyyy
-    }
-    
     # Prepare headers
     headers = {
         'Content-Type': 'application/json'
@@ -355,23 +350,37 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
     if AZURE_FUNCTION_KEY:
         headers['x-functions-key'] = AZURE_FUNCTION_KEY
     
-    # Fire-and-forget: Send bulk request with very short timeout
-    try:
-        requests.post(
-            AZURE_FUNCTION_URL,
-            json=payload,
-            headers=headers,
-            timeout=2  # Slightly longer timeout for bulk request
-        )
-        logger.info(f"Queued bulk label generation for {len(barcodes_data)} barcodes via Azure Function")
-    except requests.exceptions.Timeout:
-        # This is expected - we're not waiting for response
-        logger.debug(f"Bulk label generation queued for {len(barcodes_data)} barcodes (timeout expected)")
-    except requests.exceptions.RequestException as e:
-        # Log but don't fail - Azure queue will handle retries
-        logger.warning(f"Failed to queue bulk label generation for {len(barcodes_data)} barcodes: {str(e)}")
-    except Exception as e:
-        # Log error but don't raise - this is fire-and-forget
-        logger.warning(f"Error queuing bulk label generation: {str(e)}")
-    
+    # Chunk large batches so Azure Function HTTP handler is less likely to time out.
+    BULK_CHUNK_SIZE = 25
+    for offset in range(0, len(formatted_barcodes_data), BULK_CHUNK_SIZE):
+        chunk = formatted_barcodes_data[offset : offset + BULK_CHUNK_SIZE]
+        chunk_payload = {'barcodes': chunk}
+        try:
+            requests.post(
+                AZURE_FUNCTION_URL,
+                json=chunk_payload,
+                headers=headers,
+                timeout=10,
+            )
+            logger.info(
+                'Queued bulk label generation chunk (%s barcodes, offset %s) via Azure Function',
+                len(chunk),
+                offset,
+            )
+        except requests.exceptions.Timeout:
+            logger.debug(
+                'Bulk label chunk queued (%s barcodes, offset %s); timeout acceptable for async processing',
+                len(chunk),
+                offset,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.warning(
+                'Failed to queue bulk label chunk (%s barcodes, offset %s): %s',
+                len(chunk),
+                offset,
+                e,
+            )
+        except Exception as e:
+            logger.warning(f"Error queuing bulk label generation chunk: {str(e)}")
+
     return blob_urls

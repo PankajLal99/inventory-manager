@@ -165,9 +165,7 @@ def generate_barcodes_for_purchase_item(purchase_item, quantity):
             )
             created_barcodes.append(barcode)
     
-    # Auto-generate labels for newly created barcodes
-    if created_barcodes:
-        auto_generate_labels_for_barcodes(created_barcodes, product.name)
+    # Labels are queued once per purchase after save (see PurchaseSerializer create/update).
 
 
 def auto_generate_labels_for_barcodes(barcodes, product_name):
@@ -564,6 +562,25 @@ class PurchaseSerializer(serializers.ModelSerializer):
     
     def get_total(self, obj):
         return float(obj.get_total())
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        sync_result = getattr(instance, '_barcode_sync_result', None)
+        if sync_result is not None:
+            data['barcode_sync'] = sync_result
+        return data
+
+    def _ensure_barcodes_and_queue_labels(self, purchase):
+        """Recheck/create barcodes for every line, then queue missing labels."""
+        from backend.purchasing.barcode_sync import ensure_purchase_barcodes_on_save
+        from backend.catalog.purchase_label_generation import schedule_generate_labels_for_purchase
+
+        purchase.refresh_from_db()
+        sync_result = ensure_purchase_barcodes_on_save(purchase)
+        purchase._barcode_sync_result = sync_result
+        if purchase.items.filter(quantity__gt=0, unit_price__gt=0).exists():
+            schedule_generate_labels_for_purchase(purchase.id)
+        return sync_result
     
     @suspend_cache_signals_decorator
     def create(self, validated_data):
@@ -823,7 +840,10 @@ class PurchaseSerializer(serializers.ModelSerializer):
         # Only invalidate stock if we potentially touched it (e.g. status finalized)
         if purchase.status == 'finalized':
             invalidate_stock_cache_manual()
-            
+
+        if purchase.items.exists() and purchase.status != 'cancelled':
+            self._ensure_barcodes_and_queue_labels(purchase)
+
         return purchase
     
     @suspend_cache_signals_decorator
@@ -998,36 +1018,6 @@ class PurchaseSerializer(serializers.ModelSerializer):
                 if 'selling_price' in item_data:
                     old_item.selling_price = normalize_optional_decimal(item_data.get('selling_price'))
                 old_item.save()
-                
-                # Handle barcodes if quantity changed
-                if new_quantity != old_quantity:
-                    if new_quantity < old_quantity:
-                        # Quantity decreased: Remove excess unsold barcodes
-                        # We need to remove (old_quantity - new_quantity) barcodes
-                        # Prioritize deleting 'new' or 'unknown' barcodes, keep 'sold'/'in-cart'
-                        
-                        qty_to_remove = int(old_quantity - new_quantity)
-                        
-                        # Find deletable barcodes (not sold/in-cart)
-                        deletable_barcodes = Barcode.objects.filter(
-                            purchase_item=old_item
-                        ).exclude(
-                            tag__in=['sold', 'in-cart']
-                        ).order_by('-created_at') # Remove newest first
-                        
-                        # Make sure we don't try to delete more than available
-                        count_to_delete = min(qty_to_remove, deletable_barcodes.count())
-                        
-                        if count_to_delete > 0:
-                            barcodes_to_delete = deletable_barcodes[:count_to_delete]
-                            barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
-                            Barcode.objects.filter(id__in=barcode_ids).delete()
-                            
-                    elif new_quantity > old_quantity:
-                        # Quantity increased: Generate more barcodes for the difference
-                        qty_to_add = new_quantity - old_quantity
-                        if qty_to_add > 0:
-                            generate_barcodes_for_purchase_item(old_item, qty_to_add)
 
                 # --- Handle Stock Updates for Updated Items ---
                 
@@ -1079,14 +1069,16 @@ class PurchaseSerializer(serializers.ModelSerializer):
 
             # --- HANDLE DELETED ITEMS ---
             for old_item in items_to_delete:
-                # Delete all non-sold barcodes
+                from backend.catalog.azure_label_service import delete_blobs_for_barcodes_async
+
                 barcodes_to_delete = Barcode.objects.filter(
                     purchase_item=old_item
                 ).exclude(tag__in=['sold', 'in-cart'])
-                
+                barcode_ids = list(barcodes_to_delete.values_list('id', flat=True))
                 barcodes_to_delete.delete()
-                
-                # Delete the item itself
+                if barcode_ids:
+                    delete_blobs_for_barcodes_async(barcode_ids)
+
                 old_item.delete()
             
             # --- HANDLE STOCK UPDATES (Re-calculation) ---
@@ -1199,7 +1191,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
                                     'location': store.name if store else (warehouse.name if warehouse else None),
                                 }
                             )
-        
+
         # Handle status change to cancelled - delete non-sold barcodes, keep product
         if old_status != 'cancelled' and new_status == 'cancelled':
             from backend.catalog.models import Barcode
@@ -1309,5 +1301,9 @@ class PurchaseSerializer(serializers.ModelSerializer):
         invalidate_products_cache_manual()
         if new_status == 'finalized' or old_status == 'finalized':
             invalidate_stock_cache_manual()
+
+        # Every Save: recheck barcodes vs qty (create/update/finalize), then queue labels
+        if new_status != 'cancelled' and instance.items.exists():
+            self._ensure_barcodes_and_queue_labels(instance)
 
         return instance
