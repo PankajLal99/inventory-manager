@@ -329,73 +329,51 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
 
 
 def bulk_get_label_statuses(purchase_ids):
-    """Bulk queries label status information for a list of purchase IDs to avoid N+1 queries.
+    """Bulk label status for many purchases in one aggregated query (no N+1, no Python loop over rows).
     Returns a dictionary mapping (purchase_id, product_id) -> status_dict.
     """
     if not purchase_ids:
         return {}
-        
-    from backend.catalog.models import Barcode, BarcodeLabel
-    from django.db.models import Q
-    
-    # Fetch all barcodes for these purchases
-    barcodes = Barcode.objects.filter(purchase_id__in=purchase_ids).only('id', 'purchase_id', 'product_id', 'tag')
-    
-    # Fetch all valid label barcode_ids for these purchases
-    valid_label_barcode_ids = set(BarcodeLabel.objects.filter(
-        barcode__purchase_id__in=purchase_ids
-    ).exclude(
-        label_image=''
-    ).exclude(
-        label_image__isnull=True
-    ).filter(
-        Q(label_image__startswith='data:image') | Q(label_image__startswith='https://')
-    ).values_list('barcode_id', flat=True))
-    
-    # Map (purchase_id, product_id) -> stats
-    status_map = {}
-    for barcode in barcodes:
-        key = (barcode.purchase_id, barcode.product_id)
-        if key not in status_map:
-            status_map[key] = {
-                'total_barcodes': 0,
-                'generated_labels': 0,
-                'total_printable_barcodes': 0,
-                'generated_printable_labels': 0,
-                'excluded_non_printable_count': 0,
-            }
-        
-        stats = status_map[key]
-        stats['total_barcodes'] += 1
-        
-        is_generated = barcode.id in valid_label_barcode_ids
-        if is_generated:
-            stats['generated_labels'] += 1
-            
-        is_printable = barcode.tag not in ['sold', 'defective']
-        if is_printable:
-            stats['total_printable_barcodes'] += 1
-            if is_generated:
-                stats['generated_printable_labels'] += 1
-        else:
-            stats['excluded_non_printable_count'] += 1
-            
-    # Format mapped stats
+
+    from backend.catalog.models import Barcode
+    from django.db.models import Count, Q
+
+    non_printable_q = Q(tag__in=['sold', 'defective'])
+    printable_q = ~non_printable_q
+    valid_label_q = (
+        ~Q(label__label_image='')
+        & ~Q(label__label_image__isnull=True)
+        & (Q(label__label_image__startswith='data:image') | Q(label__label_image__startswith='https://'))
+    )
+
+    rows = (
+        Barcode.objects.filter(purchase_id__in=purchase_ids)
+        .values('purchase_id', 'product_id')
+        .annotate(
+            total_barcodes=Count('id'),
+            generated_labels=Count('id', filter=valid_label_q),
+            total_printable_barcodes=Count('id', filter=printable_q),
+            generated_printable_labels=Count('id', filter=printable_q & valid_label_q),
+            excluded_non_printable_count=Count('id', filter=non_printable_q),
+        )
+    )
+
     formatted_status = {}
-    for key, stats in status_map.items():
-        purchase_id, product_id = key
-        total_printable = stats['total_printable_barcodes']
-        gen_printable = stats['generated_printable_labels']
-        formatted_status[key] = {
+    for row in rows:
+        purchase_id = row['purchase_id']
+        product_id = row['product_id']
+        total_printable = row['total_printable_barcodes']
+        gen_printable = row['generated_printable_labels']
+        formatted_status[(purchase_id, product_id)] = {
             'product_id': product_id,
-            'total_barcodes': stats['total_barcodes'],
-            'generated_labels': stats['generated_labels'],
+            'total_barcodes': row['total_barcodes'],
+            'generated_labels': row['generated_labels'],
             'all_generated': gen_printable == total_printable and total_printable > 0,
             'needs_generation': gen_printable < total_printable,
             'total_printable_barcodes': total_printable,
             'generated_printable_labels': gen_printable,
-            'excluded_non_printable_count': stats['excluded_non_printable_count'],
-            'purchase_id': purchase_id
+            'excluded_non_printable_count': row['excluded_non_printable_count'],
+            'purchase_id': purchase_id,
         }
     return formatted_status
 

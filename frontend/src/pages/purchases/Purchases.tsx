@@ -44,6 +44,16 @@ interface LabelStatusState {
   excluded_non_printable_count: number;
 }
 
+interface ItemLabelStatus {
+  all_generated?: boolean;
+  needs_generation?: boolean;
+  total_printable_barcodes?: number;
+  total_barcodes?: number;
+  generated_printable_labels?: number;
+  generated_labels?: number;
+  excluded_non_printable_count?: number;
+}
+
 const PURCHASES_PAGE_LIMIT = 15;
 
 function parsePurchasesPageMeta(payload: unknown): {
@@ -211,7 +221,8 @@ export default function Purchases() {
   const supplierFilterRef = useRef<HTMLDivElement>(null);
   const productFilterRef = useRef<HTMLDivElement>(null);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
-  const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
+  /** Per product+purchase — blocks duplicate clicks and avoids UI flipping mid print flow */
+  const [printingLabelKeys, setPrintingLabelKeys] = useState<Record<string, boolean>>({});
   const [labelStatuses, setLabelStatuses] = useState<Record<string, LabelStatusState>>({});
   const [labelScopeFallback, setLabelScopeFallback] = useState<Record<string, boolean>>({});
   const [stockModalPurchse, setStockModalPurchase] = useState<any | null>(null);
@@ -1205,55 +1216,99 @@ export default function Purchases() {
     }
   };
 
-  const handleCheckLabelStatus = async (productId: number, purchaseId: number) => {
-    setCheckingStatusFor(productId);
+  const applyLabelStatusToState = (
+    labelKey: string,
+    productId: number,
+    purchaseId: number | undefined,
+    data: ItemLabelStatus & Record<string, unknown>,
+  ) => {
+    const allGenerated = Boolean(data.all_generated);
+    const excludedCount = Number(data.excluded_non_printable_count || 0);
+    queryClient.setQueryData(
+      ['label-status', productId, purchaseId],
+      { productId, purchaseId, data, error: null },
+    );
+    setLabelStatuses(prev => ({
+      ...prev,
+      [labelKey]: {
+        all_generated: allGenerated,
+        generating: false,
+        excluded_non_printable_count: excludedCount,
+      },
+    }));
+    return {
+      allGenerated,
+      excludedCount,
+      total: data.total_printable_barcodes ?? data.total_barcodes ?? 0,
+      generated: data.generated_printable_labels ?? data.generated_labels ?? 0,
+    };
+  };
+
+  /** One-click print: use cached/backend status when ready, else check → generate → print */
+  const handlePrintBarcodes = async (
+    productId: number,
+    purchaseId: number,
+    itemLabelStatus?: ItemLabelStatus | null,
+  ) => {
     const labelKey = getLabelKey(productId, purchaseId);
+    if (printingLabelKeys[labelKey]) return;
+
+    setPrintingLabelKeys(prev => ({ ...prev, [labelKey]: true }));
     const effectivePurchaseId = labelScopeFallback[labelKey] ? undefined : purchaseId;
+
     try {
-      const response = await productsApi.labelsStatus(productId, effectivePurchaseId);
-      const data = response.data || {};
-      const allGenerated = data.all_generated || false;
-      const total = data.total_printable_barcodes ?? data.total_barcodes ?? 0;
-      const generated = data.generated_printable_labels ?? data.generated_labels ?? 0;
-      const excludedCount = Number(data.excluded_non_printable_count || 0);
-      queryClient.setQueryData(['label-status', productId, effectivePurchaseId], { productId, purchaseId: effectivePurchaseId, data, error: null });
-      setLabelStatuses(prev => ({
-        ...prev,
-        [labelKey]: {
-          all_generated: allGenerated,
-          generating: false,
-          excluded_non_printable_count: excludedCount,
-        },
-      }));
-      if (total > 0) {
-        if (allGenerated) {
-          const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
-          toast(`All printable labels are ready (${generated} of ${total})${excludedText}. Opening print.`, 'success');
-          await handlePrintLabels(productId, purchaseId);
+      const cached = labelStatuses[labelKey];
+      const labelsReady =
+        itemLabelStatus?.all_generated === true || cached?.all_generated === true;
+
+      if (labelsReady) {
+        await handlePrintLabels(productId, purchaseId);
+        return;
+      }
+
+      try {
+        const response = await productsApi.labelsStatus(productId, effectivePurchaseId);
+        const { allGenerated, excludedCount, total, generated } = applyLabelStatusToState(
+          labelKey,
+          productId,
+          effectivePurchaseId,
+          response.data || {},
+        );
+
+        if (total > 0) {
+          if (allGenerated) {
+            const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
+            toast(`Labels ready (${generated} of ${total})${excludedText}. Opening print.`, 'success');
+            await handlePrintLabels(productId, purchaseId);
+          } else {
+            const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
+            toast(`Generating missing labels (${generated} of ${total})…${excludedText}`, 'info');
+            await triggerGenerateAndWait(productId, purchaseId);
+          }
         } else {
-          const excludedText = excludedCount > 0 ? ` (${excludedCount} sold/defective excluded)` : '';
-          toast(`Status: ${generated} of ${total} generated. Generating missing labels and opening print...${excludedText}`, 'info');
           await triggerGenerateAndWait(productId, purchaseId);
         }
-      } else {
-        await triggerGenerateAndWait(productId, purchaseId);
-      }
-    } catch (error: any) {
-      setLabelStatuses(prev => ({
-        ...prev,
-        [labelKey]: {
-          all_generated: false,
-          generating: false,
-          excluded_non_printable_count: prev[labelKey]?.excluded_non_printable_count || 0,
-        },
-      }));
-      if (error?.response?.status === 404) {
-        await triggerGenerateAndWait(productId, purchaseId);
-      } else {
-        toast(error?.response?.data?.error || 'Failed to check label status.', 'error');
+      } catch (error: any) {
+        setLabelStatuses(prev => ({
+          ...prev,
+          [labelKey]: {
+            all_generated: false,
+            generating: false,
+            excluded_non_printable_count: prev[labelKey]?.excluded_non_printable_count || 0,
+          },
+        }));
+        if (error?.response?.status === 404) {
+          await triggerGenerateAndWait(productId, purchaseId);
+        } else {
+          toast(error?.response?.data?.error || 'Failed to prepare labels for printing.', 'error');
+        }
       }
     } finally {
-      setCheckingStatusFor(null);
+      setPrintingLabelKeys(prev => {
+        const next = { ...prev };
+        delete next[labelKey];
+        return next;
+      });
     }
   };
 
@@ -1441,7 +1496,11 @@ export default function Purchases() {
           if (seenKeys.has(labelKey)) return;
           seenKeys.add(labelKey);
           const entry = { productId, purchaseId, labelKey };
-          if (!item.printed) unprinted.push(entry);
+          if (item.printed) return;
+          // Backend bulk label_status is authoritative; only poll when labels may still be generating
+          const ls = item.label_status as ItemLabelStatus | undefined;
+          if (ls?.all_generated) return;
+          unprinted.push(entry);
         });
       }
     });
@@ -1594,6 +1653,82 @@ export default function Purchases() {
       }));
     }
   }, [purchases]);
+
+  const renderInventoryPrintControls = (
+    productId: number,
+    purchaseId: number,
+    itemLabelStatus: ItemLabelStatus | null | undefined,
+    labelKey: string,
+    labelStatus: LabelStatusState,
+    excludedCount: number,
+    layout: 'desktop' | 'mobile',
+  ) => {
+    const isGenerating = generatingLabelsFor === productId || labelStatus.generating;
+    const isPrinting = Boolean(printingLabelKeys[labelKey]);
+    const labelsReady = labelStatus.all_generated;
+    const stackClass = layout === 'mobile' ? 'flex flex-col gap-2 w-full' : 'flex items-center justify-center flex-wrap gap-1.5';
+    const btnClass = layout === 'mobile' ? 'flex items-center gap-1.5 w-full' : 'flex items-center gap-1.5';
+
+    if (isGenerating) {
+      return (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled
+          className={btnClass}
+          title="Generating labels…"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span className={layout === 'desktop' ? 'hidden sm:inline' : undefined}>Generating…</span>
+        </Button>
+      );
+    }
+
+    return (
+      <div className={stackClass}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => handlePrintBarcodes(productId, purchaseId, itemLabelStatus)}
+          disabled={isPrinting || isGenerating}
+          className={`${btnClass} text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300`}
+          title="Check label status, generate if needed, and open print"
+        >
+          {isPrinting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Printer className="h-3.5 w-3.5" />
+          )}
+          <span className={layout === 'desktop' ? 'hidden sm:inline' : undefined}>
+            {isPrinting ? 'Printing…' : 'Print'}
+          </span>
+        </Button>
+        {labelsReady && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleRegenerateLabels(productId, purchaseId)}
+            className={`${btnClass} text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300`}
+            title="Regenerate labels"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            {layout === 'mobile' ? <span>Regenerate</span> : null}
+          </Button>
+        )}
+        {excludedCount > 0 && (
+          layout === 'mobile' ? (
+            <div className="text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 text-center">
+              {excludedCount} sold/defective excluded
+            </div>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
+              {excludedCount} sold/defective
+            </span>
+          )
+        )}
+      </div>
+    );
+  };
 
   // Handle supplier selection in modal
   const handleSupplierSelect = (supplierId: string) => {
@@ -1931,87 +2066,15 @@ export default function Purchases() {
                                         </td>
                                         <td className="px-3 py-2 text-center">
                                           {trackInventory ? (
-                                            <div className="flex items-center justify-center flex-wrap gap-1.5">
-                                              {(() => {
-                                                const isGenerating = generatingLabelsFor === productId || labelStatus.generating;
-                                                const isChecking = checkingStatusFor === productId;
-                                                const alreadyPrinted = item.printed;
-                                                const allGenerated = alreadyPrinted || labelStatus.all_generated;
-
-                                                if (isGenerating) {
-                                                  return (
-                                                    <Button
-                                                      variant="outline"
-                                                      size="sm"
-                                                      disabled
-                                                      className="flex items-center gap-1.5"
-                                                      title="Generating Labels..."
-                                                    >
-                                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                      <span className="hidden sm:inline">Generating...</span>
-                                                    </Button>
-                                                  );
-                                                }
-
-                                                if (allGenerated) {
-                                                  return (
-                                                    <div className="flex items-center justify-center flex-wrap gap-1.5">
-                                                      <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() => handlePrintLabels(productId, purchase.id)}
-                                                        className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                                        title="Get barcodes and open print dialog"
-                                                      >
-                                                        <Printer className="h-3.5 w-3.5" />
-                                                        <span className="hidden sm:inline">Print</span>
-                                                      </Button>
-                                                      <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() => handleRegenerateLabels(productId, purchase.id)}
-                                                        className="flex items-center gap-1.5 text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
-                                                        title="Regenerate Labels"
-                                                      >
-                                                        <RotateCcw className="h-3.5 w-3.5" />
-                                                      </Button>
-                                                      {excludedCount > 0 && (
-                                                        <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
-                                                          {excludedCount} sold/defective
-                                                        </span>
-                                                      )}
-                                                    </div>
-                                                  );
-                                                }
-
-                                                return (
-                                                  <div className="flex items-center justify-center flex-wrap gap-1.5">
-                                                    <Button
-                                                      variant="outline"
-                                                      size="sm"
-                                                      onClick={() => handleCheckLabelStatus(productId, purchase.id)}
-                                                      disabled={isChecking || isGenerating}
-                                                      className="flex items-center gap-1.5 text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                                      title="Print barcodes"
-                                                    >
-                                                      {isChecking ? (
-                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                      ) : (
-                                                        <Printer className="h-3.5 w-3.5" />
-                                                      )}
-                                                      <span className="hidden sm:inline">
-                                                        {isChecking ? 'Checking...' : 'Print'}
-                                                      </span>
-                                                    </Button>
-                                                    {excludedCount > 0 && (
-                                                      <span className="inline-flex items-center rounded-full bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 text-[10px] font-semibold">
-                                                        {excludedCount} sold/defective
-                                                      </span>
-                                                    )}
-                                                  </div>
-                                                );
-                                              })()}
-                                            </div>
+                                            renderInventoryPrintControls(
+                                              productId,
+                                              purchase.id,
+                                              item.label_status,
+                                              labelKey,
+                                              labelStatus,
+                                              excludedCount,
+                                              'desktop',
+                                            )
                                           ) : (
                                             <span className="text-xs text-gray-400">N/A</span>
                                           )}
@@ -2216,84 +2279,15 @@ export default function Purchases() {
                               {trackInventory && (
                                 <div className="mt-2 pt-2 border-t border-gray-100">
                                   <div className="flex items-center justify-center">
-                                    {(() => {
-                                      const isGenerating = generatingLabelsFor === productId || labelStatus.generating;
-                                      const isChecking = checkingStatusFor === productId;
-                                      const alreadyPrinted = item.printed;
-                                      const allGenerated = alreadyPrinted || labelStatus.all_generated;
-
-                                      if (isGenerating) {
-                                        return (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            disabled
-                                            className="flex items-center gap-1.5 w-full"
-                                            title="Generating Labels..."
-                                          >
-                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                            <span>Generating...</span>
-                                          </Button>
-                                        );
-                                      }
-
-                                      if (allGenerated) {
-                                        return (
-                                          <div className="flex flex-col gap-2">
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              onClick={() => handlePrintLabels(productId, purchase.id)}
-                                              className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                              title="Get barcodes and open print dialog"
-                                            >
-                                              <Printer className="h-3.5 w-3.5" />
-                                              <span>Get barcodes & Print</span>
-                                            </Button>
-                                            <Button
-                                              variant="outline"
-                                              size="sm"
-                                              onClick={() => handleRegenerateLabels(productId, purchase.id)}
-                                              className="flex items-center gap-1.5 w-full text-orange-700 bg-orange-50 border-orange-200 hover:bg-orange-100 hover:border-orange-300"
-                                              title="Regenerate Labels"
-                                            >
-                                              <RotateCcw className="h-3.5 w-3.5" />
-                                              <span>Regenerate</span>
-                                            </Button>
-                                            {excludedCount > 0 && (
-                                              <div className="text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 text-center">
-                                                {excludedCount} sold/defective excluded
-                                              </div>
-                                            )}
-                                          </div>
-                                        );
-                                      }
-
-                                      return (
-                                        <div className="flex flex-col gap-2">
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => handleCheckLabelStatus(productId, purchase.id)}
-                                            disabled={isChecking || isGenerating}
-                                            className="flex items-center gap-1.5 w-full text-green-700 bg-green-50 border-green-200 hover:bg-green-100 hover:border-green-300"
-                                            title="Print barcodes"
-                                          >
-                                            {isChecking ? (
-                                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                            ) : (
-                                              <Printer className="h-3.5 w-3.5" />
-                                            )}
-                                            <span>{isChecking ? 'Checking...' : 'Print'}</span>
-                                          </Button>
-                                          {excludedCount > 0 && (
-                                            <div className="text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 text-center">
-                                              {excludedCount} sold/defective excluded
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })()}
+                                    {renderInventoryPrintControls(
+                                      productId,
+                                      purchase.id,
+                                      item.label_status,
+                                      labelKey,
+                                      labelStatus,
+                                      excludedCount,
+                                      'mobile',
+                                    )}
                                   </div>
                                 </div>
                               )}
