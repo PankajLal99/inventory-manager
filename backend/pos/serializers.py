@@ -19,6 +19,9 @@ class CartItemSerializer(serializers.ModelSerializer):
     cart = serializers.PrimaryKeyRelatedField(read_only=True)
     scanned_barcodes = serializers.JSONField(required=False, allow_null=True)
     scanned_barcodes_display = serializers.SerializerMethodField()
+    scanned_times = serializers.SerializerMethodField()
+    scanned_at = serializers.DateTimeField(read_only=True)
+    scan_entries = serializers.SerializerMethodField()
 
     def get_product_brand_name(self, obj):
         """Get product brand name"""
@@ -51,7 +54,58 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CartItem
-        fields = ['id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display']
+        fields = [
+            'id', 'cart', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_supplier_name',
+            'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price',
+            'product_track_inventory', 'variant', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price',
+            'discount_amount', 'tax_amount', 'scanned_barcodes', 'scanned_barcodes_display', 'scanned_times', 'scanned_at',
+            'scan_entries',
+        ]
+
+    def get_scanned_times(self, obj):
+        from .cart_scan_times import scanned_times_list
+        return scanned_times_list(obj)
+
+    def get_scan_entries(self, obj):
+        """Concrete list of barcode + scanned_at for UI (respects sold-barcode filter in overview)."""
+        from backend.catalog.models import Barcode
+        from .cart_scan_times import barcode_scan_iso
+
+        sold_barcode_ids = self.context.get('sold_barcode_ids') or set()
+        entries = []
+        times = obj.barcode_scanned_at or {}
+
+        for barcode_str in obj.scanned_barcodes or []:
+            if not barcode_str:
+                continue
+            b_upper = str(barcode_str).strip().upper()
+            barcode_obj = None
+            try:
+                barcode_obj = Barcode.objects.get(barcode=b_upper)
+            except Barcode.DoesNotExist:
+                try:
+                    barcode_obj = Barcode.objects.get(short_code=b_upper)
+                except Barcode.DoesNotExist:
+                    pass
+            if barcode_obj and sold_barcode_ids and barcode_obj.id in sold_barcode_ids:
+                continue
+            display = (
+                (barcode_obj.short_code or barcode_obj.barcode)
+                if barcode_obj
+                else barcode_str
+            )
+            iso = barcode_scan_iso(times, barcode_str)
+            entries.append({
+                'barcode_display': display,
+                'scanned_at': iso,
+            })
+
+        if not entries and obj.scanned_at:
+            entries.append({
+                'barcode_display': None,
+                'scanned_at': obj.scanned_at.isoformat(),
+            })
+        return entries
 
     def get_scanned_barcodes_display(self, obj):
         """Return display labels (short_code or barcode) for each scanned barcode for UI.
@@ -157,8 +211,22 @@ class CartItemSerializer(serializers.ModelSerializer):
         elif 'cart' not in validated_data:
             # If neither context nor validated_data has cart, this is an error
             raise serializers.ValidationError({'cart': 'Cart is required'})
-        
-        return super().create(validated_data)
+
+        scanned_barcodes = validated_data.get('scanned_barcodes') or []
+        instance = super().create(validated_data)
+        update_fields = []
+        if scanned_barcodes:
+            from .cart_scan_times import record_barcode_scan
+            for bc in scanned_barcodes:
+                record_barcode_scan(instance, bc)
+            update_fields.append('barcode_scanned_at')
+        else:
+            from .cart_scan_times import ensure_line_scanned_at
+            ensure_line_scanned_at(instance)
+            update_fields.append('scanned_at')
+        if update_fields:
+            instance.save(update_fields=update_fields)
+        return instance
 
 
 class CartSerializer(serializers.ModelSerializer):
@@ -211,6 +279,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
     barcode_tag = serializers.SerializerMethodField()
     replacement_ref = serializers.SerializerMethodField()
     available_quantity = serializers.SerializerMethodField()
+    sold_line_credit = serializers.SerializerMethodField()
 
     def get_barcode_value(self, obj):
         """Return short_code when available for display, else full barcode."""
@@ -264,6 +333,14 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
         """Calculate available quantity for replacement (quantity - replaced_quantity)"""
         return float(obj.quantity - obj.replaced_quantity)
 
+    def get_sold_line_credit(self, obj):
+        """Selling-price line credit for trade-in / replacement (not purchase cost)."""
+        from decimal import Decimal
+
+        from .sold_price_utils import effective_sold_line_credit
+
+        return str(effective_sold_line_credit(obj).quantize(Decimal('0.01')))
+
     def get_product_brand_name(self, obj):
         """Get product brand name"""
         if obj.product and obj.product.brand:
@@ -291,7 +368,16 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InvoiceItem
-        fields = ['id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price', 'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant', 'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'barcode_tag', 'replacement_ref', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount', 'tax_amount', 'line_total', 'replaced_quantity', 'replaced_at', 'replaced_by', 'available_quantity', 'original_invoice', 'original_invoice_item', 'replacement_return_tag', 'accepted_return_price', 'original_sold_unit_price', 'original_sold_line_total', 'original_invoice_number', 'original_customer_name']
+        fields = [
+            'id', 'product', 'product_name', 'product_sku', 'product_brand_name', 'product_purchase_price',
+            'product_selling_price', 'product_can_go_below_purchase_price', 'product_track_inventory', 'variant',
+            'barcode', 'sold_barcode_value', 'barcode_value', 'barcode_full', 'barcode_id', 'barcode_tag',
+            'replacement_ref', 'quantity', 'unit_price', 'manual_unit_price', 'purchase_price', 'discount_amount',
+            'tax_amount', 'line_total', 'scanned_at', 'sold_line_credit', 'replaced_quantity', 'replaced_at',
+            'replaced_by', 'available_quantity', 'original_invoice', 'original_invoice_item', 'replacement_return_tag',
+            'accepted_return_price', 'original_sold_unit_price', 'original_sold_line_total', 'original_invoice_number',
+            'original_customer_name',
+        ]
 
 
 class PaymentSerializer(serializers.ModelSerializer):

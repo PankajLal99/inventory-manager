@@ -9,6 +9,7 @@ from django.db import transaction
 from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, Exists, OuterRef, IntegerField
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
@@ -33,6 +34,13 @@ from .serializers import (
     POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
     InvoiceListSerializer, RepairInvoiceListSerializer, InvoiceItemSerializer, PaymentSerializer,
     ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
+)
+from .cart_scan_times import (
+    record_barcode_scan,
+    remove_barcode_scan,
+    pop_last_barcode_scan,
+    ensure_line_scanned_at,
+    lookup_barcode_scan_time,
 )
 from backend.catalog.label_generator import generate_label_image
 
@@ -2061,8 +2069,9 @@ def cart_items(request, pk):
 
             if barcode_value_to_use and barcode_value_to_use not in merge_target.scanned_barcodes:
                 merge_target.scanned_barcodes.append(barcode_value_to_use)
+                record_barcode_scan(merge_target, barcode_value_to_use)
                 merge_target.quantity = Decimal(len(merge_target.scanned_barcodes))
-                merge_target.save(update_fields=['scanned_barcodes', 'quantity'])
+                merge_target.save(update_fields=['scanned_barcodes', 'quantity', 'barcode_scanned_at'])
 
                 if barcode_obj and barcode_obj.tag in ['new', 'returned']:
                     barcode_obj.tag = 'in-cart'
@@ -2426,12 +2435,13 @@ def cart_item_update(request, pk, item_id):
                 # Remove last barcode from list
                 if len(cart_item.scanned_barcodes) > 0:
                     cart_item.scanned_barcodes.pop()
+                    pop_last_barcode_scan(cart_item)
                     cart_item.quantity = Decimal(len(cart_item.scanned_barcodes))
                     if cart_item.quantity == 0:
                         # If quantity becomes 0, delete the item
                         cart_item.delete()
                         return Response(status=status.HTTP_204_NO_CONTENT)
-                    cart_item.save(update_fields=['scanned_barcodes', 'quantity'])
+                    cart_item.save(update_fields=['scanned_barcodes', 'quantity', 'barcode_scanned_at'])
                 else:
                     return Response({
                         'error': 'Cannot decrement',
@@ -2596,6 +2606,7 @@ def cart_item_remove_sku(request, pk, item_id):
     to_remove = next((x for x in cart_item.scanned_barcodes if str(x).strip().upper() == b_upper), None)
     if to_remove is not None:
         cart_item.scanned_barcodes.remove(to_remove)
+        remove_barcode_scan(cart_item, to_remove)
     cart_item.quantity = Decimal(len(cart_item.scanned_barcodes))
     
     # Update stock quantity when tracked item barcode is removed
@@ -2655,7 +2666,7 @@ def cart_item_remove_sku(request, pk, item_id):
         cart_item.delete()
         return Response({'message': 'Cart item removed', 'deleted': True}, status=status.HTTP_200_OK)
 
-    cart_item.save(update_fields=['scanned_barcodes', 'quantity'])
+    cart_item.save(update_fields=['scanned_barcodes', 'quantity', 'barcode_scanned_at'])
     serializer = CartItemSerializer(cart_item)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -2723,9 +2734,11 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, s
     if tag_barcode is None and product and not product.track_inventory:
         tag_barcode = single_barcode_for_untracked_product(product)
 
+    from .sold_price_utils import effective_sold_line_credit
+
     return_qty = invoice_item.quantity
     original_quantity = invoice_item.quantity
-    original_line_total = invoice_item.line_total
+    original_line_total = effective_sold_line_credit(invoice_item)
     if original_quantity > 0:
         refund_amount = (original_line_total / original_quantity) * return_qty
     else:
@@ -3188,6 +3201,7 @@ def cart_checkout(request, pk):
                     discount_amount=ci.discount_amount, tax_amount=ci.tax_amount,
                     line_total=line_total,
                     purchase_price=ci.purchase_price,
+                    scanned_at=ci.scanned_at or timezone.now(),
                 )
                 subtotal += line_total
                 discount_total += ci.discount_amount
@@ -3212,7 +3226,8 @@ def cart_checkout(request, pk):
                         quantity=Decimal('1.000'),
                         unit_price=ci.unit_price, manual_unit_price=ci.manual_unit_price,
                         discount_amount=pd, tax_amount=pt,
-                        line_total=line_unit_total
+                        line_total=line_unit_total,
+                        scanned_at=lookup_barcode_scan_time(ci, b_obj.barcode) or timezone.now(),
                     )
                     # Shop-specific policy:
                     # - repair pending draft -> in-cart (reserved)
@@ -4574,6 +4589,12 @@ def invoice_edit(request, pk):
     )
     for inv_item in invoice.items.select_related('product', 'variant', 'barcode').all():
         scanned = [inv_item.barcode.barcode] if inv_item.barcode else []
+        edit_scanned_at = inv_item.scanned_at or timezone.now()
+        barcode_times = {}
+        if scanned:
+            from .cart_scan_times import _barcode_key
+            for bc in scanned:
+                barcode_times[_barcode_key(bc)] = edit_scanned_at.isoformat()
         CartItem.objects.create(
             cart=cart,
             product=inv_item.product,
@@ -4584,7 +4605,9 @@ def invoice_edit(request, pk):
             purchase_price=inv_item.purchase_price,
             discount_amount=inv_item.discount_amount,
             tax_amount=inv_item.tax_amount,
-            scanned_barcodes=scanned
+            scanned_barcodes=scanned,
+            barcode_scanned_at=barcode_times,
+            scanned_at=edit_scanned_at if not scanned else None,
         )
     create_audit_log(
         request=request,
@@ -4684,6 +4707,7 @@ def invoice_update(request, pk):
                     tax_amount=cart_item.tax_amount,
                     line_total=line_total,
                     purchase_price=cart_item.purchase_price,
+                    scanned_at=cart_item.scanned_at or timezone.now(),
                 )
                 # Deduct stock for the new item in non-tracked mode
                 if invoice.store:
@@ -4732,6 +4756,7 @@ def invoice_update(request, pk):
                     tax_amount=per_unit_tax,
                     line_total=line_total,
                     purchase_price=cart_item.purchase_price,
+                    scanned_at=lookup_barcode_scan_time(cart_item, barcode_obj.barcode) or timezone.now(),
                 )
                 # Deduct stock for the new barcode in tracked mode
                 if invoice.store:
@@ -5630,15 +5655,47 @@ def return_detail(request, pk):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+PRIVILEGED_EXPENSE_CREATOR_GROUPS = ('Admin', 'Super')
+
+
+def _can_manage_all_expenses(user):
+    """Admin and Super groups can view all expenses and edit or delete any entry."""
+    return user.groups.filter(name__in=PRIVILEGED_EXPENSE_CREATOR_GROUPS).exists()
+
+
+def _expense_created_by_privileged_user(expense):
+    if not expense.created_by_id:
+        return False
+    return expense.created_by.groups.filter(name__in=PRIVILEGED_EXPENSE_CREATOR_GROUPS).exists()
+
+
+def _filter_expenses_queryset_for_user(queryset, user):
+    """Non-privileged users must not see expenses created by Admin or Super users."""
+    if _can_manage_all_expenses(user):
+        return queryset
+    privileged_creator_ids = get_user_model().objects.filter(
+        groups__name__in=PRIVILEGED_EXPENSE_CREATOR_GROUPS,
+    ).values('pk')
+    return queryset.exclude(created_by_id__in=privileged_creator_ids)
+
+
+def _user_can_view_expense(user, expense):
+    if _can_manage_all_expenses(user):
+        return True
+    return not _expense_created_by_privileged_user(expense)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def expense_list_create(request):
     """List all expenses or create a new expense."""
     if request.method == 'GET':
-        if not request.user.groups.filter(name='Super').exists():
-            return Response({'error': 'Only Super group can view expense listings.'}, status=status.HTTP_403_FORBIDDEN)
-
-        queryset = Expenses.objects.select_related('created_by', 'last_updated_by').order_by('-expense_date', '-created_on')
+        queryset = (
+            Expenses.objects.select_related('created_by', 'last_updated_by')
+            .prefetch_related('created_by__groups')
+            .order_by('-expense_date', '-created_on')
+        )
+        queryset = _filter_expenses_queryset_for_user(queryset, request.user)
         search = (request.query_params.get('search') or '').strip()
         payment_type = (request.query_params.get('payment_type') or '').strip().upper()
         date_from = request.query_params.get('date_from')
@@ -5701,14 +5758,22 @@ def expense_borrower_suggestions(request):
 @permission_classes([IsAuthenticated])
 def expense_detail(request, pk):
     """Retrieve, update, or delete an expense."""
-    if request.method == 'GET' and not request.user.groups.filter(name='Super').exists():
-        return Response({'error': 'Only Super group can view expense listings.'}, status=status.HTTP_403_FORBIDDEN)
-
-    expense = get_object_or_404(Expenses.objects.select_related('created_by', 'last_updated_by'), pk=pk)
+    expense = get_object_or_404(
+        Expenses.objects.select_related('created_by', 'last_updated_by').prefetch_related('created_by__groups'),
+        pk=pk,
+    )
 
     if request.method == 'GET':
+        if not _user_can_view_expense(request.user, expense):
+            return Response({'error': 'Expense not found.'}, status=status.HTTP_404_NOT_FOUND)
         serializer = ExpenseSerializer(expense)
         return Response(serializer.data)
+
+    if not _can_manage_all_expenses(request.user):
+        return Response(
+            {'error': 'Only Admin or Super group can edit or delete expenses.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     if request.method == 'DELETE':
         expense.delete()

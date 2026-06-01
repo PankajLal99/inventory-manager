@@ -52,6 +52,29 @@ export function posTradeInCreditTotal(lines: PosTradeInLine[]): number {
   return lines.filter((l) => l.return_tag).reduce((s, l) => s + (l.accepted_credit || 0), 0);
 }
 
+/** Resolve selling-price credit from find-invoice item payload (not purchase cost). */
+export function soldLineCreditFromInvoiceItem(item: Record<string, unknown>): number {
+  const soldCredit = parseFloat(String(item.sold_line_credit ?? ''));
+  if (Number.isFinite(soldCredit) && soldCredit > 0) {
+    return soldCredit;
+  }
+  const qty = parseFloat(String(item.quantity ?? '1')) || 1;
+  const manual = parseFloat(String(item.manual_unit_price ?? '0'));
+  const unit = parseFloat(String(item.unit_price ?? '0'));
+  const catalogSell = parseFloat(String(item.product_selling_price ?? '0'));
+  let unitPrice = 0;
+  if (Number.isFinite(manual) && manual > 0) unitPrice = manual;
+  else if (Number.isFinite(unit) && unit > 0) unitPrice = unit;
+  else if (Number.isFinite(catalogSell) && catalogSell > 0) unitPrice = catalogSell;
+  if (unitPrice > 0) {
+    const disc = parseFloat(String(item.discount_amount ?? '0')) || 0;
+    const tax = parseFloat(String(item.tax_amount ?? '0')) || 0;
+    return unitPrice * qty - disc + tax;
+  }
+  const lineTotal = parseFloat(String(item.line_total ?? '0'));
+  return Number.isFinite(lineTotal) && lineTotal > 0 ? lineTotal : 0;
+}
+
 /** Empty list can close; otherwise every line needs condition + credit in (0, original_line_credit]. */
 export function isTradeInModalComplete(lines: PosTradeInLine[]): boolean {
   if (lines.length === 0) return true;
@@ -93,7 +116,7 @@ export default function PosTradeInCartModal({
           onError('This item is already in the trade-in list.');
           return;
         }
-        const original = parseFloat(item.line_total || '0') || 0;
+        const original = soldLineCreditFromInvoiceItem(item);
         const line: PosTradeInLine = {
           id: randomId(),
           invoice_item_id: invoiceItemId,

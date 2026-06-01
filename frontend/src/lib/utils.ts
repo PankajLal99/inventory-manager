@@ -174,6 +174,22 @@ export function formatDateOnlyDisplay(dateStr: string | null | undefined): strin
     return new Date(y, m - 1, d).toLocaleDateString();
 }
 
+/** POS cart / line item scan timestamp (ISO from API). */
+export function formatScannedTime(iso: string | null | undefined): string {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+    });
+}
+
 /**
  * Converts a date-only string (YYYY-MM-DD) to an ISO string for that date at
  * the current local time. Use when sending created_at for ledger entries so

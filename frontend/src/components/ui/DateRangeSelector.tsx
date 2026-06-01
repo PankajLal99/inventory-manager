@@ -7,6 +7,7 @@ import {
   DateRangeValue,
   formatDateDDMMYYYY,
   getDateRangeByPreset,
+  getTodayDateString,
   normalizeDateRange,
 } from '../../lib/utils';
 
@@ -30,6 +31,14 @@ const getPresetLabel = (preset: DateRangePreset): string => {
   return 'Custom';
 };
 
+type CustomDateMode = 'single' | 'between';
+
+const isBetweenRange = (startDate: string, endDate: string) =>
+  Boolean(startDate && endDate && startDate !== endDate);
+
+const inferCustomDateMode = (startDate: string, endDate: string): CustomDateMode =>
+  isBetweenRange(startDate, endDate) ? 'between' : 'single';
+
 export default function DateRangeSelector({
   value,
   preset,
@@ -39,12 +48,15 @@ export default function DateRangeSelector({
   const [isOpen, setIsOpen] = useState(false);
   const [draftStartDate, setDraftStartDate] = useState(value.startDate);
   const [draftEndDate, setDraftEndDate] = useState(value.endDate);
+  const [customDateMode, setCustomDateMode] = useState<CustomDateMode>(() =>
+    inferCustomDateMode(value.startDate, value.endDate),
+  );
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setDraftStartDate(value.startDate);
     setDraftEndDate(value.endDate);
-  }, [value.startDate, value.endDate, preset]);
+  }, [value.startDate, value.endDate]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -63,10 +75,13 @@ export default function DateRangeSelector({
   const displayRange = useMemo(() => {
     if (!value.startDate && !value.endDate) return 'Select date range';
     if (value.startDate && value.endDate) {
+      if (value.startDate === value.endDate) {
+        return formatDateDDMMYYYY(value.startDate);
+      }
       return `${formatDateDDMMYYYY(value.startDate)} - ${formatDateDDMMYYYY(value.endDate)}`;
     }
-    if (value.startDate) return `From ${formatDateDDMMYYYY(value.startDate)}`;
-    return `Until ${formatDateDDMMYYYY(value.endDate)}`;
+    if (value.startDate) return formatDateDDMMYYYY(value.startDate);
+    return formatDateDDMMYYYY(value.endDate);
   }, [value.endDate, value.startDate]);
 
   const applyPreset = (nextPreset: Exclude<DateRangePreset, 'custom'>) => {
@@ -78,16 +93,21 @@ export default function DateRangeSelector({
   };
 
   const applyCustomRange = () => {
-    let nextRange: DateRangeValue = {
-      startDate: draftStartDate,
-      endDate: draftEndDate,
-    };
+    let nextRange: DateRangeValue;
 
-    // If only one date is provided, treat it as a one-day custom range.
-    if (nextRange.startDate && !nextRange.endDate) {
-      nextRange = { startDate: nextRange.startDate, endDate: nextRange.startDate };
-    } else if (!nextRange.startDate && nextRange.endDate) {
-      nextRange = { startDate: nextRange.endDate, endDate: nextRange.endDate };
+    if (customDateMode === 'single') {
+      const day = draftStartDate || draftEndDate;
+      nextRange = { startDate: day, endDate: day };
+    } else {
+      nextRange = {
+        startDate: draftStartDate,
+        endDate: draftEndDate,
+      };
+      if (nextRange.startDate && !nextRange.endDate) {
+        nextRange = { startDate: nextRange.startDate, endDate: nextRange.startDate };
+      } else if (!nextRange.startDate && nextRange.endDate) {
+        nextRange = { startDate: nextRange.endDate, endDate: nextRange.endDate };
+      }
     }
 
     const normalized = normalizeDateRange(nextRange);
@@ -98,9 +118,30 @@ export default function DateRangeSelector({
     setIsOpen(false);
   };
 
+  const selectCustomMode = () => {
+    const day = value.endDate || value.startDate || getTodayDateString();
+    setCustomDateMode('single');
+    setDraftStartDate(day);
+    setDraftEndDate(day);
+    onChange({
+      preset: 'custom',
+      range: { startDate: day, endDate: day },
+    });
+  };
+
+  const setCustomMode = (mode: CustomDateMode) => {
+    setCustomDateMode(mode);
+    if (mode === 'single') {
+      const day = draftStartDate || draftEndDate || value.startDate || value.endDate;
+      setDraftStartDate(day);
+      setDraftEndDate(day);
+    }
+  };
+
   const resetRange = () => {
     setDraftStartDate('');
     setDraftEndDate('');
+    setCustomDateMode('single');
     onChange({
       preset: 'custom',
       range: { startDate: '', endDate: '' },
@@ -147,7 +188,7 @@ export default function DateRangeSelector({
               ))}
               <button
                 type="button"
-                onClick={() => onChange({ preset: 'custom', range: value })}
+                onClick={selectCustomMode}
                 className={`rounded-lg border px-2.5 py-2 text-sm font-medium transition-colors ${preset === 'custom'
                   ? 'border-blue-500 bg-blue-50 text-blue-700'
                   : 'border-gray-200 text-gray-700 hover:border-blue-300 hover:bg-blue-50'
@@ -160,31 +201,62 @@ export default function DateRangeSelector({
 
           {preset === 'custom' && (
             <div className="space-y-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
-              <p className="text-xs uppercase tracking-wide font-semibold text-gray-500">Custom range</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <DatePicker
-                  label="Start date"
-                  value={draftStartDate}
-                  onChange={setDraftStartDate}
-                  aria-label="Custom start date"
-                />
-                <DatePicker
-                  label="End date"
-                  value={draftEndDate}
-                  onChange={setDraftEndDate}
-                  aria-label="Custom end date"
-                />
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs uppercase tracking-wide font-semibold text-gray-500">Custom</p>
+                <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setCustomMode('single')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${customDateMode === 'single'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                  >
+                    One day
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomMode('between')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${customDateMode === 'between'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                  >
+                    Between
+                  </button>
+                </div>
               </div>
-              {draftStartDate && draftEndDate && draftEndDate < draftStartDate && (
+              {customDateMode === 'single' ? (
+                <DatePicker
+                  label="Date"
+                  value={draftStartDate || draftEndDate}
+                  onChange={(nextDate) => {
+                    setDraftStartDate(nextDate);
+                    setDraftEndDate(nextDate);
+                  }}
+                  aria-label="Custom date"
+                />
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <DatePicker
+                    label="Start date"
+                    value={draftStartDate}
+                    onChange={setDraftStartDate}
+                    aria-label="Custom start date"
+                  />
+                  <DatePicker
+                    label="End date"
+                    value={draftEndDate}
+                    onChange={setDraftEndDate}
+                    aria-label="Custom end date"
+                  />
+                </div>
+              )}
+              {customDateMode === 'between' && draftStartDate && draftEndDate && draftEndDate < draftStartDate && (
                 <p className="text-xs text-amber-700">
                   End date is before start date. It will be fixed automatically on apply.
                 </p>
               )}
-              {(draftStartDate && !draftEndDate) || (!draftStartDate && draftEndDate) ? (
-                <p className="text-xs text-gray-600">
-                  Single date selected: it will be applied as a one-day range.
-                </p>
-              ) : null}
               <div className="flex justify-end gap-2 pt-1">
                 <Button type="button" size="sm" onClick={applyCustomRange}>
                   Apply

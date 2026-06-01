@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import Card from '../../components/ui/Card';
-import { ArrowRight, RefreshCw, Package, Receipt, ScanLine } from 'lucide-react';
+import { ArrowRight, RefreshCw, Package, ScanLine } from 'lucide-react';
 
 export default function Replacement() {
   const navigate = useNavigate();
@@ -12,7 +12,7 @@ export default function Replacement() {
         <p className="text-gray-600">Choose a replacement type to proceed</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {/* Replacement POS */}
         <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/pos')}>
           <div className="p-6 space-y-4">
@@ -69,25 +69,6 @@ export default function Replacement() {
             </div>
           </div>
         </Card>
-
-        {/* Credit Note */}
-        <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/replacement/credit-note')}>
-          <div className="p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-purple-100 rounded-lg">
-                <Receipt className="h-6 w-6 text-purple-600" />
-              </div>
-              <h2 className="text-xl font-semibold text-gray-900">Credit Note</h2>
-            </div>
-            <p className="text-gray-600 text-sm">
-              Generate a credit note for returned items. Items are removed from invoice, added back to stock, and a credit note is created. Customer ledger is updated.
-            </p>
-            <div className="flex items-center gap-2 text-purple-600 font-medium">
-              <span>Get Started</span>
-              <ArrowRight className="h-4 w-4" />
-            </div>
-          </div>
-        </Card>
       </div>
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-6">
@@ -98,9 +79,6 @@ export default function Replacement() {
           </div>
           <div>
             <strong className="text-green-600">Return to Stock:</strong> Use this for simple returns where items are just being returned to inventory. Customer gets a refund and items are available for sale again.
-          </div>
-          <div>
-            <strong className="text-purple-600">Credit Note:</strong> Use this when you need to issue a formal credit note for returned items. A credit note document is generated and customer account is credited.
           </div>
         </div>
       </div>

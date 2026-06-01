@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { formatNumber, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import { auth } from '../../lib/auth';
 import {
   loadUserCarts,
@@ -325,7 +326,30 @@ export default function POS() {
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkAddLoading, setBulkAddLoading] = useState(false);
   const [showTradeInModal, setShowTradeInModal] = useState(false);
-  const [tradeInLines, setTradeInLines] = useState<PosTradeInLine[]>([]);
+  const [tradeInLinesByCart, setTradeInLinesByCart] = useState<Record<number, PosTradeInLine[]>>({});
+  const tradeInLines = useMemo(
+    () => (cartId != null ? tradeInLinesByCart[cartId] ?? [] : []),
+    [cartId, tradeInLinesByCart]
+  );
+  const setTradeInLines = useCallback(
+    (lines: PosTradeInLine[] | ((prev: PosTradeInLine[]) => PosTradeInLine[])) => {
+      if (cartId == null) return;
+      setTradeInLinesByCart((prev) => {
+        const current = prev[cartId] ?? [];
+        const next = typeof lines === 'function' ? lines(current) : lines;
+        return { ...prev, [cartId]: next };
+      });
+    },
+    [cartId]
+  );
+  const clearTradeInForCart = useCallback((id: number) => {
+    setTradeInLinesByCart((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
   // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
   // Live date/time for header (updates every second)
@@ -363,6 +387,11 @@ export default function POS() {
   /** Remaining snapshot PNG parts after the first was copied (25 lines per image). */
   const snapshotPartsQueueRef = useRef<Blob[]>([]);
   const snapshotPartsTotalRef = useRef(0);
+  /** UI hint: next image index to copy when cart spans multiple snapshots. */
+  const [snapshotClipboardProgress, setSnapshotClipboardProgress] = useState<{
+    total: number;
+    nextPart: number;
+  } | null>(null);
 
   // Keep an in-memory set of barcodes known to be in cart (or just added by queue)
   // so queue processing doesn't need to block on cart refetch after every item.
@@ -526,10 +555,14 @@ export default function POS() {
   // Get user info to check if Admin
   const [user, setUser] = useState<any>(null);
 
-  // Toast helper function (auto-hide in 2 sec)
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+  // Toast helper function (auto-hide in 2 sec by default)
+  const showToast = (
+    message: string,
+    type: 'success' | 'error' | 'info' = 'success',
+    duration = 2000
+  ) => {
     const id = Math.random().toString(36).substring(7);
-    setToasts((prev) => [...prev, { id, message, type, duration: 2000 }]);
+    setToasts((prev) => [...prev, { id, message, type, duration }]);
   };
 
   const removeToast = useCallback((id: string) => {
@@ -1881,6 +1914,7 @@ export default function POS() {
 
     // Remove from localStorage immediately
     const newActiveTabId = removeCartTab(username, cartIdToDelete);
+    clearTradeInForCart(cartIdToDelete);
 
     // Reload tabs from storage to get updated list
     loadCartsFromStorage();
@@ -1976,7 +2010,7 @@ export default function POS() {
           // Silently handle sync errors
         });
       });
-  }, [username, cartId, cart?.data?.items, defaultStore, queryClient, syncCartsWithBackend, loadCartsFromStorage, removeCartTab, cartTabs.length, isWholesaleGroup, isWholesaleAdmin]);
+  }, [username, cartId, cart?.data?.items, defaultStore, queryClient, syncCartsWithBackend, loadCartsFromStorage, removeCartTab, cartTabs.length, isWholesaleGroup, isWholesaleAdmin, clearTradeInForCart]);
 
   const createCustomerMutation = useMutation({
     mutationFn: (data: { name: string; phone?: string }) => customersApi.create(data),
@@ -2007,7 +2041,9 @@ export default function POS() {
       setRepairContactNo('');
       setRepairModelName('');
       setRepairBookingAmount('');
-      setTradeInLines([]);
+      if (cartId != null) {
+        clearTradeInForCart(cartId);
+      }
 
       // Remove cart tab after successful checkout
       if (username && cartId) {
@@ -2049,10 +2085,6 @@ export default function POS() {
       alert(error?.response?.data?.message || 'Checkout failed. Please try again.');
     },
   });
-
-  useEffect(() => {
-    setTradeInLines([]);
-  }, [cartId]);
 
   // Auto-save cart state to localStorage whenever cart data changes
   // Backend is already updated via mutations, this just syncs localStorage
@@ -2553,7 +2585,9 @@ export default function POS() {
   const checkoutAndPrintThermalMutation = useMutation({
     mutationFn: (data: any) => posApi.carts.checkout(cartId!, data),
     onSuccess: async (response: any) => {
-      setTradeInLines([]);
+      if (cartId != null) {
+        clearTradeInForCart(cartId);
+      }
       // Get invoice ID from response
       const invoiceId = response?.data?.id || response?.id;
 
@@ -3045,10 +3079,32 @@ export default function POS() {
 
   const calculateTotal = () => cartGrossSubtotal - tradeInCredit;
 
+  const snapshotExpectedParts = useMemo(() => {
+    const itemCount = cart?.data?.items?.length ?? 0;
+    if (itemCount === 0) return 1;
+    return Math.ceil(itemCount / SNAPSHOT_ROWS_PER_PAGE);
+  }, [cart?.data?.items?.length]);
+
   useEffect(() => {
     snapshotPartsQueueRef.current = [];
     snapshotPartsTotalRef.current = 0;
-  }, [cartId, cart?.data?.items?.length]);
+    if (snapshotExpectedParts > 1) {
+      setSnapshotClipboardProgress({ total: snapshotExpectedParts, nextPart: 1 });
+    } else {
+      setSnapshotClipboardProgress(null);
+    }
+  }, [cartId, cart?.data?.items?.length, snapshotExpectedParts]);
+
+  const snapshotButtonBadge =
+    snapshotClipboardProgress && snapshotClipboardProgress.total > 1
+      ? `${snapshotClipboardProgress.nextPart}/${snapshotClipboardProgress.total}`
+      : null;
+
+  const snapshotButtonTitle = snapshotClipboardProgress
+    ? snapshotClipboardProgress.total > 1
+      ? `Copy cart snapshot — image ${snapshotClipboardProgress.nextPart} of ${snapshotClipboardProgress.total} (${SNAPSHOT_ROWS_PER_PAGE} lines per image)`
+      : `Copy cart snapshot (${SNAPSHOT_ROWS_PER_PAGE} lines per image)`
+    : `Copy cart snapshot (${SNAPSHOT_ROWS_PER_PAGE} lines per image)`;
 
   const copyDraftSnapshotToClipboard = useCallback(async () => {
     const cartData = cart?.data;
@@ -3078,13 +3134,21 @@ export default function POS() {
         }
 
         if (pending.length > 0) {
+          const nextPart = partNum + 1;
+          setSnapshotClipboardProgress({ total: totalParts, nextPart });
           showToast(
-            `Part ${partNum} of ${totalParts} copied. Click Cart Snapshot again for part ${partNum + 1}.`,
-            'success'
+            `Image ${partNum} of ${totalParts} copied. Tap Cart Snapshot again for image ${nextPart} of ${totalParts}.`,
+            'success',
+            5000
           );
         } else {
           snapshotPartsTotalRef.current = 0;
-          showToast(`Part ${partNum} of ${totalParts} copied. All parts done.`, 'success');
+          setSnapshotClipboardProgress(null);
+          showToast(
+            `Image ${partNum} of ${totalParts} copied. All ${totalParts} images are in your clipboard.`,
+            'success',
+            5000
+          );
         }
         return;
       }
@@ -3156,16 +3220,24 @@ export default function POS() {
       if (blobs.length > 1) {
         snapshotPartsQueueRef.current = blobs.slice(1);
         snapshotPartsTotalRef.current = blobs.length;
+        setSnapshotClipboardProgress({ total: blobs.length, nextPart: 2 });
         showToast(
-          `Part 1 of ${blobs.length} copied (${SNAPSHOT_ROWS_PER_PAGE} lines per image). Click Cart Snapshot for part 2.`,
-          'success'
+          `Image 1 of ${blobs.length} copied. Tap Cart Snapshot again for image 2 of ${blobs.length} (${SNAPSHOT_ROWS_PER_PAGE} lines per image).`,
+          'success',
+          5000
         );
       } else {
+        setSnapshotClipboardProgress(null);
         showToast('Cart snapshot copied to clipboard.', 'success');
       }
     } catch (e: any) {
       snapshotPartsQueueRef.current = [];
       snapshotPartsTotalRef.current = 0;
+      if (snapshotExpectedParts > 1) {
+        setSnapshotClipboardProgress({ total: snapshotExpectedParts, nextPart: 1 });
+      } else {
+        setSnapshotClipboardProgress(null);
+      }
       showToast(e?.message || 'Failed to copy to clipboard. Please check permissions.', 'error');
     }
   }, [
@@ -3177,6 +3249,7 @@ export default function POS() {
     editingManualPrice,
     selectedCustomer?.name,
     showToast,
+    snapshotExpectedParts,
     tradeInCredit,
   ]);
 
@@ -4743,12 +4816,20 @@ export default function POS() {
                   size="sm"
                   onClick={copyDraftSnapshotToClipboard}
                   disabled={!cart?.data?.items || !Array.isArray(cart.data.items) || cart.data.items.length === 0}
-                  className="flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50 shrink-0"
-                  title={`Copy cart snapshot (${SNAPSHOT_ROWS_PER_PAGE} lines per image; click again for next part if cart is large)`}
+                  className="relative flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50 shrink-0"
+                  title={snapshotButtonTitle}
                 >
                   <Camera className="h-4 w-4" />
                   <span className="sm:hidden">Snapshot</span>
                   <span className="hidden sm:inline">Cart Snapshot</span>
+                  {snapshotButtonBadge && (
+                    <span
+                      className="absolute -top-1.5 -right-1.5 min-w-[1.35rem] h-[1.1rem] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-none flex items-center justify-center tabular-nums"
+                      aria-label={`Snapshot image ${snapshotButtonBadge}`}
+                    >
+                      {snapshotButtonBadge}
+                    </span>
+                  )}
                 </Button>
                 {!isCartLocked && ((cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0) || selectedCustomer) && (
                 <Button
@@ -4794,6 +4875,7 @@ export default function POS() {
                   const scannedBarcodesDisplay = item.scanned_barcodes_display || scannedBarcodes;
                   const hasBarcodes = scannedBarcodes.length > 0;
                   const isBarcodesExpanded = expandedBarcodes[item.id] || false;
+                  const scanSummary = getCartLineScanSummary(item);
                   const lineTotal = effectivePrice * (parseInt(item.quantity || '0') || 0);
                   return (
                     <div key={item.id} className="bg-white border border-gray-300 rounded-lg p-3 shadow-sm hover:shadow-md transition-all">
@@ -4839,7 +4921,9 @@ export default function POS() {
                                 {isBarcodesExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                               </button>
                             )}
+                            <CartLineScannedTime item={item} variant="badge" />
                           </div>
+                          <CartLineScannedTime item={item} variant="row" className="sm:hidden" />
                         </div>
 
                         {/* Row 1 on Mobile: Quantity Controls */}
@@ -5170,11 +5254,18 @@ export default function POS() {
                       {/* Scanned Barcodes Section - Expandable below the row */}
                       {hasBarcodes && isBarcodesExpanded && (
                         <div className="mt-3 pt-3 border-t border-gray-200">
+                          <p className="text-xs font-medium text-gray-700 mb-2">Scanned barcodes</p>
                           <div className="flex flex-wrap gap-2">
-                            {scannedBarcodes.map((barcode: string, idx: number) => (
-                              <div key={idx} className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-md px-2 py-1">
-                                <Barcode className="h-3 w-3 text-blue-600" />
-                                <span className="font-mono text-xs font-semibold text-gray-800">{scannedBarcodesDisplay[idx] ?? barcode}</span>
+                            {scannedBarcodes.map((barcode: string, idx: number) => {
+                              const entry = scanSummary.entries[idx];
+                              const displayLabel = entry?.barcode_display ?? scannedBarcodesDisplay[idx] ?? barcode;
+                              return (
+                              <div key={`${barcode}-${idx}`} className="flex flex-col gap-1 bg-blue-50 border border-blue-200 rounded-md px-2 py-1.5 min-w-[10rem]">
+                                <div className="flex items-center justify-between gap-1">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <Barcode className="h-3 w-3 text-blue-600 flex-shrink-0" />
+                                    <span className="font-mono text-xs font-semibold text-gray-800 truncate">{displayLabel}</span>
+                                  </div>
                                 {!isCartLocked && (
                                   <button
                                     onClick={async () => {
@@ -5203,8 +5294,19 @@ export default function POS() {
                                     <X className="h-3 w-3" />
                                   </button>
                                 )}
+                                </div>
+                                {entry?.scanned_at ? (
+                                  <CartLineScannedTime
+                                    item={{ scan_entries: [entry] }}
+                                    variant="chip"
+                                    className="pl-4"
+                                  />
+                                ) : (
+                                  <span className="text-[10px] text-gray-400 pl-4">Scan time unavailable</span>
+                                )}
                               </div>
-                            ))}
+                            );
+                            })}
                           </div>
                         </div>
                       )}

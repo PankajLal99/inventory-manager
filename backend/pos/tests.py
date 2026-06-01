@@ -8,7 +8,7 @@ from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
 from backend.parties.models import Supplier, Customer
 from backend.purchasing.models import Purchase, PurchaseItem
-from backend.pos.models import Cart, CartItem, Invoice, InvoiceItem
+from backend.pos.models import Cart, CartItem, Invoice, InvoiceItem, Expenses
 from backend.core.models import AuditLog
 from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
@@ -455,6 +455,32 @@ class CheckoutTests(APITestCase):
         new_inv = Invoice.objects.get(id=r2.data['id'])
         self.assertEqual(new_inv.trade_in_credit, Decimal('50.00'))
         self.assertEqual(new_inv.total, Decimal('150.00'))
+
+    def test_effective_sold_line_credit_uses_selling_not_purchase_line_total(self):
+        """Trade-in credit cap follows manual sell price even when line_total stores cost."""
+        from backend.pos.sold_price_utils import effective_sold_line_credit
+
+        bc = Barcode.objects.filter(product=self.product, tag='new').first()
+        bc.tag = 'sold'
+        bc.save(update_fields=['tag'])
+        inv = Invoice.objects.create(
+            invoice_number=f'INV-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            invoice_type='cash',
+            status='paid',
+            total=Decimal('150.00'),
+            created_by=self.user,
+        )
+        item = InvoiceItem.objects.create(
+            invoice=inv,
+            product=self.product,
+            barcode=bc,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('30.00'),
+            manual_unit_price=Decimal('150.00'),
+            line_total=Decimal('30.00'),
+        )
+        self.assertEqual(effective_sold_line_credit(item), Decimal('150.00'))
 
 
 class InvoiceEditTests(APITestCase):
@@ -1284,6 +1310,43 @@ class CartBarcodeConsistencyTests(APITestCase):
         self.assertIn('scanned_barcodes_display', item)
         self.assertEqual(item['scanned_barcodes'], [self.full_barcode])
         self.assertEqual(item['scanned_barcodes_display'], ['SC-DISPLAY'])
+
+    def test_add_by_barcode_records_scanned_time(self):
+        """Cart item API includes scanned_times aligned with scanned_barcodes."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': Decimal('100.00'),
+            'barcode': self.full_barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIn('scanned_times', response.data)
+        times = response.data['scanned_times']
+        self.assertIsInstance(times, list)
+        self.assertEqual(len(times), 1)
+        self.assertTrue(times[0])
+
+        cart_item = CartItem.objects.get(cart=self.cart, product=self.product)
+        self.assertIn(self.full_barcode, cart_item.barcode_scanned_at)
+
+    def test_add_by_barcode_includes_scan_entries(self):
+        """Cart item API includes concrete scan_entries for UI."""
+        url = reverse('cart-items', kwargs={'pk': self.cart.id})
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': Decimal('100.00'),
+            'barcode': self.full_barcode,
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIn('scan_entries', response.data)
+        entries = response.data['scan_entries']
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0].get('scanned_at'))
+        self.assertEqual(entries[0].get('barcode_display'), self.full_barcode)
 
     def test_invoice_item_barcode_value_prefers_short_code_for_display(self):
         """Invoice item API barcode_value returns short_code when available (for UI display)."""
@@ -2194,3 +2257,92 @@ class ReplacementPosAPITests(APITestCase):
         self.assertEqual(r1.status_code, status.HTTP_201_CREATED, r1.data)
         r2 = self.client.post(url, {'mode': 'pending', 'lines': line_payload}, format='json')
         self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class ExpenseAccessTests(APITestCase):
+    def setUp(self):
+        self.admin_group, _ = Group.objects.get_or_create(name='Admin')
+        self.super_group, _ = Group.objects.get_or_create(name='Super')
+        self.retail_group, _ = Group.objects.get_or_create(name='Retail')
+
+        self.admin_user = User.objects.create_user(username=f'admin_{uuid.uuid4().hex[:6]}', password='password')
+        self.admin_user.groups.add(self.admin_group)
+        self.retail_user = User.objects.create_user(username=f'retail_{uuid.uuid4().hex[:6]}', password='password')
+        self.retail_user.groups.add(self.retail_group)
+
+        today = timezone.now().date()
+        self.admin_expense = Expenses.objects.create(
+            expense_date=today,
+            expense_type='Admin rent',
+            expense_amount=Decimal('100.00'),
+            created_by=self.admin_user,
+            last_updated_by=self.admin_user,
+        )
+        self.retail_expense = Expenses.objects.create(
+            expense_date=today,
+            expense_type='Retail supplies',
+            expense_amount=Decimal('50.00'),
+            created_by=self.retail_user,
+            last_updated_by=self.retail_user,
+        )
+
+    def test_retail_user_list_excludes_admin_created_expenses(self):
+        self.client.force_authenticate(user=self.retail_user)
+        response = self.client.get(reverse('expense-list-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = {row['id'] for row in response.data}
+        self.assertIn(self.retail_expense.id, ids)
+        self.assertNotIn(self.admin_expense.id, ids)
+
+    def test_admin_user_sees_all_expenses(self):
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.get(reverse('expense-list-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = {row['id'] for row in response.data}
+        self.assertIn(self.retail_expense.id, ids)
+        self.assertIn(self.admin_expense.id, ids)
+
+    def test_retail_user_cannot_update_expense(self):
+        self.client.force_authenticate(user=self.retail_user)
+        url = reverse('expense-detail', args=[self.retail_expense.id])
+        response = self.client.patch(url, {'expense_type': 'Changed'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_retail_user_cannot_view_admin_expense_detail(self):
+        self.client.force_authenticate(user=self.retail_user)
+        url = reverse('expense-detail', args=[self.admin_expense.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_retail_user_can_create_expense(self):
+        self.client.force_authenticate(user=self.retail_user)
+        today = timezone.now().date()
+        response = self.client.post(
+            reverse('expense-list-create'),
+            {
+                'expense_date': today.isoformat(),
+                'expense_type': 'New retail expense',
+                'expense_amount': '25.00',
+                'payment_choices_type': 'CASH',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['created_by_username'], self.retail_user.username)
+
+    def test_super_user_can_manage_expenses(self):
+        super_user = User.objects.create_user(username=f'super_{uuid.uuid4().hex[:6]}', password='password')
+        super_user.groups.add(self.super_group)
+        self.client.force_authenticate(user=super_user)
+        list_response = self.client.get(reverse('expense-list-create'))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        ids = [row['id'] for row in list_response.data]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn(self.admin_expense.id, ids)
+
+        patch_response = self.client.patch(
+            reverse('expense-detail', args=[self.retail_expense.id]),
+            {'expense_type': 'Updated by super'},
+            format='json',
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)

@@ -17,6 +17,7 @@ import {
   Play,
 } from 'lucide-react';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -31,6 +32,9 @@ interface CartItemOverview {
   product_name: string;
   product_sku: string;
   scanned_barcodes_display?: string[];
+  scanned_times?: (string | null)[];
+  scanned_at?: string | null;
+  scan_entries?: { barcode_display?: string | null; scanned_at?: string | null }[];
   quantity: string;
   unit_price: string;
   discount_amount?: string;
@@ -594,6 +598,9 @@ export default function ActiveCartsOverview() {
                                   <th className="px-4 py-2 text-left font-medium text-gray-700">
                                     Barcode
                                   </th>
+                                  <th className="px-4 py-2 text-left font-medium text-gray-700">
+                                    Scanned at
+                                  </th>
                                   <th className="px-4 py-2 text-right font-medium text-gray-700">
                                     Qty
                                   </th>
@@ -610,6 +617,8 @@ export default function ActiveCartsOverview() {
                                   const qty = parseFloat(item.quantity);
                                   const unit = parseFloat(item.unit_price);
                                   const line = qty * unit;
+                                  const scanSummary = getCartLineScanSummary(item);
+                                  const visible = getVisibleBarcodes(item);
                                   return (
                                     <tr
                                       key={item.id}
@@ -619,10 +628,19 @@ export default function ActiveCartsOverview() {
                                         {item.product_name}
                                       </td>
                                       <td className="px-4 py-2 font-mono text-gray-600">
-                                        {(() => {
-                                          const visible = getVisibleBarcodes(item);
-                                          return visible.length ? visible.join(', ') : '—';
-                                        })()}
+                                        {visible.length ? visible.join(', ') : '—'}
+                                      </td>
+                                      <td className="px-4 py-2 text-gray-600 text-xs whitespace-nowrap">
+                                        {scanSummary.entries.length === 0 ? (
+                                          '—'
+                                        ) : scanSummary.entries.length === 1 ? (
+                                          formatDate(scanSummary.entries[0].scanned_at!)
+                                        ) : (
+                                          <span title={scanSummary.entries.map((e) => `${e.barcode_display ?? '—'}: ${formatDate(e.scanned_at!)}`).join('\n')}>
+                                            {scanSummary.latestTime ? formatDate(scanSummary.latestTime) : '—'}
+                                            <span className="text-gray-400"> ({scanSummary.entries.length} scans)</span>
+                                          </span>
+                                        )}
                                       </td>
                                       <td className="px-4 py-2 text-right">
                                         {formatNumber(qty, 3)}

@@ -27,6 +27,7 @@ from backend.parties.models import Customer, LedgerEntry
 
 from .models import Invoice, InvoiceItem, Payment
 from .serializers import InvoiceSerializer
+from .sold_price_utils import effective_sold_unit_price
 from .views import resolve_invoice_item_barcode, update_invoice_totals, validate_barcode_for_replacement
 
 
@@ -41,17 +42,10 @@ def _norm_scan(value):
     return str(value).strip().upper()
 
 
-def _effective_sold_unit(inv_item):
-    mu = inv_item.manual_unit_price
-    if mu is not None and mu > 0:
-        return mu
-    return inv_item.unit_price or Decimal('0.00')
-
-
 def _serialize_lookup_line(inv_item):
     invoice = inv_item.invoice
     barcode_obj = resolve_invoice_item_barcode(inv_item, scanned_override=None, relink=False)
-    eff = _effective_sold_unit(inv_item)
+    eff = effective_sold_unit_price(inv_item)
     product = inv_item.product
     return {
         'original_invoice_item_id': inv_item.id,

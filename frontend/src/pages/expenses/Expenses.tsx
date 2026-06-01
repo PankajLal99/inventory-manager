@@ -78,7 +78,8 @@ export default function Expenses() {
   const [borrowerGroupFilter, setBorrowerGroupFilter] = useState('');
   const [isBorrowerSearchFocused, setIsBorrowerSearchFocused] = useState(false);
   const [activeBorrowerIndex, setActiveBorrowerIndex] = useState(-1);
-  const canSeeExpenseListing = (user?.groups || []).includes('Super');
+  const userGroups: string[] = user?.groups || [];
+  const canManageExpenses = userGroups.includes('Admin') || userGroups.includes('Super');
 
   useEffect(() => {
     const loadUser = async () => {
@@ -94,7 +95,7 @@ export default function Expenses() {
     loadUser();
   }, []);
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isPending, error, refetch } = useQuery({
     queryKey: ['expenses', search, paymentFilter, dateFrom, dateTo],
     queryFn: async () => {
       const params: Record<string, string> = {};
@@ -105,7 +106,7 @@ export default function Expenses() {
       const response = await posApi.expenses.list(params);
       return response.data;
     },
-    enabled: isUserLoaded && canSeeExpenseListing,
+    enabled: isUserLoaded,
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -333,19 +334,21 @@ export default function Expenses() {
     };
 
     if (editingExpense) {
+      if (!canManageExpenses) {
+        return toast('You do not have permission to edit expenses', 'error');
+      }
       updateExpenseMutation.mutate({ id: editingExpense.id, payload });
     } else {
       createExpenseMutation.mutate(payload);
     }
   };
 
-  if (!isUserLoaded) return <LoadingState message="Loading expenses..." />;
-  if (isLoading) return <LoadingState message="Loading expenses..." />;
-  if (canSeeExpenseListing && error) {
+  if (!isUserLoaded || isPending) return <LoadingState message="Loading expenses..." />;
+  if (error) {
     return (
       <ErrorState
         message="Error loading expenses. Please try again."
-        onRetry={() => window.location.reload()}
+        onRetry={() => refetch()}
       />
     );
   }
@@ -354,7 +357,11 @@ export default function Expenses() {
     <div className="space-y-6">
       <PageHeader
         title="Expenses"
-        subtitle="Track and manage all expense entries"
+        subtitle={
+          canManageExpenses
+            ? 'Track and manage all expense entries'
+            : 'View expense entries and add new ones (editing is restricted)'
+        }
         icon={Coins}
         action={
           <Button onClick={openCreateModal} className="gap-2">
@@ -364,8 +371,7 @@ export default function Expenses() {
         }
       />
 
-      {canSeeExpenseListing ? (
-        <>
+      <>
           <Card>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div className="relative">
@@ -444,7 +450,13 @@ export default function Expenses() {
               />
             </Card>
           ) : (
-            <Table headers={['Date', 'Expense Type', 'Lender', 'Borrower', 'Payment', 'Amount', 'Actions']}>
+            <Table
+              headers={
+                canManageExpenses
+                  ? ['Date', 'Expense Type', 'Lender', 'Borrower', 'Payment', 'Amount', 'Actions']
+                  : ['Date', 'Expense Type', 'Lender', 'Borrower', 'Payment', 'Amount']
+              }
+            >
               {expenses.map((expense) => (
                 <TableRow key={expense.id}>
                   <TableCell>{formatDateDDMMYYYY(expense.expense_date)}</TableCell>
@@ -465,38 +477,33 @@ export default function Expenses() {
                   <TableCell align="right" className="font-semibold text-red-600">
                     ₹{formatNumber(expense.expense_amount)}
                   </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-2">
-                      <Button variant="outline" size="sm" onClick={() => openEditModal(expense)} className="gap-1.5">
-                        <Pencil className="h-4 w-4" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => {
-                          const shouldDelete = window.confirm('Delete this expense entry?');
-                          if (shouldDelete) deleteExpenseMutation.mutate(expense.id);
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Delete
-                      </Button>
-                    </div>
-                  </TableCell>
+                  {canManageExpenses && (
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => openEditModal(expense)} className="gap-1.5">
+                          <Pencil className="h-4 w-4" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+                          onClick={() => {
+                            const shouldDelete = window.confirm('Delete this expense entry?');
+                            if (shouldDelete) deleteExpenseMutation.mutate(expense.id);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </Table>
           )}
-        </>
-      ) : (
-        <Card>
-          <p className="text-sm text-gray-600">
-            Expense listing is only available to users in the Super group. You can still add expenses.
-          </p>
-        </Card>
-      )}
+      </>
 
       <Modal
         isOpen={isModalOpen}

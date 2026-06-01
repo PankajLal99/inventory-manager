@@ -90,6 +90,10 @@ class CartItem(models.Model):
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     applied_promotions = models.ManyToManyField(Promotion, related_name='cart_items', blank=True)
     scanned_barcodes = models.JSONField(default=list, blank=True)  # Store list of scanned barcodes/SKUs
+    # barcode -> ISO datetime when each unit was scanned and locked into this cart
+    barcode_scanned_at = models.JSONField(default=dict, blank=True)
+    # When the line was first added (custom / non-tracked / qty without per-barcode list)
+    scanned_at = models.DateTimeField(null=True, blank=True)
     # For custom/other products: cost entered at POS (item not from a real purchase; we still store it in DB)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
@@ -228,6 +232,8 @@ class InvoiceItem(models.Model):
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     line_total = models.DecimalField(max_digits=10, decimal_places=2)
+    # When this unit was scanned into the cart (copied from CartItem at checkout)
+    scanned_at = models.DateTimeField(null=True, blank=True)
     # For custom/other products: cost at time of sale (no barcode/purchase); copied from CartItem at checkout
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     # Replacement tracking fields
