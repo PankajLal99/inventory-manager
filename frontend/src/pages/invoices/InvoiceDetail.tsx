@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
+import CartLineScannedTime from '../../components/pos/CartLineScannedTime';
 
 function escapeHtml(s: string): string {
   return String(s)
@@ -2956,6 +2957,9 @@ export default function InvoiceDetail() {
                                 <span>{barcodes.length} Barcode{barcodes.length > 1 ? 's' : ''}</span>
                                 {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </button>
+                              {barcodes.length === 1 ? (
+                                <CartLineScannedTime item={barcodes[0].item} variant="row" />
+                              ) : null}
                             </TableCell>
                             <TableCell>
                               <span className="text-gray-600 font-semibold">{totalQuantity}</span>
@@ -2968,6 +2972,7 @@ export default function InvoiceDetail() {
                               </TableCell>
                               <TableCell>
                                 <span className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</span>
+                                <CartLineScannedTime item={barcodeItem.item} variant="row" />
                               </TableCell>
                               <TableCell>
                                 <span className="text-xs text-gray-600 font-semibold">{barcodeItem.item.quantity}</span>
@@ -3010,6 +3015,9 @@ export default function InvoiceDetail() {
                                 <span>{barcodes.length} Barcode{barcodes.length > 1 ? 's' : ''}</span>
                                 {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </button>
+                              {barcodes.length === 1 ? (
+                                <CartLineScannedTime item={barcodes[0].item} variant="row" />
+                              ) : null}
                             </TableCell>
                             <TableCell>
                               <span className="text-gray-600 font-semibold">{totalQuantity}</span>
@@ -3044,6 +3052,7 @@ export default function InvoiceDetail() {
                                 </TableCell>
                                 <TableCell>
                                   <span className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</span>
+                                  <CartLineScannedTime item={item} variant="row" />
                                 </TableCell>
                                 <TableCell>
                                   <span className="text-xs text-gray-600">{item.quantity}</span>
@@ -3109,6 +3118,9 @@ export default function InvoiceDetail() {
                             <span>{barcodes.length} Barcode{barcodes.length > 1 ? 's' : ''}</span>
                             {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                           </button>
+                          {barcodes.length === 1 ? (
+                            <CartLineScannedTime item={barcodes[0].item} variant="row" />
+                          ) : null}
                           <div className="text-sm text-gray-500 mt-1">
                             <span>Quantity: <span className="font-semibold text-gray-900">{totalQuantity}</span></span>
                           </div>
@@ -3148,7 +3160,10 @@ export default function InvoiceDetail() {
                             return (
                               <div key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-white rounded-md p-3 border border-gray-200">
                                 <div className="flex items-center justify-between mb-2">
-                                  <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
+                                  <div>
+                                    <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
+                                    <CartLineScannedTime item={item} variant="row" />
+                                  </div>
                                   <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
                                 </div>
                                 {!isPending && (

@@ -8,6 +8,44 @@ export const PRODUCT_NAME_COLOR_PESTING = '#418f28';
  * Returns the display color for a product name based on PESTING / NON PESTING.
  * Check "NON PESTING" first so names containing both get red.
  */
+/** Parse API purchase_date (dd-mm-yyyy or ISO) for sorting. */
+function purchaseDateSortKey(value: string | null | undefined): number {
+  if (!value) return 0;
+  const isoPrefix = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoPrefix) {
+    const t = new Date(value).getTime();
+    return Number.isNaN(t) ? 0 : t;
+  }
+  const dmy = value.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmy) {
+    const t = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1])).getTime();
+    return Number.isNaN(t) ? 0 : t;
+  }
+  const t = new Date(value).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/** Supplier breakdown rows: newest purchase date first, then newest purchase item id. */
+export function sortSupplierBreakdownByDateDesc<
+  T extends {
+    purchase_date?: string | null;
+    purchase_date_iso?: string | null;
+    purchase_item_id?: number | null;
+  },
+>(rows: T[] | null | undefined): T[] {
+  if (!rows?.length) return rows ?? [];
+  return [...rows].sort((a, b) => {
+    const aDate = a.purchase_date_iso
+      ? purchaseDateSortKey(a.purchase_date_iso)
+      : purchaseDateSortKey(a.purchase_date ?? undefined);
+    const bDate = b.purchase_date_iso
+      ? purchaseDateSortKey(b.purchase_date_iso)
+      : purchaseDateSortKey(b.purchase_date ?? undefined);
+    if (bDate !== aDate) return bDate - aDate;
+    return (b.purchase_item_id ?? 0) - (a.purchase_item_id ?? 0);
+  });
+}
+
 export function getProductNameColor(name: string | null | undefined): string | undefined {
   if (name == null || typeof name !== 'string') return undefined;
   const upper = name.toUpperCase();

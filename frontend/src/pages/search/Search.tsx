@@ -21,7 +21,7 @@ import {
   X,
   Image as ImageIcon,
 } from 'lucide-react';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -403,7 +403,7 @@ export default function Search() {
                       if (item.brand_name) parts.push(`Brand: ${item.brand_name}`);
                       // Show Category
                       if (item.category_name) parts.push(`Category: ${item.category_name}`);
-                      const breakdown = item.supplier_breakdown || [];
+                      const breakdown = sortSupplierBreakdownByDateDesc(item.supplier_breakdown);
                       const totalFromTable = breakdown.reduce(
                         (sum: number, s: any) =>
                           sum + (Number(s.warehouse_available ?? s.warehouse_stock) || 0) + (Number(s.shop_barcode_count ?? s.shop_stock) || 0),
@@ -418,7 +418,7 @@ export default function Search() {
                     }}
                     getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
                     customRender={(item, idx) => {
-                      const breakdown = item.supplier_breakdown || [];
+                      const breakdown = sortSupplierBreakdownByDateDesc(item.supplier_breakdown);
                       const maxSellingPriceFromBreakdown = breakdown.reduce((max: number, s: any) => {
                         const val = Number(s.selling_price_value ?? 0) || 0;
                         return val > max ? val : max;
@@ -544,7 +544,7 @@ export default function Search() {
                           </div>
 
                           {/* Supplier Breakdown Table */}
-                          {item.supplier_breakdown && item.supplier_breakdown.length > 0 && (
+                          {breakdown.length > 0 && (
                             <div className="mt-4 overflow-x-auto border border-gray-100 rounded-md">
                               <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
                                 <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
@@ -575,7 +575,7 @@ export default function Search() {
                                   </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-50">
-                                  {item.supplier_breakdown.map((s: any, sIdx: number) => (
+                                  {breakdown.map((s: any, sIdx: number) => (
                                     <tr key={sIdx} className="hover:bg-gray-50 transition-colors">
                                       <td className="px-3 py-2 whitespace-nowrap text-xs font-medium text-gray-900 truncate max-w-[120px] align-middle">{s.supplier}</td>
                                       <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600 align-middle">{s.purchase_date ?? '—'}</td>

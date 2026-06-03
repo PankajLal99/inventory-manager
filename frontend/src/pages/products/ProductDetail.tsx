@@ -6,6 +6,7 @@ import Badge from '../../components/ui/Badge';
 import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 import Button from '../../components/ui/Button';
+import { sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 
 const PRODUCT_INVOICES_PAGE_SIZE = 20;
 
@@ -249,7 +250,7 @@ export default function ProductDetail() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {p.supplier_breakdown.map((s: any, idx: number) => (
+                {sortSupplierBreakdownByDateDesc(p.supplier_breakdown).map((s: any, idx: number) => (
                   <tr key={idx} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{s.supplier}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{s.purchase_date ?? '—'}</td>

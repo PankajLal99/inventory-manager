@@ -394,7 +394,12 @@ def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
             purchase__deleted_at__isnull=True,
         )
         .select_related('purchase__supplier')
-        .order_by('-purchase__purchase_date', 'purchase__supplier__name')
+        .order_by(
+            '-purchase__purchase_date',
+            '-purchase__created_at',
+            '-purchase__id',
+            '-id',
+        )
     )
     # Old behavior: derive shop availability from allocation math.
     # "used" means sold, defective, or currently in-cart from that purchase item.
@@ -427,7 +432,8 @@ def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
         price_str = f"₹{price_val:g}" if price_val else "—"
         selling_price_val = float(item.selling_price) if item.selling_price else 0
         selling_price_str = f"₹{selling_price_val:g}" if selling_price_val else "—"
-        purchase_date = item.purchase.purchase_date.strftime('%d-%m-%Y') if item.purchase and item.purchase.purchase_date else None
+        purchase_date_obj = item.purchase.purchase_date if item.purchase else None
+        purchase_date = purchase_date_obj.strftime('%d-%m-%Y') if purchase_date_obj else None
         breakdown.append({
             'supplier': supplier_name,
             'price': price_str,
@@ -439,7 +445,13 @@ def _get_supplier_breakdown_for_product(obj, exclude_fully_zero_rows=False):
             'shop_barcode_count': shop_available,
             'warehouse_available': whse_available,
             'purchase_date': purchase_date,
+            'purchase_date_iso': purchase_date_obj.isoformat() if purchase_date_obj else None,
+            'purchase_item_id': item.id,
         })
+    breakdown.sort(
+        key=lambda row: (row.get('purchase_date_iso') or '', row.get('purchase_item_id') or 0),
+        reverse=True,
+    )
     return breakdown
 
 

@@ -9,7 +9,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Pagination from '../../components/ui/Pagination';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 
 export default function StockOverview() {
   const navigate = useNavigate();
@@ -217,7 +217,9 @@ export default function StockOverview() {
                   const available = Number(p.available_quantity) || 0;
                   const total = warehouse + available;
                   const isExpanded = !!expandedIds[p.id];
-                  const breakdown = Array.isArray(p.supplier_breakdown) ? p.supplier_breakdown : [];
+                  const breakdown = sortSupplierBreakdownByDateDesc(
+                    Array.isArray(p.supplier_breakdown) ? p.supplier_breakdown : []
+                  );
 
                   return (
                     <>

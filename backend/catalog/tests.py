@@ -144,6 +144,33 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(product_data['warehouse_stock'], 0.0)
         self.assertEqual(product_data['available_quantity'], 1.0)  # 1 new - 0 warehouse
 
+    def test_supplier_breakdown_ordered_by_purchase_date_desc(self):
+        """Newest purchase_date first; same-day batches tie-break by purchase_item_id (not supplier name)."""
+        from datetime import date, timedelta
+
+        older = date.today() - timedelta(days=30)
+        newer = date.today()
+        supp_old = TestDataFactory.create_supplier(name="OldSupp")
+        supp_new = TestDataFactory.create_supplier(name="ZebraSupp")
+        p_old = TestDataFactory.create_purchase(
+            user=self.user, supplier=supp_old, status='finalized', purchase_date=older
+        )
+        TestDataFactory.create_purchase_item(
+            purchase=p_old, product=self.product,
+            quantity=Decimal('1'), shop_quantity=Decimal('1'), warehouse_quantity=Decimal('0')
+        )
+        p_new = TestDataFactory.create_purchase(
+            user=self.user, supplier=supp_new, status='finalized', purchase_date=newer
+        )
+        TestDataFactory.create_purchase_item(
+            purchase=p_new, product=self.product,
+            quantity=Decimal('1'), shop_quantity=Decimal('1'), warehouse_quantity=Decimal('0')
+        )
+        breakdown = _get_supplier_breakdown_for_product(self.product, exclude_fully_zero_rows=False)
+        self.assertGreaterEqual(len(breakdown), 2)
+        self.assertEqual(breakdown[0]['purchase_date_iso'], newer.isoformat())
+        self.assertEqual(breakdown[1]['purchase_date_iso'], older.isoformat())
+
     def test_supplier_breakdown_shop_qty_is_shop_minus_sold(self):
         """Shop Qty (shop_barcode_count) = max(0, purchase shop_quantity - sold barcode count) per supplier."""
         supp = TestDataFactory.create_supplier(name="SupplierAMS")
