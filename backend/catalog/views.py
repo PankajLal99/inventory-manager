@@ -2096,19 +2096,20 @@ def update_barcode_tag(request, barcode_id):
     old_tag = barcode_obj.tag
     
     # Validate tag transitions
-    # Only allow: 'unknown' -> 'returned'/'defective'
-    # Only allow: 'returned'/'defective' -> 'new' (with confirmation)
+    # Allow: 'new' -> 'defective' (write off fresh stock)
+    # Allow: 'unknown' -> 'returned'/'defective'
+    # Allow: 'returned'/'defective' -> 'new' (with confirmation)
     # Prevent: 'sold' -> any other tag (except through replacement which is handled separately)
-    # Prevent: 'new' -> 'returned'/'defective' (must go through sold -> unknown first)
+    # Prevent: 'new' -> 'returned' (must go through sold -> unknown first)
     
     if old_tag == 'sold' and new_tag != 'unknown':
         return Response({
             'error': 'Cannot change tag from "sold" directly. Use replacement process instead.'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    if old_tag == 'new' and new_tag in ['returned', 'defective']:
+    if old_tag == 'new' and new_tag == 'returned':
         return Response({
-            'error': 'Cannot change tag from "new" to "returned" or "defective". Product must be sold first.'
+            'error': 'Cannot change tag from "new" to "returned". Product must be sold first.'
         }, status=status.HTTP_400_BAD_REQUEST)
     
     if old_tag == 'unknown' and new_tag not in ['returned', 'defective']:
@@ -2212,8 +2213,8 @@ def bulk_update_barcode_tags(request):
                     errors.append(f'Barcode {barcode_obj.barcode}: Cannot change from "sold" directly')
                     continue
                 
-                if old_tag == 'new' and new_tag in ['returned', 'defective']:
-                    errors.append(f'Barcode {barcode_obj.barcode}: Cannot change from "new" to "{new_tag}"')
+                if old_tag == 'new' and new_tag == 'returned':
+                    errors.append(f'Barcode {barcode_obj.barcode}: Cannot change from "new" to "returned"')
                     continue
                 
                 if old_tag == 'unknown' and new_tag not in ['returned', 'defective']:

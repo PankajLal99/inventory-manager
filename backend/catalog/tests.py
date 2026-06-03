@@ -840,3 +840,47 @@ class BarcodeLookupPosScanTests(TransactionTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data.get("barcode_available"), False)
         self.assertEqual(response.data.get("sold_invoice"), invoice.invoice_number)
+
+
+class BarcodeTagTransitionTests(TransactionTestCase):
+    """Tag update rules for catalog barcode status changes."""
+
+    def setUp(self):
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.product = TestDataFactory.create_product(name='Tag Transition Product', track_inventory=True)
+        self.barcode = TestDataFactory.create_barcode(product=self.product, tag='new')
+
+    def test_fresh_barcode_can_be_marked_defective(self):
+        response = self.client.patch(
+            f'/api/v1/barcodes/{self.barcode.id}/update-tag/',
+            {'tag': 'defective'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'defective')
+
+    def test_fresh_barcode_cannot_be_marked_returned(self):
+        response = self.client.patch(
+            f'/api/v1/barcodes/{self.barcode.id}/update-tag/',
+            {'tag': 'returned'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'new')
+
+    def test_bulk_fresh_to_defective(self):
+        response = self.client.post(
+            '/api/v1/barcodes/bulk-update-tags/',
+            {'barcode_ids': [self.barcode.id], 'tag': 'defective'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data.get('updated_barcodes', [])), 1)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'defective')

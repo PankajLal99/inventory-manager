@@ -750,7 +750,7 @@ export default function Products() {
       if (updatedCount > 0) {
         alert(`Successfully marked ${updatedCount} item(s) as defective`);
       } else {
-        alert('No items were marked as defective. Please check if items are in "unknown" status and were previously sold.');
+        alert('No items were marked as defective. Items must be Fresh (New) or Unknown.');
       }
     },
     onError: (error: any) => {
@@ -3096,6 +3096,9 @@ export default function Products() {
         size="lg"
       >
         <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Scan fresh inventory barcodes and set status to Defective to remove them from available stock (no sale required).
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Scan / Enter Barcode or Short Code</label>
