@@ -600,9 +600,15 @@ export default function Products() {
     setScannedStatusRows((prev) => prev.filter((row: any) => row.barcodeId !== barcodeId));
   };
 
+  const BARCODE_STATUS_TOOL_ALLOWED_TAGS = ['new', 'unknown', 'defective'] as const;
+
   const handleApplyBulkStatus = () => {
     if (!statusUpdateTag) {
       alert('Please select a target status.');
+      return;
+    }
+    if (!BARCODE_STATUS_TOOL_ALLOWED_TAGS.includes(statusUpdateTag as typeof BARCODE_STATUS_TOOL_ALLOWED_TAGS[number])) {
+      alert('Sold, Returned, and In Cart cannot be set from this tool. Use POS or the Unknown products tab for returns.');
       return;
     }
     if (scannedStatusRows.length === 0) {
@@ -3182,11 +3188,8 @@ export default function Products() {
               >
                 <option value="">Select target status</option>
                 <option value="new">Fresh (New)</option>
-                <option value="sold">Sold</option>
                 <option value="unknown">Unknown</option>
-                <option value="returned">Returned</option>
                 <option value="defective">Defective</option>
-                <option value="in-cart">In Cart</option>
               </Select>
             </div>
             <Button

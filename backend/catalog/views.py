@@ -2094,6 +2094,16 @@ def update_barcode_tag(request, barcode_id):
         }, status=status.HTTP_400_BAD_REQUEST)
     
     old_tag = barcode_obj.tag
+
+    if new_tag == 'sold':
+        return Response({
+            'error': 'Cannot set barcode tag to "sold" manually. Complete a sale in POS instead.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    if new_tag == 'returned' and old_tag != 'unknown':
+        return Response({
+            'error': 'Cannot set barcode tag to "returned" manually. Mark returns from Unknown items or use POS replacement.'
+        }, status=status.HTTP_400_BAD_REQUEST)
     
     # Validate tag transitions
     # Allow: 'new' -> 'defective' (write off fresh stock)
@@ -2196,6 +2206,21 @@ def bulk_update_barcode_tags(request):
         return Response({
             'error': f'Invalid tag. Must be one of: {", ".join(valid_tags)}'
         }, status=status.HTTP_400_BAD_REQUEST)
+
+    if new_tag == 'sold':
+        return Response({
+            'error': 'Cannot set barcode tag to "sold" manually. Complete a sale in POS instead.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    if new_tag == 'returned':
+        # Bulk unknown->returned is allowed per barcode below; reject upfront if none are unknown.
+        unknown_ids = set(
+            Barcode.objects.filter(pk__in=barcode_ids, tag='unknown').values_list('pk', flat=True)
+        )
+        if not unknown_ids:
+            return Response({
+                'error': 'Cannot set barcode tag to "returned" manually. Mark returns from Unknown items or use POS replacement.'
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     updated_barcodes = []
     errors = []
@@ -2209,6 +2234,12 @@ def bulk_update_barcode_tags(request):
                 old_tag = barcode_obj.tag
                 
                 # Validate transitions (same rules as single update)
+                if new_tag == 'returned' and old_tag != 'unknown':
+                    errors.append(
+                        f'Barcode {barcode_obj.barcode}: Cannot set to "returned" (must be Unknown first)'
+                    )
+                    continue
+
                 if old_tag == 'sold' and new_tag != 'unknown':
                     errors.append(f'Barcode {barcode_obj.barcode}: Cannot change from "sold" directly')
                     continue

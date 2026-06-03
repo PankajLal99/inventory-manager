@@ -884,3 +884,34 @@ class BarcodeTagTransitionTests(TransactionTestCase):
         self.assertEqual(len(response.data.get('updated_barcodes', [])), 1)
         self.barcode.refresh_from_db()
         self.assertEqual(self.barcode.tag, 'defective')
+
+    def test_cannot_manually_set_sold_tag(self):
+        response = self.client.patch(
+            f'/api/v1/barcodes/{self.barcode.id}/update-tag/',
+            {'tag': 'sold'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'new')
+
+        bulk_response = self.client.post(
+            '/api/v1/barcodes/bulk-update-tags/',
+            {'barcode_ids': [self.barcode.id], 'tag': 'sold'},
+            format='json',
+        )
+        self.assertEqual(bulk_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'new')
+
+    def test_unknown_barcode_can_be_marked_returned(self):
+        self.barcode.tag = 'unknown'
+        self.barcode.save(update_fields=['tag'])
+        response = self.client.post(
+            '/api/v1/barcodes/bulk-update-tags/',
+            {'barcode_ids': [self.barcode.id], 'tag': 'returned'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.barcode.refresh_from_db()
+        self.assertEqual(self.barcode.tag, 'returned')
