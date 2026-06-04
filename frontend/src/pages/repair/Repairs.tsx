@@ -259,7 +259,13 @@ export default function Repairs() {
   const repairStore = repairStores.find((s: any) => s.id === defaultStore?.id) || repairStores[0];
 
   const repairQueriesEnabled = Boolean(repairStore?.id) || Boolean(debouncedSearch);
-  const deliveredDateFilter = groupDateFilters.delivered || toLocalDateString(new Date());
+  const isListSearchActive = Boolean(debouncedSearch);
+  const deliveredDateFilter = isListSearchActive
+    ? ''
+    : (groupDateFilters.delivered || toLocalDateString(new Date()));
+  const sectionQueryEnabled = (sectionStatus: string) =>
+    repairQueriesEnabled &&
+    (isListSearchActive || !statusFilter || statusFilter === sectionStatus);
 
   const buildRepairParams = (extra: Record<string, any> = {}) => {
     const params: any = { ...extra };
@@ -292,7 +298,7 @@ export default function Repairs() {
       }));
       return response.data;
     },
-    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'received'),
+    enabled: sectionQueryEnabled('received'),
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -300,14 +306,17 @@ export default function Repairs() {
   const { data: deliveredKpiData, isLoading: isDeliveredLoading, error: deliveredError } = useQuery({
     queryKey: ['repair-invoices-section-delivered', repairStore?.id, debouncedSearch, statusFilter, deliveredDateFilter],
     queryFn: async () => {
-      const response = await posApi.repair.invoices.list(buildRepairParams({
+      const params = buildRepairParams({
         repair_status: 'delivered',
-        delivery_date: deliveredDateFilter,
         unpaginated: 'true',
-      }));
+      });
+      if (deliveredDateFilter) {
+        params.delivery_date = deliveredDateFilter;
+      }
+      const response = await posApi.repair.invoices.list(params);
       return response.data;
     },
-    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'delivered'),
+    enabled: sectionQueryEnabled('delivered'),
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -321,7 +330,7 @@ export default function Repairs() {
       }));
       return response.data;
     },
-    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'work_in_progress'),
+    enabled: sectionQueryEnabled('work_in_progress'),
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -336,7 +345,7 @@ export default function Repairs() {
       }));
       return response.data;
     },
-    enabled: repairQueriesEnabled && (!statusFilter || statusFilter === 'not_repaired'),
+    enabled: sectionQueryEnabled('not_repaired'),
     placeholderData: keepPreviousData,
     retry: false,
   });
@@ -514,10 +523,10 @@ export default function Repairs() {
   const notRepairedItems = getRepairResults(notRepairedKpiData);
 
   const repairInvoices: RepairInvoice[] = (() => {
-    if (statusFilter === 'work_in_progress') return workInProgressItems;
-    if (statusFilter === 'received') return receivedItems;
-    if (statusFilter === 'delivered') return deliveredItems;
-    if (statusFilter === 'not_repaired') return notRepairedItems;
+    if (!isListSearchActive && statusFilter === 'work_in_progress') return workInProgressItems;
+    if (!isListSearchActive && statusFilter === 'received') return receivedItems;
+    if (!isListSearchActive && statusFilter === 'delivered') return deliveredItems;
+    if (!isListSearchActive && statusFilter === 'not_repaired') return notRepairedItems;
     return [
       ...workInProgressItems,
       ...receivedItems,
@@ -944,7 +953,7 @@ export default function Repairs() {
             const isNotRepairedGroup = group.status === 'not_repaired';
             const isCollapsed = isNotRepairedGroup && notRepairedCollapsed;
             // When status or search filters are active, show all rows (no date slicing).
-            const hasAnySearch = Boolean(debouncedSearch) || Boolean(barcodeSearch.trim());
+            const hasAnySearch = isListSearchActive || Boolean(barcodeSearch.trim());
             const hasGroupDateSelector = group.status === 'delivered' && !statusFilter && !hasAnySearch;
             const selectedGroupDate = hasGroupDateSelector
               ? getGroupSelectedDate(group.status, group.items)
@@ -1064,11 +1073,11 @@ export default function Repairs() {
                             {invoice.repair?.delivery_date ? formatDate(invoice.repair.delivery_date) : '—'}
                           </span>
                         </TableCell>
-                        <TableCell className="whitespace-normal max-w-[9rem]">
-                          <div className="flex items-start gap-1.5 min-w-0">
+                        <TableCell className="whitespace-normal min-w-[8rem]">
+                          <div className="flex items-start gap-1.5">
                             <User className="h-3.5 w-3.5 text-gray-400 shrink-0 mt-0.5" />
-                            <div className="min-w-0">
-                              <div className="text-gray-900 text-xs font-medium truncate" title={invoice.customer_name || 'Walk-in Customer'}>
+                            <div>
+                              <div className="text-gray-900 text-xs font-medium whitespace-normal break-words">
                                 {invoice.customer_name || 'Walk-in'}
                               </div>
                               <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
@@ -1286,9 +1295,9 @@ export default function Repairs() {
                               <span>{formatDate(invoice.repair.delivery_date)}</span>
                             </div>
                           )}
-                          <div className="flex items-center gap-2 text-sm text-gray-900 font-medium mb-1">
-                            <User className="h-3.5 w-3.5 text-gray-400" />
-                            <span className="truncate">
+                          <div className="flex items-start gap-2 text-sm text-gray-900 font-medium mb-1">
+                            <User className="h-3.5 w-3.5 text-gray-400 shrink-0 mt-0.5" />
+                            <span className="whitespace-normal break-words">
                               {invoice.customer_name || 'Walk-in Customer'}
                             </span>
                           </div>
