@@ -222,6 +222,7 @@ export default function Purchases() {
   const supplierRef = useRef<HTMLDivElement>(null);
   const supplierFilterRef = useRef<HTMLDivElement>(null);
   const productFilterRef = useRef<HTMLDivElement>(null);
+  const purchaseSubmitInFlightRef = useRef(false);
   const [generatingLabelsFor, setGeneratingLabelsFor] = useState<number | null>(null);
   const [checkingStatusFor, setCheckingStatusFor] = useState<number | null>(null);
   const [labelStatuses, setLabelStatuses] = useState<Record<string, LabelStatusState>>({});
@@ -626,6 +627,9 @@ export default function Purchases() {
     onError: (error: any) => {
       alert(error?.response?.data?.message || 'Failed to create purchase');
     },
+    onSettled: () => {
+      purchaseSubmitInFlightRef.current = false;
+    },
   });
 
   const updateMutation = useMutation({
@@ -679,7 +683,12 @@ export default function Purchases() {
           'Failed to update purchase');
       alert(errorMessage);
     },
+    onSettled: () => {
+      purchaseSubmitInFlightRef.current = false;
+    },
   });
+
+  const isSavingPurchase = createMutation.isPending || updateMutation.isPending;
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => purchasingApi.purchases.delete(id),
@@ -918,8 +927,7 @@ export default function Purchases() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Prevent multiple submissions
-    if (createMutation.isPending || updateMutation.isPending) {
+    if (isSavingPurchase || purchaseSubmitInFlightRef.current) {
       return;
     }
 
@@ -1036,6 +1044,8 @@ export default function Purchases() {
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
     if (formData.notes) submitData.notes = formData.notes;
 
+    purchaseSubmitInFlightRef.current = true;
+
     if (editingPurchase) {
       if (editingPurchaseStatus === 'draft') {
         submitData.status = 'finalized'; // Finalize when saving from draft
@@ -1049,7 +1059,7 @@ export default function Purchases() {
 
   const handleSaveDraft = (e: React.FormEvent) => {
     e.preventDefault();
-    if (createMutation.isPending || updateMutation.isPending) return;
+    if (isSavingPurchase || purchaseSubmitInFlightRef.current) return;
 
     let supplierId = formData.supplier;
     if (!supplierId && supplierSearch.trim()) {
@@ -1130,6 +1140,8 @@ export default function Purchases() {
     };
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
     if (formData.notes) submitData.notes = formData.notes;
+
+    purchaseSubmitInFlightRef.current = true;
 
     if (editingPurchase) {
       updateMutation.mutate({ id: editingPurchase, data: submitData });
@@ -2485,12 +2497,27 @@ export default function Purchases() {
       {showForm && (
         <Modal
           isOpen={showForm}
-          onClose={() => { setShowForm(false); resetForm(); }}
+          onClose={() => {
+            if (isSavingPurchase) return;
+            setShowForm(false);
+            resetForm();
+          }}
           title={editingPurchase ? 'Edit Purchase' : 'New Purchase'}
           size="wide"
           closeOnBackdropClick={false}
         >
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4 relative">
+            {isSavingPurchase && (
+              <div
+                className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/85 backdrop-blur-[1px] rounded-lg"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
+                <p className="mt-3 text-sm font-medium text-gray-700">Saving purchase...</p>
+                <p className="mt-1 text-xs text-gray-500">Please wait — large orders may take a moment.</p>
+              </div>
+            )}
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-sm font-medium text-gray-700">Supplier *</label>
@@ -2953,7 +2980,16 @@ export default function Purchases() {
             </div>
 
             <div className="flex justify-end flex-wrap gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={() => { setShowForm(false); resetForm(); }}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSavingPurchase}
+                onClick={() => {
+                  if (isSavingPurchase) return;
+                  setShowForm(false);
+                  resetForm();
+                }}
+              >
                 Cancel
               </Button>
               {(editingPurchaseStatus === 'draft' || !editingPurchase) && (
@@ -2961,21 +2997,24 @@ export default function Purchases() {
                   type="button"
                   variant="outline"
                   onClick={handleSaveDraft}
-                  disabled={createMutation.isPending || updateMutation.isPending || !formData.supplier}
+                  disabled={isSavingPurchase || !formData.supplier}
+                  className="flex items-center gap-2"
                 >
-                  {(createMutation.isPending || updateMutation.isPending) ? 'Saving...' : 'Save as draft'}
+                  {isSavingPurchase && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {isSavingPurchase ? 'Saving...' : 'Save as draft'}
                 </Button>
               )}
               <Button
                 type="submit"
                 disabled={
-                  createMutation.isPending ||
-                  updateMutation.isPending ||
+                  isSavingPurchase ||
                   purchaseItems.length === 0 ||
                   (!formData.supplier && !supplierSearch.trim())
                 }
+                className="flex items-center gap-2"
               >
-                {(createMutation.isPending || updateMutation.isPending)
+                {isSavingPurchase && <Loader2 className="h-4 w-4 animate-spin" />}
+                {isSavingPurchase
                   ? 'Saving...'
                   : editingPurchaseStatus === 'draft'
                     ? 'Finalize purchase'
