@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { parseBarcodesFromInput, looksLikeBarcode } from '../src/lib/scanningQueue'
+import {
+  parseBarcodesFromInput,
+  looksLikeBarcode,
+  isBarcodeAlreadyOnInvoiceItems,
+  normalizeBarcodeKey,
+} from '../src/lib/scanningQueue'
 
 describe('parseBarcodesFromInput', () => {
   it('returns empty array for empty or whitespace-only input', () => {
@@ -72,5 +77,33 @@ describe('looksLikeBarcode', () => {
   it('returns false for 3-char plain alphanumeric (ambiguous with search)', () => {
     expect(looksLikeBarcode('abc')).toBe(false) // no - or _, length 3
     expect(looksLikeBarcode('123')).toBe(false)
+  })
+})
+
+describe('normalizeBarcodeKey', () => {
+  it('trims and uppercases barcode values', () => {
+    expect(normalizeBarcodeKey('  sc-1  ')).toBe('SC-1')
+  })
+})
+
+describe('isBarcodeAlreadyOnInvoiceItems', () => {
+  it('detects duplicate by barcode_id', () => {
+    const items = [{ barcode_id: 42, barcode_value: 'SC-1' }]
+    expect(isBarcodeAlreadyOnInvoiceItems('sc-1', items, { barcode_id: 42 })).toBe(true)
+  })
+
+  it('detects duplicate by short code on line', () => {
+    const items = [{ barcode_value: 'SC-INV' }]
+    expect(isBarcodeAlreadyOnInvoiceItems('sc-inv', items)).toBe(true)
+  })
+
+  it('returns false when barcode is not on invoice', () => {
+    const items = [{ barcode_value: 'OTHER-1', barcode_id: 9 }]
+    expect(isBarcodeAlreadyOnInvoiceItems('NEW-1', items, { barcode_id: 10 })).toBe(false)
+  })
+
+  it('does not treat shared product_sku as duplicate barcode', () => {
+    const items = [{ barcode_value: 'BC-001', barcode_id: 1, product_sku: 'SHARED-SKU' }]
+    expect(isBarcodeAlreadyOnInvoiceItems('BC-002', items, { barcode_id: 2 })).toBe(false)
   })
 })

@@ -266,6 +266,31 @@ async function renderSnapshotHtmlToBlob(
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
 }
 
+type LocalLockChange = { at: number; locked: boolean };
+
+/** Once a cart is locked, keep it locked unless backend or user explicitly unlocks. */
+function mergeCartLocked(...sources: (boolean | undefined | null)[]): boolean {
+  return sources.some((s) => s === true);
+}
+
+/** Backend lock sync with cross-device support and protection for in-flight local changes. */
+function syncCartLocked(
+  backend?: boolean | null,
+  stored?: boolean,
+  state?: boolean,
+  recentLocal?: LocalLockChange | null,
+): boolean {
+  const recentMs = recentLocal ? Date.now() - recentLocal.at : Infinity;
+  const recentActive = recentLocal != null && recentMs < 30000;
+
+  if (recentActive && recentLocal!.locked === false) return false;
+  if (backend === true) return true;
+  const localLocked = mergeCartLocked(stored, state);
+  if (recentActive && recentLocal!.locked === true && localLocked) return true;
+  if (backend === false) return false;
+  return localLocked;
+}
+
 async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
   const canWriteImage =
     typeof (window as any).ClipboardItem !== 'undefined' &&
@@ -326,6 +351,12 @@ export default function POS() {
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkAddLoading, setBulkAddLoading] = useState(false);
   const [showTradeInModal, setShowTradeInModal] = useState(false);
+  const [discardCartTarget, setDiscardCartTarget] = useState<{
+    tabId: number;
+    label: string;
+    itemCount: number;
+  } | null>(null);
+  const [verifyingDiscardTabId, setVerifyingDiscardTabId] = useState<number | null>(null);
   const [tradeInLinesByCart, setTradeInLinesByCart] = useState<Record<number, PosTradeInLine[]>>({});
   const tradeInLines = useMemo(
     () => (cartId != null ? tradeInLinesByCart[cartId] ?? [] : []),
@@ -383,6 +414,8 @@ export default function POS() {
   const isTypingInPriceInput = useRef(false);
   const processingBarcodesRef = useRef<Set<string>>(new Set());
   const cartTabsRef = useRef<CartTab[]>([]);
+  /** Recent local lock/unlock per cart — protects in-flight changes from stale backend sync. */
+  const lockChangeAtRef = useRef<Map<number, LocalLockChange>>(new Map());
   const draftSnapshotFrameRef = useRef<HTMLIFrameElement>(null);
   /** Remaining snapshot PNG parts after the first was copied (25 lines per image). */
   const snapshotPartsQueueRef = useRef<Blob[]>([]);
@@ -1227,7 +1260,12 @@ export default function POS() {
             itemCount: cart.items?.length || 0,
             createdAt: cart.created_at || new Date().toISOString(),
             updatedAt: cart.updated_at || new Date().toISOString(),
-            locked: cart.locked ?? localTab?.locked ?? stateTab?.locked ?? false,
+            locked: syncCartLocked(
+              cart.locked,
+              localTab?.locked,
+              stateTab?.locked,
+              lockChangeAtRef.current.get(cart.id) ?? null
+            ),
           };
           mergedTabs.push(cartTab);
           processedIds.add(cart.id);
@@ -1262,7 +1300,12 @@ export default function POS() {
                   itemCount: cart.items?.length || 0,
                   createdAt: cart.created_at || new Date().toISOString(),
                   updatedAt: cart.updated_at || new Date().toISOString(),
-                  locked: cart.locked ?? localTab.locked ?? stateTab?.locked ?? false,
+                  locked: syncCartLocked(
+                    cart.locked,
+                    localTab.locked,
+                    stateTab?.locked,
+                    lockChangeAtRef.current.get(cart.id) ?? null
+                  ),
                 };
                 mergedTabs.push(cartTab);
                 processedIds.add(localTab.id);
@@ -1349,17 +1392,6 @@ export default function POS() {
   useEffect(() => {
     cartTabsRef.current = cartTabs;
   }, [cartTabs]);
-
-  // When cart detail loads, sync locked from backend so it's correct on any device/browser
-  useEffect(() => {
-    if (!cartId || !username || !cart?.data || typeof (cart.data as any).locked !== 'boolean') return;
-    const backendLocked = (cart.data as any).locked;
-    const currentTab = cartTabs.find((t) => t.id === cartId);
-    if (currentTab && currentTab.locked !== backendLocked) {
-      updateCartTab(username, cartId, { locked: backendLocked });
-      setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: backendLocked } : t)));
-    }
-  }, [cartId, username, cart?.data, cartTabs]);
 
   // Load carts from localStorage when username is available
   useEffect(() => {
@@ -1455,6 +1487,15 @@ export default function POS() {
   const lockCartMutation = useMutation({
     mutationFn: ({ cartId: id, locked }: { cartId: number; locked: boolean }) =>
       posApi.carts.update(id, { locked }),
+    onMutate: ({ cartId: id, locked }) => {
+      if (!username) return;
+      const previousTabs = cartTabsRef.current;
+      const previousLocal = loadUserCarts(username);
+      lockChangeAtRef.current.set(id, { at: Date.now(), locked });
+      updateCartTab(username, id, { locked });
+      setCartTabs((prev) => prev.map((t) => (t.id === id ? { ...t, locked } : t)));
+      return { previousTabs, previousLocal };
+    },
     onSuccess: (_, { cartId: id, locked }) => {
       if (username) {
         updateCartTab(username, id, { locked });
@@ -1464,11 +1505,37 @@ export default function POS() {
       queryClient.invalidateQueries({ queryKey: ['pos/carts'] });
       showToast(locked ? 'Cart locked. Open a new cart to add items.' : 'Cart unlocked', 'success');
     },
-    onError: (err: any) => {
+    onError: (err: any, { cartId: id }, context) => {
+      lockChangeAtRef.current.delete(id);
+      if (context?.previousTabs) {
+        setCartTabs(context.previousTabs);
+      }
+      if (context?.previousLocal && username) {
+        saveUserCarts(context.previousLocal);
+      }
       const msg = err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Failed to update lock';
       showToast(typeof msg === 'string' ? msg : JSON.stringify(msg), 'error');
     },
   });
+
+  // Sync lock from backend (cross-device); skip while a local lock/unlock mutation is in flight
+  useEffect(() => {
+    if (!cartId || !username || !cart?.data || typeof (cart.data as any).locked !== 'boolean') return;
+    if (lockCartMutation.isPending) return;
+    const backendLocked = (cart.data as any).locked;
+    const currentTab = cartTabsRef.current.find((t) => t.id === cartId);
+    if (currentTab?.locked === backendLocked) return;
+    const recentLocalChange = lockChangeAtRef.current.get(cartId);
+    if (
+      recentLocalChange &&
+      Date.now() - recentLocalChange.at < 8000 &&
+      backendLocked !== currentTab?.locked
+    ) {
+      return;
+    }
+    updateCartTab(username, cartId, { locked: backendLocked });
+    setCartTabs((prev) => prev.map((t) => (t.id === cartId ? { ...t, locked: backendLocked } : t)));
+  }, [cartId, username, cart?.data, lockCartMutation.isPending]);
 
   // Sync carts when Admin switches stores (but not on initial mount)
   // Note: Cart clearing is handled in the onChange handler, this just triggers cart creation
@@ -2108,11 +2175,16 @@ export default function POS() {
       const currentTabs = cartTabsRef.current;
       const mergedTabs = tabs.map((t) => {
         const fromState = currentTabs.find((s) => s.id === t.id);
-        return fromState?.locked === true
-          ? { ...t, locked: true }
-          : fromState?.locked === false
-            ? { ...t, locked: false }
-            : t;
+        const backendLocked = t.id === cartId && typeof (cart.data as any).locked === 'boolean'
+          ? (cart.data as any).locked
+          : undefined;
+        const locked = syncCartLocked(
+          backendLocked,
+          t.locked,
+          fromState?.locked,
+          lockChangeAtRef.current.get(t.id) ?? null
+        );
+        return locked === t.locked ? t : { ...t, locked };
       });
 
       // Sort tabs by creation order only (stable - doesn't change when cart is edited)
@@ -2176,9 +2248,7 @@ export default function POS() {
     setBarcodeInput('');
   };
 
-  // Handle tab close - optimistic deletion
-  const handleTabClose = (e: React.MouseEvent, tabId: number) => {
-    e.stopPropagation();
+  const requestDiscardCart = useCallback(async (tabId: number) => {
     if (!username) return;
 
     const tab = cartTabs.find((t) => t.id === tabId);
@@ -2187,53 +2257,60 @@ export default function POS() {
       return;
     }
 
-    // Prevent deletion if this is the last cart tab
     if (cartTabs.length <= 1) {
       showToast('Cannot delete the last cart. At least one cart must always exist.', 'error');
       return;
     }
 
-    // Check if this is the active cart and has items
+    const tabIndex = cartTabs.findIndex((t) => t.id === tabId);
     const isActiveCart = tabId === cartId;
-    const hasItems = isActiveCart && cart?.data?.items && cart?.data.items.length > 0;
+    const label = tab
+      ? getTabDisplayName(tab, tabIndex >= 0 ? tabIndex : 0, cartTabs)
+      : `Cart #${tabId}`;
 
-    // Confirm deletion ONLY if cart has items
-    if (hasItems) {
-      if (!window.confirm('This cart has items. Are you sure you want to delete it?')) {
+    let itemCount = isActiveCart
+      ? (cart?.data?.items?.length || tab?.itemCount || 0)
+      : (tab?.itemCount || 0);
+
+    if (!isActiveCart) {
+      setVerifyingDiscardTabId(tabId);
+      try {
+        const response = await posApi.carts.get(tabId);
+        itemCount = response.data?.items?.length || 0;
+      } catch {
+        setDiscardCartTarget({ tabId, label, itemCount: Math.max(itemCount, tab?.itemCount || 0) });
         return;
+      } finally {
+        setVerifyingDiscardTabId(null);
       }
     }
 
-    // Optimistic deletion - immediate localStorage update, background backend sync
+    if (itemCount === 0) {
+      deleteCartOptimistic(tabId, false);
+      return;
+    }
+
+    setDiscardCartTarget({ tabId, label, itemCount });
+  }, [username, cartTabs, cartId, cart?.data?.items, deleteCartOptimistic]);
+
+  const confirmDiscardCart = useCallback(() => {
+    if (!discardCartTarget) return;
+    const { tabId, itemCount } = discardCartTarget;
+    const hasItems = itemCount > 0;
+    setDiscardCartTarget(null);
     deleteCartOptimistic(tabId, hasItems);
+  }, [discardCartTarget, deleteCartOptimistic]);
+
+  // Handle tab close - show confirmation before discarding
+  const handleTabClose = (e: React.MouseEvent, tabId: number) => {
+    e.stopPropagation();
+    requestDiscardCart(tabId);
   };
 
-  // Handle delete current cart button - optimistic deletion
+  // Handle delete current cart button - show confirmation before discarding
   const handleDeleteCurrentCart = () => {
     if (!cartId || !username) return;
-
-    if (isCartLocked) {
-      showToast('Unlock the cart before deleting it.', 'info');
-      return;
-    }
-
-    // Prevent deletion if this is the last cart tab
-    if (cartTabs.length <= 1) {
-      showToast('Cannot delete the last cart. At least one cart must always exist.', 'error');
-      return;
-    }
-
-    const hasItems = cart?.data?.items && cart?.data.items.length > 0;
-
-    // Confirm deletion ONLY if cart has items
-    if (hasItems) {
-      if (!window.confirm('This cart has items. Are you sure you want to delete it?')) {
-        return;
-      }
-    }
-
-    // Optimistic deletion - immediate localStorage update, background backend sync
-    deleteCartOptimistic(cartId, hasItems);
+    requestDiscardCart(cartId);
   };
 
   // Handle new cart tab creation
@@ -3350,6 +3427,7 @@ export default function POS() {
       if (showRepairModal) setShowRepairModal(false);
       if (showCustomProductModal) setShowCustomProductModal(false);
       if (showShortcutsHelp) setShowShortcutsHelp(false);
+      if (discardCartTarget) setDiscardCartTarget(null);
     },
     onToggleStrictBarcode: () => {
       setStrictBarcodeMode(prev => {
@@ -3523,10 +3601,10 @@ export default function POS() {
         </div>
       </div>
 
-      {/* Cart Tabs */}
+      {/* Cart Tabs — wrap to new rows (max 6 per row) instead of horizontal scroll */}
       {cartTabs.length > 0 && (
-        <div className="bg-white rounded-lg shadow border border-gray-200 flex items-center gap-2 p-2">
-          <div className="flex items-center gap-1 overflow-x-auto flex-1 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+        <div className="bg-white rounded-lg shadow border border-gray-200 flex items-start gap-2 p-2">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1 flex-1">
             {cartTabs.map((tab, index) => {
               const isActive = tab.id === activeTabId;
               // Use itemCount from tab (for all tabs) or from active cart (for active tab, more accurate)
@@ -3541,8 +3619,8 @@ export default function POS() {
                   key={tab.id}
                   onClick={() => handleTabSwitch(tab.id)}
                   className={`
-                    flex items-center gap-0.5 sm:gap-2 px-1.5 sm:px-4 py-2 rounded-md cursor-pointer transition-all duration-200
-                    min-w-[80px] sm:min-w-[140px] max-w-[140px] sm:max-w-[280px] flex-shrink-0 relative h-10
+                    flex items-center gap-0.5 sm:gap-2 px-1.5 sm:px-3 py-2 rounded-md cursor-pointer transition-all duration-200
+                    w-full min-w-0 relative h-10
                     ${isActive
                       ? 'bg-blue-600 text-white shadow-md ring-2 ring-blue-400'
                       : hasItems
@@ -3575,12 +3653,12 @@ export default function POS() {
                   {cartTabs.length > 1 && (
                     <button
                       onClick={(e) => handleTabClose(e, tab.id)}
-                      disabled={tab.locked}
+                      disabled={tab.locked || verifyingDiscardTabId === tab.id}
                       className={`
                         ml-0.5 sm:ml-1 p-0.5 rounded transition-colors flex-shrink-0
-                        ${tab.locked ? 'opacity-50 cursor-not-allowed' : isActive ? 'hover:bg-white hover:bg-opacity-20' : 'hover:bg-gray-300'}
+                        ${tab.locked || verifyingDiscardTabId === tab.id ? 'opacity-50 cursor-not-allowed' : isActive ? 'hover:bg-white hover:bg-opacity-20' : 'hover:bg-gray-300'}
                       `}
-                      title={tab.locked ? 'Unlock the cart to close this tab.' : 'Close tab'}
+                      title={tab.locked ? 'Unlock the cart to close this tab.' : verifyingDiscardTabId === tab.id ? 'Checking cart…' : 'Close tab'}
                     >
                       <X className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                     </button>
@@ -3592,7 +3670,7 @@ export default function POS() {
               );
             })}
           </div>
-          {/* + button - outside the scrollable area */}
+          {/* + button — stays top-right when tabs wrap to multiple rows */}
           <button
             onClick={handleNewSale}
             disabled={createCartMutation.isPending}
@@ -5786,6 +5864,48 @@ export default function POS() {
         isOpen={showShortcutsHelp}
         onClose={() => setShowShortcutsHelp(false)}
       />
+
+      <Modal
+        isOpen={!!discardCartTarget}
+        onClose={() => setDiscardCartTarget(null)}
+        title="Discard cart?"
+        size="sm"
+        closeOnBackdropClick={!isDeletingCart}
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-900">
+              <p className="font-medium">This action cannot be undone.</p>
+              <p className="mt-1">
+                {discardCartTarget?.itemCount
+                  ? `Cart "${discardCartTarget.label}" has ${discardCartTarget.itemCount} item(s). All items will be removed and barcodes released back to inventory.`
+                  : `Cart "${discardCartTarget?.label}" will be permanently removed.`}
+              </p>
+            </div>
+          </div>
+          <p className="text-sm text-gray-600">
+            Are you sure you want to discard this cart?
+          </p>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button
+              variant="outline"
+              onClick={() => setDiscardCartTarget(null)}
+              disabled={isDeletingCart}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={confirmDiscardCart}
+              disabled={isDeletingCart}
+              className="bg-red-600 hover:bg-red-700 border-red-600"
+            >
+              Discard cart
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -5155,6 +5155,48 @@ def invoice_exchange(request, pk):
     return Response({'message': 'Exchange functionality to be implemented'})
 
 
+def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
+    """Validate barcode can be added to invoice. Returns error Response or None if OK."""
+    dup_q = Q(barcode=barcode_obj)
+    if raw_clean:
+        dup_q |= (
+            Q(sold_barcode_value=raw_clean)
+            | Q(barcode__barcode=raw_clean)
+            | Q(barcode__short_code=raw_clean)
+        )
+    if invoice.items.filter(dup_q).exists():
+        return Response(
+            {'error': 'This barcode is already on this invoice.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if barcode_obj.tag == 'in-cart':
+        if invoice.items.filter(barcode=barcode_obj).exists():
+            return Response(
+                {'error': 'This barcode is already on this invoice.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {'error': 'This barcode is not available (already in use).'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if barcode_obj.tag not in ['new', 'returned']:
+        return Response(
+            {'error': 'This barcode is not available (already sold or in use).'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if InvoiceItem.objects.filter(barcode=barcode_obj).exclude(
+        invoice__status='void'
+    ).exclude(invoice=invoice).exists():
+        return Response(
+            {'error': 'This barcode is already sold on another invoice.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def invoice_items(request, pk):
@@ -5236,49 +5278,45 @@ def invoice_items(request, pk):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-    if resolved_barcode_obj and item_data.get('product'):
-        product_id = item_data.get('product')
-        if resolved_barcode_obj.product_id != product_id:
-            return Response(
-                {'error': 'Barcode does not belong to this product.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if resolved_barcode_obj.tag not in ['new', 'returned']:
-            return Response(
-                {'error': 'This barcode is not available (already sold or in use).'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if invoice.items.filter(barcode=resolved_barcode_obj).exists():
-            return Response(
-                {'error': 'This barcode is already on this invoice.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if InvoiceItem.objects.filter(barcode=resolved_barcode_obj).exclude(
-            invoice__status='void'
-        ).exclude(invoice=invoice).exists():
-            return Response(
-                {'error': 'This barcode is already sold on another invoice.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        item_data['barcode'] = resolved_barcode_obj.id
-    
+    barcode_clean = str(raw_barcode_value).strip().upper() if raw_barcode_value else None
+
     serializer = InvoiceItemSerializer(data=item_data)
-    if serializer.is_valid():
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        locked_barcode_obj = None
+        if resolved_barcode_obj and item_data.get('product'):
+            product_id = item_data.get('product')
+            locked_barcode_obj = Barcode.objects.select_for_update().get(pk=resolved_barcode_obj.pk)
+            if locked_barcode_obj.product_id != product_id:
+                return Response(
+                    {'error': 'Barcode does not belong to this product.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            barcode_error = _validate_invoice_barcode_add(invoice, locked_barcode_obj, barcode_clean)
+            if barcode_error:
+                return barcode_error
+            item_data['barcode'] = locked_barcode_obj.id
+            serializer = InvoiceItemSerializer(data={**item_data, 'barcode': locked_barcode_obj.id})
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
         item = serializer.save(invoice=invoice)
-        
+
         # For pending invoices, ensure prices are 0
         if invoice.invoice_type == 'pending':
             item.unit_price = Decimal('0.00')
             item.manual_unit_price = None
             item.discount_amount = Decimal('0.00')
             item.tax_amount = Decimal('0.00')
-        
+
         # Calculate line_total
         quantity = item.quantity
         price = item.manual_unit_price or item.unit_price
         item.line_total = quantity * price - item.discount_amount + item.tax_amount
         item.save()
-        
+
         # Find and assign barcode for this item (if quantity is 1)
         if item.quantity == Decimal('1.000') and not item.barcode:
             # Get all barcodes already in this invoice (to avoid duplicates)
@@ -5286,7 +5324,7 @@ def invoice_items(request, pk):
             for inv_item in invoice.items.exclude(id=item.id):
                 if inv_item.barcode:
                     invoice_barcodes.add(inv_item.barcode.barcode)
-            
+
             # Find available barcodes (new, not sold, not in invoice)
             available_barcodes = Barcode.objects.filter(
                 product=item.product,
@@ -5295,7 +5333,7 @@ def invoice_items(request, pk):
             ).exclude(
                 barcode__in=invoice_barcodes
             )
-            
+
             # Exclude barcodes that are already sold
             sold_barcode_ids = InvoiceItem.objects.filter(
                 barcode__in=available_barcodes.values_list('id', flat=True)
@@ -5305,9 +5343,9 @@ def invoice_items(request, pk):
                 invoice__invoice_type='pending',
                 invoice__status='draft'
             ).values_list('barcode_id', flat=True)
-            
+
             available_barcodes = available_barcodes.exclude(id__in=sold_barcode_ids)
-            
+
             # Never guess when multiple barcodes exist: require client to send barcode_id (exact scan/selection).
             available_count = available_barcodes.count()
             if available_count > 1:
@@ -5320,10 +5358,14 @@ def invoice_items(request, pk):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             if available_count == 1:
-                barcode_obj = available_barcodes.get()
+                barcode_obj = Barcode.objects.select_for_update().get(pk=available_barcodes.get().pk)
+                barcode_error = _validate_invoice_barcode_add(invoice, barcode_obj)
+                if barcode_error:
+                    item.delete()
+                    return barcode_error
             else:
                 barcode_obj = None
-            
+
             if barcode_obj:
                 item.barcode = barcode_obj
                 item.save()
@@ -5355,7 +5397,7 @@ def invoice_items(request, pk):
                 )
         elif item.quantity == Decimal('1.000') and item.barcode:
             # Barcode was passed from frontend (exact scan) — shop-specific policy for pending draft
-            barcode_obj = item.barcode
+            barcode_obj = Barcode.objects.select_for_update().get(pk=item.barcode_id)
             if barcode_obj.tag in ['new', 'returned']:
                 old_tag = barcode_obj.tag
                 is_repair_shop = bool(invoice.store and (invoice.store.shop_type or '').lower() == 'repair')
@@ -5382,10 +5424,10 @@ def invoice_items(request, pk):
                         'context': 'invoice_item_added',
                     }
                 )
-        
+
         # Update invoice totals
         update_invoice_totals(invoice)
-        
+
         # If this invoice is linked to a repair, auto-set status to work_in_progress when first product is added (was received)
         try:
             repair = invoice.repair
@@ -5394,11 +5436,10 @@ def invoice_items(request, pk):
                 repair.save(update_fields=['status'])
         except Repair.DoesNotExist:
             pass
-        
+
         # Don't decrease stock for draft invoices - stock will be updated on checkout
-        
+
         return Response(InvoiceItemSerializer(item).data, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['PATCH', 'DELETE'])

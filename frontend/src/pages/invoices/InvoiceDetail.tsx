@@ -44,6 +44,7 @@ import {
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
 import CartLineScannedTime from '../../components/pos/CartLineScannedTime';
+import { addScannedBarcodeToInvoice } from '../../lib/scanningQueue';
 
 function escapeHtml(s: string): string {
   return String(s)
@@ -1574,75 +1575,38 @@ export default function InvoiceDetail() {
   };
 
   const handleBarcodeScan = async (barcode: string) => {
-    if (!barcode || !barcode.trim()) return;
-
-    const trimmedBarcode = barcode.trim();
-
-    // Check if invoice is in the correct state to add items
-    const isDraft = inv?.status === 'draft';
-    const isPendingOrCredit = inv?.invoice_type === 'pending' || inv?.invoice_type === 'credit';
-    if (!isDraft || !isPendingOrCredit) {
-      alert('Items can only be added to draft pending or draft credit invoices. Please ensure the invoice is in draft status with pending/credit type.');
-      return;
-    }
-
-    // Try to find product by barcode (barcode-only, like POS strict mode)
-    let product = null;
-
-    try {
-      const barcodeResponse = await productsApi.byBarcode(trimmedBarcode, true);
-      if (barcodeResponse.data) {
-        product = barcodeResponse.data;
-
-        // Check if barcode is available
-        if (product.barcode_available === false) {
-          const errorMsg = product.sold_invoice
-            ? `This item (SKU: ${trimmedBarcode}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
-            : `This item (SKU: ${trimmedBarcode}) has already been sold and is not available in inventory.`;
-          alert(errorMsg);
-          return;
-        }
+    const currentItems = (queryClient.getQueryData(['invoice', invoiceId]) as any)?.data?.items
+      ?? inv?.items
+      ?? [];
+    const result = await addScannedBarcodeToInvoice({
+      barcode,
+      items: currentItems,
+      invoiceStatus: inv?.status,
+      invoiceType: inv?.invoice_type,
+      lookupBarcode: async (value) => {
+        const response = await productsApi.byBarcode(value, true, true);
+        return response.data;
+      },
+      // Direct API call avoids duplicate alerts from addItemMutation.onError + scan handler
+      addItem: async (payload) => {
+        await posApi.invoices.addItem(invoiceId, payload);
+        await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+        await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+        queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+      },
+    });
+    if (!result.ok) {
+      if (result.silent || !result.message) return;
+      if (result.duplicate) {
+        toast(result.message, 'info');
+        setBarcodeInput('');
+        setProductSearchSelectedIndex(-1);
+        setIsSearchTyped(false);
+      } else {
+        alert(result.message);
       }
-    } catch (barcodeError: any) {
-      if (barcodeError?.response?.status === 404) {
-        alert(`Barcode "${trimmedBarcode}" not found. Please ensure the barcode is correct or scan again.`);
-        return;
-      }
-      alert(barcodeError?.response?.data?.error || 'Failed to search for product');
       return;
     }
-
-    if (!product || !product.id) {
-      alert('Product not found');
-      return;
-    }
-
-    // For pending invoices, backend will set unit_price to 0, but we should still send it
-    const isPending = inv?.invoice_type === 'pending' && inv?.status === 'draft';
-    const quantity = 1;
-    const unitPrice = isPending ? 0 : (product.selling_price || 0);
-    const discountAmount = 0;
-    const taxAmount = 0;
-    // Calculate line_total: quantity * price - discount_amount + tax_amount (same as checkout)
-    const lineTotal = quantity * unitPrice - discountAmount + taxAmount;
-
-    const itemData: any = {
-      product: product.id,
-      quantity: quantity,
-      unit_price: unitPrice,
-      discount_amount: discountAmount,
-      tax_amount: taxAmount,
-      line_total: lineTotal, // Required field - calculate it like checkout does
-      // Always send exact scanned barcode; backend will resolve and validate it
-      barcode: trimmedBarcode,
-    };
-
-    // Also include barcode_id when API provides it (backend prefers id, but barcode string is enough now)
-    if (product.barcode_id != null && product.barcode_available !== false) {
-      itemData.barcode_id = product.barcode_id;
-    }
-
-    addItemMutation.mutate(itemData);
     setBarcodeInput('');
     setProductSearchSelectedIndex(-1);
     setIsSearchTyped(false);

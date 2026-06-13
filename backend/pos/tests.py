@@ -2112,6 +2112,61 @@ class InvoiceItemBarcodeResolutionTests(APITestCase):
             f'Expected rejection error, got: {error_msg}'
         )
 
+    def test_add_item_duplicate_barcode_repair_shop_rejected(self):
+        """Repair shop draft pending: second add of same barcode is rejected as duplicate."""
+        repair_store = Store.objects.create(
+            name='Repair Shop BC',
+            code=f'REP-BC-{uuid.uuid4().hex[:8]}',
+            shop_type='repair',
+        )
+        invoice = Invoice.objects.create(
+            invoice_number=f'REP-BC-{uuid.uuid4().hex[:8]}',
+            store=repair_store,
+            customer=self.customer,
+            created_by=self.user,
+            status='draft',
+            invoice_type='pending',
+        )
+        url = reverse('invoice-items', args=[invoice.id])
+        data = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+            'barcode': self.bc1.short_code,
+        }
+        resp1 = self.client.post(url, data, format='json')
+        self.assertEqual(resp1.status_code, status.HTTP_201_CREATED, resp1.data)
+        self.bc1.refresh_from_db()
+        self.assertEqual(self.bc1.tag, 'in-cart')
+        resp2 = self.client.post(url, data, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already on this invoice', resp2.data.get('error', ''))
+        self.assertEqual(InvoiceItem.objects.filter(invoice=invoice, barcode=self.bc1).count(), 1)
+
+    def test_add_two_different_barcodes_same_product_succeeds(self):
+        """Two distinct barcodes for the same product can both be added to one invoice."""
+        invoice_id = self._create_draft_pending_invoice()
+        url = reverse('invoice-items', args=[invoice_id])
+        base = {
+            'product': self.product.id,
+            'quantity': 1,
+            'unit_price': 0,
+            'discount_amount': 0,
+            'tax_amount': 0,
+            'line_total': 0,
+        }
+        resp1 = self.client.post(url, {**base, 'barcode': self.bc1.barcode}, format='json')
+        self.assertEqual(resp1.status_code, status.HTTP_201_CREATED, resp1.data)
+        resp2 = self.client.post(url, {**base, 'barcode': self.bc2.barcode}, format='json')
+        self.assertEqual(resp2.status_code, status.HTTP_201_CREATED, resp2.data)
+        self.assertEqual(
+            InvoiceItem.objects.filter(invoice_id=invoice_id, product=self.product).count(),
+            2,
+        )
+
     def test_multiple_barcodes_no_error_when_barcode_specified(self):
         """With multiple new barcodes for a product, adding by exact barcode succeeds (no 'Multiple barcodes' error)."""
         invoice_id = self._create_draft_pending_invoice()
