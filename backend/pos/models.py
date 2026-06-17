@@ -157,14 +157,31 @@ class Invoice(models.Model):
     exchange_snapshots = models.JSONField(null=True, blank=True)
     # Replacement POS return invoice (`is_replacement_return`): mode + provenance helpers
     replacement_mode = models.CharField(max_length=20, blank=True, null=True)
+    replacement_date = models.DateField(null=True, blank=True, db_index=True)
     replacement_customer_warning = models.BooleanField(default=False)
     replacement_source_customers = models.JSONField(null=True, blank=True)
+    tags = models.ManyToManyField('InvoiceTag', related_name='invoices', blank=True)
 
     def __str__(self):
         return self.invoice_number
 
     class Meta:
         db_table = 'invoices'
+
+
+class InvoiceTag(models.Model):
+    """User-defined labels for invoices (name + color)."""
+    name = models.CharField(max_length=50, unique=True)
+    color = models.CharField(max_length=7, default='#3B82F6', help_text='Hex color, e.g. #3B82F6')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = 'invoice_tags'
+        ordering = ['name']
 
 
 class Repair(models.Model):

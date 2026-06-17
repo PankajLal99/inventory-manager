@@ -273,7 +273,10 @@ export const posApi = {
     replacementPos: {
       lookup: (data: { barcode: string }) => api.post('/pos/replacement-pos/lookup/', data),
       create: (data: any) => api.post('/pos/replacement-pos/create/', data),
-      finalize: (id: number, data: { settlement_invoice_type: string; cash_amount?: string | null; upi_amount?: string | null }) =>
+      finalize: (
+        id: number,
+        data: { settlement_invoice_type: string; replacement_date?: string; cash_amount?: string | null; upi_amount?: string | null }
+      ) =>
         api.post(`/pos/replacement-pos/${id}/finalize/`, data),
     },
     reserveBarcode: (data: { barcode_id: number; action?: 'reserve' | 'release'; restore_tag?: 'new' | 'returned' }) =>
@@ -317,6 +320,13 @@ export const posApi = {
     create: (data: any) => api.post('/expenses/', data),
     update: (id: number, data: any) => api.patch(`/expenses/${id}/`, data),
     delete: (id: number) => api.delete(`/expenses/${id}/`),
+  },
+  invoiceTags: {
+    list: (params?: { include_inactive?: string }) => api.get('/invoice-tags/', { params }),
+    create: (data: { name: string; color: string }) => api.post('/invoice-tags/', data),
+    update: (id: number, data: { name?: string; color?: string; is_active?: boolean }) =>
+      api.patch(`/invoice-tags/${id}/`, data),
+    delete: (id: number) => api.delete(`/invoice-tags/${id}/`),
   },
 };
 

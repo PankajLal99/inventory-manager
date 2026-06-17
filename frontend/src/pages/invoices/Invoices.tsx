@@ -10,14 +10,13 @@ import {
   CheckCircle,
   Coins,
   Clock,
-  User,
   Store,
   ChevronDown,
   Loader2,
   BarChart3,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { DateRangePreset, formatNumber } from '../../lib/utils';
+import { DateRangePreset, formatNumber, isMtShopCustomer, MT_SHOP_BADGE_CLASS, MT_SHOP_MOBILE_CARD_CLASS, MT_SHOP_TABLE_ROW_CLASS } from '../../lib/utils';
 import { readPersistedListDateRange, writePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
@@ -30,6 +29,8 @@ import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Button from '../../components/ui/Button';
 import Pagination from '../../components/ui/Pagination';
+import { InvoiceCustomerWithTags } from '../../components/invoices/InvoiceTagEditor';
+import type { InvoiceTag } from '../../lib/invoiceTags';
 
 interface Invoice {
   id: number;
@@ -65,6 +66,7 @@ interface Invoice {
   is_edited?: boolean;
   edited_on?: string | null;
   repair?: { id: number; [key: string]: unknown } | null;
+  tags?: InvoiceTag[];
   items?: InvoiceItem[];
 }
 
@@ -714,12 +716,12 @@ export default function Invoices() {
               { label: '', align: 'right' },
             ]}>
               {filteredInvoices.map((invoice) => {
-                const isMtShopCustomer = String(invoice.customer_name || '').toUpperCase().includes('MT SHOP');
+                const isMtShop = isMtShopCustomer(invoice.customer_name, invoice.customer_group_name);
                 return (
                   <TableRow
                     key={invoice.id}
                     onClick={() => navigate(buildInvoiceDetailPath(invoice.id))}
-                    className={`cursor-pointer transition-colors hover:opacity-80 ${isMtShopCustomer ? 'bg-indigo-100/80 border-l-4 border-l-indigo-500' : invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
+                    className={`cursor-pointer transition-colors hover:opacity-80 ${isMtShop ? MT_SHOP_TABLE_ROW_CLASS : invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
                       invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
                         invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
                           invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/50' : ''
@@ -745,17 +747,17 @@ export default function Invoices() {
                       </span>
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <User className="h-4 w-4 text-gray-400" />
-                        <span className="text-gray-900">
-                          {invoice.customer_name || 'Walk-in Customer'}
-                        </span>
-                        {isMtShopCustomer && (
-                          <span className="inline-flex items-center rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                      <InvoiceCustomerWithTags
+                        invoiceId={invoice.id}
+                        customerName={invoice.customer_name}
+                        tags={invoice.tags}
+                        fallbackName="Walk-in Customer"
+                        badge={isMtShop ? (
+                          <span className={MT_SHOP_BADGE_CLASS}>
                             MT SHOP
                           </span>
-                        )}
-                      </div>
+                        ) : undefined}
+                      />
                     </TableCell>
                     <TableCell>
                       <div className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 shadow-sm">
@@ -843,12 +845,12 @@ export default function Invoices() {
           {/* Mobile Card View */}
           <div className="md:hidden space-y-3">
             {filteredInvoices.map((invoice) => {
-              const isMtShopCustomer = String(invoice.customer_name || '').toUpperCase().includes('MT SHOP');
+              const isMtShop = isMtShopCustomer(invoice.customer_name, invoice.customer_group_name);
               return (
                 <div
                   key={invoice.id}
                   onClick={() => navigate(buildInvoiceDetailPath(invoice.id))}
-                  className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${isMtShopCustomer ? 'bg-indigo-100 border-indigo-400 ring-1 ring-indigo-300' : invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
+                  className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${isMtShop ? MT_SHOP_MOBILE_CARD_CLASS : invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
                     invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
                       invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
                         invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/70 border-purple-100' :
@@ -873,17 +875,18 @@ export default function Invoices() {
                       <div className="text-sm text-gray-600 mb-1">
                         {formatDate(invoice.created_at)}
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                        <User className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="truncate">
-                          {invoice.customer_name || 'Walk-in Customer'}
-                        </span>
-                        {isMtShopCustomer && (
-                          <span className="inline-flex items-center rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white">
+                      <InvoiceCustomerWithTags
+                        invoiceId={invoice.id}
+                        customerName={invoice.customer_name}
+                        tags={invoice.tags}
+                        fallbackName="Walk-in Customer"
+                        compact
+                        badge={isMtShop ? (
+                          <span className={MT_SHOP_BADGE_CLASS}>
                             MT SHOP
                           </span>
-                        )}
-                      </div>
+                        ) : undefined}
+                      />
                       <div className="mt-1.5 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 shadow-sm">
                         <span
                           className={`shrink-0 rounded px-2 py-0.5 text-xs font-semibold ${getTypePillClass(invoice.invoice_type)}`}

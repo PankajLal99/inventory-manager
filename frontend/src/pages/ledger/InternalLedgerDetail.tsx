@@ -159,6 +159,7 @@ export default function InternalLedgerDetail() {
       'Date': new Date(entry.created_at).toLocaleDateString(),
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
+      'Invoice': entry.invoice_number || '-',
       'Debit': entry.entry_type === 'debit' ? formatAmountINR(entry.amount || 0) : '-',
       'Credit': entry.entry_type === 'credit' ? formatAmountINR(entry.amount || 0) : '-',
       'Balance': formatAmountINR(entry.running_balance || 0),
@@ -208,13 +209,14 @@ export default function InternalLedgerDetail() {
       new Date(entry.created_at).toLocaleDateString(),
       entry.entry_type.toUpperCase(),
       entry.description || '-',
+      entry.invoice_number || '-',
       entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-',
       entry.entry_type === 'credit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-',
       `₹${formatAmountINR(entry.running_balance || 0)}`,
     ]);
 
     (doc as any).autoTable({
-      head: [['Date', 'Type', 'Description', 'Debit', 'Credit', 'Balance']],
+      head: [['Date', 'Type', 'Description', 'Invoice', 'Debit', 'Credit', 'Balance']],
       body: tableData,
       startY: 55,
       styles: { fontSize: 8 },
@@ -270,6 +272,7 @@ export default function InternalLedgerDetail() {
                 <th>Date</th>
                 <th>Type</th>
                 <th>Description</th>
+                <th>Invoice</th>
                 <th>Debit</th>
                 <th>Credit</th>
                 <th>Balance</th>
@@ -281,6 +284,7 @@ export default function InternalLedgerDetail() {
                   <td>${new Date(entry.created_at).toLocaleDateString()}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
+                  <td>${entry.invoice_number || '-'}</td>
                   <td class="debit">${entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}</td>
                   <td class="credit">${entry.entry_type === 'credit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}</td>
                   <td>₹${formatAmountINR(entry.running_balance || 0)}</td>
@@ -448,7 +452,7 @@ export default function InternalLedgerDetail() {
                   Search
                 </label>
                 <Input
-                  placeholder="Search description..."
+                  placeholder="Search description, invoice..."
                   value={filters.search}
                   onChange={(e) => setFilters({ ...filters, search: e.target.value })}
                 />
@@ -477,6 +481,7 @@ export default function InternalLedgerDetail() {
                   <th className="text-left py-3 px-4 font-semibold text-gray-700">Date</th>
                   <th className="text-left py-3 px-4 font-semibold text-gray-700">Type</th>
                   <th className="text-left py-3 px-4 font-semibold text-gray-700">Description</th>
+                  <th className="text-left py-3 px-2 font-semibold text-gray-700">Inv#</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Debit</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Credit</th>
                   <th className="text-right py-3 px-4 font-semibold text-gray-700">Balance</th>
@@ -502,6 +507,20 @@ export default function InternalLedgerDetail() {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-gray-700">{entry.description || '-'}</td>
+                    <td className="py-3 px-2">
+                      {entry.invoice_number ? (
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/invoices/${entry.invoice}`)}
+                          className="text-blue-600 hover:underline text-xs font-medium"
+                          title={entry.invoice_number}
+                        >
+                          {entry.invoice_number}
+                        </button>
+                      ) : (
+                        <span className="text-gray-400 text-xs">-</span>
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-right text-red-600 font-medium">
                       {entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}
                     </td>

@@ -340,7 +340,7 @@ export default function InternalLedger() {
 
   // Group entries by customer
   const groupedByCustomer = useMemo(() => {
-    const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string } } = {};
+    const grouped: { [key: string]: { customer: any; entries: any[]; totalCredit: number; totalDebit: number; netAmount: number; latestDescription: string; latestInvoiceNumber: string } } = {};
 
     filteredEntries.forEach((entry: any) => {
       // Use customer ID or 'anonymous' for null/undefined customers
@@ -358,6 +358,7 @@ export default function InternalLedger() {
           totalDebit: 0,
           netAmount: 0,
           latestDescription: '',
+          latestInvoiceNumber: '',
         };
       }
 
@@ -376,6 +377,7 @@ export default function InternalLedger() {
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
       grouped[key].latestDescription = byDate[0]?.description || '';
+      grouped[key].latestInvoiceNumber = byDate[0]?.invoice_number || '';
       grouped[key].entries = byDate;
     });
 
@@ -389,6 +391,7 @@ export default function InternalLedger() {
       'Customer': entry.customer_name || 'Anonymous',
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
+      'Invoice': entry.invoice_number || '-',
       'Amount': formatAmountINR(entry.amount || 0),
     }));
 
@@ -421,11 +424,12 @@ export default function InternalLedger() {
       entry.customer_name || 'Anonymous',
       entry.entry_type.toUpperCase(),
       entry.description || '-',
+      entry.invoice_number || '-',
       `₹${formatAmountINR(entry.amount || 0)}`,
     ]);
 
     (doc as any).autoTable({
-      head: [['Date', 'Customer', 'Type', 'Description', 'Amount']],
+      head: [['Date', 'Customer', 'Type', 'Description', 'Invoice', 'Amount']],
       body: tableData,
       startY: 35,
       styles: { fontSize: 8 },
@@ -474,6 +478,7 @@ export default function InternalLedger() {
                 <th>Customer</th>
                 <th>Type</th>
                 <th>Description</th>
+                <th>Invoice</th>
                 <th>Amount</th>
               </tr>
             </thead>
@@ -484,6 +489,7 @@ export default function InternalLedger() {
                   <td>${entry.customer_name || 'Anonymous'}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
+                  <td>${entry.invoice_number || '-'}</td>
                   <td class="${entry.entry_type === 'credit' ? 'credit' : 'debit'}">
                     ${entry.entry_type === 'credit' ? '+' : '-'}₹${formatAmountINR(entry.amount || 0)}
                   </td>
@@ -604,7 +610,7 @@ export default function InternalLedger() {
             <div className="relative flex-1 min-w-[140px] max-w-[200px]">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
               <Input
-                placeholder="Search name, phone, description..."
+                placeholder="Search name, phone, description, invoice..."
                 value={filters.search}
                 onChange={(e) => setFilters({ ...filters, search: e.target.value })}
                 className="pl-9 py-1.5 h-9 text-sm border-gray-300 rounded-lg"
@@ -735,6 +741,9 @@ export default function InternalLedger() {
                           <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Latest
                           </th>
+                          <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                            Inv#
+                          </th>
                           <th className="px-6 py-4 text-right text-xs font-bold text-gray-700 uppercase tracking-wider">
                             Net Amount
                           </th>
@@ -777,6 +786,23 @@ export default function InternalLedger() {
                                   {group.latestDescription || <span className="text-gray-400 italic">—</span>}
                                 </div>
                               </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                {group.latestInvoiceNumber ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const latest = group.entries[0];
+                                      if (latest?.invoice) navigate(`/invoices/${latest.invoice}`);
+                                    }}
+                                    className="text-sm text-blue-600 hover:text-blue-800 hover:underline"
+                                    title={group.latestInvoiceNumber}
+                                  >
+                                    {group.latestInvoiceNumber}
+                                  </button>
+                                ) : (
+                                  <span className="text-sm text-gray-400">—</span>
+                                )}
+                              </td>
                               <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-bold ${group.netAmount >= 0 ? 'text-green-700' : 'text-red-700'
                                 }`}>
                                 <span className={`inline-flex items-center px-3 py-1.5 rounded ${group.netAmount >= 0
@@ -795,6 +821,7 @@ export default function InternalLedger() {
                           <td colSpan={2} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
                             Totals:
                           </td>
+                          <td className="px-6 py-4" />
                           <td className="px-6 py-4" />
                           <td className="px-6 py-4 whitespace-nowrap text-right">
                             <div className="space-y-1">
@@ -873,6 +900,18 @@ export default function InternalLedger() {
                               <p className="text-xs text-gray-600 mt-1 truncate max-w-[200px]" title={group.latestDescription}>
                                 {group.latestDescription}
                               </p>
+                            ) : null}
+                            {group.latestInvoiceNumber ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const latest = group.entries[0];
+                                  if (latest?.invoice) navigate(`/invoices/${latest.invoice}`);
+                                }}
+                                className="text-xs text-blue-600 hover:underline mt-1"
+                              >
+                                Inv# {group.latestInvoiceNumber}
+                              </button>
                             ) : null}
                           </div>
                         </div>

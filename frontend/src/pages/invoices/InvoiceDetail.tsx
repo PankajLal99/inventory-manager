@@ -45,6 +45,15 @@ import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
 import CartLineScannedTime from '../../components/pos/CartLineScannedTime';
 import { addScannedBarcodeToInvoice } from '../../lib/scanningQueue';
+import InvoiceTagEditor, { InvoiceTagChip } from '../../components/invoices/InvoiceTagEditor';
+import type { InvoiceTag } from '../../lib/invoiceTags';
+
+/** A4 width at 96dpi — fixed capture size for sharp images regardless of on-screen preview scale */
+const INVOICE_CAPTURE_WIDTH_PX = 794;
+
+function invoiceCaptureScale(): number {
+  return Math.min(4, Math.max(3, window.devicePixelRatio));
+}
 
 function escapeHtml(s: string): string {
   return String(s)
@@ -225,6 +234,7 @@ export default function InvoiceDetail() {
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
+  const invoiceCaptureFrameRef = useRef<HTMLIFrameElement>(null);
   // Toggle to show/hide purchase price in checkout modal (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Repair status in checkout modal (when invoice is repair)
@@ -237,6 +247,7 @@ export default function InvoiceDetail() {
   const [replSettlementType, setReplSettlementType] = useState<'cash' | 'upi' | 'mixed' | 'credit'>('cash');
   const [replCashAmount, setReplCashAmount] = useState('');
   const [replUpiAmount, setReplUpiAmount] = useState('');
+  const [replReplacementDate, setReplReplacementDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
 
   // Debounce customer search input
   useEffect(() => {
@@ -264,6 +275,14 @@ export default function InvoiceDetail() {
   });
 
   const inv = invoice?.data;
+  const invoiceTags: InvoiceTag[] = Array.isArray(inv?.tags) ? (inv.tags as InvoiceTag[]) : [];
+
+  useEffect(() => {
+    if (inv?.is_replacement_return && typeof inv?.replacement_date === 'string' && inv.replacement_date) {
+      setReplReplacementDate(inv.replacement_date);
+    }
+  }, [inv?.id, inv?.is_replacement_return, inv?.replacement_date]);
+
   const visibleInvoiceItems = useMemo(
     () => (Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : []),
     [inv?.items]
@@ -549,7 +568,7 @@ export default function InvoiceDetail() {
 
   // Finalize a pending replacement-return invoice (settlement only — no price editing)
   const finalizeReplacementMutation = useMutation({
-    mutationFn: (payload: { settlement_invoice_type: string; cash_amount?: string | null; upi_amount?: string | null }) =>
+    mutationFn: (payload: { settlement_invoice_type: string; replacement_date?: string; cash_amount?: string | null; upi_amount?: string | null }) =>
       posApi.replacement.replacementPos.finalize(invoiceId, payload),
     onSuccess: async () => {
       try {
@@ -568,6 +587,7 @@ export default function InvoiceDetail() {
       setReplSettlementType('cash');
       setReplCashAmount('');
       setReplUpiAmount('');
+      setReplReplacementDate(new Date().toISOString().slice(0, 10));
       toast('Replacement invoice finalized successfully!', 'success');
     },
     onError: (error: any) => {
@@ -1996,24 +2016,32 @@ export default function InvoiceDetail() {
   };
 
   const handleCapturePhoto = async () => {
-    const iframe = invoicePreviewRef.current;
+    const iframe = invoiceCaptureFrameRef.current;
     const doc = iframe?.contentDocument;
-    const body = doc?.body;
-    if (!body) {
+    if (!iframe || !doc) {
       toast('Invoice preview is not ready. Please wait a moment and try again.', 'error');
       return;
     }
-    const el = doc?.documentElement;
-    const w = el?.scrollWidth ?? 794; // A4 ~210mm at 96dpi
-    const h = el?.scrollHeight ?? 1123;
     try {
+      doc.open();
+      doc.write(generateInvoiceHTML());
+      doc.close();
+      await new Promise((r) => window.setTimeout(r, 80));
+
+      const body = doc.body;
+      const el = doc.documentElement;
+      const w = el?.scrollWidth ?? INVOICE_CAPTURE_WIDTH_PX;
+      const h = el?.scrollHeight ?? 1123;
+
       const canvas = await html2canvas(body, {
-        scale: 2,
+        scale: invoiceCaptureScale(),
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
         windowWidth: w,
         windowHeight: h,
+        width: w,
+        height: h,
       });
       canvas.toBlob(
         (blob) => {
@@ -2334,9 +2362,9 @@ export default function InvoiceDetail() {
         </Button>
 
         {/* Main Header Card */}
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
           {/* Top Section: Invoice Info */}
-          <div className="p-4 sm:p-6 border-b border-gray-100">
+          <div className="p-4 sm:p-6 border-b border-gray-100 overflow-visible">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               {/* Invoice Details */}
               <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -2347,7 +2375,30 @@ export default function InvoiceDetail() {
                   <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
                     {inv.invoice_number || `Invoice #${inv.id} `}
                   </h1>
-                  <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {invoiceTags.map((tag) => (
+                      <InvoiceTagChip key={tag.id} tag={tag} size="sm" />
+                    ))}
+                    <InvoiceTagEditor
+                      invoiceId={inv.id}
+                      tags={invoiceTags}
+                      onUpdated={(tags) => {
+                        queryClient.setQueryData(['invoice', invoiceId], (old: any) => {
+                          if (!old?.data) return old;
+                          return { ...old, data: { ...old.data, tags } };
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
+                        queryClient.invalidateQueries({ queryKey: ['invoices'] });
+                        queryClient.invalidateQueries({
+                          predicate: (query) => String(query.queryKey[0] || '').startsWith('repair-invoices-section'),
+                        });
+                      }}
+                    />
+                    {invoiceTags.length === 0 && (
+                      <span className="text-xs text-gray-400">Add one or more tags</span>
+                    )}
+                  </div>
+                  <p className="text-xs sm:text-sm text-gray-500 mt-1.5">
                     Created on {formatDate(inv.created_at)}
                   </p>
                 </div>
@@ -3436,6 +3487,13 @@ export default function InvoiceDetail() {
 
                 {/* Settlement type */}
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                  <label className="block text-sm font-semibold text-gray-900">Replacement Date</label>
+                  <Input
+                    type="date"
+                    value={replReplacementDate}
+                    onChange={(e) => setReplReplacementDate(e.target.value)}
+                    className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 bg-white"
+                  />
                   <label className="block text-sm font-semibold text-gray-900">
                     <Coins className="h-4 w-4 inline mr-2" />
                     Settlement Type
@@ -3518,6 +3576,7 @@ export default function InvoiceDetail() {
                       setReplSettlementType('cash');
                       setReplCashAmount('');
                       setReplUpiAmount('');
+                      setReplReplacementDate(new Date().toISOString().slice(0, 10));
                     }}
                     disabled={finalizeReplacementMutation.isPending}
                     className="w-full sm:w-auto"
@@ -3539,6 +3598,7 @@ export default function InvoiceDetail() {
                         }
                       }
                       finalizeReplacementMutation.mutate({
+                        replacement_date: replReplacementDate,
                         settlement_invoice_type: replSettlementType,
                         cash_amount: replSettlementType === 'mixed' ? replCashAmount || null : null,
                         upi_amount: replSettlementType === 'mixed' ? replUpiAmount || null : null,
@@ -5923,6 +5983,22 @@ export default function InvoiceDetail() {
           </div>
         </Modal>
       )}
+
+      {/* Offscreen iframe at full A4 width for high-quality image capture */}
+      <iframe
+        ref={invoiceCaptureFrameRef}
+        title="invoice-capture"
+        style={{
+          position: 'fixed',
+          left: '-99999px',
+          top: 0,
+          width: `${INVOICE_CAPTURE_WIDTH_PX}px`,
+          height: '1px',
+          border: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   );
 }

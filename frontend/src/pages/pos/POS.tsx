@@ -75,6 +75,7 @@ function buildCartSnapshotHtml(opts: {
   partCount: number;
   totalItemCount: number;
   showTotals: boolean;
+  totalQty: number;
   subtotal: number;
   tradeIn: number;
   total: number;
@@ -90,6 +91,7 @@ function buildCartSnapshotHtml(opts: {
     partCount,
     totalItemCount,
     showTotals,
+    totalQty,
     subtotal,
     tradeIn,
     total,
@@ -206,6 +208,10 @@ function buildCartSnapshotHtml(opts: {
           ? `<div style="display:flex; justify-content:flex-end; margin-top:10px;">
         <table class="totals-table" style="border-collapse:collapse; font-size:12px; min-width: 260px;">
           <tbody>
+            <tr>
+              <td><strong>Total Qty</strong></td>
+              <td>${escapeHtml(formatNumber(totalQty, 3))}</td>
+            </tr>
             <tr>
               <td><strong>Subtotal</strong></td>
               <td>₹${escapeHtml(formatNumber(subtotal))}</td>
@@ -3256,6 +3262,7 @@ export default function POS() {
       const subtotal = cartGrossSubtotal || 0;
       const tradeIn = tradeInCredit || 0;
       const total = calculateTotal() || 0;
+      const totalQty = draftItems.reduce((sum, row) => sum + row.qty, 0);
       const title = 'DRAFT POS SNAPSHOT';
       const storeName = defaultStore?.name || cartData?.store_name || '-';
       const customerName = selectedCustomer?.name || cartData?.customer_name || 'Walk-in Customer';
@@ -3277,6 +3284,7 @@ export default function POS() {
           partCount,
           totalItemCount: draftItems.length,
           showTotals: i === rowChunks.length - 1,
+          totalQty,
           subtotal,
           tradeIn,
           total,
@@ -4942,7 +4950,12 @@ export default function POS() {
             </div>
             {cart?.data?.items && Array.isArray(cart.data.items) && cart.data.items.length > 0 ? (
               <div className="space-y-3">
-                {cart.data.items.map((item: any) => {
+                <div className="hidden sm:grid sm:grid-cols-[3rem_minmax(0,1fr)_auto] sm:gap-3 px-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                  <span>Sr. No</span>
+                  <span>Product</span>
+                  <span className="text-right pr-28">Qty · Price · Total</span>
+                </div>
+                {cart.data.items.map((item: any, itemIndex: number) => {
                   // Use editingManualPrice if user is typing, otherwise use saved price
                   const editingPrice = editingManualPrice[item.id];
                   // Always use manual_unit_price (user-entered); no fallback to unit_price
@@ -4955,11 +4968,20 @@ export default function POS() {
                   const isBarcodesExpanded = expandedBarcodes[item.id] || false;
                   const scanSummary = getCartLineScanSummary(item);
                   const lineTotal = effectivePrice * (parseInt(item.quantity || '0') || 0);
+                  const srNo = itemIndex + 1;
                   return (
                     <div key={item.id} className="bg-white border border-gray-300 rounded-lg p-3 shadow-sm hover:shadow-md transition-all">
                       {/* Mobile: Product name on top, then 2 rows for controls */}
                       {/* Desktop: Everything in one row */}
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <div className="flex items-start gap-3 sm:contents">
+                        <div
+                          className="flex-shrink-0 w-9 h-9 rounded-md bg-gray-100 border border-gray-200 flex items-center justify-center sm:order-0"
+                          title={`Sr. No ${srNo}`}
+                          aria-label={`Serial number ${srNo}`}
+                        >
+                          <span className="text-xs font-bold text-gray-700 tabular-nums">{srNo}</span>
+                        </div>
                         {/* Product Name - Full width on mobile, flex-1 on desktop */}
                         <div className="flex-1 min-w-0 sm:order-1">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -5002,6 +5024,7 @@ export default function POS() {
                             <CartLineScannedTime item={item} variant="badge" />
                           </div>
                           <CartLineScannedTime item={item} variant="row" className="sm:hidden" />
+                        </div>
                         </div>
 
                         {/* Row 1 on Mobile: Quantity Controls */}

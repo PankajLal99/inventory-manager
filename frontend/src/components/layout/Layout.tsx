@@ -33,7 +33,6 @@ import {
   Loader2,
   ExternalLink,
   Wrench,
-  Receipt,
   Keyboard,
   ClipboardList,
   CalendarDays,
@@ -257,7 +256,7 @@ export default function Layout() {
       title: 'Sales & Transactions',
       items: [
         { path: '/invoices', icon: FileText, label: 'Invoices', showFor: ['Admin', 'RetailAdmin', 'Retail', 'WholesaleAdmin', 'Wholesale'] },
-        { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        // { path: '/credit-notes', icon: Receipt, label: 'Credit Notes', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/customers', icon: Users, label: 'Customers', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/replacement', icon: RefreshCw, label: 'Replacement', showFor: ['Admin', 'Retail', 'RetailAdmin', 'WholesaleAdmin', 'Wholesale'] },
         { path: '/repairs', icon: Wrench, label: 'Repairs', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin', 'Repair', 'Retail', 'Wholesale'] },

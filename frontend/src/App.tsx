@@ -50,6 +50,7 @@ import StockOverview from './pages/stock/StockOverview';
 import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingDetails';
 import OverallPendingInvoiceDetails from './pages/dashboard/OverallPendingInvoiceDetails';
 import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingClearedDetails';
+import DashboardMetricDetails from './pages/dashboard/DashboardMetricDetails';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -113,6 +114,7 @@ function App() {
                   path="dashboard/wholesale-pending-cleared-details"
                   element={<WholesalePendingClearedDetails />}
                 />
+                <Route path="dashboard/metric-details" element={<DashboardMetricDetails />} />
                 <Route path="products" element={<Products />} />
                 <Route path="products/:id" element={<ProductDetail />} />
                 <Route path="pos" element={<POS />} />

@@ -202,6 +202,21 @@ export function formatDateDDMMYYYY(date: Date | string | null | undefined): stri
   return `${dd}/${mm}/${yyyy}`;
 }
 
+/** True when customer belongs to MT SHOP (name or MTSHOP customer group). */
+export function isMtShopCustomer(
+  customerName?: string | null,
+  customerGroupName?: string | null,
+): boolean {
+  if (String(customerName || '').toUpperCase().includes('MT SHOP')) return true;
+  const group = String(customerGroupName || '').toUpperCase().replace(/\s+/g, '');
+  return group.includes('MTSHOP');
+}
+
+export const MT_SHOP_TABLE_ROW_CLASS = 'bg-blue-100/80 border-l-4 border-l-blue-700';
+export const MT_SHOP_MOBILE_CARD_CLASS = 'bg-blue-100 border-blue-600 ring-1 ring-blue-400';
+export const MT_SHOP_BADGE_CLASS =
+  'inline-flex items-center rounded-full bg-blue-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white';
+
 /**
  * Formats a date-only string (YYYY-MM-DD) for display in the user's locale.
  * Parses as local date so the shown day doesn't shift (e.g. in timezones behind UTC).

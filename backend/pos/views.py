@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import Counter
 from datetime import datetime
 import uuid
-from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses
+from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses, InvoiceTag
 from backend.catalog.barcode_resolution import (
     get_catalog_barcode_by_printed_value,
     single_barcode_for_untracked_product,
@@ -33,7 +33,8 @@ from backend.parties.internal_ledger_utils import (
 from .serializers import (
     POSSessionSerializer, CartSerializer, CartOverviewSerializer, CartItemSerializer, InvoiceSerializer,
     InvoiceListSerializer, RepairInvoiceListSerializer, InvoiceItemSerializer, PaymentSerializer,
-    ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer
+    ReturnSerializer, CreditNoteSerializer, CreditNoteDetailSerializer, RepairSerializer, ExpenseSerializer,
+    InvoiceTagSerializer,
 )
 from .cart_scan_times import (
     record_barcode_scan,
@@ -353,7 +354,7 @@ def repair_invoices_list(request):
     queryset = Invoice.objects.filter(
         store_id__in=repair_store_ids,
         repair__isnull=False  # Only invoices with Repair records
-    ).select_related('customer', 'store', 'created_by', 'repair')
+    ).select_related('customer', 'store', 'created_by', 'repair').prefetch_related('tags')
 
     ordering_param = request.query_params.get('ordering', 'repair_status_priority')
     if ordering_param == 'created_at':
@@ -526,7 +527,7 @@ def find_repair_invoice_by_barcode(request):
         return Response({'error': 'repair_barcode parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
-        repair = Repair.objects.select_related('invoice', 'invoice__customer', 'invoice__store', 'invoice__created_by').prefetch_related('invoice__items', 'invoice__payments').get(
+        repair = Repair.objects.select_related('invoice', 'invoice__customer', 'invoice__store', 'invoice__created_by').prefetch_related('invoice__items', 'invoice__payments', 'invoice__tags').get(
             barcode=repair_barcode
         )
         serializer = InvoiceSerializer(repair.invoice)
@@ -2862,7 +2863,7 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, s
                     created_by=request.user,
                 )
                 if invoice.customer:
-                    LedgerEntry.objects.create(
+                    refund_entry = LedgerEntry.objects.create(
                         customer=invoice.customer,
                         invoice=invoice,
                         entry_type='credit',
@@ -2881,6 +2882,7 @@ def apply_pos_trade_in_line(request, *, invoice_item_id, return_tag, store_id, s
                         f'Refund for returned items from Invoice {invoice.invoice_number} (POS trade-in)',
                         request.user,
                         timezone.now(),
+                        source_ledger_entry_id=refund_entry.id,
                     )
                     invoice.customer.credit_balance += excess_payment
                     invoice.customer.save(update_fields=['credit_balance'])
@@ -3321,7 +3323,7 @@ def cart_checkout(request, pk):
             from backend.parties.models import LedgerEntry
             # Calculate total quantity for ledger
             total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
-            LedgerEntry.objects.create(
+            entry = LedgerEntry.objects.create(
                 customer=invoice.customer, invoice=invoice, entry_type='debit',
                 amount=invoice.total, quantity=total_qty,
                 description=f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
@@ -3331,7 +3333,8 @@ def cart_checkout(request, pk):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, 'debit', invoice.total,
                 f'Invoice {invoice.invoice_number} ({invoice_type.upper()})',
-                request.user, timezone.now()
+                request.user, timezone.now(),
+                source_ledger_entry_id=entry.id,
             )
             invoice.customer.credit_balance -= invoice.total
             invoice.customer.save()
@@ -3380,7 +3383,7 @@ def invoice_list_create(request):
     if request.method == 'GET':
         queryset = Invoice.objects.select_related(
             'customer__customer_group', 'store', 'created_by'
-        ).all()
+        ).prefetch_related('tags').all()
         date = request.query_params.get('date', None)
         store = request.query_params.get('store', None)
         customer = request.query_params.get('customer', None)
@@ -3519,7 +3522,7 @@ def invoice_list_create(request):
 @permission_classes([IsAuthenticated])
 def invoice_detail(request, pk):
     """Retrieve, update or delete an invoice"""
-    invoice = get_object_or_404(Invoice, pk=pk)
+    invoice = get_object_or_404(Invoice.objects.prefetch_related('tags'), pk=pk)
     
     if request.method == 'GET':
         serializer = InvoiceSerializer(invoice, context={'include_replacement_context': True})
@@ -3565,7 +3568,7 @@ def invoice_detail(request, pk):
     elif request.method == 'PATCH':
         # Check what fields are being updated
         update_fields = set(request.data.keys())
-        allowed_fields_for_all = {'invoice_type', 'store', 'customer'}  # Fields that can be edited for any invoice
+        allowed_fields_for_all = {'invoice_type', 'store', 'customer', 'tag_ids'}  # Fields that can be edited for any invoice
         
         # If updating only invoice_type, store, and/or customer, allow it for any invoice
         # Otherwise, only allow editing draft pending invoices
@@ -3678,7 +3681,7 @@ def invoice_detail(request, pk):
                 existing_entries.delete()
                 invoice.customer.credit_balance += net_reversal
                 total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
-                LedgerEntry.objects.create(
+                settlement_entry = LedgerEntry.objects.create(
                     customer=invoice.customer,
                     invoice=invoice,
                     entry_type='credit',
@@ -3691,7 +3694,8 @@ def invoice_detail(request, pk):
                 create_internal_ledger_entry_if_mtshop(
                     invoice.customer, 'credit', invoice.total,
                     f'Invoice {invoice.invoice_number} ({invoice.invoice_type.upper()}) (Settlement)',
-                    request.user, timezone.now()
+                    request.user, timezone.now(),
+                    source_ledger_entry_id=settlement_entry.id,
                 )
                 invoice.customer.credit_balance += invoice.total
                 invoice.customer.save(update_fields=['credit_balance'])
@@ -3754,10 +3758,13 @@ def invoice_detail(request, pk):
                     **changes
                 }
             )
-            invoice.is_edited = True
-            invoice.edited_on = timezone.now()
-            invoice.save(update_fields=['is_edited', 'edited_on'])
+            tag_only_update = update_fields == {'tag_ids'}
+            if not tag_only_update:
+                invoice.is_edited = True
+                invoice.edited_on = timezone.now()
+                invoice.save(update_fields=['is_edited', 'edited_on'])
             
+            invoice = Invoice.objects.prefetch_related('tags').get(pk=invoice.pk)
             return Response(InvoiceSerializer(invoice).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     else:  # DELETE
@@ -3954,7 +3961,7 @@ def invoice_payments(request, pk):
         if invoice.customer and amount_delta != Decimal('0.00'):
             from backend.parties.models import LedgerEntry
             entry_type = 'credit' if amount_delta > Decimal('0.00') else 'debit'
-            LedgerEntry.objects.create(
+            adjustment_entry = LedgerEntry.objects.create(
                 customer=invoice.customer,
                 invoice=invoice,
                 entry_type=entry_type,
@@ -3966,7 +3973,8 @@ def invoice_payments(request, pk):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, entry_type, abs(amount_delta),
                 f'Payment adjustment for Invoice {invoice.invoice_number}',
-                request.user, timezone.now()
+                request.user, timezone.now(),
+                source_ledger_entry_id=adjustment_entry.id,
             )
             # Credit entry increases balance, debit entry decreases it.
             invoice.customer.credit_balance += amount_delta
@@ -4051,7 +4059,8 @@ def invoice_payments(request, pk):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, 'credit', payment.amount,
                 f'Payment for Invoice {invoice.invoice_number}',
-                request.user, timezone.now()
+                request.user, timezone.now(),
+                source_ledger_entry_id=entry.id,
             )
             # Update customer credit_balance
             invoice.customer.credit_balance += entry.amount
@@ -4337,7 +4346,7 @@ def invoice_checkout(request, pk):
         if invoice.customer:
             from backend.parties.models import LedgerEntry
             total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
-            LedgerEntry.objects.create(
+            credit_entry = LedgerEntry.objects.create(
                 customer=invoice.customer, invoice=invoice, entry_type='debit',
                 amount=invoice.total, quantity=total_qty,
                 description=f'Invoice {invoice.invoice_number} (CREDIT)',
@@ -4347,7 +4356,8 @@ def invoice_checkout(request, pk):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, 'debit', invoice.total,
                 f'Invoice {invoice.invoice_number} (CREDIT)',
-                request.user, timezone.now()
+                request.user, timezone.now(),
+                source_ledger_entry_id=credit_entry.id,
             )
             invoice.customer.credit_balance -= invoice.total
             invoice.customer.save()
@@ -4467,7 +4477,8 @@ def invoice_checkout(request, pk):
         create_internal_ledger_entry_if_mtshop(
             invoice.customer, 'debit', invoice.total,
             f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Purchase)',
-            request.user, invoice.created_at or timezone.now()
+            request.user, invoice.created_at or timezone.now(),
+            source_ledger_entry_id=entry_debit.id,
         )
         invoice.customer.credit_balance -= entry_debit.amount
         
@@ -4486,7 +4497,8 @@ def invoice_checkout(request, pk):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, 'credit', invoice.total,
                 f'Invoice {invoice.invoice_number} ({new_invoice_type.upper()}) (Settlement)',
-                request.user, timezone.now()
+                request.user, timezone.now(),
+                source_ledger_entry_id=entry_credit.id,
             )
             invoice.customer.credit_balance += entry_credit.amount
             
@@ -5053,7 +5065,8 @@ def invoice_mark_credit(request, pk):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, 'debit', invoice.total,
                 f'Credit Invoice {invoice.invoice_number}',
-                request.user, invoice.created_at or timezone.now()
+                request.user, invoice.created_at or timezone.now(),
+                source_ledger_entry_id=entry.id,
             )
             # Update customer credit_balance (debit means customer owes more)
             invoice.customer.credit_balance -= entry.amount
@@ -5824,6 +5837,47 @@ def expense_detail(request, pk):
     serializer = ExpenseSerializer(expense, data=request.data, partial=partial)
     if serializer.is_valid():
         serializer.save(last_updated_by=request.user)
+        return Response(serializer.data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def invoice_tag_list_create(request):
+    """List all invoice tags or create a new tag."""
+    if request.method == 'GET':
+        include_inactive = str(request.query_params.get('include_inactive', '')).strip().lower() in ('1', 'true', 'yes')
+        queryset = InvoiceTag.objects.all()
+        if not include_inactive:
+            queryset = queryset.filter(is_active=True)
+        serializer = InvoiceTagSerializer(queryset.order_by('name'), many=True)
+        return Response(serializer.data)
+
+    serializer = InvoiceTagSerializer(data=request.data)
+    if serializer.is_valid():
+        tag = serializer.save()
+        return Response(InvoiceTagSerializer(tag).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def invoice_tag_detail(request, pk):
+    """Retrieve, update, or soft-delete an invoice tag."""
+    tag = get_object_or_404(InvoiceTag, pk=pk)
+
+    if request.method == 'GET':
+        return Response(InvoiceTagSerializer(tag).data)
+
+    if request.method == 'DELETE':
+        tag.is_active = False
+        tag.save(update_fields=['is_active'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    partial = request.method == 'PATCH'
+    serializer = InvoiceTagSerializer(tag, data=request.data, partial=partial)
+    if serializer.is_valid():
+        serializer.save()
         return Response(serializer.data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -6615,7 +6669,8 @@ def replacement_replace(request):
         create_internal_ledger_entry_if_mtshop(
             invoice.customer, entry_type, abs(price_difference),
             f'Replacement adjustment for Invoice {invoice.invoice_number}',
-            request.user, timezone.now()
+            request.user, timezone.now(),
+            source_ledger_entry_id=entry.id,
         )
         # Update customer credit_balance
         if entry_type == 'credit':
@@ -6787,7 +6842,8 @@ def replacement_return(request):
                 create_internal_ledger_entry_if_mtshop(
                     invoice.customer, 'credit', excess_payment,
                     f'Refund for returned items from Invoice {invoice.invoice_number} (Qty: {return_qty})',
-                    request.user, timezone.now()
+                    request.user, timezone.now(),
+                    source_ledger_entry_id=refund_entry.id,
                 )
                 # Update customer credit_balance
                 invoice.customer.credit_balance += refund_entry.amount
@@ -8134,7 +8190,8 @@ def replacement_credit_note(request, invoice_id):
             create_internal_ledger_entry_if_mtshop(
                 invoice.customer, 'credit', actual_credit_amount,
                 f'Credit note {credit_note.credit_note_number} for replacement of items from Invoice {invoice.invoice_number}',
-                request.user, timezone.now()
+                request.user, timezone.now(),
+                source_ledger_entry_id=entry.id,
             )
             # Update customer credit_balance
             invoice.customer.credit_balance += entry.amount

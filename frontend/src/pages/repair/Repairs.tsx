@@ -13,7 +13,6 @@ import {
   Eye,
   Phone,
   Package,
-  User,
   Clock,
   CheckCircle,
   Truck,
@@ -30,7 +29,14 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { formatNumber, toLocalDateString } from '../../lib/utils';
+import {
+  formatNumber,
+  isMtShopCustomer,
+  MT_SHOP_BADGE_CLASS,
+  MT_SHOP_MOBILE_CARD_CLASS,
+  MT_SHOP_TABLE_ROW_CLASS,
+  toLocalDateString,
+} from '../../lib/utils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -42,6 +48,8 @@ import ErrorState from '../../components/ui/ErrorState';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
+import { InvoiceCustomerWithTags } from '../../components/invoices/InvoiceTagEditor';
+import type { InvoiceTag } from '../../lib/invoiceTags';
 
 interface RepairInvoice {
   id: number;
@@ -60,6 +68,7 @@ interface RepairInvoice {
   paid_amount?: string;
   items?: RepairInvoiceItem[];
   status?: 'draft' | 'paid' | 'partial' | 'credit' | 'void';
+  tags?: InvoiceTag[];
   repair?: {
     id: number;
     contact_no: string;
@@ -1041,15 +1050,17 @@ export default function Repairs() {
                 ]}>
                   {sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
                     const isOlderThanToday = !isToday(new Date(getRepairDisplayDate(invoice)));
-                    const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
-                      invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
-                        invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
-                          invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/50' : '';
+                    const isMtShop = isMtShopCustomer(invoice.customer_name, invoice.customer_group_name);
 
                     return (
                       <TableRow
                         key={invoice.id}
-                        className={`cursor-pointer transition-colors ${statusColor} ${isOlderThanToday ? 'bg-red-50/70 border-l-4 border-red-300' : ''} hover:opacity-80`}
+                        className={`cursor-pointer transition-colors hover:opacity-80 ${isMtShop ? MT_SHOP_TABLE_ROW_CLASS : isOlderThanToday ? 'bg-red-50/70 border-l-4 border-red-300' :
+                          invoice.invoice_type === 'cash' ? 'bg-blue-50/50' :
+                      invoice.invoice_type === 'upi' ? 'bg-emerald-50/50' :
+                        invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/50' :
+                          invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/50' : ''
+                          }`}
                       >
                         <TableCell>
                           <span
@@ -1074,12 +1085,18 @@ export default function Repairs() {
                           </span>
                         </TableCell>
                         <TableCell className="whitespace-normal min-w-[8rem]">
-                          <div className="flex items-start gap-1.5">
-                            <User className="h-3.5 w-3.5 text-gray-400 shrink-0 mt-0.5" />
-                            <div>
-                              <div className="text-gray-900 text-xs font-medium whitespace-normal break-words">
-                                {invoice.customer_name || 'Walk-in'}
-                              </div>
+                          <InvoiceCustomerWithTags
+                            invoiceId={invoice.id}
+                            customerName={invoice.customer_name}
+                            tags={invoice.tags}
+                            fallbackName="Walk-in"
+                            compact
+                            badge={isMtShop ? (
+                              <span className={MT_SHOP_BADGE_CLASS}>
+                                MT SHOP
+                              </span>
+                            ) : undefined}
+                            extraBelow={
                               <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
                                 {invoice.repair?.contact_no && (
                                   <div className="flex items-center gap-0.5 text-[11px] text-gray-600 tabular-nums min-w-0">
@@ -1089,14 +1106,14 @@ export default function Repairs() {
                                     </span>
                                   </div>
                                 )}
-                                {invoice.customer_group_name && (
+                                {invoice.customer_group_name && !isMtShop && (
                                   <span className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 shrink-0">
                                     {invoice.customer_group_name}
                                   </span>
                                 )}
                               </div>
-                            </div>
-                          </div>
+                            }
+                          />
                         </TableCell>
                         <TableCell className="max-w-[10rem] whitespace-normal">
                           <div className="flex items-center gap-1 min-w-0">
@@ -1260,17 +1277,19 @@ export default function Repairs() {
                   </div>
                 ) : sortRepairsByRowStatusOrder(displayedGroupItems).map((invoice) => {
                   const isOlderThanToday = !isToday(new Date(getRepairDisplayDate(invoice)));
-                  const statusColor = invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
-                    invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
-                      invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
-                        invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/70 border-purple-100' :
-                          'bg-gray-50/70 border-gray-100';
+                  const isMtShop = isMtShopCustomer(invoice.customer_name, invoice.customer_group_name);
 
                   return (
                     <div
                       key={invoice.id}
                       onClick={() => navigate(`/invoices/${invoice.id}`)}
-                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${statusColor} ${isOlderThanToday ? 'bg-red-50/70 border-red-300' : ''}`}
+                      className={`border rounded-lg shadow-sm hover:shadow-md transition-all cursor-pointer ${isMtShop ? MT_SHOP_MOBILE_CARD_CLASS : isOlderThanToday ? 'bg-red-50/70 border-red-300' :
+                    invoice.invoice_type === 'cash' ? 'bg-blue-50/70 border-blue-100' :
+                    invoice.invoice_type === 'upi' ? 'bg-emerald-50/70 border-emerald-100' :
+                      invoice.invoice_type === 'pending' || invoice.invoice_type === 'credit' ? 'bg-amber-50/70 border-amber-100' :
+                        invoice.invoice_type === 'repair' || invoice.invoice_type === 'pos_repair' ? 'bg-purple-50/70 border-purple-100' :
+                          'bg-gray-50/70 border-gray-100'
+                          }`}
                     >
                       <div className="p-4">
                         <div className="mb-3">
@@ -1295,18 +1314,30 @@ export default function Repairs() {
                               <span>{formatDate(invoice.repair.delivery_date)}</span>
                             </div>
                           )}
-                          <div className="flex items-start gap-2 text-sm text-gray-900 font-medium mb-1">
-                            <User className="h-3.5 w-3.5 text-gray-400 shrink-0 mt-0.5" />
-                            <span className="whitespace-normal break-words">
-                              {invoice.customer_name || 'Walk-in Customer'}
-                            </span>
+                          <div className="mb-1">
+                            <InvoiceCustomerWithTags
+                              invoiceId={invoice.id}
+                              customerName={invoice.customer_name}
+                              tags={invoice.tags}
+                              fallbackName="Walk-in Customer"
+                              compact
+                              badge={isMtShop ? (
+                                <span className={MT_SHOP_BADGE_CLASS}>
+                                  MT SHOP
+                                </span>
+                              ) : undefined}
+                              extraBelow={
+                                invoice.repair?.contact_no ? (
+                                  <div className="mt-1 flex items-center gap-2 text-sm text-gray-600">
+                                    <Phone className="h-3.5 w-3.5 text-gray-400" />
+                                    <span>{invoice.repair.contact_no}</span>
+                                  </div>
+                                ) : undefined
+                              }
+                            />
                           </div>
                           {invoice.repair && (
                             <>
-                              <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                                <Phone className="h-3.5 w-3.5 text-gray-400" />
-                                <span>{invoice.repair.contact_no}</span>
-                              </div>
                               <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
                                 <Package className="h-3.5 w-3.5 text-gray-400" />
                                 <span>{invoice.repair.model_name}</span>

@@ -2,7 +2,7 @@ from decimal import Decimal
 from rest_framework import serializers
 from django.db.models import Q, F, Value, Case, When, Sum, DecimalField, ExpressionWrapper
 from django.db.models.functions import Coalesce
-from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair, Expenses
+from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Exchange, Repair, Expenses, InvoiceTag
 
 
 class CartItemSerializer(serializers.ModelSerializer):
@@ -386,6 +386,23 @@ class PaymentSerializer(serializers.ModelSerializer):
         fields = ['id', 'invoice', 'payment_method', 'amount', 'reference', 'notes', 'created_by', 'created_at']
 
 
+class InvoiceTagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InvoiceTag
+        fields = ['id', 'name', 'color', 'is_active', 'created_at']
+        read_only_fields = ['created_at']
+
+    def validate_color(self, value):
+        color = (value or '').strip()
+        if len(color) != 7 or not color.startswith('#'):
+            raise serializers.ValidationError('Color must be a hex code like #3B82F6')
+        try:
+            int(color[1:], 16)
+        except ValueError as exc:
+            raise serializers.ValidationError('Color must be a valid hex code like #3B82F6') from exc
+        return color.upper()
+
+
 class ExpenseSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     last_updated_by_username = serializers.CharField(source='last_updated_by.username', read_only=True)
@@ -432,6 +449,14 @@ class InvoiceSerializer(serializers.ModelSerializer):
     customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
+    tags = InvoiceTagSerializer(many=True, read_only=True)
+    tag_ids = serializers.PrimaryKeyRelatedField(
+        queryset=InvoiceTag.objects.filter(is_active=True),
+        many=True,
+        source='tags',
+        required=False,
+        write_only=True,
+    )
     display_total = serializers.SerializerMethodField()
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
@@ -450,11 +475,19 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total', 'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
             'trade_in_credit', 'pos_trade_ins', 'exchange_snapshots',
             'is_replacement_return', 'replacement_mode', 'replacement_customer_warning', 'replacement_source_customers',
+            'replacement_date',
             'replacement_summary',
-            'notes', 'repair', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
+            'notes', 'repair', 'tags', 'tag_ids', 'created_by', 'created_at', 'updated_at', 'pending_cleared_at',
             'is_edited', 'edited_on', 'items', 'payments'
         ]
         read_only_fields = ['pending_cleared_at']
+
+    def update(self, instance, validated_data):
+        tags = validated_data.pop('tags', None)
+        invoice = super().update(instance, validated_data)
+        if tags is not None:
+            invoice.tags.set(tags)
+        return invoice
 
     def get_display_total(self, obj):
         """
@@ -597,6 +630,7 @@ class RepairInvoiceListSerializer(serializers.ModelSerializer):
     customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
     repair = RepairSerializer(read_only=True)
+    tags = InvoiceTagSerializer(many=True, read_only=True)
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
 
@@ -604,7 +638,8 @@ class RepairInvoiceListSerializer(serializers.ModelSerializer):
         model = Invoice
         fields = [
             'id', 'invoice_number', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name',
-            'status', 'invoice_type', 'total', 'paid_amount', 'created_at', 'repair', 'computed_total', 'computed_paid'
+            'status', 'invoice_type', 'total', 'paid_amount', 'created_at', 'repair', 'tags',
+            'computed_total', 'computed_paid'
         ]
 
     def get_computed_total(self, obj):
@@ -645,6 +680,7 @@ class InvoiceListSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
+    tags = InvoiceTagSerializer(many=True, read_only=True)
     display_total = serializers.SerializerMethodField()
     computed_total = serializers.SerializerMethodField()
     computed_paid = serializers.SerializerMethodField()
@@ -656,7 +692,7 @@ class InvoiceListSerializer(serializers.ModelSerializer):
             'id', 'invoice_number', 'store', 'store_name', 'customer', 'customer_name', 'customer_group_name',
             'status', 'invoice_type', 'subtotal', 'discount_amount', 'tax_amount', 'total',
             'display_total', 'computed_total', 'computed_paid', 'paid_amount', 'due_amount',
-            'is_replacement_return', 'replacement_summary',
+            'is_replacement_return', 'replacement_summary', 'tags',
             'created_by', 'created_at', 'updated_at', 'is_edited', 'edited_on',
         ]
 

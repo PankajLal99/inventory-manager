@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, Coins, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
 import { customersApi } from '../../lib/api';
-import { formatAmountINR, toLocalDateString } from '../../lib/utils';
+import { formatAmountINR, formatDateDDMMYYYY, toLocalDateString } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { toast } from '../../lib/toast';
 import { auth } from '../../lib/auth';
@@ -121,7 +121,7 @@ export default function Payments() {
       let label = '';
       if (groupBy === 'date') {
         key = (entry.created_at || '').slice(0, 10) || 'No Date';
-        label = key;
+        label = key === 'No Date' ? key : formatDateDDMMYYYY(key);
       } else if (groupBy === 'customer') {
         key = entry.customer_name || 'Unknown Customer';
         label = key;
@@ -457,7 +457,7 @@ export default function Payments() {
         <Table headers={['Date', 'Customer', 'Payment Mode', 'Description', 'Amount', 'Created By', 'Sent', 'Actions']}>
           {entries.map((entry) => (
             <TableRow key={entry.id}>
-              <TableCell className="text-base">{entry.created_at ? entry.created_at.slice(0, 10) : '-'}</TableCell>
+              <TableCell className="text-base">{entry.created_at ? formatDateDDMMYYYY(entry.created_at) : '-'}</TableCell>
               <TableCell className="font-semibold text-base">{entry.customer_name || '-'}</TableCell>
               <TableCell>
                 <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-blue-100 text-blue-800">

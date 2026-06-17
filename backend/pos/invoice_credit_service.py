@@ -233,6 +233,7 @@ def finalize_invoice_mark_credit_core(
         f'Credit Invoice {invoice.invoice_number}',
         user,
         invoice.created_at or timezone.now(),
+        source_ledger_entry_id=entry.id,
     )
     invoice.customer.credit_balance -= entry.amount
     invoice.customer.save()
@@ -354,6 +355,7 @@ def reconcile_ledger_after_credit_invoice_total_change(
         f'Credit Invoice {invoice.invoice_number}',
         user,
         invoice.created_at or timezone.now(),
+        source_ledger_entry_id=entry.id,
     )
     invoice.customer.credit_balance -= entry.amount
     invoice.customer.save()

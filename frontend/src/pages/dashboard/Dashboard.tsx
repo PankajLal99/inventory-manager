@@ -98,7 +98,27 @@ function paymentMethodLabel(method: string) {
   return labels[method] || method || 'Other';
 }
 
+function expensePaymentModeLabel(mode: string) {
+  const labels: Record<string, string> = {
+    CASH: 'Cash',
+    ONLINE: 'Online',
+  };
+  return labels[mode] || mode || 'Other';
+}
+
 type BreakdownRow = { label: string; amount: number };
+
+type MetricDetailState = {
+  title: string;
+  subtitle?: string;
+  totalFormatted: string;
+  breakdownRows: BreakdownRow[];
+  periodLabel?: string;
+  valueType?: 'currency' | 'number';
+};
+
+/** String path, or path + router state (state must be a separate Link prop, not inside `to`). */
+type DetailLink = string | { path: string; state?: MetricDetailState };
 
 function DashboardMetricCard({
   title,
@@ -109,7 +129,7 @@ function DashboardMetricCard({
   gradientClass,
   borderClass,
   iconClass,
-  detailPath,
+  detailLink,
 }: {
   title: string;
   subtitle?: string;
@@ -119,8 +139,11 @@ function DashboardMetricCard({
   gradientClass: string;
   borderClass: string;
   iconClass: string;
-  detailPath?: string;
+  detailLink?: DetailLink;
 }) {
+  const detailPath = typeof detailLink === 'string' ? detailLink : detailLink?.path;
+  const detailState = typeof detailLink === 'object' ? detailLink?.state : undefined;
+
   return (
     <div className={`rounded-xl border p-5 ${gradientClass} ${borderClass}`}>
       <div className="flex items-center justify-between mb-2">
@@ -129,6 +152,7 @@ function DashboardMetricCard({
           {detailPath ? (
             <Link
               to={detailPath}
+              state={detailState}
               className="inline-flex items-center justify-center h-7 w-7 rounded-md hover:bg-white/70 text-gray-600 hover:text-gray-800"
               title="View details"
               aria-label={`View details for ${title}`}
@@ -387,6 +411,8 @@ export default function Dashboard() {
         total_pending_by_store?: StoreAmountRow[];
         total_pending_yet_to_finalize_by_store?: StoreAmountRow[];
         payments_by_method?: { payment_method: string; amount: number }[];
+        expenses_by_payment_mode?: { payment_mode: string; amount: number }[];
+        expenses_by_type?: { expense_type: string; amount: number }[];
         pending_purchase_by_store?: StoreAmountRow[];
         pending_purchase_item_stats_by_store?: PendingPurchaseItemStatsRow[];
         pending_purchase_yet_to_finalize_by_store?: StoreAmountRow[];
@@ -489,6 +515,14 @@ export default function Dashboard() {
     dashboardData?.payments_by_method,
   )
     ? dashboardData.payments_by_method
+    : [];
+  const expensesByPaymentMode: { payment_mode: string; amount: number }[] = Array.isArray(
+    dashboardData?.expenses_by_payment_mode,
+  )
+    ? dashboardData.expenses_by_payment_mode
+    : [];
+  const expensesByType: { expense_type: string; amount: number }[] = Array.isArray(dashboardData?.expenses_by_type)
+    ? dashboardData.expenses_by_type
     : [];
   const pendingPurchaseTotal = Number(kpis.pending_invoice_purchase_total ?? 0);
   const pendingPurchaseByStore: StoreAmountRow[] = Array.isArray(dashboardData?.pending_purchase_by_store)
@@ -637,6 +671,109 @@ export default function Dashboard() {
     return { totalPendingCardRows: rows, totalPendingCardHeadline: headline };
   })();
 
+  const metricDetailsPath = '/dashboard/metric-details';
+  const dashboardPeriodLabel =
+    dateFrom === dateTo
+      ? formatDateDDMMYYYY(dateFrom)
+      : `${formatDateDDMMYYYY(dateFrom)} – ${formatDateDDMMYYYY(dateTo)}`;
+  const metricDetailLink = (
+    title: string,
+    totalFormatted: string,
+    breakdownRows: BreakdownRow[],
+    subtitle?: string,
+    valueType: 'currency' | 'number' = 'currency',
+  ): DetailLink => ({
+    path: metricDetailsPath,
+    state: { title, totalFormatted, breakdownRows, subtitle, periodLabel: dashboardPeriodLabel, valueType },
+  });
+
+  const totalCashRows: BreakdownRow[] = [
+    { label: 'Retail (counter) — cash invoices', amount: Number(cashBreakdown.retail_counter ?? 0) },
+    {
+      label: 'Repair — cash (status delivered, delivery date in range)',
+      amount: Number(cashBreakdown.repair ?? 0),
+    },
+    { label: 'Mix cash (mixed-payment cash legs)', amount: Number(cashBreakdown.mix_cash ?? 0) },
+    { label: 'Manual cash (ledger, no invoice)', amount: Number(cashBreakdown.manual_cash ?? 0) },
+  ];
+  const totalOnlineRows: BreakdownRow[] = [
+    { label: 'Retail (counter) — UPI invoices', amount: Number(onlineBreakdown.retail_counter ?? 0) },
+    {
+      label: 'Repair — UPI (status delivered, delivery date in range)',
+      amount: Number(onlineBreakdown.repair ?? 0),
+    },
+    { label: 'Mix UPI (mixed-payment UPI legs)', amount: Number(onlineBreakdown.mix_upi ?? 0) },
+    { label: 'Manual UPI (ledger, no invoice)', amount: Number(onlineBreakdown.manual_upi ?? 0) },
+  ];
+  const totalCreditRows: BreakdownRow[] =
+    creditByStore.length > 0
+      ? creditByStore.map((r) => ({
+          label: `${r.store_name} (${shopTypeLabel(r.shop_type)})`,
+          amount: r.amount,
+        }))
+      : [{ label: 'Σ credit invoices (by shop)', amount: totalCredit }];
+  const totalExpenseRows: BreakdownRow[] = (() => {
+    // Keep one grouping dimension at a time so row-total equals KPI total.
+    if (expensesByPaymentMode.length > 0) {
+      return expensesByPaymentMode.map((r) => ({
+        label: `Payment mode · ${expensePaymentModeLabel(String(r.payment_mode || '').toUpperCase())}`,
+        amount: Number(r.amount ?? 0),
+      }));
+    }
+    if (expensesByType.length > 0) {
+      return expensesByType.map((r) => ({
+        label: `Expense type · ${r.expense_type || 'Other'}`,
+        amount: Number(r.amount ?? 0),
+      }));
+    }
+    return [{ label: 'Σ Expenses model (expense_date in range)', amount: totalExpenses }];
+  })();
+  const totalInHandRows: BreakdownRow[] = [
+    { label: 'Total cash (this dashboard)', amount: totalCash },
+    { label: 'Less: total expense', amount: -totalExpenses },
+  ];
+  const overallProfitRows: BreakdownRow[] = [
+    { label: 'Retail (counter)', amount: counterProfit },
+    { label: 'Repair', amount: repairProfit },
+  ];
+  const overallProfitBillingRows: BreakdownRow[] = [
+    { label: 'Retail (counter)', amount: counterProfitBilling },
+    { label: 'Repair', amount: repairProfitBilling },
+  ];
+  const manualPaymentsRows: BreakdownRow[] = [
+    { label: 'Cash', amount: manualCashTotalKpi },
+    { label: 'UPI', amount: manualUpiTotalKpi },
+  ];
+  const overallPendingInvoiceRows: BreakdownRow[] = (() => {
+    const rows: BreakdownRow[] = [
+      { label: 'Retail', amount: pendingRetail },
+      { label: 'Wholesale', amount: pendingWholesale },
+    ];
+    const otherShops = pendingPurchaseTotal - pendingRetail - pendingWholesale;
+    if (otherShops > 0.005) {
+      rows.push({ label: 'Repair / other shop types', amount: otherShops });
+    }
+    return rows;
+  })();
+  const totalStockValueRows: BreakdownRow[] = [
+    { label: 'New + returned barcodes (available)', amount: stockValue },
+  ];
+  const defectiveProductRows: BreakdownRow[] = [
+    { label: 'Products with ≥1 defective barcode', amount: defectiveProductCount },
+  ];
+  const defectiveUnitsRows: BreakdownRow[] = [
+    { label: 'Barcodes tagged defective', amount: defectiveBarcodeCount },
+  ];
+  const defectiveStockValueRows: BreakdownRow[] = [
+    { label: 'Σ purchase unit price (defective barcodes)', amount: defectivePurchaseValue },
+  ];
+  const defectiveMoveOutLossRows: BreakdownRow[] = [
+    { label: 'All time: Σ (loss − adjustment)', amount: defectiveMoveOutNetLoss },
+  ];
+  const defectiveMoveOutPeriodRows: BreakdownRow[] = [
+    { label: 'Move-outs in dashboard date range', amount: defectiveMoveOutNetPeriod },
+  ];
+
   return (
     <div className="min-h-screen bg-gray-50 pb-8">
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10 px-4 py-4 sm:px-6">
@@ -676,15 +813,13 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-green-50 to-green-100"
                 borderClass="border-green-200"
                 iconClass=""
-                breakdownRows={[
-                  { label: 'Retail (counter) — cash invoices', amount: Number(cashBreakdown.retail_counter ?? 0) },
-                  {
-                    label: 'Repair — cash (status delivered, delivery date in range)',
-                    amount: Number(cashBreakdown.repair ?? 0),
-                  },
-                  { label: 'Mix cash (mixed-payment cash legs)', amount: Number(cashBreakdown.mix_cash ?? 0) },
-                  { label: 'Manual cash (ledger, no invoice)', amount: Number(cashBreakdown.manual_cash ?? 0) },
-                ]}
+                detailLink={metricDetailLink(
+                  'Total cash',
+                  `₹${formatNumber(totalCash, 2)}`,
+                  totalCashRows,
+                  'Repair shop amounts: delivered only, by delivery date in range.',
+                )}
+                breakdownRows={totalCashRows}
               />
               <DashboardMetricCard
                 title="Total online"
@@ -694,15 +829,13 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-blue-50 to-blue-100"
                 borderClass="border-blue-200"
                 iconClass=""
-                breakdownRows={[
-                  { label: 'Retail (counter) — UPI invoices', amount: Number(onlineBreakdown.retail_counter ?? 0) },
-                  {
-                    label: 'Repair — UPI (status delivered, delivery date in range)',
-                    amount: Number(onlineBreakdown.repair ?? 0),
-                  },
-                  { label: 'Mix UPI (mixed-payment UPI legs)', amount: Number(onlineBreakdown.mix_upi ?? 0) },
-                  { label: 'Manual UPI (ledger, no invoice)', amount: Number(onlineBreakdown.manual_upi ?? 0) },
-                ]}
+                detailLink={metricDetailLink(
+                  'Total online',
+                  `₹${formatNumber(totalUpi, 2)}`,
+                  totalOnlineRows,
+                  'Repair shop amounts: delivered only, by delivery date in range.',
+                )}
+                breakdownRows={totalOnlineRows}
               />
               <DashboardMetricCard
                 title="Total pending"
@@ -711,6 +844,11 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                 borderClass="border-orange-200"
                 iconClass=""
+                detailLink={metricDetailLink(
+                  'Total pending',
+                  `₹${formatNumber(totalPendingCardHeadline, 2)}`,
+                  totalPendingCardRows,
+                )}
                 breakdownRows={totalPendingCardRows}
               />
               <DashboardMetricCard
@@ -721,14 +859,13 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-violet-50 to-violet-100"
                 borderClass="border-violet-200"
                 iconClass=""
-                breakdownRows={
-                  creditByStore.length > 0
-                    ? creditByStore.map((r) => ({
-                        label: `${r.store_name} (${shopTypeLabel(r.shop_type)})`,
-                        amount: r.amount,
-                      }))
-                    : [{ label: 'Σ credit invoices (by shop)', amount: totalCredit }]
-                }
+                detailLink={metricDetailLink(
+                  'Total credit',
+                  `₹${formatNumber(totalCredit, 2)}`,
+                  totalCreditRows,
+                  'Repair shops: only delivered jobs, by delivery date in range. Other shops: invoice date in range.',
+                )}
+                breakdownRows={totalCreditRows}
               />
               <DashboardMetricCard
                 title="Total expense"
@@ -737,12 +874,8 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-red-50 to-red-100"
                 borderClass="border-red-200"
                 iconClass=""
-                breakdownRows={[
-                  {
-                    label: 'Σ Expenses model (expense_date in range)',
-                    amount: totalExpenses,
-                  },
-                ]}
+                detailLink={metricDetailLink('Total expense', `₹${formatNumber(totalExpenses, 2)}`, totalExpenseRows)}
+                breakdownRows={totalExpenseRows}
               />
               <DashboardMetricCard
                 title="Total in-hand"
@@ -751,10 +884,8 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
                 borderClass="border-emerald-200"
                 iconClass=""
-                breakdownRows={[
-                  { label: 'Total cash (this dashboard)', amount: totalCash },
-                  { label: 'Total expense', amount: totalExpenses },
-                ]}
+                detailLink={metricDetailLink('Total in-hand', `₹${formatNumber(totalInhand, 2)}`, totalInHandRows)}
+                breakdownRows={totalInHandRows}
               />
             </div>
 
@@ -771,6 +902,13 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-indigo-50 to-indigo-100"
                   borderClass="border-indigo-200"
                   iconClass=""
+                  detailLink={metricDetailLink(
+                    'Counter profit (retail invoice)',
+                    `₹${formatNumber(counterProfit, 2)}`,
+                    counterProfitByTypeRows.length > 0
+                      ? counterProfitByTypeRows
+                      : [{ label: 'No counter profit in this period', amount: 0 }],
+                  )}
                   breakdownRows={
                     counterProfitByTypeRows.length > 0
                       ? counterProfitByTypeRows
@@ -785,6 +923,14 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-purple-50 to-purple-100"
                   borderClass="border-purple-200"
                   iconClass=""
+                  detailLink={metricDetailLink(
+                    'Repair profit',
+                    `₹${formatNumber(repairProfit, 2)}`,
+                    repairProfitByTypeRows.length > 0
+                      ? repairProfitByTypeRows
+                      : [{ label: 'No repair profit in this period', amount: 0 }],
+                    'Delivered: delivery date in range. Done: invoice created or repair updated in range.',
+                  )}
                   breakdownRows={
                     repairProfitByTypeRows.length > 0
                       ? repairProfitByTypeRows
@@ -798,10 +944,12 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-teal-50 to-teal-100"
                   borderClass="border-teal-200"
                   iconClass=""
-                  breakdownRows={[
-                    { label: 'Retail (counter)', amount: counterProfit },
-                    { label: 'Repair', amount: repairProfit },
-                  ]}
+                  detailLink={metricDetailLink(
+                    'Overall profit (selected period)',
+                    `₹${formatNumber(overallProfit, 2)}`,
+                    overallProfitRows,
+                  )}
+                  breakdownRows={overallProfitRows}
                 />
                 <DashboardMetricCard
                   title="Overall profit (11th → 10th month)"
@@ -815,11 +963,8 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-sky-50 to-sky-100"
                   borderClass="border-sky-200"
                   iconClass=""
-                  detailPath="/dashboard/overall-profit-billing-details"
-                  breakdownRows={[
-                    { label: 'Retail (counter)', amount: counterProfitBilling },
-                    { label: 'Repair', amount: repairProfitBilling },
-                  ]}
+                  detailLink="/dashboard/overall-profit-billing-details"
+                  breakdownRows={overallProfitBillingRows}
                 />
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mt-4">
@@ -891,10 +1036,12 @@ export default function Dashboard() {
                 gradientClass="bg-gradient-to-br from-stone-50 to-stone-100"
                 borderClass="border-stone-200"
                 iconClass=""
-                breakdownRows={[
-                  { label: 'Cash', amount: manualCashTotalKpi },
-                  { label: 'UPI', amount: manualUpiTotalKpi },
-                ]}
+                detailLink={metricDetailLink(
+                  'Manual payments total',
+                  `₹${formatNumber(manualCashTotalKpi + manualUpiTotalKpi, 2)}`,
+                  manualPaymentsRows,
+                )}
+                breakdownRows={manualPaymentsRows}
               />
               <div className="mt-4 bg-white rounded-xl border border-gray-200 overflow-hidden max-w-5xl">
                 <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
@@ -949,18 +1096,8 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
-                detailPath="/dashboard/overall-pending-invoice-details"
-                  breakdownRows={(() => {
-                    const rows: BreakdownRow[] = [
-                      { label: 'Retail', amount: pendingRetail },
-                      { label: 'Wholesale', amount: pendingWholesale },
-                    ];
-                    const otherShops = pendingPurchaseTotal - pendingRetail - pendingWholesale;
-                    if (otherShops > 0.005) {
-                      rows.push({ label: 'Repair / other shop types', amount: otherShops });
-                    }
-                    return rows;
-                  })()}
+                  detailLink="/dashboard/overall-pending-invoice-details"
+                  breakdownRows={overallPendingInvoiceRows}
                 />
                 <div className="min-h-0 space-y-4">
                   <StoreAmountList
@@ -1007,7 +1144,7 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
                   borderClass="border-emerald-200"
                   iconClass=""
-                  detailPath="/dashboard/wholesale-pending-cleared-details"
+                  detailLink="/dashboard/wholesale-pending-cleared-details"
                   breakdownRows={[
                     {
                       label: 'Wholesale stores (billing window above)',
@@ -1023,6 +1160,12 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-amber-50 to-amber-100"
                   borderClass="border-amber-200"
                   iconClass=""
+                  detailLink={metricDetailLink(
+                    'Selling total cleared',
+                    `₹${formatNumber(wholesaleClearedSelling, 2)}`,
+                    [{ label: 'Matches ledger / credit face value', amount: wholesaleClearedSelling }],
+                    'Σ invoice total at clearance',
+                  )}
                   breakdownRows={[{ label: 'Matches ledger / credit face value', amount: wholesaleClearedSelling }]}
                 />
                 <DashboardMetricCard
@@ -1033,6 +1176,12 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
+                  detailLink={metricDetailLink(
+                    'Purchase cost cleared',
+                    `₹${formatNumber(wholesaleClearedPurchase, 2)}`,
+                    [{ label: 'Barcode / purchase_price × qty', amount: wholesaleClearedPurchase }],
+                    'Same line basis as overall pending',
+                  )}
                   breakdownRows={[{ label: 'Barcode / purchase_price × qty', amount: wholesaleClearedPurchase }]}
                 />
                 <DashboardMetricCard
@@ -1043,9 +1192,18 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-emerald-50 to-emerald-100"
                   borderClass="border-emerald-200"
                   iconClass=""
+                  detailLink={metricDetailLink(
+                    'Profit',
+                    `₹${formatNumber(wholesaleClearedProfit, 2)}`,
+                    [
+                      { label: 'Selling total cleared', amount: wholesaleClearedSelling },
+                      { label: 'Less: purchase cost cleared', amount: -wholesaleClearedPurchase },
+                    ],
+                    'Selling total cleared − purchase cost cleared (calculated in browser for this window)',
+                  )}
                   breakdownRows={[
                     { label: 'Selling total cleared', amount: wholesaleClearedSelling },
-                    { label: 'Purchase cost cleared', amount: wholesaleClearedPurchase },
+                    { label: 'Less: purchase cost cleared', amount: -wholesaleClearedPurchase },
                   ]}
                 />
               </div>
@@ -1175,26 +1333,43 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-slate-50 to-slate-100"
                   borderClass="border-slate-200"
                   iconClass=""
-                  breakdownRows={[
-                    { label: 'New + returned barcodes (available)', amount: stockValue },
-                  ]}
+                  detailLink={metricDetailLink('Total stock value', `₹${formatNumber(stockValue, 2)}`, totalStockValueRows)}
+                  breakdownRows={totalStockValueRows}
                 />
-                <div className="bg-gradient-to-br from-red-50 to-red-100 border-red-200 rounded-xl border p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-700">Defective products</p>
-                    <Package className="h-5 w-5 text-red-700" />
-                  </div>
-                  <p className="text-2xl sm:text-3xl font-bold text-gray-900">{defectiveProductCount}</p>
-                  <p className="text-xs text-gray-600 mt-2">Products with ≥1 defective barcode</p>
-                </div>
-                <div className="bg-gradient-to-br from-rose-50 to-rose-100 border-rose-200 rounded-xl border p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-700">Defective units</p>
-                    <Package className="h-5 w-5 text-rose-700" />
-                  </div>
-                  <p className="text-2xl sm:text-3xl font-bold text-gray-900">{defectiveBarcodeCount}</p>
-                  <p className="text-xs text-gray-600 mt-2">Barcodes tagged defective</p>
-                </div>
+                <DashboardMetricCard
+                  title="Defective products"
+                  subtitle="Products with ≥1 defective barcode"
+                  icon={<Package className="h-5 w-5 text-red-700" />}
+                  totalFormatted={formatNumber(defectiveProductCount, 0)}
+                  gradientClass="bg-gradient-to-br from-red-50 to-red-100"
+                  borderClass="border-red-200"
+                  iconClass=""
+                  detailLink={metricDetailLink(
+                    'Defective products',
+                    formatNumber(defectiveProductCount, 0),
+                    defectiveProductRows,
+                    'Products with ≥1 defective barcode',
+                    'number',
+                  )}
+                  breakdownRows={defectiveProductRows}
+                />
+                <DashboardMetricCard
+                  title="Defective units"
+                  subtitle="Barcodes tagged defective"
+                  icon={<Package className="h-5 w-5 text-rose-700" />}
+                  totalFormatted={formatNumber(defectiveBarcodeCount, 0)}
+                  gradientClass="bg-gradient-to-br from-rose-50 to-rose-100"
+                  borderClass="border-rose-200"
+                  iconClass=""
+                  detailLink={metricDetailLink(
+                    'Defective units',
+                    formatNumber(defectiveBarcodeCount, 0),
+                    defectiveUnitsRows,
+                    'Barcodes tagged defective',
+                    'number',
+                  )}
+                  breakdownRows={defectiveUnitsRows}
+                />
                 <DashboardMetricCard
                   title="Defective stock value"
                   subtitle={`${defectiveBarcodeCount} barcode(s) tagged defective`}
@@ -1203,30 +1378,46 @@ export default function Dashboard() {
                   gradientClass="bg-gradient-to-br from-orange-50 to-orange-100"
                   borderClass="border-orange-200"
                   iconClass=""
-                  breakdownRows={[
-                    { label: 'Σ purchase unit price (defective barcodes)', amount: defectivePurchaseValue },
-                  ]}
+                  detailLink={metricDetailLink(
+                    'Defective stock value',
+                    `₹${formatNumber(defectivePurchaseValue, 2)}`,
+                    defectiveStockValueRows,
+                    `${defectiveBarcodeCount} barcode(s) tagged defective`,
+                  )}
+                  breakdownRows={defectiveStockValueRows}
                 />
-                <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 border-yellow-200 rounded-xl border p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-700">Total loss (move-outs)</p>
-                    <TrendingDown className="h-5 w-5 text-yellow-800" />
-                  </div>
-                  <p className="text-2xl sm:text-3xl font-bold text-gray-900">
-                    ₹{formatNumber(defectiveMoveOutNetLoss, 2)}
-                  </p>
-                  <p className="text-xs text-gray-600 mt-2">All time: Σ (loss − adjustment)</p>
-                </div>
-                <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 border-cyan-200 rounded-xl border p-5">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm font-medium text-gray-700">Product sent (move-out net, period)</p>
-                    <Truck className="h-5 w-5 text-cyan-800" />
-                  </div>
-                  <p className="text-2xl sm:text-3xl font-bold text-gray-900">
-                    ₹{formatNumber(defectiveMoveOutNetPeriod, 2)}
-                  </p>
-                  <p className="text-xs text-gray-600 mt-2">Move-outs in dashboard date range</p>
-                </div>
+                <DashboardMetricCard
+                  title="Total loss (move-outs)"
+                  subtitle="All time: Σ (loss − adjustment)"
+                  icon={<TrendingDown className="h-5 w-5 text-yellow-800" />}
+                  totalFormatted={`₹${formatNumber(defectiveMoveOutNetLoss, 2)}`}
+                  gradientClass="bg-gradient-to-br from-yellow-50 to-yellow-100"
+                  borderClass="border-yellow-200"
+                  iconClass=""
+                  detailLink={metricDetailLink(
+                    'Total loss (move-outs)',
+                    `₹${formatNumber(defectiveMoveOutNetLoss, 2)}`,
+                    defectiveMoveOutLossRows,
+                    'All time: Σ (loss − adjustment)',
+                  )}
+                  breakdownRows={defectiveMoveOutLossRows}
+                />
+                <DashboardMetricCard
+                  title="Product sent (move-out net, period)"
+                  subtitle="Move-outs in dashboard date range"
+                  icon={<Truck className="h-5 w-5 text-cyan-800" />}
+                  totalFormatted={`₹${formatNumber(defectiveMoveOutNetPeriod, 2)}`}
+                  gradientClass="bg-gradient-to-br from-cyan-50 to-cyan-100"
+                  borderClass="border-cyan-200"
+                  iconClass=""
+                  detailLink={metricDetailLink(
+                    'Product sent (move-out net, period)',
+                    `₹${formatNumber(defectiveMoveOutNetPeriod, 2)}`,
+                    defectiveMoveOutPeriodRows,
+                    'Move-outs in dashboard date range',
+                  )}
+                  breakdownRows={defectiveMoveOutPeriodRows}
+                />
               </div>
             </div>
 

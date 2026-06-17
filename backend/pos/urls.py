@@ -9,6 +9,7 @@ from .views import (
     invoice_checkout, invoice_edit, invoice_update, invoice_mark_credit, invoice_return, invoice_exchange, invoice_items, invoice_item_detail, invoice_item_restore_barcode,
     return_list_create, return_detail, return_credit_note, return_refund,
     expense_list_create, expense_type_suggestions, expense_borrower_suggestions, expense_detail,
+    invoice_tag_list_create, invoice_tag_detail,
     credit_note_list, credit_note_detail,
     replacement_check, replacement_create, replacement_update_tag,
     replacement_replace, replacement_return, replacement_defective, replacement_reserve_barcode,
@@ -62,6 +63,10 @@ urlpatterns = [
     path('expenses/types/', expense_type_suggestions, name='expense-type-suggestions'),
     path('expenses/borrowers/', expense_borrower_suggestions, name='expense-borrower-suggestions'),
     path('expenses/<int:pk>/', expense_detail, name='expense-detail'),
+
+    # Invoice tag endpoints
+    path('invoice-tags/', invoice_tag_list_create, name='invoice-tag-list-create'),
+    path('invoice-tags/<int:pk>/', invoice_tag_detail, name='invoice-tag-detail'),
     
     # Credit Note endpoints
     path('credit-notes/', credit_note_list, name='credit-note-list'),

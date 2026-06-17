@@ -5,6 +5,7 @@ and create replacement-return invoices (`Invoice.is_replacement_return`).
 Endpoints mounted at `pos/replacement-pos/lookup/` and `pos/replacement-pos/create/` (see urls).
 """
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import datetime, time
 import uuid
 
 from django.db import transaction
@@ -106,6 +107,21 @@ def _parse_decimal(val, label):
         raise ValueError(f'{label} is not a valid number')
 
 
+def _parse_replacement_date(raw_value):
+    if raw_value in (None, ''):
+        return timezone.localdate()
+    try:
+        return datetime.strptime(str(raw_value), '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        raise ValueError('replacement_date must be in YYYY-MM-DD format.')
+
+
+def _replacement_effective_at(replacement_date):
+    local_now = timezone.localtime(timezone.now())
+    naive_dt = datetime.combine(replacement_date, time(hour=local_now.hour, minute=local_now.minute, second=local_now.second))
+    return timezone.make_aware(naive_dt, timezone.get_current_timezone())
+
+
 def _apply_barcode_stock_for_return(invoice_item_new, tag, physical_store):
     """Update catalog barcode tags and stock for one replacement-return line (instant mode)."""
     orig = invoice_item_new.original_invoice_item
@@ -159,7 +175,14 @@ def _apply_barcode_stock_for_return(invoice_item_new, tag, physical_store):
     stock.save()
 
 
-def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, cash_amount=None, upi_amount=None):
+def _apply_replacement_pos_checkout(
+    invoice,
+    request,
+    settlement_invoice_type,
+    cash_amount=None,
+    upi_amount=None,
+    replacement_effective_at=None,
+):
     if not invoice.customer:
         raise ValueError('Customer is required for instant replacement settlement.')
 
@@ -167,6 +190,8 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
     Payment.objects.filter(invoice=invoice).delete()
 
     total = (invoice.total or Decimal('0')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    ledger_created_at = replacement_effective_at or timezone.now()
+
     if total <= 0:
         raise ValueError('Invoice total must be greater than zero before checkout.')
 
@@ -186,7 +211,7 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
             amount=total,
             description=f'Replacement POS return {invoice.invoice_number} (MIXED)',
             created_by=request.user,
-            created_at=timezone.now(),
+            created_at=ledger_created_at,
         )
     elif st == 'cash':
         entry = LedgerEntry.objects.create(
@@ -199,7 +224,7 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
             amount=total,
             description=f'Replacement POS return {invoice.invoice_number} (CASH)',
             created_by=request.user,
-            created_at=timezone.now(),
+            created_at=ledger_created_at,
         )
     elif st == 'upi':
         entry = LedgerEntry.objects.create(
@@ -212,7 +237,7 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
             amount=total,
             description=f'Replacement POS return {invoice.invoice_number} (UPI)',
             created_by=request.user,
-            created_at=timezone.now(),
+            created_at=ledger_created_at,
         )
     elif st == 'credit':
         entry = LedgerEntry.objects.create(
@@ -225,7 +250,7 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
             amount=total,
             description=f'Replacement POS return {invoice.invoice_number} (CREDIT)',
             created_by=request.user,
-            created_at=timezone.now(),
+            created_at=ledger_created_at,
         )
     else:
         raise ValueError('settlement_invoice_type must be cash, upi, mixed, or credit.')
@@ -236,7 +261,8 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
         total,
         entry.description,
         request.user,
-        timezone.now(),
+        ledger_created_at,
+        source_ledger_entry_id=entry.id,
     )
     invoice.customer.credit_balance += total
     invoice.customer.save(update_fields=['credit_balance'])
@@ -275,7 +301,12 @@ def _apply_replacement_pos_checkout(invoice, request, settlement_invoice_type, c
     invoice.status = 'credit' if st == 'credit' else 'paid'
     invoice.paid_amount = Decimal('0.00') if st == 'credit' else total
     invoice.due_amount = Decimal('0.00')
-    invoice.save(update_fields=['invoice_type', 'status', 'paid_amount', 'due_amount'])
+    if replacement_effective_at is not None:
+        invoice.created_at = replacement_effective_at
+    update_fields = ['invoice_type', 'status', 'paid_amount', 'due_amount']
+    if replacement_effective_at is not None:
+        update_fields.append('created_at')
+    invoice.save(update_fields=update_fields)
 
 
 @api_view(['POST'])
@@ -356,6 +387,8 @@ def _replacement_pos_create_body(request):
     settlement_type = str(request.data.get('settlement_invoice_type') or 'cash').strip().lower()
     if settlement_type not in ('cash', 'upi', 'mixed', 'credit'):
         raise ValueError('settlement_invoice_type must be cash, upi, mixed, or credit.')
+    replacement_date = _parse_replacement_date(request.data.get('replacement_date'))
+    replacement_effective_at = _replacement_effective_at(replacement_date)
 
     line_ids_requested = []
     parsed_lines = []
@@ -492,10 +525,11 @@ def _replacement_pos_create_body(request):
         invoice_type='pending' if mode == 'pending' else 'cash',
         is_replacement_return=True,
         replacement_mode=mode,
+        replacement_date=replacement_date,
         replacement_customer_warning=cust_warning,
         replacement_source_customers=uniq_sources,
         created_by=request.user,
-        created_at=timezone.now(),
+        created_at=replacement_effective_at,
     )
 
     cash_amt_req = None
@@ -511,7 +545,7 @@ def _replacement_pos_create_body(request):
         orig = by_pk[oid]
         qty = orig.quantity
 
-        ceil_u = _effective_sold_unit(orig)
+        ceil_u = effective_sold_unit_price(orig)
         ceil_u_q = ceil_u.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
         accepted = pd['accepted_return_price']
@@ -562,6 +596,7 @@ def _replacement_pos_create_body(request):
             invoice, request, st_use,
             cash_amount=cash_amt_req,
             upi_amount=upi_amt_req,
+            replacement_effective_at=replacement_effective_at,
         )
 
     create_audit_log(
@@ -621,12 +656,20 @@ def replacement_pos_finalize(request, pk):
 
     cash_amount = request.data.get('cash_amount')
     upi_amount = request.data.get('upi_amount')
+    replacement_date = _parse_replacement_date(
+        request.data.get('replacement_date') or invoice.replacement_date
+    )
+    replacement_effective_at = _replacement_effective_at(replacement_date)
+    invoice.replacement_date = replacement_date
+    invoice.created_at = replacement_effective_at
+    invoice.save(update_fields=['replacement_date', 'created_at'])
 
     try:
         _apply_replacement_pos_checkout(
             invoice, request, settlement_type,
             cash_amount=cash_amount,
             upi_amount=upi_amount,
+            replacement_effective_at=replacement_effective_at,
         )
     except ValueError as e:
         return Response({'error': str(e), 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)

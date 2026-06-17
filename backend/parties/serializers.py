@@ -116,13 +116,26 @@ class InternalLedgerEntrySerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     created_at = serializers.DateTimeField(required=False, allow_null=True)  # Allow custom dates
+    invoice = serializers.SerializerMethodField()
+    invoice_number = serializers.SerializerMethodField()
 
     class Meta:
         model = InternalLedgerEntry
         fields = [
-            'id', 'customer', 'customer_name',
+            'id', 'customer', 'customer_name', 'invoice', 'invoice_number',
             'entry_type', 'amount', 'description', 'created_by', 'created_by_username', 'created_at'
         ]
+
+    def _invoice_ref(self, obj):
+        return self.context.get('invoice_map', {}).get(obj.id, (None, None))
+
+    def get_invoice(self, obj):
+        invoice_id, _ = self._invoice_ref(obj)
+        return invoice_id
+
+    def get_invoice_number(self, obj):
+        _, invoice_number = self._invoice_ref(obj)
+        return invoice_number
 
 
 class PaymentReminderSerializer(serializers.ModelSerializer):

@@ -11,6 +11,7 @@ from calendar import monthrange
 from decimal import Decimal
 from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry, PaymentReminder
 from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer, PaymentReminderSerializer
+from .internal_ledger_utils import resolve_invoices_for_internal_entries
 
 INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
 
@@ -1366,6 +1367,17 @@ def _internal_ledger_customer_filter():
     return Q(customer__customer_group__name__iexact=INTERNAL_LEDGER_GROUP_NAME)
 
 
+def _serialize_internal_ledger_entries(entries):
+    entries_list = list(entries)
+    invoice_map = resolve_invoices_for_internal_entries(entries_list)
+    serializer = InternalLedgerEntrySerializer(
+        entries_list,
+        many=True,
+        context={'invoice_map': invoice_map},
+    )
+    return serializer.data
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def internal_customer_list_create(request):
@@ -1474,8 +1486,7 @@ def internal_ledger_entry_list_create(request):
             )
         
         queryset = queryset.order_by('-created_at', '-id')
-        serializer = InternalLedgerEntrySerializer(queryset, many=True)
-        return Response(serializer.data)
+        return Response(_serialize_internal_ledger_entries(queryset))
     else:  # POST
         serializer = InternalLedgerEntrySerializer(data=request.data)
         if serializer.is_valid():
@@ -1499,7 +1510,13 @@ def internal_ledger_entry_list_create(request):
                     entry.customer.credit_balance -= entry.amount
                 entry.customer.save()
             
-            return Response(InternalLedgerEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
+            return Response(
+                InternalLedgerEntrySerializer(
+                    entry,
+                    context={'invoice_map': resolve_invoices_for_internal_entries([entry])},
+                ).data,
+                status=status.HTTP_201_CREATED,
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -1513,8 +1530,8 @@ def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
     if entry.customer and ((entry.customer.customer_group is None) or (entry.customer.customer_group.name or '').upper() != INTERNAL_LEDGER_GROUP_NAME):
         return Response({'error': f'Entry not in internal ledger (customer group must be {INTERNAL_LEDGER_GROUP_NAME}).'}, status=status.HTTP_404_NOT_FOUND)
     if request.method == 'GET':
-        serializer = InternalLedgerEntrySerializer(entry)
-        return Response(serializer.data)
+        invoice_map = resolve_invoices_for_internal_entries([entry])
+        return Response(InternalLedgerEntrySerializer(entry, context={'invoice_map': invoice_map}).data)
     if request.method == 'PATCH':
         _reverse_ledger_entry_balance(entry)
         partial_data = request.data
@@ -1524,7 +1541,8 @@ def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
         if serializer.is_valid():
             entry = serializer.save()
             _apply_ledger_entry_balance(entry)
-            return Response(InternalLedgerEntrySerializer(entry).data)
+            invoice_map = resolve_invoices_for_internal_entries([entry])
+            return Response(InternalLedgerEntrySerializer(entry, context={'invoice_map': invoice_map}).data)
         _apply_ledger_entry_balance(entry)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     if request.method == 'DELETE':
@@ -1599,8 +1617,7 @@ def internal_ledger_customer_detail(request, customer_id):
     
     entries = entries.order_by('created_at')
     
-    serializer = InternalLedgerEntrySerializer(entries, many=True)
-    entries_data = serializer.data
+    entries_data = _serialize_internal_ledger_entries(entries)
     
     # Calculate running balance
     running_balance = Decimal('0.00')

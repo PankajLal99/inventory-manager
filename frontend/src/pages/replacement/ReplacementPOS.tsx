@@ -59,6 +59,10 @@ type BasketRow = LookupLine & {
 
 type SelectedCustomer = { id: number; name: string; phone?: string | null };
 
+function todayYmd(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function basketLineQty(r: BasketRow) {
   const q = parseFloat(String(r.quantity));
   return Number.isFinite(q) && q > 0 ? q : 1;
@@ -89,6 +93,7 @@ export default function ReplacementPOS() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerSearchSelectedIndex, setCustomerSearchSelectedIndex] = useState(-1);
   const [mode, setMode] = useState<'instant' | 'pending'>('pending');
+  const [replacementDate, setReplacementDate] = useState<string>(() => todayYmd());
   const [settlementType, setSettlementType] = useState<'cash' | 'upi' | 'mixed' | 'credit'>('cash');
   const [cashAmount, setCashAmount] = useState('');
   const [upiAmount, setUpiAmount] = useState('');
@@ -317,6 +322,7 @@ export default function ReplacementPOS() {
     createMutation.mutate({
       customer: selectedCustomer?.id,
       mode,
+      replacement_date: replacementDate,
       settlement_invoice_type: settlementType,
       cash_amount: settlementType === 'mixed' ? cashAmount : undefined,
       upi_amount: settlementType === 'mixed' ? upiAmount : undefined,
@@ -506,6 +512,15 @@ export default function ReplacementPOS() {
                     </div>
                   )}
                 </div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mt-3 mb-1.5">
+                  Replacement date
+                </label>
+                <Input
+                  type="date"
+                  value={replacementDate}
+                  onChange={(e) => setReplacementDate(e.target.value)}
+                  className="w-full h-11 text-sm font-semibold py-2.5 px-3 border-2 rounded-lg"
+                />
               </div>
 
               <div>
