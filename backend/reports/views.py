@@ -3,7 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField, Exists, OuterRef
+from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField, Exists, OuterRef, Subquery
 from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -583,19 +583,35 @@ def _bulk_available_barcode_counts(retailer_id, store_id, allowed_store_ids, use
 
 
 def _bulk_product_max_costs(retailer_id, store_id, allowed_store_ids, user, product_ids):
+    """Latest purchase-item unit_price per product (matches pre-refactor stock-ordering cost)."""
     if not product_ids:
         return {}
-    cost_qs = Barcode.objects.filter(
+    latest_cost_subq = Barcode.objects.filter(
         retailer_id=retailer_id,
-        product_id__in=product_ids,
+        product_id=OuterRef('id'),
+        purchase_id__isnull=False,
+        purchase_item_id__isnull=False,
         deleted_at__isnull=True,
-    ).exclude(purchase__status='draft').filter(purchase__deleted_at__isnull=True)
-    cost_qs = _apply_store_scope_to_barcode_qs(cost_qs, store_id, allowed_store_ids, user)
-    return dict(
-        cost_qs.values('product_id')
-        .annotate(cost=Max('purchase_price'))
-        .values_list('product_id', 'cost')
+    ).exclude(
+        purchase__status='draft',
+    ).filter(
+        purchase__deleted_at__isnull=True,
     )
+    latest_cost_subq = _apply_store_scope_to_barcode_qs(
+        latest_cost_subq, store_id, allowed_store_ids, user,
+    )
+    latest_cost_subq = latest_cost_subq.order_by('-purchase__created_at').values(
+        'purchase_item__unit_price',
+    )[:1]
+
+    rows = Product.objects.filter(
+        id__in=product_ids,
+        retailer_id=retailer_id,
+    ).annotate(
+        cost=Subquery(latest_cost_subq, output_field=DecimalField()),
+    ).values_list('id', 'cost')
+
+    return {pid: float(cost or 0) for pid, cost in rows}
 
 
 def _store_display_name(retailer_id, store_id):
