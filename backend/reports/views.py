@@ -3,8 +3,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField, Exists, OuterRef, Subquery
-from django.db.models.functions import TruncDate, TruncMonth
+from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField, Exists, OuterRef, Subquery, Value
+from django.db.models.functions import TruncDate, TruncMonth, Coalesce
 from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -471,6 +471,7 @@ def stock_ordering_report(request):
     for p in product_rows:
         available_count = int(counts.get(p['id'], 0) or 0)
         low_stock_threshold = p['low_stock_threshold'] or 0
+        unit_cost = float(costs.get(p['id']) or 0)
         product_data = {
             'product__id': p['id'],
             'product__name': p['name'],
@@ -478,7 +479,8 @@ def stock_ordering_report(request):
             'product__category__name': p['category__name'],
             'product__brand__name': p['brand__name'],
             'product__low_stock_threshold': low_stock_threshold,
-            'product__cost_price': float(costs.get(p['id']) or 0),
+            'product__unit_cost': unit_cost,
+            'product__cost_price': _product_stock_value(unit_cost, available_count),
             'store__name': store_name,
             'available_quantity': available_count,
         }
@@ -584,43 +586,70 @@ def _bulk_available_barcode_counts(retailer_id, store_id, allowed_store_ids, use
 
 def _bulk_product_max_costs(retailer_id, store_id, allowed_store_ids, user, product_ids):
     """
-    Cost per product for stock reports.
+    Cost (Rs.) per product for stock reports.
 
-  Source of truth (same as POS / catalog):
-    Barcode.get_purchase_price() -> purchase_item.unit_price
+    Resolution order (first non-null wins):
+      1. Latest PurchaseItem.unit_price for the product (purchasing — primary source)
+      2. Latest barcode-linked purchase_item.unit_price (catalog / POS barcode path)
+      3. Max PurchaseItem.unit_price across all purchases (legacy rows missing links)
 
-  Stock-ordering used latest non-draft purchase for the product, then
-  PurchaseItem.unit_price on that purchase (not a Barcode.purchase_price column).
+    InvoiceItem.purchase_price / CartItem.purchase_price are sale-time overrides for
+    custom 'Other -' lines only — not used for purchased inventory stock valuation.
     """
     if not product_ids:
         return {}
     from backend.purchasing.models import PurchaseItem
 
-    # Latest purchase for this product (no store filter — matches pre-refactor stock-ordering).
-    latest_purchase_subq = Barcode.objects.filter(
-        retailer_id=retailer_id,
+    pi_base = PurchaseItem.objects.filter(
         product_id=OuterRef('id'),
-        purchase_id__isnull=False,
-        deleted_at__isnull=True,
-    ).exclude(
-        purchase__status='draft',
-    ).filter(
+        purchase__retailer_id=retailer_id,
         purchase__deleted_at__isnull=True,
-    ).order_by('-purchase__created_at').values('purchase_id')[:1]
+    ).exclude(purchase__status='draft')
 
-    cost_subq = PurchaseItem.objects.filter(
-        purchase_id=Subquery(latest_purchase_subq),
+    latest_pi = pi_base.order_by('-purchase__created_at', '-purchase_id', '-id').values('unit_price')[:1]
+
+    bc_base = Barcode.objects.filter(
         product_id=OuterRef('id'),
-    ).values('unit_price')[:1]
+        retailer_id=retailer_id,
+        purchase_item_id__isnull=False,
+        deleted_at__isnull=True,
+    ).exclude(purchase__status='draft').filter(purchase__deleted_at__isnull=True)
+
+    latest_bc = bc_base.order_by('-purchase__created_at').values('purchase_item__unit_price')[:1]
 
     rows = Product.objects.filter(
         id__in=product_ids,
         retailer_id=retailer_id,
     ).annotate(
-        cost=Subquery(cost_subq, output_field=DecimalField()),
+        cost=Coalesce(
+            Subquery(latest_pi, output_field=DecimalField()),
+            Subquery(latest_bc, output_field=DecimalField()),
+            Value(Decimal('0.00')),
+            output_field=DecimalField(),
+        ),
     ).values_list('id', 'cost')
 
-    return {pid: float(cost or 0) for pid, cost in rows}
+    costs = {pid: float(cost or 0) for pid, cost in rows}
+
+    missing = [pid for pid in product_ids if costs.get(pid, 0) == 0]
+    if missing:
+        max_pi_qs = PurchaseItem.objects.filter(
+            product_id__in=missing,
+            purchase__retailer_id=retailer_id,
+            purchase__deleted_at__isnull=True,
+        ).exclude(purchase__status='draft')
+        for pid, cost in max_pi_qs.values('product_id').annotate(
+            cost=Max('unit_price'),
+        ).values_list('product_id', 'cost'):
+            if cost:
+                costs[pid] = float(cost)
+
+    return costs
+
+
+def _product_stock_value(unit_cost, quantity):
+    """Total worth of on-hand stock = available qty × unit purchase cost."""
+    return float(unit_cost or 0) * int(quantity or 0)
 
 
 def _store_display_name(retailer_id, store_id):
@@ -1218,6 +1247,8 @@ def stock_inventory_export(request):
         else:
             row_status = 'In Stock'
 
+        unit_cost = float(costs.get(pid) or 0)
+
         results.append({
             'product__id': pid,
             'product__name': p['name'],
@@ -1225,7 +1256,8 @@ def stock_inventory_export(request):
             'product__category__name': p['category__name'],
             'product__brand__name': p['brand__name'],
             'product__low_stock_threshold': threshold,
-            'product__cost_price': float(costs.get(pid) or 0),
+            'product__unit_cost': unit_cost,
+            'product__cost_price': _product_stock_value(unit_cost, qty),
             'store__name': store_name,
             'available_quantity': qty,
             'status': row_status,

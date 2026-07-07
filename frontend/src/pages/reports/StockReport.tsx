@@ -39,7 +39,7 @@ type StockExportRow = (string | number)[];
 
 const INV_HEADERS: StockExportRow = [
   '#', 'Status', 'Product', 'SKU', 'Category', 'Brand', 'Store',
-  'Qty Available', 'Threshold', 'Cost (Rs.)',
+  'Qty Available', 'Threshold', 'Stock Value (Rs.)',
 ];
 
 function inventoryRowFromApi(p: any, index: number): StockExportRow {
