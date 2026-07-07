@@ -81,7 +81,6 @@ function salesExportTaxInclusiveLabel(item: {
 }
 
 const QUERY_STALE_MS = 60_000;
-const DATE_DEBOUNCE_MS = 350;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -242,9 +241,12 @@ export default function Reports() {
 
   const currentStore = stores.find((s: any) => s.id === selectedStoreId);
 
-  // ── Date state ──
-  const [dateFrom, setDateFrom] = useState(() => toLocalDateString(new Date()));
-  const [dateTo, setDateTo] = useState(() => toLocalDateString(new Date()));
+  // ── Date state (applied = drives queries; draft = custom picker only) ──
+  const todayStr = () => toLocalDateString(new Date());
+  const [appliedFrom, setAppliedFrom] = useState(todayStr);
+  const [appliedTo, setAppliedTo] = useState(todayStr);
+  const [customDraftFrom, setCustomDraftFrom] = useState(todayStr);
+  const [customDraftTo, setCustomDraftTo] = useState(todayStr);
   const [activeDateFilter, setActiveDateFilter] = useState<string>('today');
 
   // ── Comparison period ──
@@ -253,29 +255,19 @@ export default function Reports() {
   const [customCompareTo, setCustomCompareTo] = useState('');
   const [showComparePanel, setShowComparePanel] = useState(false);
 
-  const autoCompare = computeComparePeriod(dateFrom, dateTo, activeDateFilter);
+  const autoCompare = computeComparePeriod(appliedFrom, appliedTo, activeDateFilter);
   const compareFrom = comparisonMode === 'custom' && customCompareFrom ? customCompareFrom : autoCompare.from;
   const compareTo = comparisonMode === 'custom' && customCompareTo ? customCompareTo : autoCompare.to;
   const compareLabel = comparisonMode === 'custom' ? 'Custom Comparison' : autoCompare.label;
 
-  // Debounce date-driven queries so rapid filter changes don't stampede the API.
-  const [queryDates, setQueryDates] = useState({
-    dateFrom,
-    dateTo,
-    compareFrom,
-    compareTo,
-  });
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setQueryDates({ dateFrom, dateTo, compareFrom, compareTo });
-    }, DATE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [dateFrom, dateTo, compareFrom, compareTo]);
+  const customRangePending =
+    activeDateFilter === 'custom' &&
+    (customDraftFrom !== appliedFrom || customDraftTo !== appliedTo);
 
-  const qFrom = queryDates.dateFrom;
-  const qTo = queryDates.dateTo;
-  const qCompareFrom = queryDates.compareFrom;
-  const qCompareTo = queryDates.compareTo;
+  const applyCustomDateRange = useCallback(() => {
+    setAppliedFrom(customDraftFrom);
+    setAppliedTo(customDraftTo);
+  }, [customDraftFrom, customDraftTo]);
 
   // ── Chart / insight state ──
   const [chartViewMode, setChartViewMode] = useState<'line' | 'bar'>('line');
@@ -294,48 +286,64 @@ export default function Reports() {
 
   // ── Quick date filters ──
   const setDateFilter = useCallback((filter: string) => {
-    setActiveDateFilter(filter);
     const today = new Date();
-    const todayStr = toLocalDateString(today);
+    const todayDateStr = toLocalDateString(today);
+
+    if (filter === 'custom') {
+      setActiveDateFilter('custom');
+      setCustomDraftFrom(appliedFrom);
+      setCustomDraftTo(appliedTo);
+      return;
+    }
+
+    setActiveDateFilter(filter);
+    let from = appliedFrom;
+    let to = appliedTo;
 
     switch (filter) {
       case 'today':
-        setDateFrom(todayStr); setDateTo(todayStr); break;
+        from = todayDateStr; to = todayDateStr; break;
       case 'yesterday': {
-        const y = addDays(todayStr, -1);
-        setDateFrom(y); setDateTo(y); break;
+        const y = addDays(todayDateStr, -1);
+        from = y; to = y; break;
       }
       case 'last_week':
-        setDateFrom(addDays(todayStr, -7)); setDateTo(todayStr); break;
+        from = addDays(todayDateStr, -7); to = todayDateStr; break;
       case 'last_month':
-        setDateFrom(addDays(todayStr, -30)); setDateTo(todayStr); break;
+        from = addDays(todayDateStr, -30); to = todayDateStr; break;
       case 'last_year':
-        setDateFrom(addDays(todayStr, -365)); setDateTo(todayStr); break;
+        from = addDays(todayDateStr, -365); to = todayDateStr; break;
       case 'financial_year': {
         const m = today.getMonth();
         const fyStart = m >= 3
           ? new Date(today.getFullYear(), 3, 1)
           : new Date(today.getFullYear() - 1, 3, 1);
-        setDateFrom(toLocalDateString(fyStart)); setDateTo(todayStr); break;
+        from = toLocalDateString(fyStart); to = todayDateStr; break;
       }
       default: break;
     }
+
+    setAppliedFrom(from);
+    setAppliedTo(to);
+    setCustomDraftFrom(from);
+    setCustomDraftTo(to);
+
     if (comparisonMode === 'auto') {
       setCustomCompareFrom('');
       setCustomCompareTo('');
     }
-  }, [comparisonMode]);
+  }, [appliedFrom, appliedTo, comparisonMode]);
 
-  // ── API Queries (debounced dates; cached to avoid redundant work) ──
+  // ── API Queries (applied dates only; custom range updates on Apply)
 
   // 1. Analytics Comparison (KPIs + % change + daily chart + store comparison)
   const { data: analyticsData, isLoading: analyticsLoading, isFetching: analyticsFetching } = useQuery({
-    queryKey: ['analytics-comparison', qFrom, qTo, qCompareFrom, qCompareTo, defaultStore?.id],
+    queryKey: ['analytics-comparison', appliedFrom, appliedTo, compareFrom, compareTo, defaultStore?.id],
     queryFn: async () => (await reportsApi.analyticsComparison({
-      date_from: qFrom,
-      date_to: qTo,
-      compare_from: qCompareFrom,
-      compare_to: qCompareTo,
+      date_from: appliedFrom,
+      date_to: appliedTo,
+      compare_from: compareFrom,
+      compare_to: compareTo,
       store: defaultStore?.id || undefined,
     })).data,
     enabled: !!defaultStore,
@@ -346,10 +354,10 @@ export default function Reports() {
 
   // 2. Category + Brand analytics (with optional filters)
   const { data: catBrandData, isLoading: catBrandLoading, isFetching: catBrandFetching } = useQuery({
-    queryKey: ['cat-brand', qFrom, qTo, defaultStore?.id, filterCategory, filterBrand],
+    queryKey: ['cat-brand', appliedFrom, appliedTo, defaultStore?.id, filterCategory, filterBrand],
     queryFn: async () => (await reportsApi.categoryBrandAnalytics({
-      date_from: qFrom,
-      date_to: qTo,
+      date_from: appliedFrom,
+      date_to: appliedTo,
       store: defaultStore?.id || undefined,
       category: filterCategory || undefined,
       brand: filterBrand || undefined,
@@ -372,8 +380,8 @@ export default function Reports() {
 
   // 4. Customer summary
   const { data: customerData, isLoading: customerLoading } = useQuery({
-    queryKey: ['customers', qFrom, qTo],
-    queryFn: async () => (await reportsApi.customers({ date_from: qFrom, date_to: qTo })).data,
+    queryKey: ['customers', appliedFrom, appliedTo],
+    queryFn: async () => (await reportsApi.customers({ date_from: appliedFrom, date_to: appliedTo })).data,
     retry: false,
     staleTime: QUERY_STALE_MS,
     placeholderData: keepPreviousData,
@@ -440,8 +448,8 @@ export default function Reports() {
     [analyticsData?.store_comparison],
   );
   const revenueChartLabel = useMemo(
-    () => `${fmtDate(qFrom)} – ${fmtDate(qTo)}`,
-    [qFrom, qTo],
+    () => `${fmtDate(appliedFrom)} – ${fmtDate(appliedTo)}`,
+    [appliedFrom, appliedTo],
   );
   const productRows = useMemo(() => {
     const fast = catBrandData?.fast_selling ?? [];
@@ -525,7 +533,7 @@ export default function Reports() {
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
       doc.text(
-        `${currentStore?.name || 'All Stores'}  |  ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}`,
+        `${currentStore?.name || 'All Stores'}  |  ${fmtDate(appliedFrom)} to ${fmtDate(appliedTo)}`,
         pageW / 2, 21, { align: 'center' }
       );
       doc.text(`Compared with ${compareLabel}: ${fmtDate(compareFrom)} to ${fmtDate(compareTo)}`, pageW / 2, 27, { align: 'center' });
@@ -674,7 +682,7 @@ export default function Reports() {
 
       setExportProgress({ kind: 'pdf', percent: 90, label: 'Saving PDF…' });
       await yieldToMain();
-      doc.save(`report-${dateFrom}-to-${dateTo}.pdf`);
+      doc.save(`report-${appliedFrom}-to-${appliedTo}.pdf`);
       setExportProgress({ kind: 'pdf', percent: 100, label: 'Done' });
       await new Promise((r) => setTimeout(r, 450));
     } catch (err) {
@@ -684,7 +692,7 @@ export default function Reports() {
       setPdfExporting(false);
       setExportProgress(null);
     }
-  }, [pdfExporting, excelExporting, curr, prev, pctChange, fastSelling, slowMoving, topCategories, topBrands, compareLabel, compareFrom, compareTo, dateFrom, dateTo, currentStore, productTab]);
+  }, [pdfExporting, excelExporting, curr, prev, pctChange, fastSelling, slowMoving, topCategories, topBrands, compareLabel, compareFrom, compareTo, appliedFrom, appliedTo, currentStore, productTab]);
 
   // ── Sales Report Excel (lean paginated API — avoids full invoice list OOM) ──
   const handleExportSalesExcel = useCallback(async () => {
@@ -701,8 +709,8 @@ export default function Reports() {
 
       while (hasMore) {
         const res = await reportsApi.salesExport({
-          date_from: dateFrom,
-          date_to: dateTo,
+          date_from: appliedFrom,
+          date_to: appliedTo,
           page,
           page_size: pageSize,
           store: defaultStore.id,
@@ -923,7 +931,7 @@ export default function Reports() {
       XLSX.utils.book_append_sheet(wb, ws, 'Sales Report');
       setExportProgress({ kind: 'excel', percent: 98, label: 'Downloading…' });
       await yieldToMain();
-      XLSX.writeFile(wb, `sales-report-${dateFrom}-to-${dateTo}.xlsx`);
+      XLSX.writeFile(wb, `sales-report-${appliedFrom}-to-${appliedTo}.xlsx`);
       setExportProgress({ kind: 'excel', percent: 100, label: 'Done' });
       await new Promise((r) => setTimeout(r, 450));
     } catch (err) {
@@ -935,7 +943,7 @@ export default function Reports() {
       setExcelExporting(false);
       setExportProgress(null);
     }
-  }, [excelExporting, pdfExporting, dateFrom, dateTo, defaultStore]);
+  }, [excelExporting, pdfExporting, appliedFrom, appliedTo, defaultStore]);
 
   // ── Guards ──
   if (!defaultStore && stores.length === 0) {
@@ -1064,18 +1072,29 @@ export default function Reports() {
               <Calendar className="h-4 w-4 text-gray-400" />
               <input
                 type="date"
-                value={dateFrom}
-                onChange={(e) => { setDateFrom(e.target.value); setActiveDateFilter('custom'); }}
+                value={customDraftFrom}
+                onChange={(e) => setCustomDraftFrom(e.target.value)}
                 className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               <span className="text-gray-400">→</span>
               <input
                 type="date"
-                value={dateTo}
-                onChange={(e) => { setDateTo(e.target.value); setActiveDateFilter('custom'); }}
+                value={customDraftTo}
+                onChange={(e) => setCustomDraftTo(e.target.value)}
                 className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
+            <button
+              type="button"
+              onClick={applyCustomDateRange}
+              disabled={!customRangePending}
+              className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Apply
+            </button>
+            {customRangePending && (
+              <span className="text-xs text-amber-600">Press Apply to load this range</span>
+            )}
           </div>
         )}
 
@@ -1129,7 +1148,7 @@ export default function Reports() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-semibold text-gray-700">Key Performance Indicators</h2>
           <span className="text-xs text-gray-400">
-            {fmtDate(qFrom)} – {fmtDate(qTo)} vs {compareLabel}
+            {fmtDate(appliedFrom)} – {fmtDate(appliedTo)} vs {compareLabel}
             {queriesRefreshing && !analyticsLoading && (
               <span className="ml-2 text-blue-500">Updating…</span>
             )}
@@ -1208,7 +1227,7 @@ export default function Reports() {
         <div className="flex items-center justify-between mb-4">
           <SectionHeader
             title="Revenue Trend"
-            subtitle={`${fmtDate(dateFrom)} – ${fmtDate(dateTo)} vs ${compareLabel}`}
+            subtitle={`${fmtDate(appliedFrom)} – ${fmtDate(appliedTo)} vs ${compareLabel}`}
             icon={<TrendingUp className="h-5 w-5 text-blue-600" />}
           />
           <div className="flex gap-1 ml-auto">
@@ -1394,7 +1413,7 @@ export default function Reports() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
           <SectionHeader
             title="Top Customers"
-            subtitle={`${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`}
+            subtitle={`${fmtDate(appliedFrom)} – ${fmtDate(appliedTo)}`}
             icon={<Users className="h-5 w-5 text-blue-600" />}
           />
           {customerLoading ? (
@@ -1586,8 +1605,8 @@ export default function Reports() {
         <KpiDrillDownModal
           metric={drillDown.metric}
           metricLabel={drillDown.label}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
+          dateFrom={appliedFrom}
+          dateTo={appliedTo}
           storeId={defaultStore?.id}
           onClose={() => setDrillDown(null)}
         />

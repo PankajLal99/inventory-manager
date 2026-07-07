@@ -153,8 +153,11 @@ export default function StockReport() {
   const isAdmin = isPosAdminContext(user);
 
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
-  const [dateFrom, setDateFrom] = useState(() => toLocalDateString(new Date()));
-  const [dateTo, setDateTo] = useState(() => toLocalDateString(new Date()));
+  const todayStr = () => toLocalDateString(new Date());
+  const [appliedFrom, setAppliedFrom] = useState(todayStr);
+  const [appliedTo, setAppliedTo] = useState(todayStr);
+  const [customDraftFrom, setCustomDraftFrom] = useState(todayStr);
+  const [customDraftTo, setCustomDraftTo] = useState(todayStr);
   const [activeDateFilter, setActiveDateFilter] = useState('today');
   const [activeTab, setActiveTab] = useState<ProductTab>('fast');
   const [filterCategory, setFilterCategory] = useState('');
@@ -193,34 +196,59 @@ export default function StockReport() {
     }
   }, [isAdmin, selectedStoreId, stores]);
 
+  const customRangePending =
+    activeDateFilter === 'custom' &&
+    (customDraftFrom !== appliedFrom || customDraftTo !== appliedTo);
+
+  const applyCustomDateRange = useCallback(() => {
+    setAppliedFrom(customDraftFrom);
+    setAppliedTo(customDraftTo);
+  }, [customDraftFrom, customDraftTo]);
+
   // ── Quick date filter handler ──
   const setDateFilter = useCallback((filter: string) => {
-    setActiveDateFilter(filter);
     const today = new Date();
-    const todayStr = toLocalDateString(today);
+    const todayDateStr = toLocalDateString(today);
+
+    if (filter === 'custom') {
+      setActiveDateFilter('custom');
+      setCustomDraftFrom(appliedFrom);
+      setCustomDraftTo(appliedTo);
+      return;
+    }
+
+    setActiveDateFilter(filter);
+    let from = appliedFrom;
+    let to = appliedTo;
+
     switch (filter) {
       case 'today':
-        setDateFrom(todayStr); setDateTo(todayStr); break;
+        from = todayDateStr; to = todayDateStr; break;
       case 'yesterday': {
-        const y = addDays(todayStr, -1);
-        setDateFrom(y); setDateTo(y); break;
+        const y = addDays(todayDateStr, -1);
+        from = y; to = y; break;
       }
       case 'last_week':
-        setDateFrom(addDays(todayStr, -7)); setDateTo(todayStr); break;
+        from = addDays(todayDateStr, -7); to = todayDateStr; break;
       case 'last_month':
-        setDateFrom(addDays(todayStr, -30)); setDateTo(todayStr); break;
+        from = addDays(todayDateStr, -30); to = todayDateStr; break;
       case 'last_year':
-        setDateFrom(addDays(todayStr, -365)); setDateTo(todayStr); break;
+        from = addDays(todayDateStr, -365); to = todayDateStr; break;
       default: break;
     }
-  }, []);
+
+    setAppliedFrom(from);
+    setAppliedTo(to);
+    setCustomDraftFrom(from);
+    setCustomDraftTo(to);
+  }, [appliedFrom, appliedTo]);
 
   // ── Analytics (KPIs) ──
   const { data: analyticsData, isLoading: analyticsLoading } = useQuery({
-    queryKey: ['stock-report-analytics', dateFrom, dateTo, storeId],
+    queryKey: ['stock-report-analytics', appliedFrom, appliedTo, storeId],
     queryFn: async () => (await reportsApi.analyticsComparison({
-      date_from: dateFrom,
-      date_to: dateTo,
+      date_from: appliedFrom,
+      date_to: appliedTo,
       store: storeId || undefined,
     })).data,
     enabled: !!storeId,
@@ -229,10 +257,10 @@ export default function StockReport() {
 
   // ── Sold products ──
   const { data: stockSoldData, isLoading: stockSoldLoading } = useQuery({
-    queryKey: ['stock-sold', dateFrom, dateTo, storeId],
+    queryKey: ['stock-sold', appliedFrom, appliedTo, storeId],
     queryFn: async () => (await reportsApi.stockSold({
-      date_from: dateFrom,
-      date_to: dateTo,
+      date_from: appliedFrom,
+      date_to: appliedTo,
       store: storeId || undefined,
     })).data,
     enabled: !!storeId,
@@ -241,10 +269,10 @@ export default function StockReport() {
 
   // ── Category + Brand (fast/slow) ──
   const { data: catBrandData, isLoading: catBrandLoading } = useQuery({
-    queryKey: ['stock-report-catbrand', dateFrom, dateTo, storeId, filterCategory, filterBrand],
+    queryKey: ['stock-report-catbrand', appliedFrom, appliedTo, storeId, filterCategory, filterBrand],
     queryFn: async () => (await reportsApi.categoryBrandAnalytics({
-      date_from: dateFrom,
-      date_to: dateTo,
+      date_from: appliedFrom,
+      date_to: appliedTo,
       store: storeId || undefined,
       category: filterCategory || undefined,
       brand: filterBrand || undefined,
@@ -347,8 +375,8 @@ export default function StockReport() {
         async (page, pageSize) =>
           (await reportsApi.stockSoldExport({
             store: storeId,
-            date_from: dateFrom,
-            date_to: dateTo,
+            date_from: appliedFrom,
+            date_to: appliedTo,
             page,
             page_size: pageSize,
           })).data,
@@ -391,7 +419,7 @@ export default function StockReport() {
       if (soldRows.length > 0) {
         const wsSold = XLSX.utils.aoa_to_sheet([soldHeaders, ...soldRows]);
         wsSold['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 16 }, { wch: 10 }, { wch: 14 }];
-        XLSX.utils.book_append_sheet(wb, wsSold, `Sold ${dateFrom} to ${dateTo}`);
+        XLSX.utils.book_append_sheet(wb, wsSold, `Sold ${appliedFrom} to ${appliedTo}`);
       }
 
       setExportProgress({
@@ -401,7 +429,7 @@ export default function StockReport() {
       });
       await yieldToMain();
       const storeSlug = (primaryStore?.name || 'store').replace(/\s+/g, '-').slice(0, 24);
-      XLSX.writeFile(wb, `stock-report-${storeSlug}-${dateFrom}-to-${dateTo}.xlsx`);
+      XLSX.writeFile(wb, `stock-report-${storeSlug}-${appliedFrom}-to-${appliedTo}.xlsx`);
       setExportProgress({ kind: 'excel', percent: 100, label: 'Done' });
       await new Promise((r) => setTimeout(r, 450));
     } catch (err) {
@@ -413,7 +441,7 @@ export default function StockReport() {
       setExcelExporting(false);
       setExportProgress(null);
     }
-  }, [storeId, primaryStore?.name, dateFrom, dateTo, isExporting]);
+  }, [storeId, primaryStore?.name, appliedFrom, appliedTo, isExporting]);
 
   // ── PDF Export (lean paginated APIs) ──
   const handleExportPdf = useCallback(async () => {
@@ -442,8 +470,8 @@ export default function StockReport() {
         async (page, pageSize) =>
           (await reportsApi.stockSoldExport({
             store: storeId,
-            date_from: dateFrom,
-            date_to: dateTo,
+            date_from: appliedFrom,
+            date_to: appliedTo,
             page,
             page_size: pageSize,
           })).data,
@@ -484,7 +512,7 @@ export default function StockReport() {
       doc.setFontSize(9);
       doc.setFont('helvetica', 'normal');
       doc.text(
-        `${primaryStore?.name || 'Store'}  |  Purchased inventory  |  Sales: ${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`,
+        `${primaryStore?.name || 'Store'}  |  Purchased inventory  |  Sales: ${fmtDate(appliedFrom)} – ${fmtDate(appliedTo)}`,
         pageW / 2, 22, { align: 'center' }
       );
       doc.setTextColor(0, 0, 0);
@@ -539,7 +567,7 @@ export default function StockReport() {
         if (y > 230) { doc.addPage(); y = 14; }
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text(`Products sold (${fmtDate(dateFrom)} – ${fmtDate(dateTo)})`, 14, y);
+        doc.text(`Products sold (${fmtDate(appliedFrom)} – ${fmtDate(appliedTo)})`, 14, y);
         y += 4;
         autoTable(doc, {
           startY: y,
@@ -559,7 +587,7 @@ export default function StockReport() {
       setExportProgress({ kind: 'pdf', percent: 95, label: 'Saving PDF…' });
       await yieldToMain();
       const storeSlug = (primaryStore?.name || 'store').replace(/\s+/g, '-').slice(0, 24);
-      doc.save(`stock-report-${storeSlug}-${dateFrom}-to-${dateTo}.pdf`);
+      doc.save(`stock-report-${storeSlug}-${appliedFrom}-to-${appliedTo}.pdf`);
       setExportProgress({ kind: 'pdf', percent: 100, label: 'Done' });
       await new Promise((r) => setTimeout(r, 450));
     } catch (err) {
@@ -569,7 +597,7 @@ export default function StockReport() {
       setPdfExporting(false);
       setExportProgress(null);
     }
-  }, [storeId, primaryStore?.name, curr, dateFrom, dateTo, isExporting]);
+  }, [storeId, primaryStore?.name, curr, appliedFrom, appliedTo, isExporting]);
 
   // ── Tab columns ──
   const renderTable = () => {
@@ -816,24 +844,35 @@ export default function StockReport() {
               <Calendar className="h-4 w-4 text-gray-400" />
               <input
                 type="date"
-                value={dateFrom}
-                onChange={(e) => { setDateFrom(e.target.value); setActiveDateFilter('custom'); }}
+                value={customDraftFrom}
+                onChange={(e) => setCustomDraftFrom(e.target.value)}
                 className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
               <span className="text-gray-400">→</span>
               <input
                 type="date"
-                value={dateTo}
-                onChange={(e) => { setDateTo(e.target.value); setActiveDateFilter('custom'); }}
+                value={customDraftTo}
+                onChange={(e) => setCustomDraftTo(e.target.value)}
                 className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
             </div>
+            <button
+              type="button"
+              onClick={applyCustomDateRange}
+              disabled={!customRangePending}
+              className="px-4 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Apply
+            </button>
+            {customRangePending && (
+              <span className="text-xs text-amber-600">Press Apply to load this range</span>
+            )}
           </div>
         )}
         <p className="text-xs text-gray-400">
           Store: <strong>{primaryStore?.name || '—'}</strong>
           {' · '}
-          Sales period: <strong>{fmtDate(dateFrom)}</strong> – <strong>{fmtDate(dateTo)}</strong>
+          Sales period: <strong>{fmtDate(appliedFrom)}</strong> – <strong>{fmtDate(appliedTo)}</strong>
         </p>
       </div>
 
@@ -929,7 +968,9 @@ export default function StockReport() {
                   cx="50%"
                   cy="50%"
                   outerRadius={80}
-                  label={({ name, percent }) => `${name?.slice(0, 10)} ${((percent ?? 0) * 100).toFixed(0)}%`}
+                  label={({ name, percent }: { name?: string; percent?: number }) =>
+                    `${name?.slice(0, 10)} ${((percent ?? 0) * 100).toFixed(0)}%`
+                  }
                   labelLine={false}
                   fontSize={10}
                 >
