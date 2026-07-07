@@ -1,9 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useCallback, useEffect } from 'react';
 import { reportsApi, catalogApi } from '../../lib/api';
-import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, PieChart, Pie, Legend,
@@ -16,6 +13,7 @@ import {
 import { formatNumber, toLocalDateString } from '../../lib/utils';
 import { isPosAdminContext } from '../../lib/access';
 import { auth, type User } from '../../lib/auth';
+import { ExportProgressOverlay, yieldToMain } from './exportProgress';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -39,40 +37,59 @@ function resolvePrimaryStore(
 
 type StockExportRow = (string | number)[];
 
-function buildPurchasedStockExportRows(data: {
-  in_stock?: any[];
-  out_of_stock?: any[];
-}): { headers: StockExportRow; rows: StockExportRow[] } {
-  const headers: StockExportRow = [
-    '#', 'Status', 'Product', 'SKU', 'Category', 'Brand', 'Store',
-    'Qty Available', 'Threshold', 'Cost (Rs.)',
+const INV_HEADERS: StockExportRow = [
+  '#', 'Status', 'Product', 'SKU', 'Category', 'Brand', 'Store',
+  'Qty Available', 'Threshold', 'Cost (Rs.)',
+];
+
+function inventoryRowFromApi(p: any, index: number): StockExportRow {
+  return [
+    index,
+    p.status || 'In Stock',
+    p.product__name || '',
+    p.product__sku || 'N/A',
+    p.product__category__name || '—',
+    p.product__brand__name || '—',
+    p.store__name || '—',
+    Math.round(p.available_quantity || 0),
+    p.product__low_stock_threshold || 0,
+    Number(p.product__cost_price || 0),
   ];
-  const rows: StockExportRow[] = [];
-  let n = 0;
-  const push = (p: any, status: string) => {
-    n += 1;
-    rows.push([
-      n,
-      status,
-      p.product__name || '',
-      p.product__sku || 'N/A',
-      p.product__category__name || '—',
-      p.product__brand__name || '—',
-      p.store__name || '—',
-      Math.round(p.available_quantity || 0),
-      p.product__low_stock_threshold || 0,
-      Number(p.product__cost_price || 0),
-    ]);
-  };
-  for (const p of data.in_stock || []) {
-    const qty = Number(p.available_quantity || 0);
-    const th = Number(p.product__low_stock_threshold || 0);
-    push(p, th > 0 && qty <= th ? 'Low Stock' : 'In Stock');
+}
+
+async function fetchAllPages(
+  fetchPage: (page: number, pageSize: number) => Promise<{
+    results: any[];
+    has_more?: boolean;
+    total_count?: number;
+    [key: string]: any;
+  }>,
+  onProgress: (loaded: number, total: number, meta?: Record<string, any>) => void,
+  pageSize = 100,
+): Promise<{ rows: any[]; meta: Record<string, any> }> {
+  const rows: any[] = [];
+  let page = 1;
+  let hasMore = true;
+  let total = 0;
+  let meta: Record<string, any> = {};
+
+  while (hasMore) {
+    const data = await fetchPage(page, pageSize);
+    if (!data || !Array.isArray(data.results)) {
+      throw new Error('Unexpected export response from server');
+    }
+    const batch = data.results;
+    rows.push(...batch);
+    if (typeof data.total_count === 'number') total = data.total_count;
+    // Summary fields (in_stock_count, etc.) are present on every page.
+    meta = { ...meta, ...data };
+    hasMore = Boolean(data.has_more) && batch.length > 0;
+    page += 1;
+    onProgress(rows.length, total, meta);
+    await yieldToMain();
+    if (page > 500) break;
   }
-  for (const p of data.out_of_stock || []) {
-    push(p, 'Out of Stock');
-  }
-  return { headers, rows };
+  return { rows, meta };
 }
 
 function addDays(dateStr: string, n: number): string {
@@ -136,14 +153,20 @@ export default function StockReport() {
   const isAdmin = isPosAdminContext(user);
 
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
-  const [dateFrom, setDateFrom] = useState(() => addDays(toLocalDateString(new Date()), -30));
+  const [dateFrom, setDateFrom] = useState(() => toLocalDateString(new Date()));
   const [dateTo, setDateTo] = useState(() => toLocalDateString(new Date()));
-  const [activeDateFilter, setActiveDateFilter] = useState('last_month');
+  const [activeDateFilter, setActiveDateFilter] = useState('today');
   const [activeTab, setActiveTab] = useState<ProductTab>('fast');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [excelExporting, setExcelExporting] = useState(false);
   const [pdfExporting, setPdfExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{
+    kind: 'excel' | 'pdf';
+    percent: number;
+    label: string;
+  } | null>(null);
+  const isExporting = excelExporting || pdfExporting;
 
   // ── Stores ──
   const { data: storesResponse } = useQuery({
@@ -295,17 +318,59 @@ export default function StockReport() {
     : activeTab === 'out_of_stock' || activeTab === 'low_stock' ? stockOrderingLoading
     : catBrandLoading;
 
-  // ── Excel Export ──
+  // ── Excel Export (lean paginated APIs) ──
   const handleExportExcel = useCallback(async () => {
-    if (!storeId) return;
+    if (!storeId || isExporting) return;
     setExcelExporting(true);
+    setExportProgress({ kind: 'excel', percent: 3, label: 'Starting export…' });
     try {
-      const orderingRes = await reportsApi.stockOrdering({ store: storeId });
-      const ordering = orderingRes.data || {};
-      const { headers: invHeaders, rows: invRows } = buildPurchasedStockExportRows(ordering);
+      const xlsxPromise = import('xlsx');
 
+      setExportProgress({ kind: 'excel', percent: 8, label: 'Loading inventory…' });
+      const { rows: inventory, meta: invMeta } = await fetchAllPages(
+        async (page, pageSize) =>
+          (await reportsApi.stockInventoryExport({ store: storeId, page, page_size: pageSize })).data,
+        (loaded, total) => {
+          const pct = total > 0 ? 8 + (Math.min(loaded, total) / total) * 35 : Math.min(40, 8 + loaded / 20);
+          setExportProgress({
+            kind: 'excel',
+            percent: pct,
+            label: total > 0
+              ? `Loading inventory ${Math.min(loaded, total)} / ${total}…`
+              : `Loading inventory (${loaded})…`,
+          });
+        },
+      );
+
+      setExportProgress({ kind: 'excel', percent: 48, label: 'Loading sold products…' });
+      const { rows: sold } = await fetchAllPages(
+        async (page, pageSize) =>
+          (await reportsApi.stockSoldExport({
+            store: storeId,
+            date_from: dateFrom,
+            date_to: dateTo,
+            page,
+            page_size: pageSize,
+          })).data,
+        (loaded, total) => {
+          const pct = total > 0 ? 48 + (Math.min(loaded, total) / total) * 30 : Math.min(75, 48 + loaded / 20);
+          setExportProgress({
+            kind: 'excel',
+            percent: pct,
+            label: total > 0
+              ? `Loading sold products ${Math.min(loaded, total)} / ${total}…`
+              : `Loading sold products (${loaded})…`,
+          });
+        },
+      );
+
+      setExportProgress({ kind: 'excel', percent: 82, label: 'Building spreadsheet…' });
+      await yieldToMain();
+      const XLSX = await xlsxPromise;
+
+      const invRows = inventory.map((p, i) => inventoryRowFromApi(p, i + 1));
       const wb = XLSX.utils.book_new();
-      const wsInv = XLSX.utils.aoa_to_sheet([invHeaders, ...invRows]);
+      const wsInv = XLSX.utils.aoa_to_sheet([INV_HEADERS, ...invRows]);
       wsInv['!cols'] = [
         { wch: 5 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 16 }, { wch: 16 },
         { wch: 18 }, { wch: 14 }, { wch: 10 }, { wch: 12 },
@@ -313,7 +378,7 @@ export default function StockReport() {
       XLSX.utils.book_append_sheet(wb, wsInv, 'Stock Inventory');
 
       const soldHeaders = ['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue (Rs.)', 'Invoices', 'Remaining Stock'];
-      const soldRows = soldProducts.map((p: any) => [
+      const soldRows = sold.map((p: any) => [
         p.product__name || '',
         p.product__sku || 'N/A',
         p.product__category__name || '—',
@@ -329,22 +394,82 @@ export default function StockReport() {
         XLSX.utils.book_append_sheet(wb, wsSold, `Sold ${dateFrom} to ${dateTo}`);
       }
 
+      setExportProgress({
+        kind: 'excel',
+        percent: 95,
+        label: `Writing file (${invMeta.in_stock_count ?? '—'} in stock, ${invMeta.out_of_stock_count ?? '—'} out)…`,
+      });
+      await yieldToMain();
       const storeSlug = (primaryStore?.name || 'store').replace(/\s+/g, '-').slice(0, 24);
       XLSX.writeFile(wb, `stock-report-${storeSlug}-${dateFrom}-to-${dateTo}.xlsx`);
+      setExportProgress({ kind: 'excel', percent: 100, label: 'Done' });
+      await new Promise((r) => setTimeout(r, 450));
+    } catch (err) {
+      console.error('Stock Excel export failed', err);
+      window.alert(
+        'Stock report export failed. The server may be low on memory — try again, or use a single store filter.',
+      );
     } finally {
       setExcelExporting(false);
+      setExportProgress(null);
     }
-  }, [storeId, primaryStore?.name, soldProducts, dateFrom, dateTo]);
+  }, [storeId, primaryStore?.name, dateFrom, dateTo, isExporting]);
 
-  // ── PDF Export ──
+  // ── PDF Export (lean paginated APIs) ──
   const handleExportPdf = useCallback(async () => {
-    if (!storeId) return;
+    if (!storeId || isExporting) return;
     setPdfExporting(true);
+    setExportProgress({ kind: 'pdf', percent: 5, label: 'Starting PDF…' });
     try {
-      const orderingRes = await reportsApi.stockOrdering({ store: storeId });
-      const { rows: invRows } = buildPurchasedStockExportRows(orderingRes.data || {});
-      const inCount = (orderingRes.data?.in_stock || []).length;
-      const oosCount = (orderingRes.data?.out_of_stock || []).length;
+      setExportProgress({ kind: 'pdf', percent: 12, label: 'Loading inventory…' });
+      const { rows: inventory, meta: invMeta } = await fetchAllPages(
+        async (page, pageSize) =>
+          (await reportsApi.stockInventoryExport({ store: storeId, page, page_size: pageSize })).data,
+        (loaded, total) => {
+          const pct = total > 0 ? 12 + (Math.min(loaded, total) / total) * 30 : Math.min(40, 12 + loaded / 20);
+          setExportProgress({
+            kind: 'pdf',
+            percent: pct,
+            label: total > 0
+              ? `Loading inventory ${Math.min(loaded, total)} / ${total}…`
+              : `Loading inventory (${loaded})…`,
+          });
+        },
+      );
+
+      setExportProgress({ kind: 'pdf', percent: 45, label: 'Loading sold products…' });
+      const { rows: sold } = await fetchAllPages(
+        async (page, pageSize) =>
+          (await reportsApi.stockSoldExport({
+            store: storeId,
+            date_from: dateFrom,
+            date_to: dateTo,
+            page,
+            page_size: pageSize,
+          })).data,
+        (loaded, total) => {
+          const pct = total > 0 ? 45 + (Math.min(loaded, total) / total) * 20 : Math.min(62, 45 + loaded / 20);
+          setExportProgress({
+            kind: 'pdf',
+            percent: pct,
+            label: total > 0
+              ? `Loading sold products ${Math.min(loaded, total)} / ${total}…`
+              : `Loading sold products (${loaded})…`,
+          });
+        },
+      );
+
+      setExportProgress({ kind: 'pdf', percent: 68, label: 'Loading PDF engine…' });
+      const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable'),
+      ]);
+      setExportProgress({ kind: 'pdf', percent: 78, label: 'Building PDF pages…' });
+      await yieldToMain();
+
+      const invRows = inventory.map((p, i) => inventoryRowFromApi(p, i + 1));
+      const inCount = Number(invMeta.in_stock_count) || inventory.filter((p) => p.status !== 'Out of Stock').length;
+      const oosCount = Number(invMeta.out_of_stock_count) || inventory.filter((p) => p.status === 'Out of Stock').length;
 
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const pageW = doc.internal.pageSize.getWidth();
@@ -395,15 +520,7 @@ export default function StockReport() {
       autoTable(doc, {
         startY: y,
         head: [['#', 'Status', 'Product', 'SKU', 'Category', 'Qty', 'Store']],
-        body: invRows.map((r) => [
-          r[0],
-          r[1],
-          r[2],
-          r[3],
-          r[4],
-          r[7],
-          r[6],
-        ]),
+        body: invRows.map((r) => [r[0], r[1], r[2], r[3], r[4], r[7], r[6]]),
         styles: { fontSize: 7 },
         headStyles: { fillColor: [99, 102, 241] },
         didParseCell: (data) => {
@@ -418,7 +535,7 @@ export default function StockReport() {
       });
       y = (doc as any).lastAutoTable.finalY + 8;
 
-      if (soldProducts.length > 0) {
+      if (sold.length > 0) {
         if (y > 230) { doc.addPage(); y = 14; }
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
@@ -427,7 +544,7 @@ export default function StockReport() {
         autoTable(doc, {
           startY: y,
           head: [['Product', 'SKU', 'Qty Sold', 'Revenue', 'Remaining Stock']],
-          body: soldProducts.map((p: any) => [
+          body: sold.map((p: any) => [
             p.product__name || '',
             p.product__sku || 'N/A',
             Math.round(p.total_quantity || 0),
@@ -439,12 +556,20 @@ export default function StockReport() {
         });
       }
 
+      setExportProgress({ kind: 'pdf', percent: 95, label: 'Saving PDF…' });
+      await yieldToMain();
       const storeSlug = (primaryStore?.name || 'store').replace(/\s+/g, '-').slice(0, 24);
       doc.save(`stock-report-${storeSlug}-${dateFrom}-to-${dateTo}.pdf`);
+      setExportProgress({ kind: 'pdf', percent: 100, label: 'Done' });
+      await new Promise((r) => setTimeout(r, 450));
+    } catch (err) {
+      console.error('Stock PDF export failed', err);
+      window.alert('Stock PDF export failed. Please try again.');
     } finally {
       setPdfExporting(false);
+      setExportProgress(null);
     }
-  }, [storeId, primaryStore?.name, curr, soldProducts, dateFrom, dateTo]);
+  }, [storeId, primaryStore?.name, curr, dateFrom, dateTo, isExporting]);
 
   // ── Tab columns ──
   const renderTable = () => {
@@ -609,6 +734,12 @@ export default function StockReport() {
   // ── Render ──
   return (
     <div className="space-y-6 pb-12">
+      <ExportProgressOverlay
+        open={isExporting && !!exportProgress}
+        title={exportProgress?.kind === 'pdf' ? 'Exporting Stock PDF' : 'Exporting Stock Report'}
+        label={exportProgress?.label || 'Working…'}
+        percent={exportProgress?.percent ?? 0}
+      />
 
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -646,7 +777,7 @@ export default function StockReport() {
           {/* Export Excel */}
           <button
             onClick={handleExportExcel}
-            disabled={excelExporting}
+            disabled={isExporting || !storeId}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
@@ -655,7 +786,7 @@ export default function StockReport() {
           {/* Export PDF */}
           <button
             onClick={handleExportPdf}
-            disabled={pdfExporting}
+            disabled={isExporting || !storeId}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-60"
           >
             <Download className="h-4 w-4" />

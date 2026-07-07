@@ -585,7 +585,17 @@ export const reportsApi = {
   analyticsComparison: (params?: any) => api.get('/reports/analytics-comparison/', { params }),
   categoryBrandAnalytics: (params?: any) => api.get('/reports/category-brand-analytics/', { params }),
   kpiDetail: (params?: any) => api.get('/reports/kpi-detail/', { params }),
+  /** Lean paginated invoices for Sales Report Excel (avoids full POS invoice list). */
+  salesExport: (params?: any) => api.get('/reports/sales-export/', { params, timeout: 60000 }),
+  /** Lean paginated inventory rows for Stock Report export. */
+  stockInventoryExport: (params?: any) =>
+    api.get('/reports/stock-inventory-export/', { params, timeout: 60000 }),
+  /** Lean paginated sold-products rows for Stock Report export. */
+  stockSoldExport: (params?: any) =>
+    api.get('/reports/stock-sold-export/', { params, timeout: 60000 }),
+
   dashboardKpis: (params?: any) => api.get('/reports/dashboard-kpis/', { params }),
+
   overallProfitBillingPeriodDetails: (params?: any) =>
     api.get('/reports/overall-profit-billing-period-details/', { params }),
   overallPendingInvoiceDetails: () =>

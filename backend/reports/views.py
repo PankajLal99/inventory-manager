@@ -3,13 +3,13 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Avg, DecimalField, IntegerField
+from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField
 from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from backend.pos.models import Invoice, InvoiceItem, CartItem
+from backend.pos.models import Invoice, InvoiceItem, CartItem, Payment
 from backend.catalog.models import Product, Barcode
 from backend.parties.models import Customer
 from backend.core.tenant_api import require_active_retailer, get_user_allowed_store_ids
@@ -902,3 +902,466 @@ def kpi_detail(request):
         'page_size': page_size,
         'invoices': rows,
     })
+
+
+# ─── Shared export helpers ───────────────────────────────────────────────────
+
+def _parse_export_page(request):
+    try:
+        page = max(1, int(request.query_params.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        page_size = int(request.query_params.get('page_size', 100))
+    except (TypeError, ValueError):
+        page_size = 100
+    page_size = max(1, min(page_size, 200))
+    return page, page_size
+
+
+def _parse_export_date(val, default):
+    if not val:
+        return default
+    try:
+        return datetime.strptime(val, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_export_store_id(request):
+    store_id_raw = request.query_params.get('store')
+    if store_id_raw is None or store_id_raw == '':
+        return None, None
+    try:
+        return int(store_id_raw), None
+    except (TypeError, ValueError):
+        return None, Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _export_store_access_error(request, retailer, store_id, allowed_store_ids):
+    """Return a 403 Response when the user cannot access export data, else None."""
+    if not allowed_store_ids and not (request.user.is_superuser or request.user.is_staff):
+        return Response({'detail': 'No shop access for this retailer.'}, status=status.HTTP_403_FORBIDDEN)
+    if store_id is not None and allowed_store_ids is not None and store_id not in allowed_store_ids and not (
+        request.user.is_superuser or request.user.is_staff
+    ):
+        return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+def _active_cart_barcode_values(retailer_id):
+    active = set()
+    cart_items = CartItem.objects.filter(
+        cart__status='active',
+        cart__retailer_id=retailer_id,
+    ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
+    for cart_item in cart_items.iterator(chunk_size=200):
+        if cart_item.scanned_barcodes:
+            active.update(cart_item.scanned_barcodes)
+    return active
+
+
+# ─── sales_export (lean payload for Excel) ───────────────────────────────────
+
+def _sales_export_item_tax(item):
+    """Minimal tax rate / inclusive flags for export (no full tax_bifurcation math)."""
+    rate = 0.0
+    is_inclusive = False
+    try:
+        barcode = item.barcode
+        purchase_item = barcode.purchase_item if barcode is not None else None
+        if purchase_item is not None:
+            if purchase_item.gst_percent is not None:
+                rate = float(purchase_item.gst_percent)
+            is_inclusive = bool(purchase_item.gst_inclusive)
+        elif item.product_id and getattr(item.product, 'tax_rate', None) is not None:
+            tr = item.product.tax_rate
+            if tr is not None and tr.rate is not None:
+                rate = float(tr.rate)
+    except Exception:
+        pass
+
+    tax_amt = float(item.tax_amount or 0)
+    if rate <= 0 and tax_amt > 0:
+        line_total = float(item.line_total or 0)
+        base = line_total - tax_amt
+        if base > 0:
+            rate = round((tax_amt / base) * 100, 2)
+
+    if tax_amt <= 0:
+        return None
+    return {'rate': rate, 'is_inclusive': is_inclusive}
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sales_export(request):
+    """
+    Lean invoice rows for Sales Report Excel.
+
+    Replaces POS invoice list for export: avoids InvoiceSerializer (tax_bifurcation,
+    display_total, repair, replacement ledgers, etc.) which OOMs small hosts.
+    Paginated so peak memory stays bounded.
+    """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    store_id, store_err = _parse_export_store_id(request)
+    if store_err:
+        return store_err
+    access_err = _export_store_access_error(request, retailer, store_id, allowed_store_ids)
+    if access_err:
+        return access_err
+
+    date_from = _parse_export_date(
+        request.query_params.get('date_from'),
+        (timezone.now() - timedelta(days=30)).date(),
+    )
+    date_to = _parse_export_date(request.query_params.get('date_to'), timezone.now().date())
+    page, page_size = _parse_export_page(request)
+
+    # Match POS invoice list filters used by the previous Excel export path.
+    inv_qs = (
+        Invoice.objects.filter(
+            retailer_id=retailer.id,
+            created_at__date__gte=date_from,
+            created_at__date__lte=date_to,
+            repair__isnull=True,
+        )
+        .exclude(invoice_type='defective')
+        .select_related('customer')
+        .only(
+            'id',
+            'invoice_number',
+            'created_at',
+            'tax_amount',
+            'total',
+            'due_amount',
+            'customer_id',
+            'customer__name',
+        )
+        .order_by('created_at', 'id')
+    )
+    if store_id:
+        inv_qs = inv_qs.filter(store_id=store_id)
+    elif not (request.user.is_superuser or request.user.is_staff):
+        inv_qs = inv_qs.filter(store_id__in=allowed_store_ids)
+
+    total_count = inv_qs.count()
+    offset = (page - 1) * page_size
+    invoices = list(inv_qs[offset:offset + page_size])
+    inv_ids = [inv.id for inv in invoices]
+
+    payments_by_inv = {iid: [] for iid in inv_ids}
+    items_by_inv = {iid: [] for iid in inv_ids}
+
+    if inv_ids:
+        for payment in (
+            Payment.objects.filter(invoice_id__in=inv_ids)
+            .only('invoice_id', 'payment_method', 'amount')
+            .iterator(chunk_size=200)
+        ):
+            payments_by_inv[payment.invoice_id].append({
+                'payment_method': payment.payment_method,
+                'amount': str(payment.amount),
+            })
+
+        for item in (
+            InvoiceItem.objects.filter(invoice_id__in=inv_ids)
+            .select_related('product__tax_rate', 'barcode__purchase_item')
+            .only(
+                'invoice_id',
+                'product_id',
+                'product__name',
+                'quantity',
+                'unit_price',
+                'manual_unit_price',
+                'discount_amount',
+                'tax_amount',
+                'line_total',
+                'barcode_id',
+                'barcode__purchase_item__gst_percent',
+                'barcode__purchase_item__gst_inclusive',
+                'product__tax_rate_id',
+                'product__tax_rate__rate',
+            )
+            .iterator(chunk_size=200)
+        ):
+            items_by_inv[item.invoice_id].append({
+                'product_name': item.product.name if item.product_id else '',
+                'quantity': str(item.quantity),
+                'unit_price': str(item.unit_price),
+                'manual_unit_price': (
+                    str(item.manual_unit_price) if item.manual_unit_price is not None else None
+                ),
+                'discount_amount': str(item.discount_amount or 0),
+                'tax_amount': str(item.tax_amount or 0),
+                'line_total': str(item.line_total),
+                'tax_bifurcation': _sales_export_item_tax(item),
+            })
+
+    results = [
+        {
+            'created_at': inv.created_at.isoformat() if inv.created_at else None,
+            'invoice_number': inv.invoice_number,
+            'customer_name': inv.customer.name if inv.customer_id else '',
+            'tax_amount': str(inv.tax_amount or 0),
+            'total': str(inv.total or 0),
+            'due_amount': str(inv.due_amount or 0),
+            'payments': payments_by_inv.get(inv.id, []),
+            'items': items_by_inv.get(inv.id, []),
+        }
+        for inv in invoices
+    ]
+
+    has_more = offset + len(results) < total_count
+    return Response({
+        'results': results,
+        'page': page,
+        'page_size': page_size,
+        'total_count': total_count,
+        'has_more': has_more,
+    })
+
+
+# ─── stock_inventory_export / stock_sold_export (lean, paginated) ─────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def stock_inventory_export(request):
+    """
+    Paginated inventory rows for Stock Report Excel/PDF.
+    Bulk barcode counts (no per-product N+1). Order: in-stock first, then out-of-stock.
+    """
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    store_id, store_err = _parse_export_store_id(request)
+    if store_err:
+        return store_err
+    access_err = _export_store_access_error(request, retailer, store_id, allowed_store_ids)
+    if access_err:
+        return access_err
+
+    page, page_size = _parse_export_page(request)
+
+    products_qs = Product.objects.filter(
+        retailer_id=retailer.id,
+        barcodes__isnull=False,
+    ).distinct()
+    if store_id:
+        products_qs = products_qs.filter(barcodes__purchase__store_id=store_id).distinct()
+    elif not (request.user.is_superuser or request.user.is_staff):
+        products_qs = products_qs.filter(barcodes__purchase__store_id__in=allowed_store_ids).distinct()
+
+    products = list(
+        products_qs.select_related('category', 'brand').only(
+            'id', 'name', 'sku', 'low_stock_threshold',
+            'category_id', 'category__name', 'brand_id', 'brand__name',
+        )
+    )
+    if not products:
+        return Response({
+            'results': [],
+            'page': page,
+            'page_size': page_size,
+            'total_count': 0,
+            'has_more': False,
+            'in_stock_count': 0,
+            'out_of_stock_count': 0,
+        })
+
+    active_carts = _active_cart_barcode_values(retailer.id)
+
+    # Bulk counts for the retailer/store (avoid huge product_id__in lists).
+    bc_qs = Barcode.objects.filter(
+        retailer_id=retailer.id,
+        product_id__isnull=False,
+        tag__in=['new', 'returned'],
+    ).exclude(purchase__status='draft')
+    if store_id:
+        bc_qs = bc_qs.filter(purchase__store_id=store_id)
+    elif not (request.user.is_superuser or request.user.is_staff):
+        bc_qs = bc_qs.filter(purchase__store_id__in=allowed_store_ids)
+    if active_carts:
+        bc_qs = bc_qs.exclude(barcode__in=active_carts)
+
+    sold_barcode_ids = InvoiceItem.objects.filter(
+        barcode_id__isnull=False,
+        invoice__retailer_id=retailer.id,
+    ).exclude(invoice__status='void').values('barcode_id')
+    bc_qs = bc_qs.exclude(id__in=sold_barcode_ids)
+
+    counts = dict(
+        bc_qs.values('product_id').annotate(cnt=Count('id')).values_list('product_id', 'cnt')
+    )
+    cost_qs = Barcode.objects.filter(
+        retailer_id=retailer.id,
+        product_id__isnull=False,
+    ).exclude(purchase__status='draft')
+    if store_id:
+        cost_qs = cost_qs.filter(purchase__store_id=store_id)
+    elif not (request.user.is_superuser or request.user.is_staff):
+        cost_qs = cost_qs.filter(purchase__store_id__in=allowed_store_ids)
+    costs = dict(
+        cost_qs.values('product_id')
+        .annotate(cost=Max('purchase_price'))
+        .values_list('product_id', 'cost')
+    )
+
+    store_name = 'N/A'
+    if store_id:
+        from backend.locations.models import Store as StoreModel
+        store_name = (
+            StoreModel.objects.filter(id=store_id, retailer_id=retailer.id)
+            .values_list('name', flat=True)
+            .first()
+        ) or 'N/A'
+
+    in_stock = []
+    out_of_stock = []
+    for product in products:
+        qty = int(counts.get(product.id, 0) or 0)
+        threshold = product.low_stock_threshold or 0
+        if qty == 0:
+            status = 'Out of Stock'
+        elif threshold > 0 and qty <= threshold:
+            status = 'Low Stock'
+        else:
+            status = 'In Stock'
+
+        row = {
+            'product__id': product.id,
+            'product__name': product.name,
+            'product__sku': product.sku or 'N/A',
+            'product__category__name': product.category.name if product.category_id else None,
+            'product__brand__name': product.brand.name if product.brand_id else None,
+            'product__low_stock_threshold': threshold,
+            'product__cost_price': float(costs.get(product.id) or 0),
+            'store__name': store_name,
+            'available_quantity': qty,
+            'status': status,
+        }
+        if qty == 0:
+            out_of_stock.append(row)
+        else:
+            in_stock.append(row)
+
+    in_stock.sort(key=lambda x: (-int(x['available_quantity'] or 0), (x['product__name'] or '').lower()))
+    out_of_stock.sort(key=lambda x: (x['product__name'] or '').lower())
+    all_rows = in_stock + out_of_stock
+
+    total_count = len(all_rows)
+    offset = (page - 1) * page_size
+    results = all_rows[offset:offset + page_size]
+    has_more = offset + len(results) < total_count
+
+    return Response({
+        'results': results,
+        'page': page,
+        'page_size': page_size,
+        'total_count': total_count,
+        'has_more': has_more,
+        'in_stock_count': len(in_stock),
+        'out_of_stock_count': len(out_of_stock),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def stock_sold_export(request):
+    """Paginated products-sold rows for Stock Report Excel/PDF."""
+    retailer, tenant_err = require_active_retailer(request)
+    if tenant_err:
+        return tenant_err
+
+    allowed_store_ids = get_user_allowed_store_ids(request.user, retailer)
+    store_id, store_err = _parse_export_store_id(request)
+    if store_err:
+        return store_err
+    access_err = _export_store_access_error(request, retailer, store_id, allowed_store_ids)
+    if access_err:
+        return access_err
+
+    date_from = _parse_export_date(
+        request.query_params.get('date_from'),
+        (timezone.now() - timedelta(days=30)).date(),
+    )
+    date_to = _parse_export_date(request.query_params.get('date_to'), timezone.now().date())
+    page, page_size = _parse_export_page(request)
+
+    invoices = Invoice.objects.filter(
+        retailer_id=retailer.id,
+        created_at__date__gte=date_from,
+        created_at__date__lte=date_to,
+        status__in=['paid', 'partial'],
+    ).exclude(customer__name__iexact='Manish Traders Loss')
+    if store_id:
+        invoices = invoices.filter(store_id=store_id)
+    elif allowed_store_ids is not None and not (request.user.is_superuser or request.user.is_staff):
+        invoices = invoices.filter(store_id__in=allowed_store_ids)
+
+    products_qs = (
+        InvoiceItem.objects.filter(invoice__in=invoices)
+        .values(
+            'product__id',
+            'product__name',
+            'product__sku',
+            'product__category__name',
+            'product__brand__name',
+        )
+        .annotate(
+            total_quantity=Sum('quantity', output_field=DecimalField()),
+            total_revenue=Sum('line_total', output_field=DecimalField()),
+            order_count=Count('invoice', distinct=True),
+        )
+        .order_by('-total_quantity')
+    )
+
+    total_count = products_qs.count()
+    offset = (page - 1) * page_size
+    page_rows = list(products_qs[offset:offset + page_size])
+
+    product_ids = [p['product__id'] for p in page_rows if p['product__id']]
+    available_counts = {}
+    if product_ids:
+        barcode_qs = Barcode.objects.filter(
+            product_id__in=product_ids,
+            retailer_id=retailer.id,
+            tag='new',
+            deleted_at__isnull=True,
+        )
+        if store_id:
+            barcode_qs = barcode_qs.filter(current_store_id=store_id)
+        available_counts = dict(
+            barcode_qs.values('product_id').annotate(cnt=Count('id')).values_list('product_id', 'cnt')
+        )
+
+    results = []
+    for p in page_rows:
+        results.append({
+            'product__id': p['product__id'],
+            'product__name': p['product__name'],
+            'product__sku': p['product__sku'],
+            'product__category__name': p['product__category__name'],
+            'product__brand__name': p['product__brand__name'],
+            'total_quantity': float(p['total_quantity'] or 0),
+            'total_revenue': float(p['total_revenue'] or 0),
+            'order_count': p['order_count'] or 0,
+            'available_quantity': available_counts.get(p['product__id'], 0),
+        })
+
+    has_more = offset + len(results) < total_count
+    return Response({
+        'results': results,
+        'page': page,
+        'page_size': page_size,
+        'total_count': total_count,
+        'has_more': has_more,
+        'period': {'from': date_from.isoformat(), 'to': date_to.isoformat()},
+    })
+

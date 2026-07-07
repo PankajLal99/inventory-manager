@@ -1,9 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { Navigate, Link } from 'react-router-dom';
-import { reportsApi, catalogApi, posApi } from '../../lib/api';
+import { reportsApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import * as XLSX from 'xlsx';
 import { isPosAdminContext } from '../../lib/access';
 import {
   BarChart3,
@@ -28,6 +27,23 @@ import {
   BarChart2,
 } from 'lucide-react';
 import { formatNumber, toLocalDateString } from '../../lib/utils';
+import KpiDrillDownModal from './KpiDrillDownModal';
+import { ExportProgressOverlay, yieldToMain } from './exportProgress';
+
+// Recharts is heavy — load chart chunks only when data is ready to render.
+const RevenueChart = lazy(() => import('./RevenueChart'));
+const StoreComparisonPanel = lazy(() => import('./StoreComparisonPanel'));
+const CategoryBrandChart = lazy(() => import('./CategoryBrandChart'));
+
+function ChartSkeleton({ height = 260 }: { height?: number }) {
+  return (
+    <div
+      className="w-full rounded-lg bg-gray-50 animate-pulse border border-gray-100"
+      style={{ height }}
+      aria-hidden
+    />
+  );
+}
 
 /** Invoice list items expose line_total + tax_bifurcation (not tax_percent / tax_is_inclusive). */
 function salesExportLineTotal(item: {
@@ -63,12 +79,9 @@ function salesExportTaxInclusiveLabel(item: {
 }): string {
   return item.tax_bifurcation?.is_inclusive === true ? 'Inclusive' : 'Exclusive';
 }
-import RevenueChart from './RevenueChart';
-import StoreComparisonPanel from './StoreComparisonPanel';
-import CategoryBrandChart from './CategoryBrandChart';
-import KpiDrillDownModal from './KpiDrillDownModal';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+
+const QUERY_STALE_MS = 60_000;
+const DATE_DEBOUNCE_MS = 350;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -230,9 +243,9 @@ export default function Reports() {
   const currentStore = stores.find((s: any) => s.id === selectedStoreId);
 
   // ── Date state ──
-  const [dateFrom, setDateFrom] = useState(() => addDays(toLocalDateString(new Date()), -30));
+  const [dateFrom, setDateFrom] = useState(() => toLocalDateString(new Date()));
   const [dateTo, setDateTo] = useState(() => toLocalDateString(new Date()));
-  const [activeDateFilter, setActiveDateFilter] = useState<string>('custom');
+  const [activeDateFilter, setActiveDateFilter] = useState<string>('today');
 
   // ── Comparison period ──
   const [comparisonMode, setComparisonMode] = useState<'auto' | 'custom'>('auto');
@@ -244,6 +257,25 @@ export default function Reports() {
   const compareFrom = comparisonMode === 'custom' && customCompareFrom ? customCompareFrom : autoCompare.from;
   const compareTo = comparisonMode === 'custom' && customCompareTo ? customCompareTo : autoCompare.to;
   const compareLabel = comparisonMode === 'custom' ? 'Custom Comparison' : autoCompare.label;
+
+  // Debounce date-driven queries so rapid filter changes don't stampede the API.
+  const [queryDates, setQueryDates] = useState({
+    dateFrom,
+    dateTo,
+    compareFrom,
+    compareTo,
+  });
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setQueryDates({ dateFrom, dateTo, compareFrom, compareTo });
+    }, DATE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [dateFrom, dateTo, compareFrom, compareTo]);
+
+  const qFrom = queryDates.dateFrom;
+  const qTo = queryDates.dateTo;
+  const qCompareFrom = queryDates.compareFrom;
+  const qCompareTo = queryDates.compareTo;
 
   // ── Chart / insight state ──
   const [chartViewMode, setChartViewMode] = useState<'line' | 'bar'>('line');
@@ -294,28 +326,30 @@ export default function Reports() {
     }
   }, [comparisonMode]);
 
-  // ── API Queries ──
+  // ── API Queries (debounced dates; cached to avoid redundant work) ──
 
   // 1. Analytics Comparison (KPIs + % change + daily chart + store comparison)
-  const { data: analyticsData, isLoading: analyticsLoading } = useQuery({
-    queryKey: ['analytics-comparison', dateFrom, dateTo, compareFrom, compareTo, defaultStore?.id],
+  const { data: analyticsData, isLoading: analyticsLoading, isFetching: analyticsFetching } = useQuery({
+    queryKey: ['analytics-comparison', qFrom, qTo, qCompareFrom, qCompareTo, defaultStore?.id],
     queryFn: async () => (await reportsApi.analyticsComparison({
-      date_from: dateFrom,
-      date_to: dateTo,
-      compare_from: compareFrom,
-      compare_to: compareTo,
+      date_from: qFrom,
+      date_to: qTo,
+      compare_from: qCompareFrom,
+      compare_to: qCompareTo,
       store: defaultStore?.id || undefined,
     })).data,
     enabled: !!defaultStore,
     retry: false,
+    staleTime: QUERY_STALE_MS,
+    placeholderData: keepPreviousData,
   });
 
   // 2. Category + Brand analytics (with optional filters)
-  const { data: catBrandData, isLoading: catBrandLoading } = useQuery({
-    queryKey: ['cat-brand', dateFrom, dateTo, defaultStore?.id, filterCategory, filterBrand],
+  const { data: catBrandData, isLoading: catBrandLoading, isFetching: catBrandFetching } = useQuery({
+    queryKey: ['cat-brand', qFrom, qTo, defaultStore?.id, filterCategory, filterBrand],
     queryFn: async () => (await reportsApi.categoryBrandAnalytics({
-      date_from: dateFrom,
-      date_to: dateTo,
+      date_from: qFrom,
+      date_to: qTo,
       store: defaultStore?.id || undefined,
       category: filterCategory || undefined,
       brand: filterBrand || undefined,
@@ -323,6 +357,8 @@ export default function Reports() {
     })).data,
     enabled: !!defaultStore,
     retry: false,
+    staleTime: QUERY_STALE_MS,
+    placeholderData: keepPreviousData,
   });
 
   // 3. Inventory summary
@@ -331,13 +367,16 @@ export default function Reports() {
     queryFn: async () => (await reportsApi.inventorySummary({ store: defaultStore?.id || undefined })).data,
     enabled: !!defaultStore,
     retry: false,
+    staleTime: QUERY_STALE_MS,
   });
 
   // 4. Customer summary
   const { data: customerData, isLoading: customerLoading } = useQuery({
-    queryKey: ['customers', dateFrom, dateTo],
-    queryFn: async () => (await reportsApi.customers({ date_from: dateFrom, date_to: dateTo })).data,
+    queryKey: ['customers', qFrom, qTo],
+    queryFn: async () => (await reportsApi.customers({ date_from: qFrom, date_to: qTo })).data,
     retry: false,
+    staleTime: QUERY_STALE_MS,
+    placeholderData: keepPreviousData,
   });
 
   // 5. Stock ordering (lazy)
@@ -346,6 +385,7 @@ export default function Reports() {
     queryFn: async () => (await reportsApi.stockOrdering({ store: defaultStore?.id || undefined })).data,
     enabled: showStockOrdering && !!defaultStore,
     retry: false,
+    staleTime: QUERY_STALE_MS,
   });
 
   // 6. Annual revenue
@@ -353,239 +393,365 @@ export default function Reports() {
     queryKey: ['revenue', year],
     queryFn: async () => (await reportsApi.revenue({ year })).data,
     retry: false,
+    staleTime: QUERY_STALE_MS,
+    placeholderData: keepPreviousData,
   });
 
   // ── Derived data ──
   const curr = analyticsData?.current || {};
   const prev = analyticsData?.previous || {};
   const pctChange = analyticsData?.pct_change || {};
-  const dailyCurrent: any[] = analyticsData?.daily_current || [];
-  const dailyPrevious: any[] = analyticsData?.daily_previous || [];
-  const storeComparison: any[] = analyticsData?.store_comparison || [];
+  const dailyCurrent: any[] = analyticsData?.daily_current ?? [];
+  const dailyPrevious: any[] = analyticsData?.daily_previous ?? [];
 
-  const topCategories: any[] = catBrandData?.top_categories || [];
-  const topBrands: any[] = catBrandData?.top_brands || [];
-  const fastSelling: any[] = catBrandData?.fast_selling || [];
-  const slowMoving: any[] = catBrandData?.slow_moving || [];
+  const topCategories: any[] = catBrandData?.top_categories ?? [];
+  const topBrands: any[] = catBrandData?.top_brands ?? [];
+  const fastSelling: any[] = catBrandData?.fast_selling ?? [];
+  const slowMoving: any[] = catBrandData?.slow_moving ?? [];
 
   const inventorySummary = inventoryData?.summary || inventoryData || {};
-  const topCustomers: any[] = customerData?.top_customers || [];
+  const topCustomers: any[] = customerData?.top_customers ?? [];
+
+  // Prefetch chart chunks while KPIs/API load so recharts is ready when data arrives.
+  useEffect(() => {
+    void import('./RevenueChart');
+    void import('./CategoryBrandChart');
+    void import('./StoreComparisonPanel');
+  }, []);
+
+  const chartCurrentData = useMemo(
+    () => (analyticsData?.daily_current ?? []).map((d: any) => ({
+      date: d.date,
+      total: Number(d.total || 0),
+      count: d.count || 0,
+    })),
+    [analyticsData?.daily_current],
+  );
+  const chartPreviousData = useMemo(
+    () => (analyticsData?.daily_previous ?? []).map((d: any) => ({
+      date: d.date,
+      total: Number(d.total || 0),
+      count: d.count || 0,
+    })),
+    [analyticsData?.daily_previous],
+  );
+  const storeComparisonData = useMemo(
+    () => analyticsData?.store_comparison ?? [],
+    [analyticsData?.store_comparison],
+  );
+  const revenueChartLabel = useMemo(
+    () => `${fmtDate(qFrom)} – ${fmtDate(qTo)}`,
+    [qFrom, qTo],
+  );
+  const productRows = useMemo(() => {
+    const fast = catBrandData?.fast_selling ?? [];
+    const slow = catBrandData?.slow_moving ?? [];
+    if (productTab === 'fast') return fast;
+    if (productTab === 'slow') return slow;
+    return [...fast].sort((a: any, b: any) => (b.total_revenue || 0) - (a.total_revenue || 0));
+  }, [productTab, catBrandData?.fast_selling, catBrandData?.slow_moving]);
+  const categoryChartData = useMemo(
+    () => (catBrandData?.top_categories ?? []).map((c: any) => ({
+      name: c.product__category__name || 'Unknown',
+      total_revenue: Number(c.total_revenue || 0),
+      total_quantity: Number(c.total_quantity || 0),
+      order_count: c.order_count || 0,
+    })),
+    [catBrandData?.top_categories],
+  );
+  const brandChartData = useMemo(
+    () => (catBrandData?.top_brands ?? []).map((b: any) => ({
+      name: b.product__brand__name || 'Unknown',
+      total_revenue: Number(b.total_revenue || 0),
+      total_quantity: Number(b.total_quantity || 0),
+      order_count: b.order_count || 0,
+    })),
+    [catBrandData?.top_brands],
+  );
 
   // Derive available filter options from data
-  const availableCategories = topCategories.map((c: any) => ({
-    id: c.product__category__id,
-    name: c.product__category__name || 'Unknown',
-  }));
-  const availableBrands = topBrands.map((b: any) => ({
-    id: b.product__brand__id,
-    name: b.product__brand__name || 'Unknown',
-  }));
+  const availableCategories = useMemo(
+    () => (catBrandData?.top_categories ?? []).map((c: any) => ({
+      id: c.product__category__id,
+      name: c.product__category__name || 'Unknown',
+    })),
+    [catBrandData?.top_categories],
+  );
+  const availableBrands = useMemo(
+    () => (catBrandData?.top_brands ?? []).map((b: any) => ({
+      id: b.product__brand__id,
+      name: b.product__brand__name || 'Unknown',
+    })),
+    [catBrandData?.top_brands],
+  );
 
-  // ── PDF Export ──
-  const handleExportPdf = useCallback(() => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageW = doc.internal.pageSize.getWidth();
-    let y = 0;
+  const queriesRefreshing = analyticsFetching || catBrandFetching;
 
-    // ── Title banner ──
-    doc.setFillColor(59, 130, 246);
-    doc.rect(0, 0, pageW, 30, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Reports & Analytics', pageW / 2, 13, { align: 'center' });
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.text(
-      `${currentStore?.name || 'All Stores'}  |  ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}`,
-      pageW / 2, 21, { align: 'center' }
-    );
-    doc.text(`Compared with ${compareLabel}: ${fmtDate(compareFrom)} to ${fmtDate(compareTo)}`, pageW / 2, 27, { align: 'center' });
-    doc.setTextColor(0, 0, 0);
-    y = 38;
-
-    // ── Visual KPI Cards (coloured rectangles) ──
-    const kpiCards = [
-      {
-        label: 'Total Sales',
-        curr: `Rs.${formatNumber(curr.total_sales || 0)}`,
-        prev: `Rs.${formatNumber(prev.total_sales || 0)}`,
-        pct: pctChange.total_sales,
-        rgb: [16, 185, 129] as [number, number, number],
-      },
-      {
-        label: 'Total Invoices',
-        curr: String(curr.total_invoices || 0),
-        prev: String(prev.total_invoices || 0),
-        pct: pctChange.total_invoices,
-        rgb: [59, 130, 246] as [number, number, number],
-      },
-      {
-        label: 'Items Sold',
-        curr: String(Math.round(curr.items_sold || 0)),
-        prev: String(Math.round(prev.items_sold || 0)),
-        pct: pctChange.items_sold,
-        rgb: [139, 92, 246] as [number, number, number],
-      },
-      {
-        label: 'Avg Order Value',
-        curr: `Rs.${formatNumber(curr.avg_order_value || 0)}`,
-        prev: `Rs.${formatNumber(prev.avg_order_value || 0)}`,
-        pct: pctChange.avg_order_value,
-        rgb: [245, 158, 11] as [number, number, number],
-      },
-    ];
-
-    const cardW = (pageW - 28) / 4;
-    const cardH = 26;
-    kpiCards.forEach((k, i) => {
-      const x = 14 + i * (cardW + 2);
-      // Card background
-      doc.setFillColor(...k.rgb);
-      doc.roundedRect(x, y, cardW, cardH, 3, 3, 'F');
-      // Label
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'normal');
-      doc.text(k.label, x + cardW / 2, y + 7, { align: 'center' });
-      // Current value
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text(k.curr, x + cardW / 2, y + 15, { align: 'center' });
-      // Prev + % change
-      doc.setFontSize(6.5);
-      doc.setFont('helvetica', 'normal');
-      const pctStr = k.pct != null
-        ? `${k.pct > 0 ? '+' : ''}${Number(k.pct).toFixed(1)}%`
-        : '';
-      doc.text(`vs ${k.prev}  ${pctStr}`, x + cardW / 2, y + 22, { align: 'center' });
-    });
-    doc.setTextColor(0, 0, 0);
-    y += cardH + 10;
-
-    // ── KPI comparison table ──
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.text('KPI Summary', 14, y);
-    y += 4;
-    autoTable(doc, {
-      startY: y,
-      head: [['Metric', 'Current Period', 'Comparison Period', '% Change']],
-      body: [
-        ['Total Sales', `Rs.${formatNumber(curr.total_sales || 0)}`, `Rs.${formatNumber(prev.total_sales || 0)}`, pctChange.total_sales != null ? `${pctChange.total_sales > 0 ? '+' : ''}${Number(pctChange.total_sales).toFixed(1)}%` : '-'],
-        ['Total Invoices', String(curr.total_invoices || 0), String(prev.total_invoices || 0), pctChange.total_invoices != null ? `${pctChange.total_invoices > 0 ? '+' : ''}${Number(pctChange.total_invoices).toFixed(1)}%` : '-'],
-        ['Items Sold', String(Math.round(curr.items_sold || 0)), String(Math.round(prev.items_sold || 0)), pctChange.items_sold != null ? `${pctChange.items_sold > 0 ? '+' : ''}${Number(pctChange.items_sold).toFixed(1)}%` : '-'],
-        ['Avg Order Value', `Rs.${formatNumber(curr.avg_order_value || 0)}`, `Rs.${formatNumber(prev.avg_order_value || 0)}`, pctChange.avg_order_value != null ? `${pctChange.avg_order_value > 0 ? '+' : ''}${Number(pctChange.avg_order_value).toFixed(1)}%` : '-'],
-      ],
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [59, 130, 246] },
-      columnStyles: {
-        3: { halign: 'center' },
-      },
-    });
-    y = (doc as any).lastAutoTable.finalY + 10;
-
-    // ── Top Products ──
-    const topProds = (productTab === 'fast' ? fastSelling : productTab === 'slow' ? slowMoving : fastSelling);
-    if (topProds.length > 0) {
-      if (y > 230) { doc.addPage(); y = 14; }
-      doc.setFontSize(11);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Top Products', 14, y);
-      y += 4;
-      autoTable(doc, {
-        startY: y,
-        head: [['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue']],
-        body: topProds.slice(0, 15).map((p: any) => [
-          p.product__name || '',
-          p.product__sku || 'N/A',
-          p.product__category__name || '-',
-          p.product__brand__name || '-',
-          Math.round(p.total_quantity || 0),
-          `Rs.${formatNumber(p.total_revenue || 0)}`,
-        ]),
-        styles: { fontSize: 8 },
-        headStyles: { fillColor: [99, 102, 241] },
-      });
-      y = (doc as any).lastAutoTable.finalY + 10;
-    }
-
-    // ── Top Categories ──
-    if (topCategories.length > 0) {
-      if (y > 230) { doc.addPage(); y = 14; }
-      doc.setFontSize(11);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Top Categories', 14, y);
-      y += 4;
-      autoTable(doc, {
-        startY: y,
-        head: [['Category', 'Revenue', 'Qty Sold', 'Orders']],
-        body: topCategories.map((c: any) => [
-          c.product__category__name || 'Unknown',
-          `Rs.${formatNumber(c.total_revenue || 0)}`,
-          Math.round(c.total_quantity || 0),
-          c.order_count || 0,
-        ]),
-        styles: { fontSize: 8 },
-        headStyles: { fillColor: [245, 158, 11] },
-      });
-      y = (doc as any).lastAutoTable.finalY + 10;
-    }
-
-    // ── Top Brands ──
-    if (topBrands.length > 0) {
-      if (y > 230) { doc.addPage(); y = 14; }
-      doc.setFontSize(11);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Top Brands', 14, y);
-      y += 4;
-      autoTable(doc, {
-        startY: y,
-        head: [['Brand', 'Revenue', 'Qty Sold', 'Orders']],
-        body: topBrands.map((b: any) => [
-          b.product__brand__name || 'Unknown',
-          `Rs.${formatNumber(b.total_revenue || 0)}`,
-          Math.round(b.total_quantity || 0),
-          b.order_count || 0,
-        ]),
-        styles: { fontSize: 8 },
-        headStyles: { fillColor: [16, 185, 129] },
-      });
-    }
-
-    doc.save(`report-${dateFrom}-to-${dateTo}.pdf`);
-  }, [curr, prev, pctChange, fastSelling, slowMoving, topCategories, topBrands, compareLabel, compareFrom, compareTo, dateFrom, dateTo, currentStore, productTab]);
-
-  // ── Sales Report Excel Export ──
+  // ── Export progress (shared overlay) ──
+  const [exportProgress, setExportProgress] = useState<{
+    kind: 'excel' | 'pdf';
+    percent: number;
+    label: string;
+  } | null>(null);
+  const [pdfExporting, setPdfExporting] = useState(false);
   const [excelExporting, setExcelExporting] = useState(false);
+  const isExporting = pdfExporting || excelExporting;
 
-  const handleExportSalesExcel = useCallback(async () => {
-    setExcelExporting(true);
+  // ── PDF Export (lazy-load jspdf; uses already-fetched report data) ──
+  const handleExportPdf = useCallback(async () => {
+    if (pdfExporting || excelExporting) return;
+    setPdfExporting(true);
+    setExportProgress({ kind: 'pdf', percent: 8, label: 'Preparing PDF…' });
     try {
-      const res = await posApi.invoices.list({
-        date_from: dateFrom,
-        date_to: dateTo,
-        ...(defaultStore?.id ? { store: defaultStore.id } : {}),
-      });
-      const invoices: any[] = res.data?.results ?? res.data ?? [];
+      await yieldToMain();
+      setExportProgress({ kind: 'pdf', percent: 25, label: 'Loading PDF engine…' });
+      const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable'),
+      ]);
+      setExportProgress({ kind: 'pdf', percent: 45, label: 'Building report pages…' });
+      await yieldToMain();
 
-      // Numeric column indices (0-based, within the row array)
-      // 7=Tax, 8=Total, 9=Cash, 10=UPI, 11=Card, 12=Pending, 13=Grand
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      let y = 0;
+
+      doc.setFillColor(59, 130, 246);
+      doc.rect(0, 0, pageW, 30, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Reports & Analytics', pageW / 2, 13, { align: 'center' });
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.text(
+        `${currentStore?.name || 'All Stores'}  |  ${fmtDate(dateFrom)} to ${fmtDate(dateTo)}`,
+        pageW / 2, 21, { align: 'center' }
+      );
+      doc.text(`Compared with ${compareLabel}: ${fmtDate(compareFrom)} to ${fmtDate(compareTo)}`, pageW / 2, 27, { align: 'center' });
+      doc.setTextColor(0, 0, 0);
+      y = 38;
+
+      const kpiCards = [
+        {
+          label: 'Total Sales',
+          curr: `Rs.${formatNumber(curr.total_sales || 0)}`,
+          prev: `Rs.${formatNumber(prev.total_sales || 0)}`,
+          pct: pctChange.total_sales,
+          rgb: [16, 185, 129] as [number, number, number],
+        },
+        {
+          label: 'Total Invoices',
+          curr: String(curr.total_invoices || 0),
+          prev: String(prev.total_invoices || 0),
+          pct: pctChange.total_invoices,
+          rgb: [59, 130, 246] as [number, number, number],
+        },
+        {
+          label: 'Items Sold',
+          curr: String(Math.round(curr.items_sold || 0)),
+          prev: String(Math.round(prev.items_sold || 0)),
+          pct: pctChange.items_sold,
+          rgb: [139, 92, 246] as [number, number, number],
+        },
+        {
+          label: 'Avg Order Value',
+          curr: `Rs.${formatNumber(curr.avg_order_value || 0)}`,
+          prev: `Rs.${formatNumber(prev.avg_order_value || 0)}`,
+          pct: pctChange.avg_order_value,
+          rgb: [245, 158, 11] as [number, number, number],
+        },
+      ];
+
+      const cardW = (pageW - 28) / 4;
+      const cardH = 26;
+      kpiCards.forEach((k, i) => {
+        const x = 14 + i * (cardW + 2);
+        doc.setFillColor(...k.rgb);
+        doc.roundedRect(x, y, cardW, cardH, 3, 3, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'normal');
+        doc.text(k.label, x + cardW / 2, y + 7, { align: 'center' });
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.text(k.curr, x + cardW / 2, y + 15, { align: 'center' });
+        doc.setFontSize(6.5);
+        doc.setFont('helvetica', 'normal');
+        const pctStr = k.pct != null
+          ? `${k.pct > 0 ? '+' : ''}${Number(k.pct).toFixed(1)}%`
+          : '';
+        doc.text(`vs ${k.prev}  ${pctStr}`, x + cardW / 2, y + 22, { align: 'center' });
+      });
+      doc.setTextColor(0, 0, 0);
+      y += cardH + 10;
+
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('KPI Summary', 14, y);
+      y += 4;
+      autoTable(doc, {
+        startY: y,
+        head: [['Metric', 'Current Period', 'Comparison Period', '% Change']],
+        body: [
+          ['Total Sales', `Rs.${formatNumber(curr.total_sales || 0)}`, `Rs.${formatNumber(prev.total_sales || 0)}`, pctChange.total_sales != null ? `${pctChange.total_sales > 0 ? '+' : ''}${Number(pctChange.total_sales).toFixed(1)}%` : '-'],
+          ['Total Invoices', String(curr.total_invoices || 0), String(prev.total_invoices || 0), pctChange.total_invoices != null ? `${pctChange.total_invoices > 0 ? '+' : ''}${Number(pctChange.total_invoices).toFixed(1)}%` : '-'],
+          ['Items Sold', String(Math.round(curr.items_sold || 0)), String(Math.round(prev.items_sold || 0)), pctChange.items_sold != null ? `${pctChange.items_sold > 0 ? '+' : ''}${Number(pctChange.items_sold).toFixed(1)}%` : '-'],
+          ['Avg Order Value', `Rs.${formatNumber(curr.avg_order_value || 0)}`, `Rs.${formatNumber(prev.avg_order_value || 0)}`, pctChange.avg_order_value != null ? `${pctChange.avg_order_value > 0 ? '+' : ''}${Number(pctChange.avg_order_value).toFixed(1)}%` : '-'],
+        ],
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [59, 130, 246] },
+        columnStyles: {
+          3: { halign: 'center' },
+        },
+      });
+      y = (doc as any).lastAutoTable.finalY + 10;
+
+      const topProds = (productTab === 'fast' ? fastSelling : productTab === 'slow' ? slowMoving : fastSelling);
+      if (topProds.length > 0) {
+        if (y > 230) { doc.addPage(); y = 14; }
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Top Products', 14, y);
+        y += 4;
+        autoTable(doc, {
+          startY: y,
+          head: [['Product', 'SKU', 'Category', 'Brand', 'Qty Sold', 'Revenue']],
+          body: topProds.slice(0, 15).map((p: any) => [
+            p.product__name || '',
+            p.product__sku || 'N/A',
+            p.product__category__name || '-',
+            p.product__brand__name || '-',
+            Math.round(p.total_quantity || 0),
+            `Rs.${formatNumber(p.total_revenue || 0)}`,
+          ]),
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [99, 102, 241] },
+        });
+        y = (doc as any).lastAutoTable.finalY + 10;
+      }
+
+      if (topCategories.length > 0) {
+        if (y > 230) { doc.addPage(); y = 14; }
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Top Categories', 14, y);
+        y += 4;
+        autoTable(doc, {
+          startY: y,
+          head: [['Category', 'Revenue', 'Qty Sold', 'Orders']],
+          body: topCategories.map((c: any) => [
+            c.product__category__name || 'Unknown',
+            `Rs.${formatNumber(c.total_revenue || 0)}`,
+            Math.round(c.total_quantity || 0),
+            c.order_count || 0,
+          ]),
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [245, 158, 11] },
+        });
+        y = (doc as any).lastAutoTable.finalY + 10;
+      }
+
+      if (topBrands.length > 0) {
+        if (y > 230) { doc.addPage(); y = 14; }
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Top Brands', 14, y);
+        y += 4;
+        autoTable(doc, {
+          startY: y,
+          head: [['Brand', 'Revenue', 'Qty Sold', 'Orders']],
+          body: topBrands.map((b: any) => [
+            b.product__brand__name || 'Unknown',
+            `Rs.${formatNumber(b.total_revenue || 0)}`,
+            Math.round(b.total_quantity || 0),
+            b.order_count || 0,
+          ]),
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [16, 185, 129] },
+        });
+      }
+
+      setExportProgress({ kind: 'pdf', percent: 90, label: 'Saving PDF…' });
+      await yieldToMain();
+      doc.save(`report-${dateFrom}-to-${dateTo}.pdf`);
+      setExportProgress({ kind: 'pdf', percent: 100, label: 'Done' });
+      await new Promise((r) => setTimeout(r, 450));
+    } catch (err) {
+      console.error('PDF export failed', err);
+      window.alert('PDF export failed. Please try again.');
+    } finally {
+      setPdfExporting(false);
+      setExportProgress(null);
+    }
+  }, [pdfExporting, excelExporting, curr, prev, pctChange, fastSelling, slowMoving, topCategories, topBrands, compareLabel, compareFrom, compareTo, dateFrom, dateTo, currentStore, productTab]);
+
+  // ── Sales Report Excel (lean paginated API — avoids full invoice list OOM) ──
+  const handleExportSalesExcel = useCallback(async () => {
+    if (excelExporting || pdfExporting || !defaultStore?.id) return;
+    setExcelExporting(true);
+    setExportProgress({ kind: 'excel', percent: 3, label: 'Starting export…' });
+    try {
+      const xlsxPromise = import('xlsx');
+      const invoices: any[] = [];
+      const pageSize = 100;
+      let page = 1;
+      let hasMore = true;
+      let totalCount = 0;
+
+      while (hasMore) {
+        const res = await reportsApi.salesExport({
+          date_from: dateFrom,
+          date_to: dateTo,
+          page,
+          page_size: pageSize,
+          store: defaultStore.id,
+        });
+        if (!res.data || !Array.isArray(res.data.results)) {
+          throw new Error('Unexpected export response from server');
+        }
+        const batch: any[] = res.data.results;
+        if (typeof res.data.total_count === 'number') totalCount = res.data.total_count;
+        invoices.push(...batch);
+        hasMore = Boolean(res.data.has_more) && batch.length > 0;
+        page += 1;
+
+        // Fetch phase occupies 0–72% so the bar moves steadily while pages load.
+        let fetchPct: number;
+        if (totalCount > 0) {
+          fetchPct = 3 + (Math.min(invoices.length, totalCount) / totalCount) * 69;
+        } else {
+          fetchPct = Math.min(60, 3 + page * 4);
+        }
+        setExportProgress({
+          kind: 'excel',
+          percent: fetchPct,
+          label:
+            totalCount > 0
+              ? `Loading invoices ${Math.min(invoices.length, totalCount)} / ${totalCount}…`
+              : `Loading invoices (${invoices.length})…`,
+        });
+        await yieldToMain();
+        // Safety cap against infinite loops if API misbehaves.
+        if (page > 500) break;
+      }
+
+      setExportProgress({ kind: 'excel', percent: 75, label: 'Building spreadsheet rows…' });
+      await yieldToMain();
+      const XLSX = await xlsxPromise;
 
       type Row = (string | number)[];
-
-      // Helper: zero-accumulator for numeric columns
       const zeroAcc = () => ({ tax: 0, total: 0, cash: 0, upi: 0, card: 0, pending: 0, grand: 0 });
       type Acc = ReturnType<typeof zeroAcc>;
 
       const addToAcc = (acc: Acc, row: Row) => {
-        acc.tax    += Number(row[7])  || 0;
-        acc.total  += Number(row[8])  || 0;
-        acc.cash   += Number(row[9])  || 0;
-        acc.upi    += Number(row[10]) || 0;
-        acc.card   += Number(row[11]) || 0;
-        acc.pending+= Number(row[12]) || 0;
-        acc.grand  += Number(row[13]) || 0;
+        acc.tax += Number(row[7]) || 0;
+        acc.total += Number(row[8]) || 0;
+        acc.cash += Number(row[9]) || 0;
+        acc.upi += Number(row[10]) || 0;
+        acc.card += Number(row[11]) || 0;
+        acc.pending += Number(row[12]) || 0;
+        acc.grand += Number(row[13]) || 0;
       };
 
       const subtotalRow = (label: string, acc: Acc): Row => [
@@ -594,42 +760,61 @@ export default function Reports() {
         '', '',
       ];
 
-      // ── Group invoices by calendar date (YYYY-MM-DD) ──
       type DayGroup = { dateLabel: string; rows: Row[] };
       const dayMap = new Map<string, DayGroup>();
+      const CHUNK = 50;
+      const invTotalCount = invoices.length || 1;
 
-      for (const inv of invoices) {
+      for (let i = 0; i < invoices.length; i += 1) {
+        if (i > 0 && i % CHUNK === 0) {
+          const buildPct = 75 + ((i / invTotalCount) * 15);
+          setExportProgress({
+            kind: 'excel',
+            percent: buildPct,
+            label: `Building rows ${i} / ${invoices.length}…`,
+          });
+          await yieldToMain();
+        }
+
+        const inv = invoices[i];
         const dateObj = inv.created_at ? new Date(inv.created_at) : null;
         const dateKey = dateObj ? dateObj.toISOString().slice(0, 10) : 'Unknown';
         const dateLabel = dateObj
           ? dateObj.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
           : 'Unknown';
 
-        if (!dayMap.has(dateKey)) dayMap.set(dateKey, { dateLabel, rows: [] });
-        const group = dayMap.get(dateKey)!;
+        let group = dayMap.get(dateKey);
+        if (!group) {
+          group = { dateLabel, rows: [] };
+          dayMap.set(dateKey, group);
+        }
 
+        let cashTotal = 0;
+        let upiTotal = 0;
+        let cardTotal = 0;
         const payments: any[] = inv.payments ?? [];
-        const cashTotal    = payments.filter((p: any) => p.payment_method === 'cash').reduce((s: number, p: any) => s + parseFloat(p.amount || 0), 0);
-        const upiTotal     = payments.filter((p: any) => p.payment_method === 'upi').reduce((s: number, p: any) => s + parseFloat(p.amount || 0), 0);
-        const cardTotal    = payments.filter((p: any) => p.payment_method === 'card').reduce((s: number, p: any) => s + parseFloat(p.amount || 0), 0);
-        const pendingTotal = parseFloat(inv.due_amount || 0);
-        const grandTotal   = cashTotal + upiTotal + cardTotal + pendingTotal;
-        const invTotal     = parseFloat(inv.total || 0);
-
-        const invoiceNo    = inv.invoice_number ?? '';
+        for (let p = 0; p < payments.length; p += 1) {
+          const amount = parseFloat(payments[p].amount || 0) || 0;
+          const method = payments[p].payment_method;
+          if (method === 'cash') cashTotal += amount;
+          else if (method === 'upi') upiTotal += amount;
+          else if (method === 'card') cardTotal += amount;
+        }
+        const pendingTotal = parseFloat(inv.due_amount || 0) || 0;
+        const grandTotal = cashTotal + upiTotal + cardTotal + pendingTotal;
+        const invTotal = parseFloat(inv.total || 0) || 0;
+        const invoiceNo = inv.invoice_number ?? '';
         const customerName = inv.customer_name ?? '';
-
         const items: any[] = inv.items ?? [];
+
         if (items.length === 0) {
           group.rows.push([
             dateLabel, invoiceNo, customerName,
-            '', '', '', '', parseFloat(inv.tax_amount || 0), invTotal,
+            '', '', '', '', parseFloat(inv.tax_amount || 0) || 0, invTotal,
             cashTotal, upiTotal, cardTotal, pendingTotal, grandTotal,
             '', '',
           ]);
         } else {
-          // Consolidate same product/tax rows inside each invoice so barcode-level
-          // lines (qty split as 1 each) don't create repeated rows in export.
           const groupedItems = new Map<string, {
             productName: string;
             taxPercent: number;
@@ -639,7 +824,8 @@ export default function Reports() {
             lineTotal: number;
           }>();
 
-          for (const item of items) {
+          for (let j = 0; j < items.length; j += 1) {
+            const item = items[j];
             const productName = item.product_name ?? '';
             const taxPercent = salesExportTaxPercent(item);
             const taxMode = salesExportTaxInclusiveLabel(item);
@@ -661,9 +847,8 @@ export default function Reports() {
             }
           }
 
-          const groupedRows = [...groupedItems.values()];
-          for (let idx = 0; idx < groupedRows.length; idx += 1) {
-            const row = groupedRows[idx];
+          let idx = 0;
+          for (const row of groupedItems.values()) {
             const isFirstItemRow = idx === 0;
             group.rows.push([
               dateLabel,
@@ -675,8 +860,6 @@ export default function Reports() {
               row.qty,
               row.taxTotal,
               row.lineTotal,
-              // Payment totals are invoice-level values: keep only on first line
-              // to avoid multiplying totals by number of line items.
               isFirstItemRow ? cashTotal : '',
               isFirstItemRow ? upiTotal : '',
               isFirstItemRow ? cardTotal : '',
@@ -685,6 +868,7 @@ export default function Reports() {
               '',
               '',
             ]);
+            idx += 1;
           }
         }
       }
@@ -692,25 +876,18 @@ export default function Reports() {
       const isMultiDay = dayMap.size > 1;
       const allRows: Row[] = [];
       const grandAcc = zeroAcc();
-
-      // Sort days ascending
       const sortedDays = [...dayMap.entries()].sort(([a], [b]) => a.localeCompare(b));
 
       for (const [, group] of sortedDays) {
         allRows.push(...group.rows);
-
         if (isMultiDay) {
           const dayAcc = zeroAcc();
-          group.rows.forEach(r => addToAcc(dayAcc, r));
+          for (const r of group.rows) addToAcc(dayAcc, r);
           allRows.push(subtotalRow(`Day Total – ${group.dateLabel}`, dayAcc));
-          // blank separator
           allRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
         }
-
-        group.rows.forEach(r => addToAcc(grandAcc, r));
+        for (const r of group.rows) addToAcc(grandAcc, r);
       }
-
-      // Grand total row at the very end
       allRows.push(subtotalRow('GRAND TOTAL', grandAcc));
 
       const headers: Row = [
@@ -732,47 +909,33 @@ export default function Reports() {
         'Deposit Date',
       ];
 
+      setExportProgress({ kind: 'excel', percent: 92, label: 'Writing Excel file…' });
+      await yieldToMain();
       const ws = XLSX.utils.aoa_to_sheet([headers, ...allRows]);
-
-      // Bold + background for subtotal/grand-total rows
-      const boldRows: number[] = [];
-      let rowIdx = 1; // 0 = header
-      for (const [, group] of sortedDays) {
-        rowIdx += group.rows.length;
-        if (isMultiDay) {
-          boldRows.push(rowIdx);    // day subtotal
-          rowIdx += 2;              // +1 blank separator
-        }
-      }
-      boldRows.push(rowIdx); // grand total
-
-      const totalCols = headers.length;
-      for (const r of boldRows) {
-        for (let c = 0; c < totalCols; c++) {
-          const cellRef = XLSX.utils.encode_cell({ r, c });
-          if (!ws[cellRef]) ws[cellRef] = { v: '', t: 's' };
-          ws[cellRef].s = {
-            font: { bold: true },
-            fill: { fgColor: { rgb: r === rowIdx ? 'D6EAF8' : 'EBF5FB' }, patternType: 'solid' },
-          };
-        }
-      }
-
-      // Column widths
       ws['!cols'] = [
         { wch: 14 }, { wch: 16 }, { wch: 22 }, { wch: 30 },
-        { wch: 8 },  { wch: 18 }, { wch: 8 },  { wch: 12 }, { wch: 14 },
+        { wch: 8 }, { wch: 18 }, { wch: 8 }, { wch: 12 }, { wch: 14 },
         { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 16 },
         { wch: 26 }, { wch: 24 }, { wch: 16 },
       ];
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Sales Report');
+      setExportProgress({ kind: 'excel', percent: 98, label: 'Downloading…' });
+      await yieldToMain();
       XLSX.writeFile(wb, `sales-report-${dateFrom}-to-${dateTo}.xlsx`);
+      setExportProgress({ kind: 'excel', percent: 100, label: 'Done' });
+      await new Promise((r) => setTimeout(r, 450));
+    } catch (err) {
+      console.error('Excel export failed', err);
+      window.alert(
+        'Sales report export failed. The server may be low on memory — try a shorter date range, then retry.',
+      );
     } finally {
       setExcelExporting(false);
+      setExportProgress(null);
     }
-  }, [dateFrom, dateTo, defaultStore]);
+  }, [excelExporting, pdfExporting, dateFrom, dateTo, defaultStore]);
 
   // ── Guards ──
   if (!defaultStore && stores.length === 0) {
@@ -800,6 +963,12 @@ export default function Reports() {
   // ── Render ──
   return (
     <div className="space-y-6 pb-12" ref={reportRef}>
+      <ExportProgressOverlay
+        open={isExporting && !!exportProgress}
+        title={exportProgress?.kind === 'pdf' ? 'Exporting PDF' : 'Exporting Sales Report'}
+        label={exportProgress?.label || 'Working…'}
+        percent={exportProgress?.percent ?? 0}
+      />
 
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -845,15 +1014,16 @@ export default function Reports() {
           {/* Export PDF */}
           <button
             onClick={handleExportPdf}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+            disabled={isExporting || analyticsLoading}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
-            Export PDF
+            {pdfExporting ? 'Exporting…' : 'Export PDF'}
           </button>
           {/* Sales Report Excel */}
           <button
             onClick={handleExportSalesExcel}
-            disabled={excelExporting}
+            disabled={isExporting || !defaultStore?.id}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
@@ -959,7 +1129,10 @@ export default function Reports() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-base font-semibold text-gray-700">Key Performance Indicators</h2>
           <span className="text-xs text-gray-400">
-            {fmtDate(dateFrom)} – {fmtDate(dateTo)} vs {compareLabel}
+            {fmtDate(qFrom)} – {fmtDate(qTo)} vs {compareLabel}
+            {queriesRefreshing && !analyticsLoading && (
+              <span className="ml-2 text-blue-500">Updating…</span>
+            )}
           </span>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1056,31 +1229,33 @@ export default function Reports() {
           </div>
         </div>
         {analyticsLoading ? (
-          <div className="h-64 flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
-          </div>
+          <ChartSkeleton height={260} />
         ) : dailyCurrent.length === 0 && dailyPrevious.length === 0 ? (
           <div className="h-64 flex items-center justify-center text-gray-400">No data for this period</div>
         ) : (
-          <RevenueChart
-            currentData={dailyCurrent.map((d: any) => ({ date: d.date, total: Number(d.total || 0), count: d.count || 0 }))}
-            previousData={dailyPrevious.map((d: any) => ({ date: d.date, total: Number(d.total || 0), count: d.count || 0 }))}
-            currentLabel={`${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`}
-            previousLabel={compareLabel}
-            viewMode={chartViewMode}
-          />
+          <Suspense fallback={<ChartSkeleton height={260} />}>
+            <RevenueChart
+              currentData={chartCurrentData}
+              previousData={chartPreviousData}
+              currentLabel={revenueChartLabel}
+              previousLabel={compareLabel}
+              viewMode={chartViewMode}
+            />
+          </Suspense>
         )}
       </div>
 
       {/* ── Store Comparison (shown only if multi-store retailer) ── */}
-      {storeComparison.length >= 2 && (
+      {storeComparisonData.length >= 2 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
           <SectionHeader
             title="Store Comparison"
             subtitle="Compare performance across your stores for the selected period"
             icon={<Store className="h-5 w-5 text-blue-600" />}
           />
-          <StoreComparisonPanel stores={storeComparison} />
+          <Suspense fallback={<ChartSkeleton height={220} />}>
+            <StoreComparisonPanel stores={storeComparisonData} />
+          </Suspense>
         </div>
       )}
 
@@ -1152,47 +1327,45 @@ export default function Reports() {
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-blue-600" />
           </div>
-        ) : (() => {
-          const products = productTab === 'fast' ? fastSelling : productTab === 'slow' ? slowMoving : [...fastSelling].sort((a, b) => (b.total_revenue || 0) - (a.total_revenue || 0));
-          if (products.length === 0) return <p className="text-center text-gray-400 py-8">No product data for this period</p>;
-          return (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">#</th>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Brand</th>
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Revenue</th>
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Orders</th>
+        ) : productRows.length === 0 ? (
+          <p className="text-center text-gray-400 py-8">No product data for this period</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">#</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Brand</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Qty</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Revenue</th>
+                  <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">Orders</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {productRows.map((p: any, i: number) => (
+                  <tr key={p.product__id || i} className="hover:bg-blue-50/40 transition-colors">
+                    <td className="px-3 py-2.5 text-gray-400 font-mono text-xs">{i + 1}</td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-medium text-gray-900">{p.product__name}</span>
+                      {p.product__sku && <span className="ml-2 text-xs text-gray-400 font-mono">{p.product__sku}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-gray-600">{p.product__category__name || '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-600">{p.product__brand__name || '—'}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <span className={`font-semibold ${productTab === 'slow' ? 'text-orange-600' : 'text-gray-900'}`}>
+                        {Math.round(p.total_quantity || 0)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-semibold text-gray-900">₹{formatNumber(p.total_revenue || 0)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-600">{p.order_count || 0}</td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {products.map((p: any, i: number) => (
-                    <tr key={p.product__id || i} className="hover:bg-blue-50/40 transition-colors">
-                      <td className="px-3 py-2.5 text-gray-400 font-mono text-xs">{i + 1}</td>
-                      <td className="px-3 py-2.5">
-                        <span className="font-medium text-gray-900">{p.product__name}</span>
-                        {p.product__sku && <span className="ml-2 text-xs text-gray-400 font-mono">{p.product__sku}</span>}
-                      </td>
-                      <td className="px-3 py-2.5 text-gray-600">{p.product__category__name || '—'}</td>
-                      <td className="px-3 py-2.5 text-gray-600">{p.product__brand__name || '—'}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        <span className={`font-semibold ${productTab === 'slow' ? 'text-orange-600' : 'text-gray-900'}`}>
-                          {Math.round(p.total_quantity || 0)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-semibold text-gray-900">₹{formatNumber(p.total_revenue || 0)}</td>
-                      <td className="px-3 py-2.5 text-right text-gray-600">{p.order_count || 0}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        })()}
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ── Category & Brand Analytics ── */}
@@ -1203,26 +1376,16 @@ export default function Reports() {
           icon={<Layers className="h-5 w-5 text-indigo-600" />}
         />
         {catBrandLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" />
-          </div>
+          <ChartSkeleton height={200} />
         ) : (topCategories.length === 0 && topBrands.length === 0) ? (
           <p className="text-center text-gray-400 py-8">No category/brand data for this period</p>
         ) : (
-          <CategoryBrandChart
-            categories={topCategories.map((c: any) => ({
-              name: c.product__category__name || 'Unknown',
-              total_revenue: Number(c.total_revenue || 0),
-              total_quantity: Number(c.total_quantity || 0),
-              order_count: c.order_count || 0,
-            }))}
-            brands={topBrands.map((b: any) => ({
-              name: b.product__brand__name || 'Unknown',
-              total_revenue: Number(b.total_revenue || 0),
-              total_quantity: Number(b.total_quantity || 0),
-              order_count: b.order_count || 0,
-            }))}
-          />
+          <Suspense fallback={<ChartSkeleton height={200} />}>
+            <CategoryBrandChart
+              categories={categoryChartData}
+              brands={brandChartData}
+            />
+          </Suspense>
         )}
       </div>
 

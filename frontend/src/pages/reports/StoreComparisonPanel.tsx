@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell,
@@ -19,43 +20,60 @@ interface Props {
 
 const STORE_COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#06b6d4'];
 
-export default function StoreComparisonPanel({ stores }: Props) {
-  if (!stores || stores.length < 2) return null;
+const METRICS: Array<keyof Omit<StoreMetric, 'store_id' | 'store_name'>> = [
+  'total_sales', 'total_invoices', 'items_sold', 'avg_order_value',
+];
 
-  // Normalize for radar: each metric as % of max across stores
-  const metrics: Array<keyof Omit<StoreMetric, 'store_id' | 'store_name'>> = [
-    'total_sales', 'total_invoices', 'items_sold', 'avg_order_value',
-  ];
-  const metricLabels: Record<string, string> = {
-    total_sales: 'Revenue',
-    total_invoices: 'Orders',
-    items_sold: 'Items Sold',
-    avg_order_value: 'Avg Order',
-  };
+const METRIC_LABELS: Record<string, string> = {
+  total_sales: 'Revenue',
+  total_invoices: 'Orders',
+  items_sold: 'Items Sold',
+  avg_order_value: 'Avg Order',
+};
 
-  const maxVal: Record<string, number> = {};
-  metrics.forEach(m => {
-    maxVal[m] = Math.max(...stores.map(s => s[m] || 0)) || 1;
-  });
+const fmtY = (v: number) =>
+  v >= 100000 ? `₹${(v / 100000).toFixed(1)}L` : `₹${(v / 1000).toFixed(0)}K`;
 
-  const radarData = metrics.map(m => {
-    const row: Record<string, any> = { metric: metricLabels[m] };
-    stores.forEach(s => {
-      row[s.store_name] = Math.round(((s[m] || 0) / maxVal[m]) * 100);
+const tooltipFmt = (v: number | string | readonly (number | string)[] | undefined | null) =>
+  [`₹${formatNumber(v as number | string | undefined | null)}`, ''];
+
+function StoreComparisonPanel({ stores }: Props) {
+  const { radarData, barData } = useMemo(() => {
+    if (!stores || stores.length < 2) {
+      return { radarData: [], barData: [] };
+    }
+
+    const maxVal: Record<string, number> = {};
+    for (const m of METRICS) {
+      let max = 0;
+      for (const s of stores) {
+        const val = s[m] || 0;
+        if (val > max) max = val;
+      }
+      maxVal[m] = max || 1;
+    }
+
+    const radarData = METRICS.map((m) => {
+      const row: Record<string, string | number> = { metric: METRIC_LABELS[m] };
+      for (const s of stores) {
+        row[s.store_name] = Math.round(((s[m] || 0) / maxVal[m]) * 100);
+      }
+      return row;
     });
-    return row;
-  });
 
-  // Bar chart data
-  const barData = stores.map(s => ({
-    name: s.store_name.length > 14 ? s.store_name.slice(0, 12) + '…' : s.store_name,
-    Revenue: s.total_sales,
-    Orders: s.total_invoices,
-  }));
+    const barData = stores.map((s) => ({
+      name: s.store_name.length > 14 ? `${s.store_name.slice(0, 12)}…` : s.store_name,
+      Revenue: s.total_sales,
+      Orders: s.total_invoices,
+    }));
+
+    return { radarData, barData };
+  }, [stores]);
+
+  if (!stores || stores.length < 2) return null;
 
   return (
     <div>
-      {/* Summary table */}
       <div className="overflow-x-auto mb-6">
         <table className="w-full text-sm">
           <thead>
@@ -83,28 +101,27 @@ export default function StoreComparisonPanel({ stores }: Props) {
         </table>
       </div>
 
-      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Revenue Bar */}
         <div>
           <p className="text-xs font-medium text-gray-500 uppercase mb-3">Revenue by Store</p>
-          <ResponsiveContainer width="100%" height={180}>
+          <ResponsiveContainer width="100%" height={180} debounce={50}>
             <BarChart data={barData} margin={{ top: 0, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-              <YAxis tickFormatter={v => v >= 100000 ? `₹${(v / 100000).toFixed(1)}L` : `₹${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11 }} width={52} />
-              <Tooltip formatter={(v) => [`₹${formatNumber(v as number | string | undefined | null)}`, '']} />
-              <Bar dataKey="Revenue" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                {barData.map((_e, i) => <Cell key={i} fill={STORE_COLORS[i % STORE_COLORS.length]} />)}
+              <YAxis tickFormatter={fmtY} tick={{ fontSize: 11 }} width={52} />
+              <Tooltip formatter={tooltipFmt} isAnimationActive={false} />
+              <Bar dataKey="Revenue" radius={[4, 4, 0, 0]} maxBarSize={40} isAnimationActive={false}>
+                {barData.map((_e, i) => (
+                  <Cell key={i} fill={STORE_COLORS[i % STORE_COLORS.length]} />
+                ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* Radar */}
         <div>
           <p className="text-xs font-medium text-gray-500 uppercase mb-3">Relative Comparison (%)</p>
-          <ResponsiveContainer width="100%" height={180}>
+          <ResponsiveContainer width="100%" height={180} debounce={50}>
             <RadarChart data={radarData}>
               <PolarGrid />
               <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
@@ -116,6 +133,7 @@ export default function StoreComparisonPanel({ stores }: Props) {
                   stroke={STORE_COLORS[i % STORE_COLORS.length]}
                   fill={STORE_COLORS[i % STORE_COLORS.length]}
                   fillOpacity={0.15}
+                  isAnimationActive={false}
                 />
               ))}
               <Legend />
@@ -126,3 +144,5 @@ export default function StoreComparisonPanel({ stores }: Props) {
     </div>
   );
 }
+
+export default memo(StoreComparisonPanel);

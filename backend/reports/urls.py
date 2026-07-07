@@ -19,6 +19,11 @@ urlpatterns = [
     path('reports/analytics-comparison/', views.analytics_comparison, name='analytics-comparison'),
     path('reports/category-brand-analytics/', views.category_brand_analytics, name='category-brand-analytics'),
     path('reports/kpi-detail/', views.kpi_detail, name='kpi-detail'),
+    path('reports/sales-export/', views.sales_export, name='sales-export'),
+    path('reports/stock-inventory-export/', views.stock_inventory_export, name='stock-inventory-export'),
+    path('reports/stock-sold-export/', views.stock_sold_export, name='stock-sold-export'),
+
+
     # Dashboard
     path('reports/dashboard-kpis/', optimized_dashboard_kpis, name='dashboard-kpis'),
     path(
