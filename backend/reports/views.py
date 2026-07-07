@@ -583,32 +583,41 @@ def _bulk_available_barcode_counts(retailer_id, store_id, allowed_store_ids, use
 
 
 def _bulk_product_max_costs(retailer_id, store_id, allowed_store_ids, user, product_ids):
-    """Latest purchase-item unit_price per product (matches pre-refactor stock-ordering cost)."""
+    """
+    Cost per product for stock reports.
+
+  Source of truth (same as POS / catalog):
+    Barcode.get_purchase_price() -> purchase_item.unit_price
+
+  Stock-ordering used latest non-draft purchase for the product, then
+  PurchaseItem.unit_price on that purchase (not a Barcode.purchase_price column).
+    """
     if not product_ids:
         return {}
-    latest_cost_subq = Barcode.objects.filter(
+    from backend.purchasing.models import PurchaseItem
+
+    # Latest purchase for this product (no store filter — matches pre-refactor stock-ordering).
+    latest_purchase_subq = Barcode.objects.filter(
         retailer_id=retailer_id,
         product_id=OuterRef('id'),
         purchase_id__isnull=False,
-        purchase_item_id__isnull=False,
         deleted_at__isnull=True,
     ).exclude(
         purchase__status='draft',
     ).filter(
         purchase__deleted_at__isnull=True,
-    )
-    latest_cost_subq = _apply_store_scope_to_barcode_qs(
-        latest_cost_subq, store_id, allowed_store_ids, user,
-    )
-    latest_cost_subq = latest_cost_subq.order_by('-purchase__created_at').values(
-        'purchase_item__unit_price',
-    )[:1]
+    ).order_by('-purchase__created_at').values('purchase_id')[:1]
+
+    cost_subq = PurchaseItem.objects.filter(
+        purchase_id=Subquery(latest_purchase_subq),
+        product_id=OuterRef('id'),
+    ).values('unit_price')[:1]
 
     rows = Product.objects.filter(
         id__in=product_ids,
         retailer_id=retailer_id,
     ).annotate(
-        cost=Subquery(latest_cost_subq, output_field=DecimalField()),
+        cost=Subquery(cost_subq, output_field=DecimalField()),
     ).values_list('id', 'cost')
 
     return {pid: float(cost or 0) for pid, cost in rows}
