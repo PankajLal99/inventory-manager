@@ -3,7 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField
+from django.db.models import Sum, Count, Avg, Max, DecimalField, IntegerField, Exists, OuterRef
 from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -256,15 +256,8 @@ def inventory_summary(request):
             return Response({'detail': 'No shop access for this retailer.'}, status=status.HTTP_403_FORBIDDEN)
         
         logger.info(f"User {request.user.username} requested inventory summary (store={store_id}, warehouse={warehouse_id})")
-        
-        # Use barcode-based calculations - only count products that have been purchased
-        # Get all products that have at least one barcode (have been purchased)
-        products_with_barcodes = Product.objects.filter(
-            retailer_id=retailer.id,
-            barcodes__isnull=False
-        ).distinct()
-        
-        # Filter by store if provided (through purchase relationship)
+
+        sid = None
         if store_id:
             try:
                 sid = int(store_id)
@@ -272,83 +265,47 @@ def inventory_summary(request):
                 return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
             if sid not in allowed_store_ids:
                 return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
-            products_with_barcodes = products_with_barcodes.filter(
-                barcodes__purchase__store_id=sid
-            ).distinct()
-        elif not (request.user.is_superuser or request.user.is_staff):
-            products_with_barcodes = products_with_barcodes.filter(
-                barcodes__purchase__store_id__in=allowed_store_ids
-            ).distinct()
-        
-        # Calculate metrics - only for products that have been purchased
-        total_products = products_with_barcodes.count()
-        
-        # Calculate total quantity from barcodes (new + returned tags, excluding draft purchases)
-        total_quantity = Barcode.objects.filter(
+
+        product_ids = _purchased_product_ids(retailer.id, sid, allowed_store_ids, request.user)
+        total_products = len(product_ids)
+
+        total_quantity_count = Barcode.objects.filter(
             retailer_id=retailer.id,
             tag__in=['new', 'returned'],
-            product__in=products_with_barcodes
+            product_id__in=product_ids,
+            deleted_at__isnull=True,
         ).exclude(
-            purchase__status='draft'
+            purchase__status='draft',
+        ).filter(
+            purchase__deleted_at__isnull=True,
         )
-        
-        if store_id:
-            total_quantity = total_quantity.filter(purchase__store_id=sid)
-        elif not (request.user.is_superuser or request.user.is_staff):
-            total_quantity = total_quantity.filter(purchase__store_id__in=allowed_store_ids)
-        
-        total_quantity_count = total_quantity.count()
-        
-        # Get barcodes in active carts (reserved)
-        active_carts_barcodes = set()
-        cart_items = CartItem.objects.filter(
-            cart__status='active',
-            cart__retailer_id=retailer.id,
-        ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-        
-        for cart_item in cart_items:
-            if cart_item.scanned_barcodes:
-                active_carts_barcodes.update(cart_item.scanned_barcodes)
-        
-        # Calculate available quantity (excluding barcodes in active carts)
-        available_barcodes = total_quantity.exclude(barcode__in=active_carts_barcodes)
-        total_available = available_barcodes.count()
+        total_quantity_count = _apply_store_scope_to_barcode_qs(
+            total_quantity_count, sid, allowed_store_ids, request.user,
+        ).count()
+
+        active_carts_barcodes = _active_cart_barcode_values(retailer.id)
+        counts = _bulk_available_barcode_counts(
+            retailer.id, sid, allowed_store_ids, request.user, active_carts_barcodes,
+        )
+        total_available = sum(int(v or 0) for v in counts.values())
         total_reserved = len(active_carts_barcodes)
-        
-        # Low stock count and out of stock count - only for products that have been purchased
+
+        thresholds = dict(
+            Product.objects.filter(id__in=product_ids, retailer_id=retailer.id)
+            .values_list('id', 'low_stock_threshold')
+        ) if product_ids else {}
+
         low_stock_count = 0
         out_of_stock_count = 0
-        
-        # Calculate low stock and out of stock by checking each product's barcode count
-        for product in products_with_barcodes.select_related():
-            # Count available barcodes for this product (new + returned, not in carts, not sold, not from draft purchases)
-            product_barcodes = Barcode.objects.filter(
-                retailer_id=retailer.id,
-                product=product,
-                tag__in=['new', 'returned']
-            ).exclude(
-                purchase__status='draft'
-            )
-            
-            # Exclude barcodes in active carts
-            if active_carts_barcodes:
-                product_barcodes = product_barcodes.exclude(barcode__in=active_carts_barcodes)
-            
-            # Exclude sold barcodes (assigned to non-void invoices)
-            sold_barcode_ids = InvoiceItem.objects.filter(
-                barcode__in=product_barcodes.values_list('id', flat=True)
-            ).exclude(
-                invoice__status='void'
-            ).values_list('barcode_id', flat=True)
-            
-            available_count = product_barcodes.exclude(id__in=sold_barcode_ids).count()
-            
-            # Only count as out of stock if product has been purchased (has barcodes) and available_count is 0
+        for pid in product_ids:
+            available_count = int(counts.get(pid, 0) or 0)
             if available_count == 0:
                 out_of_stock_count += 1
-            elif product.low_stock_threshold and available_count > 0 and available_count <= product.low_stock_threshold:
-                low_stock_count += 1
-        
+            else:
+                threshold = thresholds.get(pid) or 0
+                if threshold > 0 and available_count <= threshold:
+                    low_stock_count += 1
+
         logger.debug(f"Inventory summary: total_products={total_products}, total_quantity={total_quantity_count}, low_stock={low_stock_count}, out_of_stock={out_of_stock_count}")
         
         return Response({
@@ -476,13 +433,7 @@ def stock_ordering_report(request):
     if not allowed_store_ids:
         return Response({'detail': 'No shop access for this retailer.'}, status=status.HTTP_403_FORBIDDEN)
     
-    # Only include products that have been purchased (have barcodes)
-    products_with_barcodes = Product.objects.filter(
-        retailer_id=retailer.id,
-        barcodes__isnull=False
-    ).distinct()
-    
-    # Filter by store if provided (through purchase relationship)
+    sid = None
     if store_id:
         try:
             sid = int(store_id)
@@ -490,102 +441,48 @@ def stock_ordering_report(request):
             return Response({'detail': 'Invalid store filter.'}, status=status.HTTP_400_BAD_REQUEST)
         if sid not in allowed_store_ids:
             return Response({'detail': 'Store access denied.'}, status=status.HTTP_403_FORBIDDEN)
-        products_with_barcodes = products_with_barcodes.filter(
-            barcodes__purchase__store_id=sid
-        ).distinct()
-    elif not (request.user.is_superuser or request.user.is_staff):
-        products_with_barcodes = products_with_barcodes.filter(
-            barcodes__purchase__store_id__in=allowed_store_ids
-        ).distinct()
-    
-    # Get barcodes in active carts (reserved)
-    active_carts_barcodes = set()
-    cart_items = CartItem.objects.filter(
-        cart__status='active',
-        cart__retailer_id=retailer.id,
-    ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-    
-    for cart_item in cart_items:
-        if cart_item.scanned_barcodes:
-            active_carts_barcodes.update(cart_item.scanned_barcodes)
-    
+
+    product_ids = _purchased_product_ids(retailer.id, sid, allowed_store_ids, request.user)
+    if not product_ids:
+        return Response({
+            'in_stock': [],
+            'out_of_stock': [],
+            'low_stock': [],
+            'products_needing_order': [],
+        })
+
+    active_carts_barcodes = _active_cart_barcode_values(retailer.id)
+    counts = _bulk_available_barcode_counts(
+        retailer.id, sid, allowed_store_ids, request.user, active_carts_barcodes,
+    )
+    costs = _bulk_product_max_costs(retailer.id, sid, allowed_store_ids, request.user, product_ids)
+    store_name = _store_display_name(retailer.id, sid)
+
+    product_rows = list(
+        Product.objects.filter(id__in=product_ids, retailer_id=retailer.id)
+        .values('id', 'name', 'sku', 'low_stock_threshold', 'category__name', 'brand__name')
+    )
+
     in_stock = []
     out_of_stock = []
     low_stock = []
     products_needing_order = []
-    
-    # Process each product that has been purchased
-    for product in products_with_barcodes.select_related('category', 'brand'):
-        # Get store name from first purchase if store_id is provided, otherwise use first store
-        store_name = None
-        if store_id:
-            from backend.locations.models import Store
-            try:
-                store = Store.objects.get(id=sid, retailer_id=retailer.id)
-                store_name = store.name
-            except Store.DoesNotExist:
-                pass
-        
-        # Count available barcodes for this product (new + returned, not in carts, not sold, not from draft purchases)
-        product_barcodes = Barcode.objects.filter(
-            retailer_id=retailer.id,
-            product=product,
-            tag__in=['new', 'returned']
-        ).exclude(
-            purchase__status='draft'
-        )
-        
-        # Filter by store if provided
-        if store_id:
-            product_barcodes = product_barcodes.filter(purchase__store_id=sid)
-        elif not (request.user.is_superuser or request.user.is_staff):
-            product_barcodes = product_barcodes.filter(purchase__store_id__in=allowed_store_ids)
-        
-        # Exclude barcodes in active carts
-        if active_carts_barcodes:
-            product_barcodes = product_barcodes.exclude(barcode__in=active_carts_barcodes)
-        
-        # Exclude sold barcodes (assigned to non-void invoices)
-        sold_barcode_ids = InvoiceItem.objects.filter(
-            barcode__in=product_barcodes.values_list('id', flat=True)
-        ).exclude(
-            invoice__status='void'
-        ).values_list('barcode_id', flat=True)
-        
-        available_count = product_barcodes.exclude(id__in=sold_barcode_ids).count()
-        low_stock_threshold = product.low_stock_threshold or 0
-        
-        # Get cost price from latest purchase
-        cost_price = Decimal('0.00')
-        latest_purchase = product.barcodes.filter(
-            purchase__isnull=False
-        ).exclude(
-            purchase__status='draft'
-        ).select_related('purchase').order_by('-purchase__created_at').first()
-        
-        if latest_purchase and latest_purchase.purchase:
-            # Get cost price from purchase items
-            from backend.purchasing.models import PurchaseItem
-            purchase_item = PurchaseItem.objects.filter(
-                purchase=latest_purchase.purchase,
-                product=product
-            ).first()
-            if purchase_item:
-                cost_price = purchase_item.unit_price or Decimal('0.00')
-        
+
+    for p in product_rows:
+        available_count = int(counts.get(p['id'], 0) or 0)
+        low_stock_threshold = p['low_stock_threshold'] or 0
         product_data = {
-            'product__id': product.id,
-            'product__name': product.name,
-            'product__sku': product.sku or 'N/A',
-            'product__category__name': product.category.name if product.category_id else None,
-            'product__brand__name': product.brand.name if product.brand_id else None,
+            'product__id': p['id'],
+            'product__name': p['name'],
+            'product__sku': p['sku'] or 'N/A',
+            'product__category__name': p['category__name'],
+            'product__brand__name': p['brand__name'],
             'product__low_stock_threshold': low_stock_threshold,
-            'product__cost_price': float(cost_price),
-            'store__name': store_name or 'N/A',
+            'product__cost_price': float(costs.get(p['id']) or 0),
+            'store__name': store_name,
             'available_quantity': available_count,
         }
-        
-        # Categorize products (purchased = has barcodes; in_stock before out_of_stock in exports)
+
         if available_count == 0:
             out_of_stock.append(product_data)
             products_needing_order.append(product_data)
@@ -609,6 +506,107 @@ def stock_ordering_report(request):
         'low_stock': low_stock,
         'products_needing_order': products_needing_order,
     })
+
+
+# ─── Stock / barcode helpers (bulk counts — avoid per-product N+1) ───────────
+
+def _is_staff_user(user):
+    return user.is_superuser or user.is_staff
+
+
+def _active_cart_barcode_values(retailer_id):
+    active = set()
+    cart_items = CartItem.objects.filter(
+        cart__status='active',
+        cart__retailer_id=retailer_id,
+    ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
+    for cart_item in cart_items.iterator(chunk_size=200):
+        if cart_item.scanned_barcodes:
+            active.update(cart_item.scanned_barcodes)
+    return active
+
+
+def _apply_store_scope_to_barcode_qs(qs, store_id, allowed_store_ids, user):
+    if store_id:
+        return qs.filter(purchase__store_id=store_id)
+    if allowed_store_ids is not None and not _is_staff_user(user):
+        return qs.filter(purchase__store_id__in=allowed_store_ids)
+    return qs
+
+
+def _purchased_product_ids(retailer_id, store_id, allowed_store_ids, user):
+    qs = Barcode.objects.filter(
+        retailer_id=retailer_id,
+        product_id__isnull=False,
+        deleted_at__isnull=True,
+    ).exclude(
+        purchase__status='draft',
+    ).filter(
+        purchase__deleted_at__isnull=True,
+    )
+    qs = _apply_store_scope_to_barcode_qs(qs, store_id, allowed_store_ids, user)
+    return list(qs.values_list('product_id', flat=True).distinct())
+
+
+def _bulk_available_barcode_counts(retailer_id, store_id, allowed_store_ids, user, active_carts=None):
+    """
+    Available = new/returned barcodes, not draft purchase, not sold (invoice line),
+    not reserved in an active cart. One aggregate query via EXISTS (not global NOT IN).
+    """
+    if active_carts is None:
+        active_carts = _active_cart_barcode_values(retailer_id)
+
+    sold_exists = InvoiceItem.objects.filter(
+        barcode_id=OuterRef('pk'),
+        invoice__retailer_id=retailer_id,
+    ).exclude(invoice__status='void')
+
+    bc_qs = Barcode.objects.filter(
+        retailer_id=retailer_id,
+        product_id__isnull=False,
+        tag__in=['new', 'returned'],
+        deleted_at__isnull=True,
+    ).exclude(
+        purchase__status='draft',
+    ).filter(
+        purchase__deleted_at__isnull=True,
+    )
+    bc_qs = _apply_store_scope_to_barcode_qs(bc_qs, store_id, allowed_store_ids, user)
+    bc_qs = bc_qs.annotate(_sold=Exists(sold_exists)).filter(_sold=False)
+
+    if active_carts:
+        bc_qs = bc_qs.exclude(barcode__in=active_carts)
+
+    return dict(
+        bc_qs.values('product_id').annotate(cnt=Count('id')).values_list('product_id', 'cnt')
+    )
+
+
+def _bulk_product_max_costs(retailer_id, store_id, allowed_store_ids, user, product_ids):
+    if not product_ids:
+        return {}
+    cost_qs = Barcode.objects.filter(
+        retailer_id=retailer_id,
+        product_id__in=product_ids,
+        deleted_at__isnull=True,
+    ).exclude(purchase__status='draft').filter(purchase__deleted_at__isnull=True)
+    cost_qs = _apply_store_scope_to_barcode_qs(cost_qs, store_id, allowed_store_ids, user)
+    return dict(
+        cost_qs.values('product_id')
+        .annotate(cost=Max('purchase_price'))
+        .values_list('product_id', 'cost')
+    )
+
+
+def _store_display_name(retailer_id, store_id):
+    if not store_id:
+        return 'N/A'
+    from backend.locations.models import Store as StoreModel
+    return (
+        StoreModel.objects.filter(id=store_id, retailer_id=retailer_id)
+        .values_list('name', flat=True)
+        .first()
+    ) or 'N/A'
 
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
@@ -949,18 +947,6 @@ def _export_store_access_error(request, retailer, store_id, allowed_store_ids):
     return None
 
 
-def _active_cart_barcode_values(retailer_id):
-    active = set()
-    cart_items = CartItem.objects.filter(
-        cart__status='active',
-        cart__retailer_id=retailer_id,
-    ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-    for cart_item in cart_items.iterator(chunk_size=200):
-        if cart_item.scanned_barcodes:
-            active.update(cart_item.scanned_barcodes)
-    return active
-
-
 # ─── sales_export (lean payload for Excel) ───────────────────────────────────
 
 def _sales_export_item_tax(item):
@@ -1149,22 +1135,8 @@ def stock_inventory_export(request):
 
     page, page_size = _parse_export_page(request)
 
-    products_qs = Product.objects.filter(
-        retailer_id=retailer.id,
-        barcodes__isnull=False,
-    ).distinct()
-    if store_id:
-        products_qs = products_qs.filter(barcodes__purchase__store_id=store_id).distinct()
-    elif not (request.user.is_superuser or request.user.is_staff):
-        products_qs = products_qs.filter(barcodes__purchase__store_id__in=allowed_store_ids).distinct()
-
-    products = list(
-        products_qs.select_related('category', 'brand').only(
-            'id', 'name', 'sku', 'low_stock_threshold',
-            'category_id', 'category__name', 'brand_id', 'brand__name',
-        )
-    )
-    if not products:
+    product_ids = _purchased_product_ids(retailer.id, store_id, allowed_store_ids, request.user)
+    if not product_ids:
         return Response({
             'results': [],
             'page': page,
@@ -1176,88 +1148,64 @@ def stock_inventory_export(request):
         })
 
     active_carts = _active_cart_barcode_values(retailer.id)
-
-    # Bulk counts for the retailer/store (avoid huge product_id__in lists).
-    bc_qs = Barcode.objects.filter(
-        retailer_id=retailer.id,
-        product_id__isnull=False,
-        tag__in=['new', 'returned'],
-    ).exclude(purchase__status='draft')
-    if store_id:
-        bc_qs = bc_qs.filter(purchase__store_id=store_id)
-    elif not (request.user.is_superuser or request.user.is_staff):
-        bc_qs = bc_qs.filter(purchase__store_id__in=allowed_store_ids)
-    if active_carts:
-        bc_qs = bc_qs.exclude(barcode__in=active_carts)
-
-    sold_barcode_ids = InvoiceItem.objects.filter(
-        barcode_id__isnull=False,
-        invoice__retailer_id=retailer.id,
-    ).exclude(invoice__status='void').values('barcode_id')
-    bc_qs = bc_qs.exclude(id__in=sold_barcode_ids)
-
-    counts = dict(
-        bc_qs.values('product_id').annotate(cnt=Count('id')).values_list('product_id', 'cnt')
+    counts = _bulk_available_barcode_counts(
+        retailer.id, store_id, allowed_store_ids, request.user, active_carts,
     )
-    cost_qs = Barcode.objects.filter(
-        retailer_id=retailer.id,
-        product_id__isnull=False,
-    ).exclude(purchase__status='draft')
-    if store_id:
-        cost_qs = cost_qs.filter(purchase__store_id=store_id)
-    elif not (request.user.is_superuser or request.user.is_staff):
-        cost_qs = cost_qs.filter(purchase__store_id__in=allowed_store_ids)
-    costs = dict(
-        cost_qs.values('product_id')
-        .annotate(cost=Max('purchase_price'))
-        .values_list('product_id', 'cost')
+    store_name = _store_display_name(retailer.id, store_id)
+
+    product_rows = list(
+        Product.objects.filter(id__in=product_ids, retailer_id=retailer.id)
+        .values('id', 'name', 'sku', 'low_stock_threshold', 'category__name', 'brand__name')
     )
 
-    store_name = 'N/A'
-    if store_id:
-        from backend.locations.models import Store as StoreModel
-        store_name = (
-            StoreModel.objects.filter(id=store_id, retailer_id=retailer.id)
-            .values_list('name', flat=True)
-            .first()
-        ) or 'N/A'
-
-    in_stock = []
-    out_of_stock = []
-    for product in products:
-        qty = int(counts.get(product.id, 0) or 0)
-        threshold = product.low_stock_threshold or 0
-        if qty == 0:
-            status = 'Out of Stock'
-        elif threshold > 0 and qty <= threshold:
-            status = 'Low Stock'
+    in_stock_keys = []
+    out_of_stock_keys = []
+    for p in product_rows:
+        pid = p['id']
+        qty = int(counts.get(pid, 0) or 0)
+        name_key = (p['name'] or '').lower()
+        if qty > 0:
+            in_stock_keys.append((pid, qty, name_key))
         else:
-            status = 'In Stock'
+            out_of_stock_keys.append((pid, name_key))
 
-        row = {
-            'product__id': product.id,
-            'product__name': product.name,
-            'product__sku': product.sku or 'N/A',
-            'product__category__name': product.category.name if product.category_id else None,
-            'product__brand__name': product.brand.name if product.brand_id else None,
+    in_stock_keys.sort(key=lambda x: (-x[1], x[2]))
+    out_of_stock_keys.sort(key=lambda x: x[1])
+    ordered_ids = [x[0] for x in in_stock_keys] + [x[0] for x in out_of_stock_keys]
+
+    total_count = len(ordered_ids)
+    offset = (page - 1) * page_size
+    page_ids = ordered_ids[offset:offset + page_size]
+    product_by_id = {p['id']: p for p in product_rows}
+    costs = _bulk_product_max_costs(
+        retailer.id, store_id, allowed_store_ids, request.user, page_ids,
+    )
+
+    results = []
+    for pid in page_ids:
+        p = product_by_id[pid]
+        qty = int(counts.get(pid, 0) or 0)
+        threshold = p['low_stock_threshold'] or 0
+        if qty == 0:
+            row_status = 'Out of Stock'
+        elif threshold > 0 and qty <= threshold:
+            row_status = 'Low Stock'
+        else:
+            row_status = 'In Stock'
+
+        results.append({
+            'product__id': pid,
+            'product__name': p['name'],
+            'product__sku': p['sku'] or 'N/A',
+            'product__category__name': p['category__name'],
+            'product__brand__name': p['brand__name'],
             'product__low_stock_threshold': threshold,
-            'product__cost_price': float(costs.get(product.id) or 0),
+            'product__cost_price': float(costs.get(pid) or 0),
             'store__name': store_name,
             'available_quantity': qty,
-            'status': status,
-        }
-        if qty == 0:
-            out_of_stock.append(row)
-        else:
-            in_stock.append(row)
+            'status': row_status,
+        })
 
-    in_stock.sort(key=lambda x: (-int(x['available_quantity'] or 0), (x['product__name'] or '').lower()))
-    out_of_stock.sort(key=lambda x: (x['product__name'] or '').lower())
-    all_rows = in_stock + out_of_stock
-
-    total_count = len(all_rows)
-    offset = (page - 1) * page_size
-    results = all_rows[offset:offset + page_size]
     has_more = offset + len(results) < total_count
 
     return Response({
@@ -1266,8 +1214,8 @@ def stock_inventory_export(request):
         'page_size': page_size,
         'total_count': total_count,
         'has_more': has_more,
-        'in_stock_count': len(in_stock),
-        'out_of_stock_count': len(out_of_stock),
+        'in_stock_count': len(in_stock_keys),
+        'out_of_stock_count': len(out_of_stock_keys),
     })
 
 
