@@ -4,14 +4,19 @@ import Button from './ui/Button';
 import Input from './ui/Input';
 import { Printer, Save, RotateCcw, Ruler, Type } from 'lucide-react';
 
+export type ThermalFontWeight = 'normal' | '500' | 'bold' | '900';
+
 export interface ThermalPrintSettings {
   paperWidth: number;      // mm — default 72
   paperHeight: number;     // mm — 0 means auto
   fontSize: number;        // px — default 10
   headerFontSize: number;  // px — default 14
-  fontWeight: 'normal' | 'bold' | '900'; // font weight
+  fontWeight: 'normal' | 'bold' | '900'; // body font weight
   fontFamily: 'monospace' | 'sans-serif';
   textStroke: number;      // 0–1.2 px — adds CSS -webkit-text-stroke for extra ink darkness
+  invoiceTitle: string;    // multiline — printed at top of thermal receipt
+  invoiceTitleFontSize: number;
+  invoiceTitleFontWeight: ThermalFontWeight;
 }
 
 const DEFAULT_SETTINGS: ThermalPrintSettings = {
@@ -22,6 +27,24 @@ const DEFAULT_SETTINGS: ThermalPrintSettings = {
   fontWeight: 'normal',
   fontFamily: 'monospace',
   textStroke: 0,
+  invoiceTitle: 'INVOICE',
+  invoiceTitleFontSize: 14,
+  invoiceTitleFontWeight: 'bold',
+};
+
+const escapeThermalHtml = (s: string): string =>
+  String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+/** Renders the configurable invoice title block for thermal print HTML */
+export const buildThermalInvoiceTitleHtml = (settings: ThermalPrintSettings): string => {
+  const text = (settings.invoiceTitle ?? DEFAULT_SETTINGS.invoiceTitle).trim() || DEFAULT_SETTINGS.invoiceTitle;
+  const fontSize = settings.invoiceTitleFontSize ?? settings.headerFontSize ?? DEFAULT_SETTINGS.invoiceTitleFontSize;
+  const fontWeight = settings.invoiceTitleFontWeight ?? DEFAULT_SETTINGS.invoiceTitleFontWeight;
+  return `<h1 style="font-size: ${fontSize}px; margin-bottom: 3px; font-weight: ${fontWeight}; white-space: pre-line; line-height: 1.25;">${escapeThermalHtml(text)}</h1>`;
 };
 
 const STORAGE_KEY = 'thermal_print_settings';
@@ -55,6 +78,13 @@ const FONT_WEIGHT_OPTIONS: { value: ThermalPrintSettings['fontWeight']; label: s
   { value: 'normal', label: 'Normal', description: 'Standard weight — default for most thermal printers' },
   { value: 'bold', label: 'Bold', description: 'Darker / heavier — good for low-contrast printers' },
   { value: '900', label: 'Extra Bold', description: 'Maximum darkness — for very faint print output' },
+];
+
+const TITLE_FONT_WEIGHT_OPTIONS: { value: ThermalFontWeight; label: string }[] = [
+  { value: 'normal', label: 'Normal' },
+  { value: '500', label: 'Medium' },
+  { value: 'bold', label: 'Bold' },
+  { value: '900', label: 'Extra Bold' },
 ];
 
 const FONT_FAMILY_OPTIONS: { value: ThermalPrintSettings['fontFamily']; label: string }[] = [
@@ -398,6 +428,95 @@ export default function ThermalPrintSettingsModal({ isOpen, onClose }: ThermalPr
               </p>
             </div>
 
+            {/* Invoice Title */}
+            <div className="md:col-span-2 border-t border-gray-200 pt-4 mt-2">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Invoice Title
+                <span className="ml-2 text-xs text-gray-400 font-normal">multiline supported</span>
+              </label>
+              <textarea
+                rows={3}
+                value={settings.invoiceTitle}
+                onChange={(e) => handleChange('invoiceTitle', e.target.value)}
+                placeholder="INVOICE"
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Shown at the top of thermal receipts. Use Enter for multiple lines (e.g. store name + INVOICE).
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Title Font Size (px)
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <Input
+                      type="number"
+                      min="8"
+                      max="28"
+                      step="1"
+                      value={settings.invoiceTitleFontSize.toString()}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 8;
+                        handleChange('invoiceTitleFontSize', Math.max(8, Math.min(28, val)));
+                      }}
+                      className="flex-1"
+                    />
+                    <input
+                      type="range"
+                      min="8"
+                      max="28"
+                      step="1"
+                      value={settings.invoiceTitleFontSize}
+                      onChange={(e) => handleChange('invoiceTitleFontSize', parseInt(e.target.value))}
+                      className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                    />
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    {[12, 14, 16, 18, 22].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => handleChange('invoiceTitleFontSize', s)}
+                        className={`px-2 py-1 text-xs rounded border transition-colors ${
+                          settings.invoiceTitleFontSize === s
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
+                        }`}
+                      >
+                        {s}px
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Title Font Weight
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {TITLE_FONT_WEIGHT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => handleChange('invoiceTitleFontWeight', opt.value)}
+                        className={`p-2 rounded-lg border-2 text-sm transition-all ${
+                          settings.invoiceTitleFontWeight === opt.value
+                            ? 'border-blue-600 bg-blue-50'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        }`}
+                        style={{
+                          fontWeight: opt.value,
+                          fontFamily: settings.fontFamily === 'monospace' ? 'Courier New, monospace' : 'Arial, sans-serif',
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Font Family */}
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -443,7 +562,16 @@ export default function ThermalPrintSettingsModal({ isOpen, onClose }: ThermalPr
             }}
           >
             <div style={{ textAlign: 'center', borderBottom: '1px dashed #000', paddingBottom: 4, marginBottom: 4 }}>
-              <div style={{ fontSize: settings.headerFontSize, fontWeight: 'bold' }}>INVOICE</div>
+              <div
+                style={{
+                  fontSize: settings.invoiceTitleFontSize,
+                  fontWeight: settings.invoiceTitleFontWeight,
+                  whiteSpace: 'pre-line',
+                  lineHeight: 1.25,
+                }}
+              >
+                {settings.invoiceTitle || 'INVOICE'}
+              </div>
               <div style={{ fontSize: settings.fontSize - 1 }}>INV-2024-001</div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
@@ -461,7 +589,7 @@ export default function ThermalPrintSettingsModal({ isOpen, onClose }: ThermalPr
           </div>
           <div className="mt-3 text-xs text-gray-600 space-y-1 text-center">
             <p><span className="font-medium">Paper:</span> {settings.paperWidth}mm × {settings.paperHeight === 0 ? 'auto' : `${settings.paperHeight}mm`}</p>
-            <p><span className="font-medium">Font:</span> {settings.fontSize}px body / {settings.headerFontSize}px header · weight {settings.fontWeight}{settings.textStroke > 0 ? ` · stroke ${settings.textStroke}px` : ''}</p>
+            <p><span className="font-medium">Font:</span> {settings.fontSize}px body / {settings.invoiceTitleFontSize}px title · body weight {settings.fontWeight}{settings.textStroke > 0 ? ` · stroke ${settings.textStroke}px` : ''}</p>
           </div>
         </div>
 

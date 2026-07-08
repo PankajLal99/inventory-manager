@@ -6,7 +6,7 @@ import { auth } from '../../lib/auth';
 import { hasInvoiceHideCashCheckout, isInvoiceRestrictedUser } from '../../lib/access';
 import { formatNumber, getProductNameColor } from '../../lib/utils';
 import { toast } from '../../lib/toast';
-import { loadThermalPrintSettings } from '../../components/ThermalPrintSettings';
+import { loadThermalPrintSettings, buildThermalInvoiceTitleHtml } from '../../components/ThermalPrintSettings';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -2146,7 +2146,6 @@ export default function InvoiceDetail() {
     const paperHeightCss = thermalSettings.paperHeight === 0 ? 'auto' : `${thermalSettings.paperHeight}mm`;
     const paperWidthIn = (paperWidthMm / 25.4).toFixed(3);
     const bodyFontSize = thermalSettings.fontSize;
-    const headerFontSize = thermalSettings.headerFontSize;
     const fontFamily = thermalSettings.fontFamily === 'monospace'
       ? "'Courier New', monospace"
       : "Arial, Helvetica, sans-serif";
@@ -2193,7 +2192,7 @@ export default function InvoiceDetail() {
             border-bottom: 1px dashed #000;
             padding-bottom: 5px; 
             }
-            .header h1 {font-size: ${headerFontSize}px; margin-bottom: 3px; font-weight: bold; }
+            .header h1 { margin-bottom: 3px; }
             .header p {font-size: ${subFontSize}px; margin: 1px 0; }
             .info {margin-bottom: 6px; font-size: ${subFontSize}px; }
             .info-row {margin: 2px 0; }
@@ -2253,7 +2252,7 @@ export default function InvoiceDetail() {
         <div class="header">
           ${(invoice.retailer_name_extra || '').trim() ? `<div style="font-size:13px;font-weight:bold;margin-bottom:2px;">${escapeHtml((invoice.retailer_name_extra || '').trim())}</div>` : ''}
           ${(invoice.shop_address || '').trim() ? `<div style="font-size:9px;white-space:pre-line;margin-bottom:3px;">${escapeHtml((invoice.shop_address || '').trim())}</div>` : ''}
-          <h1>INVOICE</h1>
+          ${buildThermalInvoiceTitleHtml(thermalSettings)}
           <p>${invoice.invoice_number || `#${invoice.id}`}</p>
           <p>${formatDate(invoice.created_at)}</p>
         </div>
