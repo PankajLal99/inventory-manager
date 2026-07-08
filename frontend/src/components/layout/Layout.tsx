@@ -70,12 +70,11 @@ export default function Layout() {
   useEffect(() => {
     // Load user on mount
     const loadUser = async () => {
-      if (auth.isAuthenticated()) {
+      if (auth.isMainAuthenticated()) {
         try {
-          const loadedUser = await auth.loadUser();
+          const loadedUser = await auth.loadUser('main');
           setUser(loadedUser);
         } catch (error) {
-          // If loading fails, redirect to login
           navigate('/login');
         }
       }
@@ -99,7 +98,7 @@ export default function Layout() {
   }, [userMenuOpen]);
 
   const handleLogout = () => {
-    auth.logout();
+    auth.logout('main');
     navigate('/login');
   };
 

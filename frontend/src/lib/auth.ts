@@ -1,4 +1,11 @@
 import { authApi } from './api';
+import {
+  getAuthScopeForPath,
+  type AuthScope,
+} from './authPaths';
+
+export type { AuthScope } from './authPaths';
+export { getAuthScopeForPath, isCreditAppPath, CREDIT_APP_PATH_PREFIXES } from './authPaths';
 
 export interface User {
   id: number;
@@ -26,48 +33,114 @@ export interface User {
   is_superuser?: boolean;
 }
 
-let currentUser: User | null = null;
+const MAIN_ACCESS = 'access_token';
+const MAIN_REFRESH = 'refresh_token';
+const CREDIT_ACCESS = 'credit_access_token';
+const CREDIT_REFRESH = 'credit_refresh_token';
+
+function accessKey(scope: AuthScope) {
+  return scope === 'credit' ? CREDIT_ACCESS : MAIN_ACCESS;
+}
+
+function refreshKey(scope: AuthScope) {
+  return scope === 'credit' ? CREDIT_REFRESH : MAIN_REFRESH;
+}
+
+let mainUser: User | null = null;
+let creditUser: User | null = null;
 
 export const auth = {
   register: async (data: any) => {
     const response = await authApi.register(data);
     const { access, refresh } = response.data;
-    localStorage.setItem('access_token', access);
-    localStorage.setItem('refresh_token', refresh);
-    await auth.loadUser();
+    localStorage.setItem(MAIN_ACCESS, access);
+    localStorage.setItem(MAIN_REFRESH, refresh);
+    await auth.loadUser('main');
     return response.data;
   },
 
-  login: async (username: string, password: string) => {
+  /**
+   * Log into main and/or credit independently.
+   * creditPortal:true → credit tokens only (main session untouched).
+   * otherwise → main tokens only (credit session untouched).
+   */
+  login: async (username: string, password: string, options?: { creditPortal?: boolean }) => {
     const response = await authApi.login(username, password);
     const { access, refresh } = response.data;
-    localStorage.setItem('access_token', access);
-    localStorage.setItem('refresh_token', refresh);
-    await auth.loadUser();
+    const scope: AuthScope = options?.creditPortal ? 'credit' : 'main';
+    localStorage.setItem(accessKey(scope), access);
+    localStorage.setItem(refreshKey(scope), refresh);
+    await auth.loadUser(scope);
     return response.data;
   },
 
-  logout: () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    currentUser = null;
+  /** Log out only one portal so the other can stay signed in. */
+  logout: (scope?: AuthScope) => {
+    const active = scope ?? getAuthScopeForPath();
+    localStorage.removeItem(accessKey(active));
+    localStorage.removeItem(refreshKey(active));
+    if (active === 'credit') creditUser = null;
+    else mainUser = null;
   },
 
-  loadUser: async () => {
+  getAccessToken: (scope?: AuthScope) => {
+    const s = scope ?? getAuthScopeForPath();
+    return localStorage.getItem(accessKey(s));
+  },
+
+  getRefreshToken: (scope?: AuthScope) => {
+    const s = scope ?? getAuthScopeForPath();
+    return localStorage.getItem(refreshKey(s));
+  },
+
+  setAccessToken: (token: string, scope?: AuthScope) => {
+    const s = scope ?? getAuthScopeForPath();
+    localStorage.setItem(accessKey(s), token);
+  },
+
+  clearSessionTokens: (scope: AuthScope) => {
+    localStorage.removeItem(accessKey(scope));
+    localStorage.removeItem(refreshKey(scope));
+    if (scope === 'credit') creditUser = null;
+    else mainUser = null;
+  },
+
+  /** True when the current URL is a credit-app path (uses credit tokens). */
+  isCreditPortalSession: (pathname?: string) => getAuthScopeForPath(pathname) === 'credit',
+
+  getLoginPath: (pathname?: string) =>
+    getAuthScopeForPath(pathname) === 'credit' ? '/credit-login' : '/login',
+
+  loadUser: async (scope?: AuthScope) => {
+    const s = scope ?? getAuthScopeForPath();
     try {
-      const response = await authApi.me();
-      currentUser = response.data;
-      return currentUser;
+      const token = localStorage.getItem(accessKey(s));
+      if (!token) {
+        if (s === 'credit') creditUser = null;
+        else mainUser = null;
+        throw new Error('Not authenticated');
+      }
+      const response = await authApi.me(s);
+      if (s === 'credit') creditUser = response.data;
+      else mainUser = response.data;
+      return response.data as User;
     } catch (error) {
-      currentUser = null;
+      if (s === 'credit') creditUser = null;
+      else mainUser = null;
       throw error;
     }
   },
 
-  getUser: () => currentUser,
-
-  isAuthenticated: () => {
-    return !!localStorage.getItem('access_token');
+  getUser: (scope?: AuthScope) => {
+    const s = scope ?? getAuthScopeForPath();
+    return s === 'credit' ? creditUser : mainUser;
   },
-};
 
+  isAuthenticated: (scope?: AuthScope) => {
+    const s = scope ?? getAuthScopeForPath();
+    return !!localStorage.getItem(accessKey(s));
+  },
+
+  isMainAuthenticated: () => !!localStorage.getItem(MAIN_ACCESS),
+  isCreditAuthenticated: () => !!localStorage.getItem(CREDIT_ACCESS),
+};

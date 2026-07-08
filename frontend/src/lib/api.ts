@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getAuthScopeForPath, isCreditAppPath, type AuthScope } from './authPaths';
 
 // Get API URL from runtime config (for production) or build-time env (for development)
 // Priority: window.__ENV__ > import.meta.env.VITE_API_URL > default
@@ -28,6 +29,17 @@ const getApiBaseUrl = (): string => {
 
 const API_BASE_URL = getApiBaseUrl();
 
+const MAIN_ACCESS = 'access_token';
+const MAIN_REFRESH = 'refresh_token';
+const CREDIT_ACCESS = 'credit_access_token';
+const CREDIT_REFRESH = 'credit_refresh_token';
+
+function tokenKeys(scope: AuthScope) {
+  return scope === 'credit'
+    ? { access: CREDIT_ACCESS, refresh: CREDIT_REFRESH }
+    : { access: MAIN_ACCESS, refresh: MAIN_REFRESH };
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -35,13 +47,15 @@ const api = axios.create({
   },
 });
 
-// Request interceptor to add auth token
+// Request interceptor — use main or credit tokens based on current page / request scope
 api.interceptors.request.use(
   (config) => {
     if (config.data instanceof FormData && config.headers) {
       delete (config.headers as any)['Content-Type'];
     }
-    const token = localStorage.getItem('access_token');
+    const scope: AuthScope = (config as any).authScope || getAuthScopeForPath();
+    (config as any).authScope = scope;
+    const token = localStorage.getItem(tokenKeys(scope).access);
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -58,30 +72,36 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    // Handle 401 Unauthorized - try to refresh token
+    // Handle 401 Unauthorized - try to refresh token for that scope only
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
+      const scope: AuthScope =
+        originalRequest.authScope || getAuthScopeForPath();
+      const keys = tokenKeys(scope);
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
+        const refreshToken = localStorage.getItem(keys.refresh);
         if (refreshToken) {
           const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {
             refresh: refreshToken,
           });
           const { access } = response.data;
-          localStorage.setItem('access_token', access);
+          localStorage.setItem(keys.access, access);
           originalRequest.headers.Authorization = `Bearer ${access}`;
           return api(originalRequest);
         }
       } catch (refreshError: any) {
-        // Clear invalid tokens regardless of error type (401, 500, etc.)
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        // Silently handle invalid tokens - don't log errors or redirect unnecessarily
+        // Clear only this portal's tokens — leave the other login intact
+        localStorage.removeItem(keys.access);
+        localStorage.removeItem(keys.refresh);
         if (refreshError.response?.status === 401 || refreshError.response?.status === 500) {
-          // Token is invalid or user doesn't exist - clear and continue
-          // Only redirect if not already on login/register page
-          if (!window.location.pathname.includes('/login') && !window.location.pathname.includes('/register')) {
-            window.location.href = '/login';
+          const path = window.location.pathname;
+          const onAuthPage =
+            path.includes('/login') ||
+            path.includes('/credit-login') ||
+            path.includes('/register');
+          if (!onAuthPage) {
+            const creditPath = isCreditAppPath(path) || scope === 'credit';
+            window.location.href = creditPath ? '/credit-login' : '/login';
           }
         }
         return Promise.reject(refreshError);
@@ -108,7 +128,8 @@ export const authApi = {
   login: (username: string, password: string) =>
     api.post('/auth/login/', { username, password }),
   refresh: (refresh: string) => api.post('/auth/refresh/', { refresh }),
-  me: () => api.get('/auth/me/'),
+  me: (scope?: AuthScope) =>
+    api.get('/auth/me/', { authScope: scope ?? getAuthScopeForPath() } as any),
 };
 
 // Products API
@@ -525,5 +546,100 @@ export const reportsApi = {
 export const searchApi = {
   search: (query: string, type: string = 'all', params?: { product_limit?: number }) =>
     api.get('/search/', { params: { q: query, type, ...params } }),
+};
+
+// Credit POS API (separate from regular POS / parties ledger)
+export const creditApi = {
+  customers: {
+    list: (params?: any) => api.get('/credit/customers/', { params }),
+    create: (data: any) => api.post('/credit/customers/', data),
+    search: (params?: { search?: string }) => api.get('/credit/customers/search/', { params }),
+    ensure: (data: {
+      credit_customer_id?: number;
+      parties_customer_id?: number;
+      name?: string;
+      phone?: string;
+    }) => api.post('/credit/customers/ensure/', data),
+  },
+  products: {
+    list: (params?: any) => api.get('/credit/products/', { params }),
+    create: (data: any) => api.post('/credit/products/', data),
+    search: (params?: {
+      search?: string;
+      limit?: number;
+      exclude_other_custom?: string | boolean;
+    }) =>
+      api.get('/credit/products/search/', {
+        params: {
+          search_mode: 'name_only',
+          exclude_other_custom: 'true',
+          ...params,
+        },
+      }),
+  },
+  carts: {
+    create: (data: any) => api.post('/credit/carts/', data),
+    get: (id: number) => api.get(`/credit/carts/${id}/`),
+    getActive: (params?: { store?: number; single?: string }) =>
+      api.get('/credit/carts/', { params: { active: true, single: 'true', ...params } }),
+    getAllActive: (params?: { store?: number }) =>
+      api.get('/credit/carts/', { params: { active: true, ...params } }),
+    update: (id: number, data: any) => api.patch(`/credit/carts/${id}/`, data),
+    delete: (id: number) => api.delete(`/credit/carts/${id}/`),
+    addItem: (id: number, data: any) => api.post(`/credit/carts/${id}/items/`, data),
+    updateItem: (cartId: number, itemId: number, data: any) =>
+      api.patch(`/credit/carts/${cartId}/items/${itemId}/`, data),
+    deleteItem: (cartId: number, itemId: number) =>
+      api.delete(`/credit/carts/${cartId}/items/${itemId}/`),
+    checkout: (id: number, data: any) => api.post(`/credit/carts/${id}/checkout/`, data),
+  },
+  invoices: {
+    list: (params?: any) => api.get('/credit/invoices/', { params }),
+    get: (id: number) => api.get(`/credit/invoices/${id}/`),
+    void: (id: number) => api.post(`/credit/invoices/${id}/void/`),
+  },
+  returns: {
+    soldProducts: (params: {
+      credit_customer_id?: number;
+      parties_customer_id?: number;
+      customer?: number;
+      search?: string;
+    }) => api.get('/credit/returns/sold-products/', { params }),
+    list: (params?: any) => api.get('/credit/returns/', { params }),
+    get: (id: number) => api.get(`/credit/returns/${id}/`),
+    create: (data: {
+      store: number;
+      credit_customer_id?: number;
+      parties_customer_id?: number;
+      customer?: number;
+      notes?: string;
+      items: { invoice_item_id: number; quantity: number | string }[];
+    }) => api.post('/credit/returns/', data),
+  },
+  payments: {
+    list: (params?: any) => api.get('/credit/payments/', { params }),
+    get: (id: number) => api.get(`/credit/payments/${id}/`),
+    create: (data: {
+      credit_customer_id?: number;
+      customer?: number;
+      parties_customer_id?: number;
+      payment_method: 'cash' | 'upi' | 'mixed';
+      amount?: number | string;
+      cash_amount?: number | string;
+      upi_amount?: number | string;
+      notes?: string;
+      paid_at?: string;
+    }) => api.post('/credit/payments/', data),
+  },
+  ledger: {
+    list: (params?: any) => api.get('/credit/ledger/', { params }),
+    statement: (params: {
+      customer: number | string;
+      date_from?: string;
+      date_to?: string;
+      txn_type?: 'sale' | 'payment' | 'return' | '';
+    }) => api.get('/credit/ledger/statement/', { params }),
+    byCustomer: (params?: any) => api.get('/credit/ledger/by-customer/', { params }),
+  },
 };
 

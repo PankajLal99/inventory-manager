@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     'backend.purchasing',
     'backend.pricing',
     'backend.pos',
+    'backend.credit',
     'backend.reports',
 ]
 

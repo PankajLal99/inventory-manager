@@ -33,6 +33,7 @@ urlpatterns = [
     path('api/v1/', include('backend.purchasing.urls')),
     path('api/v1/', include('backend.pricing.urls')),
     path('api/v1/', include('backend.pos.urls')),
+    path('api/v1/', include('backend.credit.urls')),
     path('api/v1/', include('backend.reports.urls')),
     re_path(r'^media/(?P<path>.*)$', serve,{'document_root': settings.MEDIA_ROOT}),
     re_path(r'^static/(?P<path>.*)$', serve,{'document_root': settings.STATIC_ROOT}),
