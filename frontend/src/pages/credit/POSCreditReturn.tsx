@@ -311,7 +311,7 @@ export default function POSCreditReturn() {
       const ret = res.data;
       showToast(`Credit return ${ret.return_number} created`);
       setBasket([]);
-      navigate(`/credit-ledger?customer=${selectedCustomer.credit_customer_id}`);
+      navigate(`/credit-ledger/${selectedCustomer.credit_customer_id}`);
     } catch (err: any) {
       showToast(err?.response?.data?.detail || 'Return failed', 'error');
     } finally {

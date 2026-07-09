@@ -2,7 +2,18 @@ import uuid
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
-from django.db.models import Q, F
+from django.db.models import (
+    Case,
+    Count,
+    F,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+)
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
@@ -893,21 +904,117 @@ def credit_ledger_statement(request):
     })
 
 
+def _credit_days_since_last_payment(last_payment_at, last_sale_at):
+    """Days since last payment; if never paid, days since last sale debit."""
+    today = timezone.localdate()
+    if last_payment_at:
+        return (today - last_payment_at.date()).days
+    if last_sale_at:
+        return (today - last_sale_at.date()).days
+    return None
+
+
+def _credit_collection_status(balance, days_since_last_payment):
+    """
+    Defaulter / collection status for credit ledger accounts:
+    - good (green): balance cleared or payment received within 4 days
+    - warning (yellow): no payment for 5–9 days while balance is due
+    - danger (red): no payment for 10+ days while balance is due
+    """
+    bal = balance if isinstance(balance, Decimal) else Decimal(str(balance or 0))
+    if bal <= 0:
+        return 'good'
+    if days_since_last_payment is None:
+        return 'danger'
+    if days_since_last_payment >= 10:
+        return 'danger'
+    if days_since_last_payment >= 5:
+        return 'warning'
+    return 'good'
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def credit_ledger_by_customer(request):
-    """Summary list of credit customers with balances (for ledger index)."""
+    """Summary list of credit customers with balances and collection status (ledger index)."""
     search = request.query_params.get('search', '').strip()
-    qs = CreditCustomer.objects.filter(is_active=True)
+    only_with_balance = (request.query_params.get('with_balance') or '').strip().lower()
+
+    latest_desc = (
+        CreditLedgerEntry.objects.filter(customer_id=OuterRef('pk'))
+        .order_by('-created_at', '-id')
+        .values('description')[:1]
+    )
+    last_payment = (
+        CreditPayment.objects.filter(customer_id=OuterRef('pk'))
+        .order_by('-paid_at')
+        .values('paid_at')[:1]
+    )
+    last_sale = (
+        CreditLedgerEntry.objects.filter(
+            customer_id=OuterRef('pk'),
+            entry_type='debit',
+            payment__isnull=True,
+            credit_return__isnull=True,
+        )
+        .order_by('-created_at')
+        .values('created_at')[:1]
+    )
+
+    qs = CreditCustomer.objects.filter(is_active=True).annotate(
+        total_debit=Coalesce(
+            Sum(
+                Case(
+                    When(ledger_entries__entry_type='debit', then=F('ledger_entries__amount')),
+                    default=Value(Decimal('0')),
+                )
+            ),
+            Decimal('0'),
+        ),
+        total_credit=Coalesce(
+            Sum(
+                Case(
+                    When(ledger_entries__entry_type='credit', then=F('ledger_entries__amount')),
+                    default=Value(Decimal('0')),
+                )
+            ),
+            Decimal('0'),
+        ),
+        entry_count=Count('ledger_entries', distinct=True),
+        latest_description=Subquery(latest_desc),
+        last_payment_at=Subquery(last_payment),
+        last_sale_at=Subquery(last_sale),
+    )
+
     if search:
         qs = qs.filter(Q(name__icontains=search) | Q(phone__icontains=search))
-
-    only_with_balance = request.query_params.get('with_balance')
-    if only_with_balance in ('1', 'true', 'True'):
+    if only_with_balance in ('1', 'true'):
         qs = qs.exclude(balance=0)
 
-    qs = qs.order_by('name')
-    return Response(CreditCustomerSerializer(qs[:200], many=True).data)
+    qs = qs.order_by('name')[:200]
+
+    out = []
+    for row in qs:
+        balance = row.balance or Decimal('0')
+        days_since = _credit_days_since_last_payment(row.last_payment_at, row.last_sale_at)
+        collection_status = _credit_collection_status(balance, days_since)
+        total_debit = row.total_debit or Decimal('0')
+        total_credit = row.total_credit or Decimal('0')
+        out.append({
+            'id': row.id,
+            'name': row.name,
+            'phone': row.phone or '',
+            'balance': str(balance),
+            'total_debit': str(total_debit),
+            'total_credit': str(total_credit),
+            'net_amount': str(total_debit - total_credit),
+            'entry_count': row.entry_count or 0,
+            'latest_description': row.latest_description or '',
+            'last_payment_at': row.last_payment_at.isoformat() if row.last_payment_at else None,
+            'days_since_last_payment': days_since,
+            'collection_status': collection_status,
+        })
+    return Response(out)
 
 
 # ── Returns ─────────────────────────────────────────────────────────────────
