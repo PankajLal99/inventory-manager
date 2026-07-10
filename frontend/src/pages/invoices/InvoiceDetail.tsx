@@ -104,7 +104,6 @@ function formatExchangeSnapshotNote(snapshot: unknown): string {
   if (o.old_barcode != null) parts.push(`old barcode ${String(o.old_barcode)}`);
   if (o.original_sale_unit_price != null) parts.push(`sold ₹${String(o.original_sale_unit_price)}`);
   if (o.charge_unit_price != null) parts.push(`charged ₹${String(o.charge_unit_price)}`);
-  if (o.purchase_cost != null) parts.push(`cost ref ₹${String(o.purchase_cost)}`);
   return parts.join(' · ');
 }
 
@@ -117,7 +116,6 @@ function formatExchangeSnapshotPrintHtml(snapshot: unknown): string {
   if (o.old_barcode != null) bits.push(`old ${escapeHtml(String(o.old_barcode))}`);
   if (o.original_sale_unit_price != null) bits.push(`sold ₹${escapeHtml(String(o.original_sale_unit_price))}`);
   if (o.charge_unit_price != null) bits.push(`charged ₹${escapeHtml(String(o.charge_unit_price))}`);
-  if (o.purchase_cost != null) bits.push(`cost ref ₹${escapeHtml(String(o.purchase_cost))}`);
   if (!bits.length) return '';
   return `<div style="font-size:10px;color:${INV_THEME.textMuted};margin-top:4px;line-height:1.35;font-weight:500;">${bits.join(' · ')}</div>`;
 }
