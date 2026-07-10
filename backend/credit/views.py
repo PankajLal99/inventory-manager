@@ -624,7 +624,23 @@ def credit_cart_checkout(request, pk):
         return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     notes = request.data.get('notes', '') or ''
-    created_at = request.data.get('created_at')
+    created_at_raw = request.data.get('created_at')
+    created_at_override = None
+    if created_at_raw not in (None, ''):
+        raw_str = str(created_at_raw).strip()
+        if raw_str.endswith('Z'):
+            raw_str = raw_str[:-1] + '+00:00'
+        parsed_created_at = parse_datetime(raw_str)
+        if parsed_created_at is None:
+            return Response(
+                {'detail': 'Invalid created_at datetime format'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if timezone.is_naive(parsed_created_at):
+            parsed_created_at = timezone.make_aware(
+                parsed_created_at, timezone.get_current_timezone()
+            )
+        created_at_override = parsed_created_at
 
     for item in items:
         if item.unit_price < 0:
@@ -657,8 +673,8 @@ def credit_cart_checkout(request, pk):
             'notes': notes,
             'created_by': request.user,
         }
-        if created_at:
-            invoice_kwargs['created_at'] = created_at
+        if created_at_override is not None:
+            invoice_kwargs['created_at'] = created_at_override
 
         invoice = CreditInvoice.objects.create(**invoice_kwargs)
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import html2canvas from 'html2canvas';
@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { catalogApi, creditApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { amountForInput, formatNumber } from '../../lib/utils';
+import { amountForInput, dateStringWithCurrentTimeISO, formatNumber, toLocalDateString } from '../../lib/utils';
 import {
   addCreditCartTab,
   getActiveCreditTabId,
@@ -276,10 +276,65 @@ async function copyInvoiceImageToClipboard(
   return copyPngBlobToClipboard(merged);
 }
 
+/** Tab cycle: Product Search → Qty → Price → Delete → Product Search */
+const CREDIT_POS_TAB_ATTR = 'data-credit-pos-tab';
+
+function getCreditPosTabFields(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(`[${CREDIT_POS_TAB_ATTR}]`)).filter(
+    (el) => {
+      if (el.getAttribute('aria-disabled') === 'true') return false;
+      if ((el as HTMLButtonElement).disabled) return false;
+      if ((el as HTMLInputElement).disabled) return false;
+      return true;
+    }
+  );
+}
+
+function focusCreditPosTabField(
+  root: HTMLElement | null,
+  current: HTMLElement | null,
+  reverse: boolean
+) {
+  if (!root) return;
+  const fields = getCreditPosTabFields(root);
+  if (fields.length === 0) return;
+  if (!current) {
+    fields[0]?.focus();
+    return;
+  }
+  const idx = fields.indexOf(current);
+  if (idx < 0) {
+    fields[0]?.focus();
+    return;
+  }
+  const nextIdx = reverse
+    ? (idx - 1 + fields.length) % fields.length
+    : (idx + 1) % fields.length;
+  fields[nextIdx]?.focus();
+  if (fields[nextIdx] instanceof HTMLInputElement) {
+    fields[nextIdx].select?.();
+  }
+}
+
+function focusLastCartQty(root: HTMLElement | null) {
+  if (!root) return;
+  const qtys = Array.from(
+    root.querySelectorAll<HTMLElement>(`[${CREDIT_POS_TAB_ATTR}="qty"]`)
+  ).filter((el) => !(el as HTMLInputElement).disabled);
+  const last = qtys[qtys.length - 1];
+  if (last) {
+    last.focus();
+    if (last instanceof HTMLInputElement) last.select?.();
+  } else {
+    root.querySelector<HTMLElement>(`[${CREDIT_POS_TAB_ATTR}="search"]`)?.focus();
+  }
+}
+
 export default function POSCredit() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const productInputRef = useRef<HTMLInputElement>(null);
+  const posWorkflowRef = useRef<HTMLDivElement>(null);
   const draftSnapshotFrameRef = useRef<HTMLIFrameElement>(null);
   const cartTabsRef = useRef<CreditCartTab[]>([]);
   const lockChangeAtRef = useRef<Map<number, LocalLockChange>>(new Map());
@@ -314,9 +369,15 @@ export default function POSCredit() {
   const [newProductName, setNewProductName] = useState('');
 
   const [checkingOut, setCheckingOut] = useState(false);
+  const [invoiceDate, setInvoiceDate] = useState(() => toLocalDateString(new Date()));
   /** Local draft values while editing cart lines (cleared on focus for easy re-entry). */
   const [editingQty, setEditingQty] = useState<Record<number, string>>({});
   const [editingPrice, setEditingPrice] = useState<Record<number, string>>({});
+
+  const isCustomInvoiceDate = useMemo(
+    () => invoiceDate !== toLocalDateString(new Date()),
+    [invoiceDate]
+  );
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Math.random().toString(36).substring(7);
@@ -827,10 +888,19 @@ export default function POSCredit() {
       await refetchCart();
       setProductSearch('');
       setProductIndex(-1);
-      productInputRef.current?.focus();
+      // After add: land on Qty of the new line (Tab cycle: Search → Qty → Price → Delete → Search)
+      window.setTimeout(() => focusLastCartQty(posWorkflowRef.current), 40);
     } catch (err: any) {
       showToast(err?.response?.data?.detail || 'Failed to add item', 'error');
     }
+  };
+
+  const handlePosWorkflowKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab') return;
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest?.(`[${CREDIT_POS_TAB_ATTR}]`)) return;
+    e.preventDefault();
+    focusCreditPosTabField(posWorkflowRef.current, target, e.shiftKey);
   };
 
   const updateItemPrice = async (itemId: number, unitPrice: string) => {
@@ -1032,10 +1102,16 @@ export default function POSCredit() {
       showToast('All items need a selling price > 0', 'error');
       return;
     }
+    if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
+      showToast('Select a valid invoice date', 'error');
+      return;
+    }
 
     setCheckingOut(true);
     try {
-      const payload: any = {};
+      const payload: any = {
+        created_at: dateStringWithCurrentTimeISO(invoiceDate),
+      };
       if (selectedCustomer.credit_customer_id) {
         payload.credit_customer_id = selectedCustomer.credit_customer_id;
       } else if (selectedCustomer.parties_customer_id) {
@@ -1094,6 +1170,7 @@ export default function POSCredit() {
         setCartId(null);
       }
       setSelectedCustomer(null);
+      setInvoiceDate(toLocalDateString(new Date()));
       queryClient.invalidateQueries({ queryKey: ['credit-cart'] });
       navigate(`/credit-invoices/${invoice.id}`);
     } catch (err: any) {
@@ -1520,7 +1597,12 @@ export default function POSCredit() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-4">
+        <div
+          ref={posWorkflowRef}
+          className="lg:col-span-2 space-y-4"
+          onKeyDown={handlePosWorkflowKeyDown}
+          data-credit-pos-workflow
+        >
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
@@ -1531,6 +1613,7 @@ export default function POSCredit() {
                 type="button"
                 variant="secondary"
                 size="sm"
+                tabIndex={-1}
                 disabled={isCartLocked}
                 onClick={() => {
                   setNewProductName(productSearch.trim() || '');
@@ -1551,6 +1634,7 @@ export default function POSCredit() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
                 ref={productInputRef}
+                data-credit-pos-tab="search"
                 className={`pl-9 ${isCartLocked ? 'opacity-60 cursor-not-allowed bg-gray-50' : ''}`}
                 placeholder={
                   isCartLocked
@@ -1591,6 +1675,7 @@ export default function POSCredit() {
                       <button
                         key={`${p.source}-${p.id}`}
                         type="button"
+                        tabIndex={-1}
                         className={`w-full text-left px-3 py-2 text-sm hover:bg-amber-50 flex justify-between gap-2 ${
                           idx === productIndex ? 'bg-amber-50' : ''
                         }`}
@@ -1629,6 +1714,7 @@ export default function POSCredit() {
                     <Button
                       variant="outline"
                       size="sm"
+                      tabIndex={-1}
                       onClick={() => lockCartMutation.mutate({ cartId, locked: false })}
                       disabled={lockCartMutation.isPending}
                       className="flex items-center gap-1.5 text-amber-600 border-amber-300 hover:bg-amber-50"
@@ -1640,6 +1726,7 @@ export default function POSCredit() {
                     <Button
                       variant="outline"
                       size="sm"
+                      tabIndex={-1}
                       onClick={() => lockCartMutation.mutate({ cartId, locked: true })}
                       disabled={lockCartMutation.isPending}
                       className="flex items-center gap-1.5 text-gray-600 border-gray-300 hover:bg-gray-50"
@@ -1652,6 +1739,7 @@ export default function POSCredit() {
                 <Button
                   variant="outline"
                   size="sm"
+                  tabIndex={-1}
                   onClick={copyDraftSnapshotToClipboard}
                   disabled={!cartItems.length}
                   className="relative flex items-center gap-1.5 text-gray-700 border-gray-300 hover:bg-gray-50"
@@ -1696,6 +1784,7 @@ export default function POSCredit() {
                         type="text"
                         inputMode="numeric"
                         pattern="[0-9]*"
+                        data-credit-pos-tab="qty"
                         value={
                           editingQty[item.id] ??
                           (() => {
@@ -1718,7 +1807,14 @@ export default function POSCredit() {
                         }}
                         onBlur={(e) => updateItemQty(item.id, e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            focusCreditPosTabField(
+                              posWorkflowRef.current,
+                              e.currentTarget,
+                              false
+                            );
+                          }
                         }}
                         className="text-sm"
                         placeholder="Qty"
@@ -1729,6 +1825,7 @@ export default function POSCredit() {
                       <Input
                         type="text"
                         inputMode="decimal"
+                        data-credit-pos-tab="price"
                         value={
                           editingPrice[item.id] ?? amountForInput(item.unit_price)
                         }
@@ -1743,7 +1840,14 @@ export default function POSCredit() {
                         }}
                         onBlur={(e) => updateItemPrice(item.id, e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            focusCreditPosTabField(
+                              posWorkflowRef.current,
+                              e.currentTarget,
+                              false
+                            );
+                          }
                         }}
                         className="text-sm"
                         placeholder="Price"
@@ -1755,9 +1859,11 @@ export default function POSCredit() {
                     </div>
                     <button
                       type="button"
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded disabled:opacity-40"
+                      data-credit-pos-tab="delete"
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-red-300"
                       disabled={isCartLocked}
                       onClick={() => removeItem(item.id)}
+                      aria-label="Remove line"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -1770,6 +1876,30 @@ export default function POSCredit() {
 
         <div className="space-y-4">
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1.5 flex items-center gap-2">
+                Invoice Date
+                {isCustomInvoiceDate && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-300">
+                    Custom date
+                  </span>
+                )}
+              </label>
+              <Input
+                type="date"
+                value={invoiceDate}
+                onChange={(e) => setInvoiceDate(e.target.value)}
+                className={`w-full h-11 text-sm font-medium border-2 rounded-lg ${
+                  isCustomInvoiceDate ? 'border-amber-400 bg-amber-50/50' : ''
+                }`}
+                disabled={isCartLocked}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                {isCustomInvoiceDate
+                  ? 'Invoice will be created with the selected date above.'
+                  : 'Time stays current; only the invoice date changes.'}
+              </p>
+            </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-500">Subtotal</span>
               <span className="font-medium">₹{formatNumber(cartTotal)}</span>
