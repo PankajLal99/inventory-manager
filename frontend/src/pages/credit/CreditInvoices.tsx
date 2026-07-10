@@ -170,13 +170,13 @@ export default function CreditInvoices() {
       </div>
 
       <Card className="w-full">
-        <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <h2 className="text-lg font-semibold text-gray-900">Filters</h2>
+        <div className="p-4 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-lg font-semibold text-gray-900 shrink-0">Filters</h2>
           <Button
             variant="outline"
             size="sm"
             onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 self-start"
+            className="flex items-center gap-2 self-start sm:self-auto"
           >
             <Filter className="h-4 w-4" />
             {showFilters ? 'Hide' : 'Show'} filters
@@ -184,67 +184,77 @@ export default function CreditInvoices() {
         </div>
 
         {showFilters ? (
-          <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end border-b border-gray-100">
-            <div className="relative lg:col-span-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                type="text"
-                placeholder="Search invoice # or customer…"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            <Select
-              label="Status"
-              value={status}
-              onChange={(e) => {
-                setStatus(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">All</option>
-              <option value="open">Open</option>
-              <option value="void">Void</option>
-            </Select>
-            <Select
-              label="Customer Group"
-              value={customerGroup}
-              onChange={(e) => {
-                setCustomerGroup(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">All Groups</option>
-              {(customerGroups as any[]).map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </Select>
-            <div className="lg:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Date range</label>
-              <DateRangeSelector
-                preset={datePreset}
-                value={{ startDate: dateFrom, endDate: dateTo }}
-                onChange={({ preset, range }) => {
-                  setDatePreset(preset);
-                  setDateFrom(range.startDate);
-                  setDateTo(range.endDate);
-                  setPage(1);
-                }}
-              />
-            </div>
-            {hasActiveFilters ? (
-              <div className="lg:col-span-4 flex justify-end">
-                <Button variant="outline" onClick={handleResetFilters}>
-                  Reset filters
-                </Button>
+          <div className="p-4 border-b border-gray-100 overflow-x-auto">
+            <div className="flex items-end gap-3 min-w-[920px] xl:min-w-0 xl:w-full">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder="Search invoice # or customer…"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                  className="pl-10 h-10"
+                />
               </div>
-            ) : null}
+              <div className="w-36 shrink-0">
+                <Select
+                  label="Status"
+                  value={status}
+                  onChange={(e) => {
+                    setStatus(e.target.value);
+                    setPage(1);
+                  }}
+                  className="h-10 py-2 text-sm"
+                >
+                  <option value="">All</option>
+                  <option value="open">Open</option>
+                  <option value="void">Void</option>
+                </Select>
+              </div>
+              <div className="w-44 shrink-0">
+                <Select
+                  label="Customer Group"
+                  value={customerGroup}
+                  onChange={(e) => {
+                    setCustomerGroup(e.target.value);
+                    setPage(1);
+                  }}
+                  className="h-10 py-2 text-sm"
+                >
+                  <option value="">All Groups</option>
+                  {(customerGroups as any[]).map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="w-56 shrink-0">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Date range</label>
+                <DateRangeSelector
+                  preset={datePreset}
+                  value={{ startDate: dateFrom, endDate: dateTo }}
+                  onChange={({ preset, range }) => {
+                    setDatePreset(preset);
+                    setDateFrom(range.startDate);
+                    setDateTo(range.endDate);
+                    setPage(1);
+                  }}
+                />
+              </div>
+              {hasActiveFilters ? (
+                <Button
+                  variant="outline"
+                  onClick={handleResetFilters}
+                  className="shrink-0 h-10 mb-0.5"
+                >
+                  Reset
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

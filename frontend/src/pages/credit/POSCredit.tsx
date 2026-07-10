@@ -1222,6 +1222,14 @@ export default function POSCredit() {
   const productsList = (productResults as MergedProduct[]) || [];
   const customersList = (customerResults as MergedCustomer[]) || [];
 
+  const activeCustomerName =
+    selectedCustomer?.name || cart?.customer_name || null;
+  const activeCustomerPhone = selectedCustomer?.phone || null;
+  const activeCustomerBalance = selectedCustomer?.balance;
+  const customerInitial = activeCustomerName
+    ? activeCustomerName.trim().charAt(0).toUpperCase()
+    : null;
+
   return (
     <div className="space-y-4">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
@@ -1270,6 +1278,75 @@ export default function POSCredit() {
         </div>
         <div className="flex justify-center">
           <CreditPOSModeToggle mode="sale" />
+        </div>
+
+        {/* Active customer — visible at a glance above cart tabs */}
+        <div
+          className={`rounded-xl border px-4 py-3 transition-all ${
+            activeCustomerName
+              ? 'bg-amber-50 border-amber-200 shadow-sm'
+              : 'bg-stone-50 border-stone-200 border-dashed'
+          }`}
+        >
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-base font-bold shadow-sm ${
+                activeCustomerName
+                  ? 'bg-amber-600 text-white ring-2 ring-amber-200'
+                  : 'bg-stone-200 text-stone-500'
+              }`}
+              aria-hidden
+            >
+              {customerInitial ?? <User className="h-5 w-5" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              {activeCustomerName ? (
+                <>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-800/80">
+                    Customer
+                  </p>
+                  <p className="text-lg sm:text-xl font-bold text-stone-900 truncate leading-tight mt-0.5">
+                    {activeCustomerName}
+                  </p>
+                  {(activeCustomerPhone || activeCustomerBalance != null) && (
+                    <p className="text-xs text-stone-500 mt-1 truncate">
+                      {activeCustomerPhone}
+                      {activeCustomerPhone && activeCustomerBalance != null && (
+                        <span className="mx-1.5 text-stone-300">·</span>
+                      )}
+                      {activeCustomerBalance != null && (
+                        <span className="font-semibold text-amber-800">
+                          Balance ₹{formatNumber(parseFloat(String(activeCustomerBalance || 0)))}
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-semibold text-stone-500">No customer selected</p>
+                  <p className="text-xs text-stone-400 mt-0.5">
+                    Pick a customer from the panel on the right to start billing
+                  </p>
+                </>
+              )}
+            </div>
+            {activeCustomerName && activeCustomerBalance != null ? (
+              <div className="hidden sm:flex shrink-0 flex-col items-end rounded-lg bg-amber-600 px-3.5 py-2 text-white shadow-sm">
+                <span className="text-[10px] font-semibold uppercase tracking-wide opacity-90">
+                  Ledger
+                </span>
+                <span className="text-base font-bold tabular-nums leading-tight">
+                  ₹{formatNumber(parseFloat(String(activeCustomerBalance || 0)))}
+                </span>
+              </div>
+            ) : activeCustomerName ? (
+              <div className="hidden sm:flex shrink-0 items-center rounded-full bg-amber-100 border border-amber-200 px-3 py-1.5">
+                <User className="h-3.5 w-3.5 text-amber-700 mr-1.5" />
+                <span className="text-xs font-semibold text-amber-900">On credit</span>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
