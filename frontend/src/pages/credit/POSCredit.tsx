@@ -1280,73 +1280,165 @@ export default function POSCredit() {
           <CreditPOSModeToggle mode="sale" />
         </div>
 
-        {/* Active customer — visible at a glance above cart tabs */}
+        {/* Customer search / selected customer — top of POS */}
         <div
           className={`rounded-xl border px-4 py-3 transition-all ${
             activeCustomerName
               ? 'bg-amber-50 border-amber-200 shadow-sm'
-              : 'bg-stone-50 border-stone-200 border-dashed'
+              : 'bg-white border-stone-200'
           }`}
         >
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-base font-bold shadow-sm ${
-                activeCustomerName
-                  ? 'bg-amber-600 text-white ring-2 ring-amber-200'
-                  : 'bg-stone-200 text-stone-500'
-              }`}
-              aria-hidden
-            >
-              {customerInitial ?? <User className="h-5 w-5" />}
+          {activeCustomerName ? (
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-base font-bold shadow-sm bg-amber-600 text-white ring-2 ring-amber-200"
+                aria-hidden
+              >
+                {customerInitial}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-800/80">
+                  Customer
+                </p>
+                <p className="text-lg sm:text-xl font-bold text-stone-900 truncate leading-tight mt-0.5">
+                  {activeCustomerName}
+                </p>
+                {(activeCustomerPhone || activeCustomerBalance != null) && (
+                  <p className="text-xs text-stone-500 mt-1 truncate">
+                    {activeCustomerPhone}
+                    {activeCustomerPhone && activeCustomerBalance != null && (
+                      <span className="mx-1.5 text-stone-300">·</span>
+                    )}
+                    {activeCustomerBalance != null && (
+                      <span className="font-semibold text-amber-800">
+                        Balance ₹{formatNumber(parseFloat(String(activeCustomerBalance || 0)))}
+                      </span>
+                    )}
+                    {selectedCustomer?.source ? (
+                      <span className="ml-2 uppercase text-stone-400">{selectedCustomer.source}</span>
+                    ) : null}
+                  </p>
+                )}
+              </div>
+              {activeCustomerBalance != null ? (
+                <div className="hidden sm:flex shrink-0 flex-col items-end rounded-lg bg-amber-600 px-3.5 py-2 text-white shadow-sm">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide opacity-90">
+                    Ledger
+                  </span>
+                  <span className="text-base font-bold tabular-nums leading-tight">
+                    ₹{formatNumber(parseFloat(String(activeCustomerBalance || 0)))}
+                  </span>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="shrink-0 p-2 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-amber-100/80 disabled:opacity-40"
+                disabled={isCartLocked}
+                onClick={clearCustomer}
+                title="Clear customer"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
-            <div className="min-w-0 flex-1">
-              {activeCustomerName ? (
-                <>
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-800/80">
-                    Customer
-                  </p>
-                  <p className="text-lg sm:text-xl font-bold text-stone-900 truncate leading-tight mt-0.5">
-                    {activeCustomerName}
-                  </p>
-                  {(activeCustomerPhone || activeCustomerBalance != null) && (
-                    <p className="text-xs text-stone-500 mt-1 truncate">
-                      {activeCustomerPhone}
-                      {activeCustomerPhone && activeCustomerBalance != null && (
-                        <span className="mx-1.5 text-stone-300">·</span>
+          ) : (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-400 border border-stone-200"
+                  aria-hidden
+                >
+                  <User className="h-5 w-5" />
+                </div>
+                <div className="relative min-w-0 flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400 pointer-events-none" />
+                  <Input
+                    className={`pl-9 ${isCartLocked ? 'opacity-60 cursor-not-allowed bg-gray-50' : ''}`}
+                    placeholder={
+                      isCartLocked
+                        ? 'Cart locked — unlock to select customer'
+                        : 'Search credit + shop customers…'
+                    }
+                    value={customerSearch}
+                    disabled={isCartLocked}
+                    onChange={(e) => {
+                      setCustomerSearch(e.target.value);
+                      setCustomerIndex(0);
+                    }}
+                    onKeyDown={(e) => {
+                      if (isCartLocked) return;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setCustomerIndex((i) => Math.min(i + 1, customersList.length - 1));
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setCustomerIndex((i) => Math.max(i - 1, 0));
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (customersList.length > 0) {
+                          const idx = customerIndex >= 0 ? customerIndex : 0;
+                          selectCustomer(customersList[idx]);
+                        } else if (customerSearch.trim()) {
+                          setNewCustomer({ name: customerSearch.trim(), phone: '' });
+                          setShowCreateCustomer(true);
+                        }
+                      }
+                    }}
+                  />
+                  {customerSearch.trim() && !isCartLocked && (
+                    <div className="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-auto">
+                      {isCustomerSearching ||
+                      customerSearch.trim() !== debouncedCustomerSearch.trim() ? (
+                        <div className="px-3 py-2 text-sm text-gray-400">Searching…</div>
+                      ) : customersList.length === 0 ? (
+                        <div className="px-3 py-2 text-sm text-gray-400">
+                          No customers found — press Enter to create “{customerSearch.trim()}”
+                        </div>
+                      ) : (
+                        customersList.map((c, idx) => (
+                          <button
+                            key={`${c.source}-${c.id}`}
+                            type="button"
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-amber-50 ${
+                              idx === customerIndex ? 'bg-amber-50' : ''
+                            }`}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectCustomer(c);
+                            }}
+                          >
+                            <div className="flex justify-between gap-2">
+                              <span className="font-medium text-gray-900 truncate">{c.name}</span>
+                              <span className="text-xs uppercase text-gray-400 shrink-0">{c.source}</span>
+                            </div>
+                            <div className="flex justify-between gap-2 text-xs text-gray-400 mt-0.5">
+                              <span>{c.phone || '—'}</span>
+                              <span className="text-amber-700 font-medium">
+                                ₹{formatNumber(parseFloat(String(c.balance || 0)))}
+                              </span>
+                            </div>
+                          </button>
+                        ))
                       )}
-                      {activeCustomerBalance != null && (
-                        <span className="font-semibold text-amber-800">
-                          Balance ₹{formatNumber(parseFloat(String(activeCustomerBalance || 0)))}
-                        </span>
-                      )}
-                    </p>
+                    </div>
                   )}
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-semibold text-stone-500">No customer selected</p>
-                  <p className="text-xs text-stone-400 mt-0.5">
-                    Pick a customer from the panel on the right to start billing
-                  </p>
-                </>
-              )}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={isCartLocked}
+                className="shrink-0 self-stretch sm:self-auto"
+                onClick={() => {
+                  setNewCustomer({ name: customerSearch.trim() || '', phone: '' });
+                  setShowCreateCustomer(true);
+                }}
+              >
+                <UserPlus className="h-4 w-4 mr-1" />
+                New
+              </Button>
             </div>
-            {activeCustomerName && activeCustomerBalance != null ? (
-              <div className="hidden sm:flex shrink-0 flex-col items-end rounded-lg bg-amber-600 px-3.5 py-2 text-white shadow-sm">
-                <span className="text-[10px] font-semibold uppercase tracking-wide opacity-90">
-                  Ledger
-                </span>
-                <span className="text-base font-bold tabular-nums leading-tight">
-                  ₹{formatNumber(parseFloat(String(activeCustomerBalance || 0)))}
-                </span>
-              </div>
-            ) : activeCustomerName ? (
-              <div className="hidden sm:flex shrink-0 items-center rounded-full bg-amber-100 border border-amber-200 px-3 py-1.5">
-                <User className="h-3.5 w-3.5 text-amber-700 mr-1.5" />
-                <span className="text-xs font-semibold text-amber-900">On credit</span>
-              </div>
-            ) : null}
-          </div>
+          )}
         </div>
       </div>
 
@@ -1677,114 +1769,6 @@ export default function POSCredit() {
         </div>
 
         <div className="space-y-4">
-          <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                <User className="h-4 w-4" />
-                Customer
-              </label>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={isCartLocked}
-                onClick={() => {
-                  setNewCustomer({ name: customerSearch.trim() || '', phone: '' });
-                  setShowCreateCustomer(true);
-                }}
-              >
-                <UserPlus className="h-4 w-4 mr-1" />
-                New
-              </Button>
-            </div>
-
-            {selectedCustomer ? (
-              <div className="flex items-start justify-between gap-2 bg-amber-50 border border-amber-100 rounded-md p-3">
-                <div>
-                  <div className="font-medium text-gray-900">{selectedCustomer.name}</div>
-                  {selectedCustomer.phone ? (
-                    <div className="text-xs text-gray-500">{selectedCustomer.phone}</div>
-                  ) : null}
-                  <div className="text-xs text-amber-700 mt-1">
-                    Balance: ₹{formatNumber(parseFloat(String(selectedCustomer.balance || 0)))}
-                    <span className="ml-2 uppercase text-gray-400">{selectedCustomer.source}</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="text-gray-400 hover:text-gray-600 disabled:opacity-40"
-                  disabled={isCartLocked}
-                  onClick={clearCustomer}
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            ) : (
-              <div className="relative">
-                <Input
-                  placeholder="Search credit + shop customers…"
-                  value={customerSearch}
-                  disabled={isCartLocked}
-                  onChange={(e) => {
-                    setCustomerSearch(e.target.value);
-                    setCustomerIndex(0);
-                  }}
-                  onKeyDown={(e) => {
-                    if (isCartLocked) return;
-                    if (e.key === 'ArrowDown') {
-                      e.preventDefault();
-                      setCustomerIndex((i) => Math.min(i + 1, customersList.length - 1));
-                    } else if (e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      setCustomerIndex((i) => Math.max(i - 1, 0));
-                    } else if (e.key === 'Enter') {
-                      e.preventDefault();
-                      if (customersList.length > 0) {
-                        const idx = customerIndex >= 0 ? customerIndex : 0;
-                        selectCustomer(customersList[idx]);
-                      } else if (customerSearch.trim()) {
-                        setNewCustomer({ name: customerSearch.trim(), phone: '' });
-                        setShowCreateCustomer(true);
-                      }
-                    }
-                  }}
-                />
-                {customerSearch.trim() && !isCartLocked && (
-                  <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-56 overflow-auto">
-                    {isCustomerSearching ||
-                    customerSearch.trim() !== debouncedCustomerSearch.trim() ? (
-                      <div className="px-3 py-2 text-sm text-gray-400">Searching…</div>
-                    ) : customersList.length === 0 ? (
-                      <div className="px-3 py-2 text-sm text-gray-400">
-                        No customers found — press Enter to create “{customerSearch.trim()}”
-                      </div>
-                    ) : (
-                      customersList.map((c, idx) => (
-                        <button
-                          key={`${c.source}-${c.id}`}
-                          type="button"
-                          className={`w-full text-left px-3 py-2 text-sm hover:bg-amber-50 ${
-                            idx === customerIndex ? 'bg-amber-50' : ''
-                          }`}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectCustomer(c);
-                          }}
-                        >
-                          <div className="flex justify-between">
-                            <span>{c.name}</span>
-                            <span className="text-xs uppercase text-gray-400">{c.source}</span>
-                          </div>
-                          {c.phone ? <div className="text-xs text-gray-400">{c.phone}</div> : null}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
             <div className="flex justify-between text-sm">
               <span className="text-gray-500">Subtotal</span>
