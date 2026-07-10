@@ -6,17 +6,15 @@ import {
   Undo2,
   Trash2,
   User,
-  Store,
   X,
   CheckCircle,
   Package,
 } from 'lucide-react';
+import CreditPOSModeToggle from './CreditPOSModeToggle';
 import { catalogApi, creditApi } from '../../lib/api';
-import { auth } from '../../lib/auth';
 import { formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
-import Select from '../../components/ui/Select';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 
@@ -63,8 +61,6 @@ export default function POSCreditReturn() {
   const productInputRef = useRef<HTMLInputElement>(null);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [user, setUser] = useState<any>(null);
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
 
   const [customerSearch, setCustomerSearch] = useState('');
   const [debouncedCustomerSearch, setDebouncedCustomerSearch] = useState('');
@@ -85,23 +81,9 @@ export default function POSCreditReturn() {
   const removeToast = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
 
   useEffect(() => {
-    setUser(auth.getUser());
-  }, []);
-
-  useEffect(() => {
     const t = window.setTimeout(() => setDebouncedCustomerSearch(customerSearch), 300);
     return () => window.clearTimeout(t);
   }, [customerSearch]);
-
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedProductSearch(productSearch), 300);
-    return () => window.clearTimeout(t);
-  }, [productSearch]);
-
-  const userGroups: string[] = user?.groups || [];
-  const isAdmin = userGroups.includes('Admin') || user?.is_superuser;
-  const isRetailGroup = userGroups.includes('Retail') || userGroups.includes('RetailAdmin');
-  const isWholesaleAdmin = userGroups.includes('WholesaleAdmin');
 
   const { data: stores = [] } = useQuery({
     queryKey: ['stores'],
@@ -117,18 +99,12 @@ export default function POSCreditReturn() {
     return list.filter((s: any) => s.is_active !== false);
   }, [stores]);
 
-  const defaultStore = useMemo(() => {
-    if ((isAdmin || isRetailGroup || isWholesaleAdmin) && selectedStoreId) {
-      return filteredStores.find((s: any) => s.id === selectedStoreId) || filteredStores[0];
-    }
-    return filteredStores[0];
-  }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
+  const defaultStore = useMemo(() => filteredStores[0], [filteredStores]);
 
   useEffect(() => {
-    if ((isAdmin || isRetailGroup || isWholesaleAdmin) && !selectedStoreId && filteredStores.length > 0) {
-      setSelectedStoreId(filteredStores[0].id);
-    }
-  }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
+    const t = window.setTimeout(() => setDebouncedProductSearch(productSearch), 300);
+    return () => window.clearTimeout(t);
+  }, [productSearch]);
 
   const { data: customerResults = [], isFetching: isCustomerSearching } = useQuery({
     queryKey: ['credit-customer-search', debouncedCustomerSearch],
@@ -283,7 +259,7 @@ export default function POSCreditReturn() {
       return;
     }
     if (!defaultStore?.id) {
-      showToast('Select a store first', 'error');
+      showToast('No store configured for credit POS', 'error');
       return;
     }
     if (!basket.length) {
@@ -323,7 +299,7 @@ export default function POSCreditReturn() {
     <div className="space-y-4">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="space-y-3">
         <div>
           <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
             <Undo2 className="h-5 w-5 text-amber-600" />
@@ -333,21 +309,9 @@ export default function POSCreditReturn() {
             Return products from this customer&apos;s credit invoices at the sold price. Qty cannot exceed what was sold.
           </p>
         </div>
-        {(isAdmin || isRetailGroup || isWholesaleAdmin) && filteredStores.length > 0 && (
-          <div className="flex items-center gap-2 min-w-[200px]">
-            <Store className="h-4 w-4 text-gray-400" />
-            <Select
-              value={selectedStoreId ? String(selectedStoreId) : ''}
-              onChange={(e) => setSelectedStoreId(parseInt(e.target.value, 10))}
-            >
-              {filteredStores.map((s: any) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-        )}
+        <div className="flex justify-center">
+          <CreditPOSModeToggle mode="return" />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

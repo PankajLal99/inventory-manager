@@ -10,7 +10,6 @@ import {
   User,
   UserPlus,
   Package,
-  Store,
   X,
   CheckCircle,
   Sparkles,
@@ -33,13 +32,13 @@ import {
   updateCreditCartTab,
   type CreditCartTab,
 } from '../../lib/creditCartStorage';
+import CreditPOSModeToggle from './CreditPOSModeToggle';
 import {
   buildCreditInvoiceHtml,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
-import Select from '../../components/ui/Select';
 import Modal from '../../components/ui/Modal';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
@@ -173,9 +172,7 @@ export default function POSCredit() {
   const isCreatingCartRef = useRef(false);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [user, setUser] = useState<any>(null);
   const [username, setUsername] = useState<string | null>(null);
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
   const [cartId, setCartId] = useState<number | null>(null);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [cartTabs, setCartTabs] = useState<CreditCartTab[]>([]);
@@ -213,18 +210,12 @@ export default function POSCredit() {
 
   useEffect(() => {
     const u = auth.getUser();
-    setUser(u);
     setUsername(u?.username || null);
   }, []);
 
   useEffect(() => {
     cartTabsRef.current = cartTabs;
   }, [cartTabs]);
-
-  const userGroups: string[] = user?.groups || [];
-  const isAdmin = userGroups.includes('Admin') || user?.is_superuser;
-  const isRetailGroup = userGroups.includes('Retail') || userGroups.includes('RetailAdmin');
-  const isWholesaleAdmin = userGroups.includes('WholesaleAdmin');
 
   const { data: stores = [] } = useQuery({
     queryKey: ['stores'],
@@ -240,18 +231,7 @@ export default function POSCredit() {
     return list.filter((s: any) => s.is_active !== false);
   }, [stores]);
 
-  const defaultStore = useMemo(() => {
-    if ((isAdmin || isRetailGroup || isWholesaleAdmin) && selectedStoreId) {
-      return filteredStores.find((s: any) => s.id === selectedStoreId) || filteredStores[0];
-    }
-    return filteredStores[0];
-  }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
-
-  useEffect(() => {
-    if ((isAdmin || isRetailGroup || isWholesaleAdmin) && !selectedStoreId && filteredStores.length > 0) {
-      setSelectedStoreId(filteredStores[0].id);
-    }
-  }, [isAdmin, isRetailGroup, isWholesaleAdmin, selectedStoreId, filteredStores]);
+  const defaultStore = useMemo(() => filteredStores[0], [filteredStores]);
 
   const activeTab = cartTabs.find((t) => t.id === cartId);
   const isCartLocked = !!activeTab?.locked;
@@ -580,7 +560,7 @@ export default function POSCredit() {
 
   const handleNewSale = () => {
     if (!defaultStore) {
-      showToast('Select a store first', 'error');
+      showToast('No store configured for credit POS', 'error');
       return;
     }
     createCartMutation.mutate();
@@ -673,30 +653,6 @@ export default function POSCredit() {
     await deleteCartOptimistic(cartId);
   };
 
-  const handleStoreChange = async (id: number) => {
-    if (id === selectedStoreId) return;
-    if (cartId && isCartLocked) {
-      showToast('Unlock the cart before switching store.', 'info');
-      return;
-    }
-    if (cartId && username) {
-      try {
-        if (!isCartLocked) {
-          await creditApi.carts.delete(cartId).catch(() => undefined);
-        }
-        queryClient.removeQueries({ queryKey: ['credit-cart', cartId] });
-        removeCreditCartTab(username, cartId);
-      } catch {
-        // ignore
-      }
-    }
-    setCartId(null);
-    setActiveTabId(null);
-    setCartTabs([]);
-    setSelectedCustomer(null);
-    setSelectedStoreId(id);
-  };
-
   const getTabDisplayName = (tab: CreditCartTab, index: number): string => {
     const customerName = tab.customerName || (tab.id === cartId ? cart?.customer_name : null);
     if (customerName) {
@@ -714,7 +670,7 @@ export default function POSCredit() {
     let id = cartId;
     if (!id) {
       if (!defaultStore?.id) {
-        showToast('Select a store first', 'error');
+        showToast('No store configured for credit POS', 'error');
         return;
       }
       try {
@@ -1145,8 +1101,8 @@ export default function POSCredit() {
     <div className="space-y-4">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
               <ShoppingCart className="h-5 w-5 text-amber-600" />
@@ -1156,51 +1112,39 @@ export default function POSCredit() {
               Products by name only — enter qty and price on each line.
             </p>
           </div>
-          {(isAdmin || isRetailGroup || isWholesaleAdmin) && filteredStores.length > 0 && (
-            <div className="flex items-center gap-2 min-w-[200px]">
-              <Store className="h-4 w-4 text-gray-400" />
-              <Select
-                value={selectedStoreId ? String(selectedStoreId) : ''}
-                onChange={(e) => handleStoreChange(parseInt(e.target.value, 10))}
+          <div className="flex items-center gap-2">
+            {cartId && (
+              <Button
+                variant="outline"
+                onClick={handleDeleteCurrentCart}
+                disabled={isDeletingCart || cartTabs.length <= 1 || isCartLocked}
+                className="flex items-center gap-1.5 text-red-600 border-red-300 hover:bg-red-50 text-sm"
+                title={
+                  isCartLocked
+                    ? 'Unlock the cart to delete it.'
+                    : cartTabs.length <= 1
+                      ? 'Cannot delete the last cart.'
+                      : 'Delete current cart'
+                }
               >
-                {filteredStores.map((s: any) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {cartId && (
+                <Trash className="h-4 w-4" />
+                <span className="hidden sm:inline">Delete Cart</span>
+              </Button>
+            )}
             <Button
-              variant="outline"
-              onClick={handleDeleteCurrentCart}
-              disabled={isDeletingCart || cartTabs.length <= 1 || isCartLocked}
-              className="flex items-center gap-1.5 text-red-600 border-red-300 hover:bg-red-50 text-sm"
-              title={
-                isCartLocked
-                  ? 'Unlock the cart to delete it.'
-                  : cartTabs.length <= 1
-                    ? 'Cannot delete the last cart.'
-                    : 'Delete current cart'
-              }
+              variant="primary"
+              onClick={handleNewSale}
+              disabled={createCartMutation.isPending}
+              className="flex items-center gap-1.5 text-sm"
             >
-              <Trash className="h-4 w-4" />
-              <span className="hidden sm:inline">Delete Cart</span>
+              <Sparkles className="h-4 w-4" />
+              <span className="hidden sm:inline">New Sale</span>
+              <span className="sm:hidden">New</span>
             </Button>
-          )}
-          <Button
-            variant="primary"
-            onClick={handleNewSale}
-            disabled={createCartMutation.isPending}
-            className="flex items-center gap-1.5 text-sm"
-          >
-            <Sparkles className="h-4 w-4" />
-            <span className="hidden sm:inline">New Sale</span>
-            <span className="sm:hidden">New</span>
-          </Button>
+          </div>
+        </div>
+        <div className="flex justify-center">
+          <CreditPOSModeToggle mode="sale" />
         </div>
       </div>
 

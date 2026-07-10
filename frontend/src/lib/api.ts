@@ -552,6 +552,7 @@ export const searchApi = {
 export const creditApi = {
   customers: {
     list: (params?: any) => api.get('/credit/customers/', { params }),
+    groups: () => api.get('/credit/customers/groups/'),
     create: (data: any) => api.post('/credit/customers/', data),
     search: (params?: { search?: string }) => api.get('/credit/customers/search/', { params }),
     ensure: (data: {
@@ -595,6 +596,7 @@ export const creditApi = {
   },
   invoices: {
     list: (params?: any) => api.get('/credit/invoices/', { params }),
+    summary: (params?: any) => api.get('/credit/invoices/summary/', { params }),
     get: (id: number) => api.get(`/credit/invoices/${id}/`),
     void: (id: number) => api.post(`/credit/invoices/${id}/void/`),
   },

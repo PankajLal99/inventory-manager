@@ -6,14 +6,12 @@ import {
   FileText,
   BookOpen,
   LogOut,
-  RefreshCw,
   Menu,
   X,
 } from 'lucide-react';
 
 const NAV = [
   { path: '/pos-credit', label: 'POS Credit', icon: Coins },
-  { path: '/pos-credit-return', label: 'Credit Return', icon: RefreshCw },
   { path: '/credit-invoices', label: 'Credit Invoices', icon: FileText },
   { path: '/credit-ledger', label: 'Credit Ledger', icon: BookOpen },
 ] as const;
@@ -50,10 +48,12 @@ export default function CreditLayout() {
     navigate('/credit-login');
   };
 
+  const { pathname } = location;
+
   return (
-    <div className="min-h-screen bg-stone-50 flex flex-col">
-      <header className="bg-white border-b border-amber-200 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 flex items-center justify-between h-14 gap-3">
+    <div className="min-h-screen bg-gradient-to-b from-stone-100 to-stone-50 flex flex-col">
+      <header className="bg-white/95 backdrop-blur border-b border-amber-200/80 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-[1480px] mx-auto w-full px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <div className="flex-shrink-0 h-9 w-9 rounded-xl bg-amber-100 flex items-center justify-center">
               <Coins className="h-5 w-5 text-amber-700" />
@@ -68,7 +68,10 @@ export default function CreditLayout() {
 
           <nav className="hidden md:flex items-center gap-1">
             {NAV.map(({ path, label, icon: Icon }) => {
-              const active = isActive(location.pathname, path);
+              const active =
+                path === '/pos-credit'
+                  ? pathname === '/pos-credit' || pathname === '/pos-credit-return'
+                  : isActive(pathname, path);
               return (
                 <Link
                   key={path}
@@ -107,9 +110,13 @@ export default function CreditLayout() {
         </div>
 
         {mobileOpen && (
-          <div className="md:hidden border-t border-amber-100 bg-white px-3 py-2 space-y-1">
+          <div className="md:hidden border-t border-amber-100 bg-white">
+            <div className="max-w-[1480px] mx-auto w-full px-4 sm:px-6 lg:px-8 py-2 space-y-1">
             {NAV.map(({ path, label, icon: Icon }) => {
-              const active = isActive(location.pathname, path);
+              const active =
+                path === '/pos-credit'
+                  ? pathname === '/pos-credit' || pathname === '/pos-credit-return'
+                  : isActive(pathname, path);
               return (
                 <Link
                   key={path}
@@ -132,12 +139,17 @@ export default function CreditLayout() {
               <LogOut className="h-4 w-4" />
               Logout
             </button>
+            </div>
           </div>
         )}
       </header>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <Outlet />
+      <main className="flex-1 w-full">
+        <div className="max-w-[1480px] mx-auto w-full px-4 sm:px-6 lg:px-8 py-5 sm:py-8">
+          <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm ring-1 ring-black/[0.03] min-h-[calc(100vh-7.5rem)] p-4 sm:p-6 lg:p-8">
+            <Outlet />
+          </div>
+        </div>
       </main>
     </div>
   );

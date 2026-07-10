@@ -16,7 +16,15 @@ export type CreditLedgerCustomerRow = {
   last_payment_at?: string | null;
   days_since_last_payment?: number | null;
   collection_status?: CollectionStatus;
+  customer_group_id?: number | null;
+  customer_group_name?: string;
 };
+
+export function formatCustomerWithGroup(name: string, groupName?: string) {
+  const safeName = name || 'Anonymous';
+  const safeGroup = (groupName || '').trim();
+  return safeGroup ? `${safeName} (${safeGroup})` : safeName;
+}
 
 export function formatLedgerDate(value?: string | null) {
   if (!value) return '—';

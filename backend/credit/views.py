@@ -23,7 +23,7 @@ from rest_framework.response import Response
 
 from backend.catalog.models import Product
 from backend.locations.models import Store
-from backend.parties.models import Customer
+from backend.parties.models import Customer, CustomerGroup
 
 from .models import (
     CreditCart,
@@ -89,6 +89,19 @@ def _require_whole_quantity(qty: Decimal):
     return None
 
 
+def _get_credit_default_group():
+    """CustomerGroup used for credit-only customers (not linked from parties)."""
+    group, _ = CustomerGroup.objects.get_or_create(
+        name='Credit',
+        defaults={
+            'description': 'POS Credit customers',
+            'discount_percentage': Decimal('0.00'),
+            'is_active': True,
+        },
+    )
+    return group
+
+
 def ensure_credit_customer(*, credit_customer_id=None, parties_customer_id=None, name=None, phone=None):
     """
     Resolve or create a CreditCustomer.
@@ -122,12 +135,14 @@ def ensure_credit_customer(*, credit_customer_id=None, parties_customer_id=None,
             email=party.email or '',
             address=party.address or '',
             linked_customer=party,
+            customer_group=party.customer_group or _get_credit_default_group(),
         )
 
     if name and str(name).strip():
         return CreditCustomer.objects.create(
             name=str(name).strip(),
             phone=(str(phone).strip() if phone else None) or None,
+            customer_group=_get_credit_default_group(),
         )
 
     raise ValueError('Customer is required')
@@ -139,7 +154,7 @@ def ensure_credit_customer(*, credit_customer_id=None, parties_customer_id=None,
 @permission_classes([IsAuthenticated])
 def credit_customer_list_create(request):
     if request.method == 'GET':
-        qs = CreditCustomer.objects.filter(is_active=True)
+        qs = CreditCustomer.objects.filter(is_active=True).select_related('customer_group', 'linked_customer')
         search = request.query_params.get('search', '').strip()
         if search:
             qs = qs.filter(
@@ -147,13 +162,34 @@ def credit_customer_list_create(request):
                 Q(phone__icontains=search) |
                 Q(email__icontains=search)
             )
+        customer_group_id = request.query_params.get('customer_group', '').strip()
+        if customer_group_id:
+            qs = qs.filter(customer_group_id=customer_group_id)
         qs = qs.order_by('name')[:50]
         return Response(CreditCustomerSerializer(qs, many=True).data)
 
     serializer = CreditCustomerSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     customer = serializer.save()
+    if not customer.customer_group_id:
+        customer.customer_group = _get_credit_default_group()
+        customer.save(update_fields=['customer_group', 'updated_at'])
     return Response(CreditCustomerSerializer(customer).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_customer_groups_list(request):
+    """Customer groups used on credit customers (always includes Credit group)."""
+    default_group = _get_credit_default_group()
+    used_ids = set(
+        CreditCustomer.objects.filter(is_active=True, customer_group__isnull=False)
+        .values_list('customer_group_id', flat=True)
+        .distinct()
+    )
+    used_ids.add(default_group.id)
+    groups = CustomerGroup.objects.filter(id__in=used_ids, is_active=True).order_by('name')
+    return Response([{'id': g.id, 'name': g.name} for g in groups])
 
 
 @api_view(['GET'])
@@ -170,13 +206,14 @@ def credit_customer_search(request):
 
     credit_qs = CreditCustomer.objects.filter(is_active=True).filter(
         Q(name__icontains=search) | Q(phone__icontains=search)
-    ).select_related('linked_customer')[:30]
+    ).select_related('linked_customer', 'customer_group')[:30]
 
     for c in credit_qs:
         if c.linked_customer_id:
             seen_party_ids.add(c.linked_customer_id)
         if c.phone:
             seen_phones.add(c.phone.strip())
+        group_name = c.customer_group.name if c.customer_group_id else ''
         results.append({
             'id': c.id,
             'name': c.name,
@@ -186,11 +223,13 @@ def credit_customer_search(request):
             'credit_customer_id': c.id,
             'parties_customer_id': c.linked_customer_id,
             'balance': c.balance,
+            'customer_group_id': c.customer_group_id,
+            'customer_group_name': group_name,
         })
 
     party_qs = Customer.objects.filter(is_active=True).filter(
         Q(name__icontains=search) | Q(phone__icontains=search)
-    )[:30]
+    ).select_related('customer_group')[:30]
 
     for p in party_qs:
         if p.id in seen_party_ids:
@@ -198,7 +237,7 @@ def credit_customer_search(request):
         if p.phone and p.phone.strip() in seen_phones:
             continue
         # If a linked credit customer already exists, prefer that (should already be in results)
-        linked = CreditCustomer.objects.filter(linked_customer=p).first()
+        linked = CreditCustomer.objects.filter(linked_customer=p).select_related('customer_group').first()
         if linked:
             continue
         results.append({
@@ -210,6 +249,8 @@ def credit_customer_search(request):
             'credit_customer_id': None,
             'parties_customer_id': p.id,
             'balance': Decimal('0.00'),
+            'customer_group_id': p.customer_group_id,
+            'customer_group_name': p.customer_group.name if p.customer_group_id else '',
         })
 
     results.sort(key=lambda r: (r['name'] or '').lower())
@@ -648,10 +689,10 @@ def credit_cart_checkout(request, pk):
 
 # ── Invoices ────────────────────────────────────────────────────────────────
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def credit_invoice_list(request):
-    qs = CreditInvoice.objects.select_related('customer', 'store', 'created_by').all()
+def _credit_invoices_filtered_queryset(request):
+    qs = CreditInvoice.objects.select_related(
+        'customer', 'customer__customer_group', 'store', 'created_by'
+    ).all()
 
     search = request.query_params.get('search', '').strip()
     if search:
@@ -673,6 +714,10 @@ def credit_invoice_list(request):
     if customer_id:
         qs = qs.filter(customer_id=customer_id)
 
+    customer_group_id = request.query_params.get('customer_group', '').strip()
+    if customer_group_id:
+        qs = qs.filter(customer__customer_group_id=customer_group_id)
+
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
     if date_from:
@@ -680,9 +725,74 @@ def credit_invoice_list(request):
     if date_to:
         qs = qs.filter(created_at__date__lte=date_to)
 
-    qs = qs.order_by('-created_at')
+    return qs.order_by('-created_at')
 
-    # Simple pagination
+
+def _credit_returns_filtered_queryset(request):
+    qs = CreditReturn.objects.select_related(
+        'customer', 'customer__customer_group', 'store', 'created_by'
+    ).prefetch_related('items')
+
+    customer_id = request.query_params.get('customer') or request.query_params.get('credit_customer_id')
+    if customer_id:
+        qs = qs.filter(customer_id=customer_id)
+
+    customer_group_id = request.query_params.get('customer_group', '').strip()
+    if customer_group_id:
+        qs = qs.filter(customer__customer_group_id=customer_group_id)
+
+    store_id = request.query_params.get('store')
+    if store_id:
+        qs = qs.filter(store_id=store_id)
+
+    search = request.query_params.get('search', '').strip()
+    if search:
+        qs = qs.filter(
+            Q(return_number__icontains=search) |
+            Q(customer__name__icontains=search)
+        )
+
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    if date_from:
+        qs = qs.filter(created_at__date__gte=date_from)
+    if date_to:
+        qs = qs.filter(created_at__date__lte=date_to)
+
+    return qs.filter(status='completed').order_by('-created_at')
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_invoices_summary(request):
+    """KPI totals for credit invoices / returns with the same filters as list views."""
+    invoice_qs = _credit_invoices_filtered_queryset(request)
+    return_qs = _credit_returns_filtered_queryset(request)
+
+    sales_total = invoice_qs.filter(status='open').aggregate(
+        total=Coalesce(Sum('total'), Decimal('0')),
+        count=Count('id'),
+    )
+    void_count = invoice_qs.filter(status='void').count()
+    returns_total = return_qs.aggregate(
+        total=Coalesce(Sum('total'), Decimal('0')),
+        count=Count('id'),
+    )
+
+    return Response({
+        'total_sales': str(sales_total['total'] or Decimal('0')),
+        'sales_count': sales_total['count'] or 0,
+        'void_count': void_count,
+        'total_returns': str(returns_total['total'] or Decimal('0')),
+        'returns_count': returns_total['count'] or 0,
+        'invoice_count': invoice_qs.count(),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_invoice_list(request):
+    qs = _credit_invoices_filtered_queryset(request)
     try:
         page = max(int(request.query_params.get('page', 1)), 1)
         page_size = min(max(int(request.query_params.get('page_size', 25)), 1), 100)
@@ -961,7 +1071,10 @@ def credit_ledger_by_customer(request):
         .values('created_at')[:1]
     )
 
-    qs = CreditCustomer.objects.filter(is_active=True).annotate(
+    qs = CreditCustomer.objects.filter(is_active=True).select_related(
+        'customer_group',
+        'linked_customer',
+    ).annotate(
         total_debit=Coalesce(
             Sum(
                 Case(
@@ -988,6 +1101,9 @@ def credit_ledger_by_customer(request):
 
     if search:
         qs = qs.filter(Q(name__icontains=search) | Q(phone__icontains=search))
+    customer_group_id = request.query_params.get('customer_group', '').strip()
+    if customer_group_id:
+        qs = qs.filter(customer_group_id=customer_group_id)
     if only_with_balance in ('1', 'true'):
         qs = qs.exclude(balance=0)
 
@@ -1004,6 +1120,8 @@ def credit_ledger_by_customer(request):
             'id': row.id,
             'name': row.name,
             'phone': row.phone or '',
+            'customer_group_id': row.customer_group_id,
+            'customer_group_name': row.customer_group.name if row.customer_group_id else '',
             'balance': str(balance),
             'total_debit': str(total_debit),
             'total_credit': str(total_credit),
@@ -1093,17 +1211,7 @@ def credit_return_sold_products(request):
 @permission_classes([IsAuthenticated])
 def credit_return_list_create(request):
     if request.method == 'GET':
-        qs = CreditReturn.objects.select_related('customer', 'store', 'created_by').prefetch_related('items')
-        customer_id = request.query_params.get('customer') or request.query_params.get('credit_customer_id')
-        if customer_id:
-            qs = qs.filter(customer_id=customer_id)
-        search = request.query_params.get('search', '').strip()
-        if search:
-            qs = qs.filter(
-                Q(return_number__icontains=search) |
-                Q(customer__name__icontains=search)
-            )
-        qs = qs.order_by('-created_at')
+        qs = _credit_returns_filtered_queryset(request)
         try:
             page = max(int(request.query_params.get('page', 1)), 1)
             page_size = min(max(int(request.query_params.get('page_size', 25)), 1), 100)

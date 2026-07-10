@@ -15,6 +15,7 @@ import { creditApi } from '../../lib/api';
 import { formatAmountINR } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import Select from '../../components/ui/Select';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -24,6 +25,7 @@ import {
   collectionStatusDotClass,
   collectionStatusLabel,
   collectionStatusRowClass,
+  formatCustomerWithGroup,
   type CreditLedgerCustomerRow,
 } from './creditLedgerUtils';
 
@@ -36,11 +38,13 @@ export default function CreditLedger() {
   const [withBalanceOnly, setWithBalanceOnly] = useState(
     searchParams.get('with_balance') === '1'
   );
+  const [customerGroup, setCustomerGroup] = useState(searchParams.get('customer_group') || '');
 
   const buildDetailPath = (customerId: number) => {
     const params = new URLSearchParams();
     if (search.trim()) params.set('search', search.trim());
     if (withBalanceOnly) params.set('with_balance', '1');
+    if (customerGroup) params.set('customer_group', customerGroup);
     const query = params.toString();
     return query ? `/credit-ledger/${customerId}?${query}` : `/credit-ledger/${customerId}`;
   };
@@ -58,12 +62,21 @@ export default function CreditLedger() {
     }
   }, [searchParams, navigate]);
 
+  const { data: customerGroups = [] } = useQuery({
+    queryKey: ['credit-customer-groups'],
+    queryFn: async () => {
+      const response = await creditApi.customers.groups();
+      return response.data || [];
+    },
+  });
+
   const { data: customers = [], isLoading, error, refetch } = useQuery({
-    queryKey: ['credit-ledger-customers', search, withBalanceOnly],
+    queryKey: ['credit-ledger-customers', search, withBalanceOnly, customerGroup],
     queryFn: async () => {
       const params: Record<string, string> = {};
       if (search.trim()) params.search = search.trim();
       if (withBalanceOnly) params.with_balance = '1';
+      if (customerGroup) params.customer_group = customerGroup;
       const res = await creditApi.ledger.byCustomer(params);
       return (res.data || []) as CreditLedgerCustomerRow[];
     },
@@ -87,11 +100,12 @@ export default function CreditLedger() {
     };
   }, [customers]);
 
-  const hasActiveFilters = !!(search.trim() || withBalanceOnly);
+  const hasActiveFilters = !!(search.trim() || withBalanceOnly || customerGroup);
 
   const handleResetFilters = () => {
     setSearch('');
     setWithBalanceOnly(false);
+    setCustomerGroup('');
     setSearchParams({});
   };
 
@@ -193,7 +207,7 @@ export default function CreditLedger() {
               Filters
               {hasActiveFilters ? (
                 <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                  {[search.trim(), withBalanceOnly].filter(Boolean).length}
+                  {[search.trim(), withBalanceOnly, customerGroup].filter(Boolean).length}
                 </span>
               ) : null}
             </Button>
@@ -202,6 +216,27 @@ export default function CreditLedger() {
 
         {showFilters ? (
           <div className="border-t pt-4 mb-4 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Select
+                label="Customer Group"
+                value={customerGroup}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setCustomerGroup(value);
+                  const next = new URLSearchParams(searchParams);
+                  if (value) next.set('customer_group', value);
+                  else next.delete('customer_group');
+                  setSearchParams(next, { replace: true });
+                }}
+              >
+                <option value="">All Groups</option>
+                {customerGroups.map((group: any) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
             <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
               <input
                 type="checkbox"
@@ -246,6 +281,9 @@ export default function CreditLedger() {
                       Customer
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
+                      Group
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
                       Status
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider">
@@ -276,12 +314,17 @@ export default function CreditLedger() {
                               onClick={() => navigate(buildDetailPath(row.id))}
                               className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline text-left"
                             >
-                              {row.name}
+                              {formatCustomerWithGroup(row.name, row.customer_group_name)}
                             </button>
                             {row.phone ? (
                               <span className="text-xs text-gray-500">({row.phone})</span>
                             ) : null}
                           </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                          {row.customer_group_name || (
+                            <span className="text-gray-400 italic">—</span>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <Badge variant={collectionStatusBadgeVariant(status)}>
@@ -314,7 +357,7 @@ export default function CreditLedger() {
                 </tbody>
                 <tfoot className="bg-gray-50 border-t-2 border-gray-300">
                   <tr>
-                    <td colSpan={4} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
+                    <td colSpan={5} className="px-6 py-4 text-right text-sm font-bold text-gray-700">
                       Totals:
                     </td>
                     <td className="px-6 py-4 text-right">
@@ -360,7 +403,7 @@ export default function CreditLedger() {
                           onClick={() => navigate(buildDetailPath(row.id))}
                           className="text-base font-semibold text-blue-600 hover:underline text-left"
                         >
-                          {row.name}
+                          {formatCustomerWithGroup(row.name, row.customer_group_name)}
                         </button>
                         {row.phone ? (
                           <p className="text-xs text-gray-500 mt-0.5">{row.phone}</p>

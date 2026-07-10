@@ -16,8 +16,8 @@ from .models import (
 
 @admin.register(CreditCustomer)
 class CreditCustomerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'phone', 'balance', 'linked_customer', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['name', 'phone', 'customer_group', 'balance', 'linked_customer', 'is_active', 'created_at']
+    list_filter = ['is_active', 'customer_group', 'created_at']
     search_fields = ['name', 'phone', 'email']
     ordering = ['name']
 

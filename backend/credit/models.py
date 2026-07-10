@@ -6,7 +6,7 @@ from django.utils import timezone
 from backend.catalog.models import Product
 from backend.core.models import User
 from backend.locations.models import Store
-from backend.parties.models import Customer
+from backend.parties.models import Customer, CustomerGroup
 
 
 class CreditCustomer(models.Model):
@@ -17,6 +17,13 @@ class CreditCustomer(models.Model):
     address = models.TextField(blank=True)
     linked_customer = models.ForeignKey(
         Customer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='credit_customers',
+    )
+    customer_group = models.ForeignKey(
+        CustomerGroup,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

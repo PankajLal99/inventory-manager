@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from backend.parties.models import CustomerGroup
+
 from .models import (
     CreditCart,
     CreditCartItem,
@@ -28,15 +30,30 @@ def _whole_qty(value):
 
 class CreditCustomerSerializer(serializers.ModelSerializer):
     linked_customer_name = serializers.CharField(source='linked_customer.name', read_only=True, allow_null=True)
+    customer_group_name = serializers.CharField(source='customer_group.name', read_only=True, allow_null=True)
 
     class Meta:
         model = CreditCustomer
         fields = [
             'id', 'name', 'phone', 'email', 'address',
             'linked_customer', 'linked_customer_name',
+            'customer_group', 'customer_group_name',
             'balance', 'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['balance', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        if not validated_data.get('customer_group'):
+            group, _ = CustomerGroup.objects.get_or_create(
+                name='Credit',
+                defaults={
+                    'description': 'POS Credit customers',
+                    'discount_percentage': Decimal('0.00'),
+                    'is_active': True,
+                },
+            )
+            validated_data['customer_group'] = group
+        return super().create(validated_data)
 
 
 class CreditProductSerializer(serializers.ModelSerializer):
@@ -118,6 +135,8 @@ class CreditInvoiceSerializer(serializers.ModelSerializer):
     items = CreditInvoiceItemSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True, allow_null=True)
     customer_phone = serializers.CharField(source='customer.phone', read_only=True, allow_null=True)
+    customer_group_id = serializers.IntegerField(source='customer.customer_group_id', read_only=True, allow_null=True)
+    customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True, allow_null=True)
     created_by_name = serializers.SerializerMethodField()
 
@@ -126,6 +145,7 @@ class CreditInvoiceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'invoice_number', 'cart', 'store', 'store_name',
             'customer', 'customer_name', 'customer_phone',
+            'customer_group_id', 'customer_group_name',
             'status', 'subtotal', 'discount_amount', 'tax_amount', 'total',
             'notes', 'created_by', 'created_by_name', 'created_at', 'updated_at',
             'voided_at', 'voided_by', 'items',
@@ -299,6 +319,8 @@ class MergedCustomerSearchSerializer(serializers.Serializer):
     credit_customer_id = serializers.IntegerField(allow_null=True, required=False)
     parties_customer_id = serializers.IntegerField(allow_null=True, required=False)
     balance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    customer_group_id = serializers.IntegerField(allow_null=True, required=False)
+    customer_group_name = serializers.CharField(allow_blank=True, required=False)
 
 
 class MergedProductSearchSerializer(serializers.Serializer):

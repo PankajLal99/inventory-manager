@@ -5,6 +5,7 @@ from . import views
 urlpatterns = [
     # Customers
     path('credit/customers/', views.credit_customer_list_create, name='credit-customer-list-create'),
+    path('credit/customers/groups/', views.credit_customer_groups_list, name='credit-customer-groups-list'),
     path('credit/customers/search/', views.credit_customer_search, name='credit-customer-search'),
     path('credit/customers/ensure/', views.credit_customer_ensure, name='credit-customer-ensure'),
 
@@ -21,6 +22,7 @@ urlpatterns = [
 
     # Invoices
     path('credit/invoices/', views.credit_invoice_list, name='credit-invoice-list'),
+    path('credit/invoices/summary/', views.credit_invoices_summary, name='credit-invoices-summary'),
     path('credit/invoices/<int:pk>/', views.credit_invoice_detail, name='credit-invoice-detail'),
     path('credit/invoices/<int:pk>/void/', views.credit_invoice_void, name='credit-invoice-void'),
 
