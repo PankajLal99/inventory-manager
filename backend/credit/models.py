@@ -349,7 +349,7 @@ class CreditLedgerEntry(models.Model):
 
     class Meta:
         db_table = 'credit_ledger_entries'
-        ordering = ['-created_at']
+        ordering = ['created_at', 'id']
         indexes = [
             models.Index(fields=['customer', '-created_at'], name='idx_cred_led_cust'),
         ]

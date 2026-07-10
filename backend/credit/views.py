@@ -1006,6 +1006,7 @@ def credit_ledger_statement(request):
     elif txn_type == 'sale':
         qs = qs.filter(payment__isnull=True, credit_return__isnull=True)
 
+    # Chronological statement: oldest first (ascending by date)
     entries = list(qs.order_by('created_at', 'id'))
     serializer = CreditLedgerEntrySerializer(entries, many=True)
 
@@ -1027,6 +1028,14 @@ def credit_ledger_statement(request):
             'running_balance': abs(running),
             'balance_side': bal_side,
         })
+
+    # Keep response rows strictly ascending by date (oldest on top)
+    rows.sort(
+        key=lambda r: (
+            str(r.get('created_at') or ''),
+            int(r.get('id') or 0),
+        )
+    )
 
     closing = running
     closing_side = 'Dr' if closing >= 0 else 'Cr'
@@ -1089,6 +1098,11 @@ def credit_ledger_by_customer(request):
         .order_by('-created_at', '-id')
         .values('description')[:1]
     )
+    latest_activity = (
+        CreditLedgerEntry.objects.filter(customer_id=OuterRef('pk'))
+        .order_by('-created_at', '-id')
+        .values('created_at')[:1]
+    )
     last_payment = (
         CreditPayment.objects.filter(customer_id=OuterRef('pk'))
         .order_by('-paid_at')
@@ -1132,6 +1146,7 @@ def credit_ledger_by_customer(request):
         ),
         entry_count=Count('ledger_entries', distinct=True),
         latest_description=Subquery(latest_desc),
+        last_activity_at=Subquery(latest_activity),
         last_payment_at=Subquery(last_payment),
         last_sale_at=Subquery(last_sale),
     )
@@ -1144,7 +1159,8 @@ def credit_ledger_by_customer(request):
     if only_with_balance in ('1', 'true'):
         qs = qs.exclude(balance=0)
 
-    qs = qs.order_by('name')[:200]
+    # Oldest ledger activity first; newest at the bottom; no-entry accounts last
+    qs = qs.order_by(F('last_activity_at').asc(nulls_last=True), 'name')[:200]
 
     out = []
     for row in qs:
@@ -1165,6 +1181,7 @@ def credit_ledger_by_customer(request):
             'net_amount': str(total_debit - total_credit),
             'entry_count': row.entry_count or 0,
             'latest_description': row.latest_description or '',
+            'last_activity_at': row.last_activity_at.isoformat() if row.last_activity_at else None,
             'last_payment_at': row.last_payment_at.isoformat() if row.last_payment_at else None,
             'days_since_last_payment': days_since,
             'collection_status': collection_status,

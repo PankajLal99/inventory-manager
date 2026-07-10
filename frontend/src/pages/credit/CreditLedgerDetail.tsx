@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { creditApi } from '../../lib/api';
 import { formatAmountINR, formatNumber, toLocalDateString } from '../../lib/utils';
 import Button from '../../components/ui/Button';
@@ -97,7 +97,14 @@ export default function CreditLedgerDetail() {
 
   const selectedCustomer = statement?.customer || customerMeta;
   const rows = useMemo(() => {
-    const list = statement?.rows || [];
+    const list = [...(statement?.rows || [])];
+    // Oldest date on top (ascending)
+    list.sort((a: any, b: any) => {
+      const ta = new Date(a.created_at || 0).getTime();
+      const tb = new Date(b.created_at || 0).getTime();
+      if (ta !== tb) return ta - tb;
+      return (Number(a.id) || 0) - (Number(b.id) || 0);
+    });
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter((row: any) => {
@@ -226,7 +233,7 @@ export default function CreditLedgerDetail() {
       balanceLabel(statement.closing_balance, statement.closing_side),
     ]);
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: y + 2,
       head: [['Date', 'Type', 'Vch No.', 'Particulars', 'Narration', 'Debit', 'Credit', 'Balance']],
       body,
