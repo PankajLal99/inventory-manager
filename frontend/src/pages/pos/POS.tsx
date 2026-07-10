@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
-import { formatNumber, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { formatNumber, formatAmountINR, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { creditAmountInWords } from '../credit/CreditInvoiceDocument';
 import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import { auth } from '../../lib/auth';
 import {
@@ -46,6 +47,23 @@ function escapeHtml(s: unknown): string {
 
 /** Max cart lines per snapshot image (taller captures fade with html2canvas). */
 const SNAPSHOT_ROWS_PER_PAGE = 25;
+const POS_SNAPSHOT_SHOP_NAME = 'MANISH TRADERS';
+const POS_SNAPSHOT_WIDTH = 794;
+const POS_SNAPSHOT_HEIGHT = 1123;
+
+/** Orange / amber theme — matches credit invoice look (no ledger balance fields). */
+const POS_SNAP_THEME = {
+  primary: '#d97706',
+  primaryPale: '#fffbeb',
+  primaryBorder: '#fbbf24',
+  secondary: '#78350f',
+  secondaryMuted: '#92400e',
+  text: '#1c1917',
+  textMuted: '#57534e',
+  white: '#ffffff',
+  rowAlt: '#fff7ed',
+  tableHead: '#fef3c7',
+};
 
 type CartSnapshotRow = {
   idx: number;
@@ -64,8 +82,31 @@ function chunkSnapshotRows<T>(rows: T[], size: number): T[][] {
   return chunks.length > 0 ? chunks : [[]];
 }
 
+function fmtSnapQty(qty: number): string {
+  return Number.isInteger(qty) ? String(qty) : formatNumber(qty, 3);
+}
+
+function posSnapshotHeaderShapes(): string {
+  return `
+    <div style="position:absolute;top:-48px;left:48px;width:128px;height:128px;border-radius:50%;background:rgba(255,255,255,0.14);z-index:0;"></div>
+    <div style="position:absolute;bottom:-36px;left:28%;width:72px;height:72px;border-radius:50%;background:rgba(251,191,36,0.5);z-index:0;"></div>
+    <div style="position:absolute;bottom:8px;left:-18px;width:56px;height:56px;border-radius:12px;background:rgba(255,255,255,0.1);transform:rotate(-12deg);z-index:0;"></div>
+  `;
+}
+
+function posSnapshotFooterShapes(): string {
+  const T = POS_SNAP_THEME;
+  return `
+    <div style="position:absolute;bottom:-20px;right:24px;width:64px;height:64px;border-radius:50%;background:${T.primaryBorder};opacity:0.35;"></div>
+    <div style="position:absolute;top:16px;left:-12px;width:40px;height:40px;border-radius:10px;background:${T.primary};opacity:0.12;transform:rotate(20deg);"></div>
+  `;
+}
+
+/**
+ * Themed A4 cart snapshot HTML (orange/amber like credit invoice).
+ * No previous-balance / ledger fields — sale totals only.
+ */
 function buildCartSnapshotHtml(opts: {
-  title: string;
   cartLabel: string;
   headerDate: string;
   storeName: string;
@@ -81,7 +122,6 @@ function buildCartSnapshotHtml(opts: {
   total: number;
 }): string {
   const {
-    title,
     cartLabel,
     headerDate,
     storeName,
@@ -96,147 +136,164 @@ function buildCartSnapshotHtml(opts: {
     tradeIn,
     total,
   } = opts;
+  const T = POS_SNAP_THEME;
+  const shopName = POS_SNAPSHOT_SHOP_NAME;
 
-  const partLabel =
-    partCount > 1 ? `Part ${partIndex} of ${partCount}` : '';
-  const lineRange =
-    partCount > 1 && rows.length > 0
-      ? `Lines ${rows[0].idx}–${rows[rows.length - 1].idx}`
+  const partNote =
+    partCount > 1
+      ? `<div style="font-size:11px;margin-top:8px;color:${T.textMuted};font-weight:600;">Part ${partIndex} of ${partCount}${
+          rows.length ? ` · Lines ${rows[0].idx}–${rows[rows.length - 1].idx}` : ''
+        }</div>`
+      : '';
+
+  const bodyRows = rows
+    .map(
+      (r, i) => `<tr style="background:${i % 2 === 1 ? T.rowAlt : T.white};">
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${r.idx}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:left;font-size:12px;font-weight:600;color:${T.text};">${escapeHtml(r.name)}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:64px;font-size:12px;font-weight:600;">${escapeHtml(fmtSnapQty(r.qty))}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:52px;font-size:12px;color:${T.textMuted};">Pcs.</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:80px;font-size:12px;">${escapeHtml(formatAmountINR(r.unitPrice))}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:96px;font-size:12px;font-weight:700;color:${T.secondary};">${escapeHtml(formatAmountINR(r.lineTotal))}</td>
+    </tr>`
+    )
+    .join('');
+
+  const emptyRow = `<tr>
+    <td colspan="6" style="border:1px solid ${T.primaryBorder};padding:28px;text-align:center;font-size:12px;color:#a8a29e;">No line items</td>
+  </tr>`;
+
+  const qtyFooterRow = showTotals
+    ? `<tr>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};font-size:12px;font-weight:700;color:${T.secondary};">Total Quantity</td>
+      <td colspan="2" style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};text-align:right;font-size:12px;font-weight:700;color:${T.secondary};">${escapeHtml(fmtSnapQty(totalQty))} Pcs.</td>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
+    </tr>`
+    : '';
+
+  const summaryRow = (label: string, value: string) => `
+    <tr>
+      <td style="padding:8px 14px;font-size:12px;color:${T.textMuted};font-weight:600;border-bottom:1px solid ${T.primaryBorder};">${label}</td>
+      <td style="padding:8px 14px;font-size:12px;text-align:right;font-weight:700;color:${T.text};border-bottom:1px solid ${T.primaryBorder};">${value}</td>
+    </tr>`;
+
+  const summaryBlock = showTotals
+    ? `<table style="width:100%;border-collapse:collapse;margin-top:14px;border:2px solid ${T.primary};font-size:12px;">
+        <tr>
+          <td colspan="2" style="padding:9px 14px;background:${T.primary};color:${T.white};font-weight:700;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;">Invoice Summary</td>
+        </tr>
+        ${summaryRow('Total Items', `${escapeHtml(String(totalItemCount))} ${totalItemCount === 1 ? 'Line' : 'Lines'} · ${escapeHtml(fmtSnapQty(totalQty))} Pcs.`)}
+        ${summaryRow('Sub Total', `₹ ${escapeHtml(formatAmountINR(subtotal))}`)}
+        ${
+          tradeIn > 0
+            ? summaryRow('Trade-in', `− ₹ ${escapeHtml(formatAmountINR(tradeIn))}`)
+            : ''
+        }
+        <tr>
+          <td style="padding:9px 14px;font-size:12px;color:${T.white};font-weight:700;background:${T.primary};">Total</td>
+          <td style="padding:9px 14px;font-size:12px;text-align:right;font-weight:800;color:${T.white};background:${T.primary};">₹ ${escapeHtml(formatAmountINR(total))}</td>
+        </tr>
+      </table>
+      <div style="margin-top:12px;padding:10px 14px;background:${T.white};border:1px solid ${T.primaryBorder};border-left:4px solid ${T.primary};font-size:12px;line-height:1.5;">
+        <span style="color:${T.secondary};font-weight:700;">Amount in Words: </span>
+        <span style="color:${T.text};font-weight:600;">${escapeHtml(creditAmountInWords(total))}</span>
+      </div>`
+    : '';
+
+  const footer = showTotals
+    ? `<div style="position:relative;overflow:hidden;padding:16px 24px 20px;border-top:3px solid ${T.primary};background:${T.primaryPale};">
+        ${posSnapshotFooterShapes()}
+        ${summaryBlock}
+        <table style="position:relative;width:100%;border-collapse:collapse;font-size:12px;margin-top:18px;">
+          <tr>
+            <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
+              <div style="font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:11px;">Terms &amp; Conditions</div>
+              <div style="font-size:12px;color:${T.textMuted};margin-top:5px;line-height:1.45;">Goods once sold will not be taken back. Please check items before leaving the counter.</div>
+            </td>
+            <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
+              <div style="height:32px;"></div>
+              <div style="display:inline-block;border-top:2px solid ${T.secondaryMuted};padding:5px 18px 0;font-size:12px;font-weight:700;color:${T.secondary};">Receiver's Signature</div>
+            </td>
+          </tr>
+        </table>
+        <div style="position:relative;margin-top:14px;text-align:center;font-size:11px;color:${T.textMuted};">Thank you for your business · ${escapeHtml(shopName)}</div>
+      </div>`
+    : partCount > 1
+      ? `<div style="border-top:2px dashed ${T.primaryBorder};padding:12px 24px;font-size:12px;text-align:right;color:${T.secondaryMuted};font-weight:600;background:${T.primaryPale};">Continued on next page…</div>`
       : '';
 
   return `<!doctype html>
 <html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>${escapeHtml(title)}</title>
-    <style>
-      .draft-a4,
-      .draft-a4 table {
-        font-family: Arial, sans-serif;
-      }
-      .draft-a4 .items-grid {
-        width: 100%;
-        margin-top: 10px;
-        font-size: 12px;
-      }
-      .draft-a4 .items-grid-row {
-        display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) 70px 110px 110px;
-      }
-      .draft-a4 .items-grid-cell {
-        border: 1px solid #000;
-        padding: 6px 8px;
-        display: flex;
-        align-items: center;
-        min-height: 42px;
-        line-height: 1.3;
-        box-sizing: border-box;
-      }
-      .draft-a4 .items-grid-header .items-grid-cell {
-        font-weight: 700;
-      }
-      .draft-a4 .cell-left {
-        justify-content: flex-start;
-        text-align: left;
-      }
-      .draft-a4 .cell-right {
-        justify-content: flex-end;
-        text-align: right;
-      }
-      .draft-a4 .items-grid-cell.product-cell {
-        white-space: normal;
-        word-break: break-word;
-      }
-      .draft-a4 .totals-table td {
-        border: 1px solid #000;
-        padding: 6px 8px;
-      }
-      .draft-a4 .totals-table td:first-child {
-        text-align: left;
-      }
-      .draft-a4 .totals-table td:last-child {
-        text-align: right;
-      }
-      .draft-a4 .totals-table tr {
-        height: 38px;
-      }
-      .draft-a4 .totals-table td {
-        vertical-align: middle !important;
-        line-height: 1.3;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="draft-a4" style="font-family: Arial, sans-serif; color:#000; width: 794px; margin: 0 auto;">
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; border:1px solid #000; padding:10px 12px;">
-        <div>
-          <div style="font-size:18px; font-weight:700; letter-spacing:0.4px;">${escapeHtml(title)}</div>
-          <div style="font-size:12px; margin-top:2px;">${escapeHtml(cartLabel)} · ${escapeHtml(headerDate)}</div>
-          ${partLabel ? `<div style="font-size:12px; margin-top:4px; font-weight:700;">${escapeHtml(partLabel)}${lineRange ? ` · ${escapeHtml(lineRange)}` : ''}</div>` : ''}
-          <div style="font-size:12px; margin-top:6px;"><strong>Store:</strong> ${escapeHtml(storeName)}</div>
-          <div style="font-size:12px; margin-top:2px;"><strong>Customer:</strong> ${escapeHtml(customerName)}</div>
-        </div>
-        <div style="text-align:right; font-size:12px;">
-          <div><strong>Items:</strong> ${totalItemCount}</div>
-          <div style="margin-top:4px; color:#555;">(Draft copy)</div>
-        </div>
-      </div>
+<head>
+  <meta charset="UTF-8" />
+  <title>POS Snapshot — ${escapeHtml(shopName)}</title>
+</head>
+<body style="margin:0;padding:0;background:#e7e5e4;font-size:12px;">
+  <div id="pos-snapshot-root" style="width:${POS_SNAPSHOT_WIDTH}px;min-height:${POS_SNAPSHOT_HEIGHT}px;margin:0;background:${T.white};color:${T.text};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${T.primary};">
 
-      <div class="items-grid">
-        <div class="items-grid-row items-grid-header">
-          <div class="items-grid-cell cell-left">#</div>
-          <div class="items-grid-cell cell-left">Product</div>
-          <div class="items-grid-cell cell-right">Qty</div>
-          <div class="items-grid-cell cell-right">Price</div>
-          <div class="items-grid-cell cell-right">Total</div>
-        </div>
-        ${rows
-          .map(
-            (r) => `<div class="items-grid-row">
-          <div class="items-grid-cell cell-left">${r.idx}</div>
-          <div class="items-grid-cell cell-left product-cell">${escapeHtml(r.name)}</div>
-          <div class="items-grid-cell cell-right">${escapeHtml(formatNumber(r.qty, 3))}</div>
-          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.unitPrice))}</div>
-          <div class="items-grid-cell cell-right">₹${escapeHtml(formatNumber(r.lineTotal))}</div>
-        </div>`
-          )
-          .join('')}
-      </div>
-
-      ${
-        showTotals
-          ? `<div style="display:flex; justify-content:flex-end; margin-top:10px;">
-        <table class="totals-table" style="border-collapse:collapse; font-size:12px; min-width: 260px;">
-          <tbody>
-            <tr>
-              <td><strong>Total Qty</strong></td>
-              <td>${escapeHtml(formatNumber(totalQty, 3))}</td>
-            </tr>
-            <tr>
-              <td><strong>Subtotal</strong></td>
-              <td>₹${escapeHtml(formatNumber(subtotal))}</td>
-            </tr>
-            ${
-              tradeIn > 0
-                ? `<tr>
-              <td><strong>Trade-in</strong></td>
-              <td>-₹${escapeHtml(formatNumber(tradeIn))}</td>
-            </tr>`
-                : ''
-            }
-            <tr>
-              <td><strong>Total</strong></td>
-              <td><strong>₹${escapeHtml(formatNumber(total))}</strong></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>`
-          : partCount > 1
-            ? `<div style="margin-top:10px; font-size:12px; text-align:right; color:#555;">Continued on next image…</div>`
-            : ''
-      }
+    <div style="position:relative;overflow:hidden;background:${T.primary};padding:20px 28px;color:${T.white};">
+      ${posSnapshotHeaderShapes()}
+      <table style="position:relative;z-index:1;width:100%;border-collapse:collapse;color:${T.white};">
+        <tr>
+          <td style="vertical-align:middle;">
+            <div style="font-size:24px;font-weight:800;letter-spacing:1px;text-transform:uppercase;line-height:1.2;color:${T.white};">${escapeHtml(shopName)}</div>
+            <div style="font-size:11px;font-weight:600;margin-top:5px;letter-spacing:0.5px;text-transform:uppercase;color:${T.white};">Sale Invoice · Draft</div>
+          </td>
+          <td style="vertical-align:middle;text-align:right;width:240px;color:${T.white};">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:${T.white};">Cart / Ref.</div>
+            <div style="font-size:15px;font-weight:800;margin-top:4px;letter-spacing:0.3px;color:${T.white};">${escapeHtml(cartLabel)}</div>
+          </td>
+        </tr>
+      </table>
     </div>
-  </body>
+
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed;background:${T.primaryPale};border-bottom:2px solid ${T.primaryBorder};font-size:12px;">
+      <tr>
+        <td style="width:58%;vertical-align:top;padding:14px 20px;border-right:1px solid ${T.primaryBorder};">
+          <div style="font-size:11px;font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Bill To</div>
+          <div style="font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:0.2px;color:${T.text};line-height:1.25;">${escapeHtml(customerName || '—')}</div>
+          ${storeName ? `<div style="font-size:12px;color:${T.textMuted};margin-top:4px;font-weight:600;">Store: ${escapeHtml(storeName)}</div>` : ''}
+          ${partNote}
+        </td>
+        <td style="width:42%;vertical-align:top;padding:14px 20px;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <tr>
+              <td style="padding:0 0 8px 0;font-weight:600;color:${T.secondaryMuted};white-space:nowrap;">Dated</td>
+              <td style="padding:0 0 8px 0;font-weight:700;text-align:right;color:${T.text};">${escapeHtml(headerDate)}</td>
+            </tr>
+            <tr>
+              <td style="padding:0;font-weight:600;color:${T.secondaryMuted};white-space:nowrap;">Items</td>
+              <td style="padding:0;text-align:right;font-weight:700;color:${T.primary};">${escapeHtml(String(totalItemCount))}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;flex-shrink:0;">
+      <thead>
+        <tr style="background:${T.tableHead};">
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:center;font-weight:700;color:${T.secondary};width:42px;font-size:11px;">S.N.</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 8px;text-align:left;font-weight:700;color:${T.secondary};font-size:11px;">Description of Goods</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:right;font-weight:700;color:${T.secondary};width:64px;font-size:11px;">Qty.</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:center;font-weight:700;color:${T.secondary};width:52px;font-size:11px;">Unit</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:right;font-weight:700;color:${T.secondary};width:80px;font-size:11px;">Rate (₹)</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 8px;text-align:right;font-weight:700;color:${T.secondary};width:96px;font-size:11px;">Amount (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${bodyRows || emptyRow}
+        ${qtyFooterRow}
+      </tbody>
+    </table>
+
+    <div style="flex:1;min-height:20px;"></div>
+
+    ${footer}
+  </div>
+</body>
 </html>`;
 }
 
@@ -251,22 +308,26 @@ async function renderSnapshotHtmlToBlob(
   doc.write(html);
   doc.close();
 
-  await new Promise((r) => window.setTimeout(r, 60));
+  await new Promise((r) => window.setTimeout(r, 150));
 
-  const body = doc.body;
-  const el = doc.documentElement;
-  const w = el?.scrollWidth ?? 794;
-  const h = el?.scrollHeight ?? 1123;
+  const root =
+    (doc.getElementById('pos-snapshot-root') as HTMLElement | null) || doc.body;
+  const w = POS_SNAPSHOT_WIDTH;
+  const h = Math.max(
+    POS_SNAPSHOT_HEIGHT,
+    Math.ceil(root.scrollHeight || root.offsetHeight || 1)
+  );
+  iframe.style.height = `${h + 8}px`;
 
-  const canvas = await html2canvas(body, {
+  const canvas = await html2canvas(root, {
     scale: 2,
     useCORS: true,
     logging: false,
     backgroundColor: '#ffffff',
     windowWidth: w,
     windowHeight: h,
-    height: h,
     width: w,
+    height: h,
   });
 
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
@@ -3263,7 +3324,6 @@ export default function POS() {
       const tradeIn = tradeInCredit || 0;
       const total = calculateTotal() || 0;
       const totalQty = draftItems.reduce((sum, row) => sum + row.qty, 0);
-      const title = 'DRAFT POS SNAPSHOT';
       const storeName = defaultStore?.name || cartData?.store_name || '-';
       const customerName = selectedCustomer?.name || cartData?.customer_name || 'Walk-in Customer';
       const cartLabel = cartData?.cart_number || (cartId ? `CART-${cartId}` : 'Cart');
@@ -3274,7 +3334,6 @@ export default function POS() {
 
       for (let i = 0; i < rowChunks.length; i++) {
         const html = buildCartSnapshotHtml({
-          title,
           cartLabel,
           headerDate,
           storeName,
