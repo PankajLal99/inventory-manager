@@ -278,6 +278,27 @@ async function copyInvoiceImageToClipboard(
 
 /** Tab cycle: Product Search → Qty → Price → Delete → Product Search */
 const CREDIT_POS_TAB_ATTR = 'data-credit-pos-tab';
+const CREDIT_POS_INVOICE_DATE_KEY = 'credit-pos-invoice-date';
+
+function loadPersistedCreditInvoiceDate(): string {
+  try {
+    const raw = localStorage.getItem(CREDIT_POS_INVOICE_DATE_KEY);
+    if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  } catch {
+    /* ignore */
+  }
+  return toLocalDateString(new Date());
+}
+
+function persistCreditInvoiceDate(date: string) {
+  try {
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      localStorage.setItem(CREDIT_POS_INVOICE_DATE_KEY, date);
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function getCreditPosTabFields(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(`[${CREDIT_POS_TAB_ATTR}]`)).filter(
@@ -369,7 +390,7 @@ export default function POSCredit() {
   const [newProductName, setNewProductName] = useState('');
 
   const [checkingOut, setCheckingOut] = useState(false);
-  const [invoiceDate, setInvoiceDate] = useState(() => toLocalDateString(new Date()));
+  const [invoiceDate, setInvoiceDate] = useState(loadPersistedCreditInvoiceDate);
   /** Local draft values while editing cart lines (cleared on focus for easy re-entry). */
   const [editingQty, setEditingQty] = useState<Record<number, string>>({});
   const [editingPrice, setEditingPrice] = useState<Record<number, string>>({});
@@ -1170,7 +1191,6 @@ export default function POSCredit() {
         setCartId(null);
       }
       setSelectedCustomer(null);
-      setInvoiceDate(toLocalDateString(new Date()));
       queryClient.invalidateQueries({ queryKey: ['credit-cart'] });
       navigate(`/credit-invoices/${invoice.id}`);
     } catch (err: any) {
@@ -1888,7 +1908,11 @@ export default function POSCredit() {
               <Input
                 type="date"
                 value={invoiceDate}
-                onChange={(e) => setInvoiceDate(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setInvoiceDate(next);
+                  persistCreditInvoiceDate(next);
+                }}
                 className={`w-full h-11 text-sm font-medium border-2 rounded-lg ${
                   isCustomInvoiceDate ? 'border-amber-400 bg-amber-50/50' : ''
                 }`}
@@ -1896,7 +1920,7 @@ export default function POSCredit() {
               />
               <p className="mt-1 text-xs text-gray-500">
                 {isCustomInvoiceDate
-                  ? 'Invoice will be created with the selected date above.'
+                  ? 'Saved for next invoices too (including after refresh).'
                   : 'Time stays current; only the invoice date changes.'}
               </p>
             </div>

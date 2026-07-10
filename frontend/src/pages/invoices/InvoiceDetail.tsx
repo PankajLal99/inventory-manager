@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatAmountINR, getProductNameColor } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -50,17 +50,49 @@ import type { InvoiceTag } from '../../lib/invoiceTags';
 
 /** A4 width at 96dpi — fixed capture size for sharp images regardless of on-screen preview scale */
 const INVOICE_CAPTURE_WIDTH_PX = 794;
+const INVOICE_CAPTURE_HEIGHT_PX = 1123;
+const INVOICE_SHOP_NAME = 'MANISH TRADERS';
+
+/** Orange / amber theme — matches credit invoice print layout */
+const INV_THEME = {
+  primary: '#d97706',
+  primaryPale: '#fffbeb',
+  primaryBorder: '#fbbf24',
+  secondary: '#78350f',
+  secondaryMuted: '#92400e',
+  text: '#1c1917',
+  textMuted: '#57534e',
+  white: '#ffffff',
+  rowAlt: '#fff7ed',
+  tableHead: '#fef3c7',
+};
 
 function invoiceCaptureScale(): number {
   return Math.min(4, Math.max(3, window.devicePixelRatio));
 }
 
-function escapeHtml(s: string): string {
-  return String(s)
+function escapeHtml(s: unknown): string {
+  return String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function invoiceHeaderShapes(): string {
+  return `
+    <div style="position:absolute;top:-48px;left:48px;width:128px;height:128px;border-radius:50%;background:rgba(255,255,255,0.14);z-index:0;"></div>
+    <div style="position:absolute;bottom:-36px;left:28%;width:72px;height:72px;border-radius:50%;background:rgba(251,191,36,0.5);z-index:0;"></div>
+    <div style="position:absolute;bottom:8px;left:-18px;width:56px;height:56px;border-radius:12px;background:rgba(255,255,255,0.1);transform:rotate(-12deg);z-index:0;"></div>
+  `;
+}
+
+function invoiceFooterShapes(): string {
+  const T = INV_THEME;
+  return `
+    <div style="position:absolute;bottom:-20px;right:24px;width:64px;height:64px;border-radius:50%;background:${T.primaryBorder};opacity:0.35;"></div>
+    <div style="position:absolute;top:16px;left:-12px;width:40px;height:40px;border-radius:10px;background:${T.primary};opacity:0.12;transform:rotate(20deg);"></div>
+  `;
 }
 
 /** Plain-text line for on-screen invoice item rows */
@@ -87,7 +119,7 @@ function formatExchangeSnapshotPrintHtml(snapshot: unknown): string {
   if (o.charge_unit_price != null) bits.push(`charged ₹${escapeHtml(String(o.charge_unit_price))}`);
   if (o.purchase_cost != null) bits.push(`cost ref ₹${escapeHtml(String(o.purchase_cost))}`);
   if (!bits.length) return '';
-  return `<div style="font-size:10px;color:#333;margin-top:4px;line-height:1.35;">${bits.join(' · ')}</div>`;
+  return `<div style="font-size:10px;color:${INV_THEME.textMuted};margin-top:4px;line-height:1.35;font-weight:500;">${bits.join(' · ')}</div>`;
 }
 
 /** Replace-product metadata lives on the invoice (`exchange_snapshots`), keyed by line id */
@@ -117,10 +149,11 @@ function getInvoiceAdjustedTotalValue(invoice: any): number {
   return Number.isFinite(base) ? base : 0;
 }
 
-/** Extra table rows for A4 print after trade-in total line */
+/** Extra summary detail lines for A4 print after trade-in total */
 function buildTradeInDetailRowsA4Html(inv: { pos_trade_ins?: unknown }): string {
   const rows = inv?.pos_trade_ins;
   if (!Array.isArray(rows) || rows.length === 0) return '';
+  const T = INV_THEME;
   return rows
     .map((row: any) => {
       const product = row.product_name ? escapeHtml(String(row.product_name)) : '—';
@@ -133,13 +166,11 @@ function buildTradeInDetailRowsA4Html(inv: { pos_trade_ins?: unknown }): string 
           : '—';
       const cred =
         row.credit != null && String(row.credit) !== '' ? `₹${escapeHtml(String(row.credit))}` : '—';
-      return `<tr>
-        <td colspan="5" style="font-size:10px;padding:6px 8px;border-left:1px solid #000;border-right:1px solid #000;background:#f6fff6;text-align:left;line-height:1.4;">
-          <strong>Trade-in</strong> · ${product}${bc !== '—' ? ` · ${bc}` : ''}<br/>
-          Prior invoice ${src} · ${tag}<br/>
-          Original line ${orig} · Credit applied ${cred}
-        </td>
-      </tr>`;
+      return `<div style="margin-top:8px;padding:8px 12px;background:#ecfdf5;border:1px solid #a7f3d0;border-left:3px solid #059669;font-size:10px;line-height:1.45;color:${T.text};">
+        <strong style="color:#065f46;">Trade-in</strong> · ${product}${bc !== '—' ? ` · ${bc}` : ''}<br/>
+        Prior invoice ${src} · ${tag}<br/>
+        Original line ${orig} · Credit applied ${cred}
+      </div>`;
     })
     .join('');
 }
@@ -1647,337 +1678,241 @@ export default function InvoiceDetail() {
 
   // Shared function to generate invoice HTML for both print and download
   const generateInvoiceHTML = () => {
+    const T = INV_THEME;
     const isRepairInvoice = !!inv?.repair;
-    const printableInvoiceTitle = isRepairInvoice ? 'Repair Invoice' : 'Invoice';
+    const printableInvoiceTitle = isRepairInvoice ? 'Repair Invoice' : 'Sale Invoice';
     const printableItems = Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : [];
 
-    // Calculate total PCS
     const totalPcs = printableItems.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0);
-
-    // Get total amount (use replacement-adjusted total when available for sharing/print)
     const totalAmount = getInvoiceAdjustedTotalValue(inv);
     const amountInWords = numberToWords(totalAmount);
-
-    // Format date
     const invoiceDate = formatDateForInvoice(inv.created_at);
+    const invoiceNo = inv.invoice_number || `#${inv.id}`;
+    const shopName = INVOICE_SHOP_NAME;
+    const companyAddress = 'Shop Number 124-A Ground Floor, Chaitaniya Market Ghoda Nikkas Bhopal';
+    const customerName = inv.customer_name || 'Walk-in Customer';
+    const storeName = inv.store_name || '';
+    const statusLabel = String(inv.status || '').toUpperCase();
+    const typeLabel = String(inv.invoice_type || 'sale').toUpperCase();
 
-    // Get customer PAN/IT (not available in model, will show empty)
-    const customerPanIt = ''; // Customer model doesn't have PAN/IT field
+    // Group items by product name AND brand
+    const groupedItems: Record<string, {
+      name: string;
+      brand: string;
+      totalQuantity: number;
+      totalAmount: number;
+      items: any[];
+    }> = {};
 
-    // Get reference number (using invoice_number as ref)
-    const refNo = inv.invoice_number || `#${inv.id} `;
+    printableItems.forEach((item: any) => {
+      const name = item.product_name || '-';
+      const brand = item.product_brand_name || item.brand_name || '';
+      const groupKey = brand ? `${name}::${brand}` : name;
+      if (!groupedItems[groupKey]) {
+        groupedItems[groupKey] = { name, brand, totalQuantity: 0, totalAmount: 0, items: [] };
+      }
+      const quantity = parseInt(item.quantity || '0') || 0;
+      const amount = parseFloat(item.line_total || '0');
+      groupedItems[groupKey].totalQuantity += quantity;
+      groupedItems[groupKey].totalAmount += amount;
+      groupedItems[groupKey].items.push(item);
+    });
 
-    // Company details - using store info or default
-    const companyName = 'Manish Traders';
-    const companyAddress = 'Shop Number124-A Ground Floor\nChaitaniya Market Ghoda Nikkas Bhopal';
-    const companyPhone1 = ''; // Can be populated from store.phone if needed
-    const companyPhone2 = '';
+    const groupedList = Object.values(groupedItems);
+    const lineCount = groupedList.length;
+    const subtotalBeforeTradeIn = groupedList.reduce((s, g) => s + g.totalAmount, 0);
 
-    return `
-  <!DOCTYPE html>
-    <html>
-      <head>
-        <title>${printableInvoiceTitle} ${inv.invoice_number || inv.id}</title>
-        <meta charset="UTF-8">
-          <style>
-            * {margin: 0; padding: 0; box-sizing: border-box; }
-            body {font-family: Arial, sans-serif; padding: 10px; color: #000; line-height: 1.2; }
+    const bodyRows = groupedList
+      .map((group, i) => {
+        const avgUnitPrice = group.totalQuantity > 0 ? group.totalAmount / group.totalQuantity : 0;
+        const productDisplay = group.brand ? `${group.name} (${group.brand})` : group.name;
+        const productColor = getProductNameColor(group.name);
+        const nameColor = productColor || T.text;
+        const exchangeHtml = group.items
+          .map((item: any) => formatExchangeSnapshotPrintHtml(exchangeSnapshotForItem(inv, item.id)))
+          .join('');
+        return `<tr style="background:${i % 2 === 1 ? T.rowAlt : T.white};">
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${i + 1}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:left;font-size:12px;font-weight:600;color:${nameColor};">${escapeHtml(productDisplay)}${exchangeHtml}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:64px;font-size:12px;font-weight:600;">${escapeHtml(formatNumber(group.totalQuantity, 3))}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:52px;font-size:12px;color:${T.textMuted};">Pcs.</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:80px;font-size:12px;">${escapeHtml(formatAmountINR(avgUnitPrice))}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:96px;font-size:12px;font-weight:700;color:${T.secondary};">${escapeHtml(formatAmountINR(group.totalAmount))}</td>
+    </tr>`;
+      })
+      .join('');
 
-            /* A4 Page Container */
-            .page-container {
-              display: flex;
-            flex-direction: column;
-            min-height: 277mm; /* A4 297mm - 20mm padding/margin */
-            padding: 10px;
-            }
+    const emptyRow = `<tr>
+      <td colspan="6" style="border:1px solid ${T.primaryBorder};padding:28px;text-align:center;font-size:12px;color:#a8a29e;">No line items</td>
+    </tr>`;
 
-            .content-area {
-              flex: 1;
-            }
+    const qtyFooterRow = `<tr>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};font-size:12px;font-weight:700;color:${T.secondary};">Total Quantity</td>
+      <td colspan="2" style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};text-align:right;font-size:12px;font-weight:700;color:${T.secondary};">${escapeHtml(formatNumber(totalPcs, 3))} Pcs.</td>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
+      <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
+    </tr>`;
 
-            .footer-area {
-              margin-top: auto;
-            }
+    const summaryRow = (label: string, value: string, opts?: { muted?: boolean }) => `
+      <tr>
+        <td style="padding:8px 14px;font-size:12px;color:${opts?.muted ? T.textMuted : T.textMuted};font-weight:600;border-bottom:1px solid ${T.primaryBorder};">${label}</td>
+        <td style="padding:8px 14px;font-size:12px;text-align:right;font-weight:700;color:${T.text};border-bottom:1px solid ${T.primaryBorder};">${value}</td>
+      </tr>`;
 
-            /* Top section with Invoice No, Ref No, and Date */
-            .top-section {display: flex; justify-content: space-between; margin-bottom: 10px; }
-            .top-left { }
-            .top-right {text-align: right; }
-            .top-left p, .top-right p {margin: 2px 0; font-size: 13px; }
+    const fmtBal = (n: number) =>
+      n < 0
+        ? `₹ ${escapeHtml(formatAmountINR(Math.abs(n)))} (Cr)`
+        : `₹ ${escapeHtml(formatAmountINR(n))}`;
 
-            /* Company header - centered */
-            .company-header {text-align: center; margin-bottom: 10px; }
-            .company-name {font-size: 18px; font-weight: bold; margin-bottom: 4px; }
-            .company-address {font-size: 13px; white-space: pre-line; margin-bottom: 2px; }
-            .company-phone {font-size: 13px; }
+    const showLedgerBalances = !!(inv.customer && customerHasCreditInvoice && inv.status !== 'paid');
+    const totalLabel = `${tradeInCreditAmount > 0 ? 'Net Total' : 'Total'}${inv.replacement_summary ? ' (Adj.)' : ''}`;
 
-            /* INVOICE title - bold and centered */
-            .invoice-title {text-align: center; font-size: 20px; font-weight: bold; margin: 10px 0; text-transform: uppercase; }
-
-            /* Party section */
-            .party-section {margin-bottom: 10px; }
-            .party-section p {margin: 2px 0; font-size: 13px; }
-
-            /* Table - explicit vertical-align for consistent capture (e.g. html2canvas) */
-            table {width: 100%; border-collapse: collapse; margin-bottom: 10px; table-layout: fixed; }
-            th, td {vertical-align: middle; }
-            th {background: #f0f0f0; padding: 6px 8px; border: 1px solid #000; font-weight: bold; font-size: 12px; }
-            td {padding: 4px 8px; border-left: 1px solid #000; border-right: 1px solid #000; font-size: 12px; }
-            .text-right {text-align: right; }
-            .text-center {text-align: center; }
-
-            /* Total row */
-            .total-row {font-weight: bold; }
-            .total-row td {border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 6px 8px; }
-
-            /* Amount in words section */
-            .amount-words {margin-top: 10px; margin-bottom: 10px; }
-            .amount-words p {margin: 2px 0; font-size: 13px; }
-
-            /* Declaration section */
-            .declaration {margin-top: 15px; margin-bottom: 10px; }
-            .declaration p {margin: 2px 0; font-size: 12px; }
-
-            /* Authorised Signatory */
-            .signatory {margin-top: 30px; text-align: right; }
-            .signatory p {font-size: 13px; }
-
-            /* Footer */
-            .footer {margin-top: 15px; text-align: center; border-top: 1px solid #000; padding-top: 5px; }
-            .footer p {font-size: 11px; text-decoration: underline; }
-
-            /* Watermark */
-            .watermark {
-              position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-45deg);
-            font-size: 120px;
-            font-weight: bold;
-            color: rgba(0, 0, 0, 0.08);
-            z-index: -1;
-            pointer-events: none;
-            white-space: nowrap;
-            text-transform: uppercase;
-            letter-spacing: 10px;
-            }
-
-            @media print {
-              body {padding: 0; margin: 0; position: relative; }
-            .page-container {min-height: 297mm; padding: 20mm 15mm; }
-            .signatory {margin-top: 50px; }
-            }
-          </style>
-      </head>
-      <body>
-        <div class="page-container">
-          <div class="content-area" style="display: flex; flex-direction: column; flex: 1;">
-            <!-- Watermark -->
-            <div class="watermark">${(inv.invoice_type || 'sale').toUpperCase()}</div>
-
-            <!-- Top Section: Wrapper to avoid flex issues -->
-            <div style="flex-shrink: 0;">
-              <!-- Top Left: Invoice No and Ref No -->
-              <!-- Top Right: Date -->
-              <div class="top-section">
-                <div class="top-left">
-                  <p><strong>Invoice No. :</strong> ${inv.invoice_number || `#${inv.id}`}</p>
-                  <p><strong>Ref No. :</strong> ${refNo}</p>
-                </div>
-                <div class="top-right">
-                  <p><strong>Date:</strong> ${invoiceDate}</p>
-                </div>
-              </div>
-
-              <!-- Center Top: Company Details -->
-              <div class="company-header">
-                <div class="company-name">${companyName}</div>
-                <div class="company-address">${companyAddress}</div>
-                <div class="company-phone">${companyPhone1}${companyPhone1 && companyPhone2 ? ', ' : ''}${companyPhone2}</div>
-              </div>
-
-              <!-- INVOICE Title - Bold -->
-              <div class="invoice-title">${isRepairInvoice ? 'REPAIR INVOICE' : 'INVOICE'}</div>
-
-              <!-- Party Section -->
-              <div class="party-section">
-                <p><strong>Party :</strong> ${inv.customer_name || 'Walk-in Customer'}</p>
-                <p><strong>PAN/IT no :</strong> ${customerPanIt || '-'}</p>
-              </div>
-            </div>
-
-            <!-- Table -->
-            <table style="flex: 1; border-bottom: 1px solid #000;">
-              <thead>
-                <tr>
-                  <th style="width: 45%; text-align: left;">Description of Good</th>
-                  <th style="width: 15%; text-align: center;">Quantity in PCS</th>
-                  <th style="width: 15%; text-align: right;">Rate</th>
-                  <th style="width: 10%; text-align: center;">Per (PCS)</th>
-                  <th style="width: 15%; text-align: right;">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${(() => {
-        if (!printableItems || printableItems.length === 0) {
-          return '<tr><td colspan="5" style="border-bottom: 1px solid #000;">No items</td></tr>';
+    const summaryBlock = `
+      <table style="width:100%;border-collapse:collapse;margin-top:14px;border:2px solid ${T.primary};font-size:12px;">
+        <tr>
+          <td colspan="2" style="padding:9px 14px;background:${T.primary};color:${T.white};font-weight:700;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;">Invoice Summary</td>
+        </tr>
+        ${summaryRow('Total Items', `${escapeHtml(String(lineCount))} ${lineCount === 1 ? 'Line' : 'Lines'} · ${escapeHtml(formatNumber(totalPcs, 3))} Pcs.`)}
+        ${summaryRow('Sub Total', `₹ ${escapeHtml(formatAmountINR(subtotalBeforeTradeIn))}`)}
+        ${
+          tradeInCreditAmount > 0
+            ? summaryRow('Trade-in Credit', `− ₹ ${escapeHtml(formatAmountINR(tradeInCreditAmount))}`)
+            : ''
         }
+        ${
+          inv.replacement_summary
+            ? summaryRow('Original Invoice Total', `₹ ${escapeHtml(formatAmountINR(parseFloat(String(inv.total ?? 0)) || 0))}`)
+            : ''
+        }
+        <tr>
+          <td style="padding:9px 14px;font-size:12px;color:${T.white};font-weight:700;background:${T.primary};">${escapeHtml(totalLabel)}</td>
+          <td style="padding:9px 14px;font-size:12px;text-align:right;font-weight:800;color:${T.white};background:${T.primary};">₹ ${escapeHtml(formatAmountINR(totalAmount))}</td>
+        </tr>
+        ${
+          showLedgerBalances
+            ? `
+        ${summaryRow('Old Balance', fmtBal(prevBalance))}
+        <tr>
+          <td style="padding:9px 14px;font-size:12px;color:${T.white};font-weight:700;background:${T.secondary};">Total Outstanding</td>
+          <td style="padding:9px 14px;font-size:12px;text-align:right;font-weight:800;color:${T.white};background:${T.secondary};">${fmtBal(totalOutstanding)}</td>
+        </tr>`
+            : ''
+        }
+      </table>
+      ${tradeInCreditAmount > 0 ? buildTradeInDetailRowsA4Html(inv) : ''}
+      <div style="margin-top:12px;padding:10px 14px;background:${T.white};border:1px solid ${T.primaryBorder};border-left:4px solid ${T.primary};font-size:12px;line-height:1.5;">
+        <span style="color:${T.secondary};font-weight:700;">Amount in Words: </span>
+        <span style="color:${T.text};font-weight:600;">${escapeHtml(amountInWords)}</span>
+      </div>`;
 
-        // Group items by product name AND brand
-        const groupedItems: Record<string, {
-          name: string;
-          brand: string;
-          totalQuantity: number;
-          totalAmount: number;
-          items: any[];
-        }> = {};
+    const voidBadge =
+      inv.status === 'void'
+        ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b91c1c;background:#fee2e2;color:#b91c1c;">Void</div>`
+        : '';
 
-        printableItems.forEach((item: any) => {
-          const name = item.product_name || '-';
-          const brand = item.product_brand_name || item.brand_name || '';
-          // Create unique key combining name and brand
-          const groupKey = brand ? `${name}::${brand}` : name;
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>${escapeHtml(printableInvoiceTitle)} ${escapeHtml(invoiceNo)}</title>
+  <style>
+    @media print {
+      body { margin: 0; padding: 0; background: #fff !important; }
+      #invoice-print-root { border: 3px solid ${T.primary} !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#e7e5e4;font-size:12px;">
+  <div id="invoice-print-root" style="width:${INVOICE_CAPTURE_WIDTH_PX}px;min-height:${INVOICE_CAPTURE_HEIGHT_PX}px;margin:0 auto;background:${T.white};color:${T.text};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${T.primary};">
 
-          if (!groupedItems[groupKey]) {
-            groupedItems[groupKey] = {
-              name,
-              brand,
-              totalQuantity: 0,
-              totalAmount: 0,
-              items: []
-            };
-          }
+    <div style="position:relative;overflow:hidden;background:${T.primary};padding:20px 28px;color:${T.white};">
+      ${invoiceHeaderShapes()}
+      <table style="position:relative;z-index:1;width:100%;border-collapse:collapse;color:${T.white};">
+        <tr>
+          <td style="vertical-align:middle;">
+            <div style="font-size:24px;font-weight:800;letter-spacing:1px;text-transform:uppercase;line-height:1.2;color:${T.white};">${escapeHtml(shopName)}</div>
+            <div style="font-size:11px;font-weight:600;margin-top:5px;letter-spacing:0.5px;text-transform:uppercase;color:${T.white};">${escapeHtml(printableInvoiceTitle)}</div>
+            <div style="font-size:11px;margin-top:6px;color:rgba(255,255,255,0.9);font-weight:500;line-height:1.35;">${escapeHtml(companyAddress)}</div>
+          </td>
+          <td style="vertical-align:middle;text-align:right;width:240px;color:${T.white};">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:${T.white};">Invoice No.</div>
+            <div style="font-size:15px;font-weight:800;margin-top:4px;letter-spacing:0.3px;color:${T.white};">${escapeHtml(invoiceNo)}</div>
+          </td>
+        </tr>
+      </table>
+    </div>
 
-          // Sum quantities and amounts
-          const quantity = parseInt(item.quantity || '0') || 0;
-          const amount = parseFloat(item.line_total || '0');
-          groupedItems[groupKey].totalQuantity += quantity;
-          groupedItems[groupKey].totalAmount += amount;
-          groupedItems[groupKey].items.push(item);
-        });
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed;background:${T.primaryPale};border-bottom:2px solid ${T.primaryBorder};font-size:12px;">
+      <tr>
+        <td style="width:58%;vertical-align:top;padding:14px 20px;border-right:1px solid ${T.primaryBorder};">
+          <div style="font-size:11px;font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Bill To</div>
+          <div style="font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:0.2px;color:${T.text};line-height:1.25;">${escapeHtml(customerName)}</div>
+          ${storeName ? `<div style="font-size:12px;color:${T.textMuted};margin-top:4px;font-weight:600;">Store: ${escapeHtml(storeName)}</div>` : ''}
+          ${voidBadge}
+        </td>
+        <td style="width:42%;vertical-align:top;padding:14px 20px;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <tr>
+              <td style="padding:0 0 8px 0;font-weight:600;color:${T.secondaryMuted};white-space:nowrap;">Invoice No.</td>
+              <td style="padding:0 0 8px 0;font-weight:800;text-align:right;color:${T.secondary};">${escapeHtml(invoiceNo)}</td>
+            </tr>
+            <tr>
+              <td style="padding:0 0 8px 0;font-weight:600;color:${T.secondaryMuted};white-space:nowrap;">Dated</td>
+              <td style="padding:0 0 8px 0;font-weight:700;text-align:right;color:${T.text};">${escapeHtml(invoiceDate)}</td>
+            </tr>
+            <tr>
+              <td style="padding:0 0 8px 0;font-weight:600;color:${T.secondaryMuted};white-space:nowrap;">Type</td>
+              <td style="padding:0 0 8px 0;text-align:right;font-weight:700;color:${T.primary};">${escapeHtml(typeLabel)}</td>
+            </tr>
+            <tr>
+              <td style="padding:0;font-weight:600;color:${T.secondaryMuted};white-space:nowrap;">Status</td>
+              <td style="padding:0;text-align:right;font-weight:700;color:${T.text};">${escapeHtml(statusLabel || '—')}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
 
-        // Render grouped items
-        let itemsHtml = Object.values(groupedItems).map((group) => {
-          // Calculate average unit price from total amount and quantity
-          const avgUnitPrice = group.totalQuantity > 0
-            ? group.totalAmount / group.totalQuantity
-            : 0;
+    <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;flex-shrink:0;">
+      <thead>
+        <tr style="background:${T.tableHead};">
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:center;font-weight:700;color:${T.secondary};width:42px;font-size:11px;">S.N.</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 8px;text-align:left;font-weight:700;color:${T.secondary};font-size:11px;">Description of Goods</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:right;font-weight:700;color:${T.secondary};width:64px;font-size:11px;">Qty.</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:center;font-weight:700;color:${T.secondary};width:52px;font-size:11px;">Unit</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 6px;text-align:right;font-weight:700;color:${T.secondary};width:80px;font-size:11px;">Rate (₹)</th>
+          <th style="border:1px solid ${T.secondaryMuted};padding:8px 8px;text-align:right;font-weight:700;color:${T.secondary};width:96px;font-size:11px;">Amount (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${bodyRows || emptyRow}
+        ${qtyFooterRow}
+      </tbody>
+    </table>
 
-          // Build product name with brand
-          const productDisplay = group.brand
-            ? `${group.name} (${group.brand})`
-            : group.name;
-          const productColor = getProductNameColor(group.name);
-          const productColorStyle = productColor ? ` color: ${productColor};` : '';
+    <div style="flex:1;min-height:20px;"></div>
 
-          const exchangeHtml = group.items
-            .map((item: any) => formatExchangeSnapshotPrintHtml(exchangeSnapshotForItem(inv, item.id)))
-            .join('');
-
-          return `
-                        <tr style="border-bottom: 1px solid #eee;">
-                          <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}${exchangeHtml}</td>
-                          <td style="border-bottom: 1px solid #eee; text-align: center;">${formatNumber(group.totalQuantity, 3)}</td>
-                          <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(avgUnitPrice, 2)}</td>
-                          <td style="border-bottom: 1px solid #eee; text-align: center;">PCS</td>
-                          <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(group.totalAmount, 2)}</td>
-                        </tr>
-                      `;
-        }).join('');
-
-        // Add spacer row to fill space and join lines
-        // We use a high height or let flex handle it
-        itemsHtml += `
-              <tr style="height: 100%;">
-                <td style="border-bottom: none;"></td>
-                <td style="border-bottom: none;"></td>
-                <td style="border-bottom: none;"></td>
-                <td style="border-bottom: none;"></td>
-                <td style="border-bottom: none;"></td>
-              </tr>
-            `;
-
-        return itemsHtml;
-      })()}
-                <!-- Transport Charge Row -->
-                <tr>
-                  <td>Transport Charge</td>
-                  <td></td>
-                  <td></td>
-                  <td></td>
-                  <td style="text-align: right;">${formatNumber(0, 2)}</td>
-                </tr>
-                ${tradeInCreditAmount > 0 ? `
-                <tr>
-                  <td colspan="4" style="text-align: right; font-size: 12px; padding-top: 6px;">Trade-in credit (prior sale)</td>
-                  <td style="text-align: right; font-size: 12px; padding-top: 6px; color: #166534;">-₹${formatNumber(tradeInCreditAmount, 2)}</td>
-                </tr>
-                ${buildTradeInDetailRowsA4Html(inv)}
-                ` : ''}
-                <!-- Total Row -->
-                <tr class="total-row">
-                  <td><strong>${tradeInCreditAmount > 0 ? 'Net total' : 'Total'}${inv.replacement_summary ? ' (Adj.)' : ''}</strong></td>
-                  <td style="text-align: center;"><strong>${formatNumber(totalPcs, 3)}</strong></td>
-                  <td></td>
-                  <td></td>
-                  <td style="text-align: right;"><strong>${formatNumber(totalAmount, 2)}</strong></td>
-                </tr>
-                ${inv.replacement_summary ? `
-                <tr>
-                  <td colspan="4" style="text-align: right; font-size: 11px; color: #374151;">Original invoice total</td>
-                  <td style="text-align: right; font-size: 11px; color: #374151;">₹${formatNumber(inv.total || '0', 2)}</td>
-                </tr>
-                ` : ''}
-                ${inv.customer && customerHasCreditInvoice && inv.status !== 'paid' ? `
-                <tr style="border-top: 1px dashed #000;">
-                  <td style="padding-top: 8px;">Old Balance</td>
-                  <td></td>
-                  <td></td>
-                  <td></td>
-                  <td style="text-align: right; padding-top: 8px;">${prevBalance < 0 ? formatNumber(Math.abs(prevBalance), 2) + ' (Cr)' : formatNumber(prevBalance, 2)}</td>
-                </tr>
-                <tr class="total-row">
-                  <td><strong>Total Outstanding</strong></td>
-                  <td></td>
-                  <td></td>
-                  <td></td>
-                  <td style="text-align: right;"><strong>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding), 2) + ' (Cr)' : formatNumber(totalOutstanding, 2)}</strong></td>
-                </tr>
-                ` : ''}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="footer-area">
-            <!-- Amount in Words -->
-            <div class="amount-words">
-              <p><strong>Amount Chargeable (in words)</strong> E & OE</p>
-              <p><strong>${amountInWords}</strong></p>
-            </div>
-
-            <!-- Declaration and Signatory section -->
-            <div style="display: flex; justify-content: space-between; padding-top: 4px;">
-              <div style="width: 60%;">
-                <p style="font-size: 12px; margin-bottom: 4px;"><strong>Declaration:</strong></p>
-                <p style="font-size: 11px; line-height: 1.4;">We declare that this invoice shows the actual price of the good described and that all particulars are true and correct.</p>
-              </div>
-              <div style="text-align: right; width: 40%;">
-                <p style="font-size: 13px;"><strong>for ${companyName}</strong></p>
-                <div style="margin-top: 45px;">
-                  <p style="font-size: 13px;"><strong>Authorised Signatory</strong></p>
-                </div>
-              </div>
-            </div>
-
-            <!-- Footer -->
-            <div class="footer">
-              <p>This is a Computer Generated Invoice</p>
-            </div>
-          </div>
-        </div>
-      </body>
-    </html>
-`;
+    <div style="position:relative;overflow:hidden;padding:16px 24px 20px;border-top:3px solid ${T.primary};background:${T.primaryPale};">
+      ${invoiceFooterShapes()}
+      ${summaryBlock}
+      <table style="position:relative;width:100%;border-collapse:collapse;font-size:12px;margin-top:18px;">
+        <tr>
+          <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
+            <div style="font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:11px;">Declaration</div>
+            <div style="font-size:12px;color:${T.textMuted};margin-top:5px;line-height:1.45;">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</div>
+          </td>
+          <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
+            <div style="font-size:12px;font-weight:700;color:${T.secondary};margin-bottom:28px;">for ${escapeHtml(shopName)}</div>
+            <div style="display:inline-block;border-top:2px solid ${T.secondaryMuted};padding:5px 18px 0;font-size:12px;font-weight:700;color:${T.secondary};">Authorised Signatory</div>
+          </td>
+        </tr>
+      </table>
+      <div style="position:relative;margin-top:14px;text-align:center;font-size:11px;color:${T.textMuted};">This is a Computer Generated Invoice · ${escapeHtml(shopName)}</div>
+    </div>
+  </div>
+</body>
+</html>`;
   };
 
   const handlePrint = () => {
@@ -2026,14 +1961,18 @@ export default function InvoiceDetail() {
       doc.open();
       doc.write(generateInvoiceHTML());
       doc.close();
-      await new Promise((r) => window.setTimeout(r, 80));
+      await new Promise((r) => window.setTimeout(r, 150));
 
-      const body = doc.body;
-      const el = doc.documentElement;
-      const w = el?.scrollWidth ?? INVOICE_CAPTURE_WIDTH_PX;
-      const h = el?.scrollHeight ?? 1123;
+      const root =
+        (doc.getElementById('invoice-print-root') as HTMLElement | null) || doc.body;
+      const w = INVOICE_CAPTURE_WIDTH_PX;
+      const h = Math.max(
+        INVOICE_CAPTURE_HEIGHT_PX,
+        Math.ceil(root.scrollHeight || root.offsetHeight || 1)
+      );
+      iframe.style.height = `${h + 8}px`;
 
-      const canvas = await html2canvas(body, {
+      const canvas = await html2canvas(root, {
         scale: invoiceCaptureScale(),
         useCORS: true,
         logging: false,
