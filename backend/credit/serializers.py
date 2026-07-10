@@ -139,6 +139,8 @@ class CreditInvoiceSerializer(serializers.ModelSerializer):
     customer_group_name = serializers.CharField(source='customer.customer_group.name', read_only=True, allow_null=True)
     store_name = serializers.CharField(source='store.name', read_only=True, allow_null=True)
     created_by_name = serializers.SerializerMethodField()
+    customer_balance = serializers.SerializerMethodField()
+    previous_balance = serializers.SerializerMethodField()
 
     class Meta:
         model = CreditInvoice
@@ -147,6 +149,7 @@ class CreditInvoiceSerializer(serializers.ModelSerializer):
             'customer', 'customer_name', 'customer_phone',
             'customer_group_id', 'customer_group_name',
             'status', 'subtotal', 'discount_amount', 'tax_amount', 'total',
+            'customer_balance', 'previous_balance',
             'notes', 'created_by', 'created_by_name', 'created_at', 'updated_at',
             'voided_at', 'voided_by', 'items',
         ]
@@ -159,6 +162,20 @@ class CreditInvoiceSerializer(serializers.ModelSerializer):
         if obj.created_by:
             return obj.created_by.get_full_name() or obj.created_by.username
         return None
+
+    def get_customer_balance(self, obj):
+        if not obj.customer_id:
+            return Decimal('0')
+        return obj.customer.balance or Decimal('0')
+
+    def get_previous_balance(self, obj):
+        if not obj.customer_id:
+            return Decimal('0')
+        bal = obj.customer.balance or Decimal('0')
+        total = obj.total or Decimal('0')
+        if obj.status == 'open':
+            return bal - total
+        return bal
 
 
 class CreditReturnItemSerializer(serializers.ModelSerializer):

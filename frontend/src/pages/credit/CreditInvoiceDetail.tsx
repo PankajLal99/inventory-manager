@@ -30,7 +30,9 @@ import type { Toast } from '../../components/ui/Toast';
 import { formatCreditInvoiceDate } from './CreditInvoiceDocument';
 import {
   buildCreditInvoiceHtml,
+  CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
+  CREDIT_SHOP_NAME,
 } from './creditInvoiceHtml';
 
 function invoiceStatusInfo(status?: string) {
@@ -84,11 +86,14 @@ export default function CreditInvoiceDetail() {
         invoice_number: invoice.invoice_number,
         customer_name: invoice.customer_name,
         customer_phone: invoice.customer_phone,
-        store_name: invoice.store_name,
         created_at: invoice.created_at,
+        subtotal: invoice.subtotal,
         total: invoice.total,
         notes: invoice.notes,
         status: invoice.status,
+        customer_balance: invoice.customer_balance,
+        previous_balance: invoice.previous_balance,
+        totalItems: (invoice.items || []).length,
         items: invoice.items || [],
         showTotals: true,
       })
@@ -116,11 +121,14 @@ export default function CreditInvoiceDetail() {
       invoice_number: invoice.invoice_number,
       customer_name: invoice.customer_name,
       customer_phone: invoice.customer_phone,
-      store_name: invoice.store_name,
       created_at: invoice.created_at,
+      subtotal: invoice.subtotal,
       total: invoice.total,
       notes: invoice.notes,
       status: invoice.status,
+      customer_balance: invoice.customer_balance,
+      previous_balance: invoice.previous_balance,
+      totalItems: (invoice.items || []).length,
       items: invoice.items || [],
       showTotals: true,
     });
@@ -128,12 +136,15 @@ export default function CreditInvoiceDetail() {
     doc.open();
     doc.write(html);
     doc.close();
-    await new Promise((r) => window.setTimeout(r, 80));
+    await new Promise((r) => window.setTimeout(r, 150));
 
     const root = doc.getElementById('credit-invoice-root') || doc.body;
     const w = CREDIT_INVOICE_CAPTURE_WIDTH;
-    const h = Math.ceil(
-      (root as HTMLElement).scrollHeight || (root as HTMLElement).offsetHeight || 1
+    const h = Math.max(
+      CREDIT_INVOICE_CAPTURE_HEIGHT,
+      Math.ceil(
+        (root as HTMLElement).scrollHeight || (root as HTMLElement).offsetHeight || 1
+      )
     );
     iframe.style.height = `${h + 8}px`;
 
@@ -329,8 +340,8 @@ export default function CreditInvoiceDetail() {
             <div className="flex items-start gap-3">
               <FileText className="h-5 w-5 text-gray-400 mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
-                <dt className="text-sm font-medium text-gray-500 mb-1">Store</dt>
-                <dd className="text-sm text-gray-900">{invoice.store_name || '—'}</dd>
+                <dt className="text-sm font-medium text-gray-500 mb-1">Shop</dt>
+                <dd className="text-sm text-gray-900 font-semibold">{CREDIT_SHOP_NAME}</dd>
               </div>
             </div>
             <div className="flex items-start gap-3">
@@ -366,12 +377,34 @@ export default function CreditInvoiceDetail() {
               <span className="text-sm text-gray-600">Total quantity</span>
               <span className="text-sm font-medium text-gray-900">{totalQty}</span>
             </div>
+            <div className="flex justify-between items-center py-2">
+              <span className="text-sm text-gray-600">Sub total</span>
+              <span className="text-sm font-medium text-gray-900">
+                ₹{formatNumber(invoice.subtotal ?? invoice.total ?? '0')}
+              </span>
+            </div>
             <div className="border-t border-gray-200 pt-3 mt-3 flex justify-between items-center">
               <span className="text-base font-semibold text-gray-900">Grand Total</span>
               <span className="text-lg font-bold text-gray-900">
                 ₹{formatNumber(invoice.total ?? '0')}
               </span>
             </div>
+            {invoice.previous_balance != null ? (
+              <div className="flex justify-between items-center py-2">
+                <span className="text-sm text-gray-600">Previous balance</span>
+                <span className="text-sm font-medium text-gray-900">
+                  ₹{formatNumber(invoice.previous_balance)}
+                </span>
+              </div>
+            ) : null}
+            {invoice.customer_balance != null ? (
+              <div className="flex justify-between items-center py-2 bg-amber-900/5 rounded-lg px-3 border border-amber-200">
+                <span className="text-sm font-semibold text-amber-900">Balance (ledger)</span>
+                <span className="text-sm font-bold text-amber-900">
+                  ₹{formatNumber(invoice.customer_balance)}
+                </span>
+              </div>
+            ) : null}
             <div className="flex justify-between items-center py-2 bg-amber-50 rounded-lg px-3 border border-amber-100">
               <span className="text-sm font-medium text-amber-800">Posted to credit ledger</span>
               <span className="text-sm font-semibold text-amber-900">

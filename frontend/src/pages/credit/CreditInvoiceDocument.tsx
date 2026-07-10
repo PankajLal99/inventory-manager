@@ -1,5 +1,6 @@
 import { format } from 'date-fns';
 import { formatAmountINR } from '../../lib/utils';
+import { CREDIT_SHOP_NAME } from './creditInvoiceHtml';
 
 /** Indian-style amount in words for credit invoices. */
 export function creditAmountInWords(num: number): string {
@@ -69,8 +70,12 @@ export type CreditInvoiceLike = {
   customer_name?: string | null;
   customer_phone?: string | null;
   store_name?: string | null;
+  shop_name?: string | null;
   status?: string;
+  subtotal?: string | number;
   total?: string | number;
+  customer_balance?: string | number | null;
+  previous_balance?: string | number | null;
   created_at?: string;
   notes?: string;
   items?: Array<{
@@ -84,68 +89,118 @@ export type CreditInvoiceLike = {
 
 type Props = {
   invoice: CreditInvoiceLike;
-  /** Optional wrapper class for print/PDF targeting */
   className?: string;
 };
+
+function parseAmount(value: string | number | null | undefined): number {
+  return parseFloat(String(value ?? 0)) || 0;
+}
 
 export default function CreditInvoiceDocument({ invoice, className = '' }: Props) {
   const items = invoice.items || [];
   const totalQty = items.reduce((sum, item) => sum + (parseFloat(String(item.quantity || 0)) || 0), 0);
-  const totalAmt = parseFloat(String(invoice.total ?? 0)) || 0;
+  const totalItems = items.length;
+  const totalAmt = parseAmount(invoice.total);
+  const subtotalAmt = parseAmount(invoice.subtotal) || totalAmt;
+  const shopName = invoice.shop_name?.trim() || CREDIT_SHOP_NAME;
+  const hasBalance =
+    invoice.customer_balance != null || invoice.previous_balance != null;
+  const previousBal = parseAmount(invoice.previous_balance);
+  const closingBal =
+    invoice.customer_balance != null
+      ? parseAmount(invoice.customer_balance)
+      : hasBalance
+        ? previousBal + totalAmt
+        : null;
 
   return (
     <div
-      className={`bg-white text-gray-900 border border-gray-800 shadow-sm print:shadow-none ${className}`}
+      className={`bg-white text-stone-900 border-[3px] border-amber-600 shadow-lg print:shadow-none flex flex-col min-h-[297mm] text-xs leading-snug ${className}`}
       data-credit-invoice-doc
     >
-      {/* Header: Party + Invoice meta */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 border-b border-gray-800">
-        <div className="p-4 sm:border-r border-gray-800">
-          <div className="text-sm font-semibold mb-2">Party Details :</div>
-          <div className="text-base font-bold uppercase tracking-wide">
+      {/* Shop header — flat colour + abstract shapes */}
+      <div className="relative overflow-hidden bg-amber-600 text-white px-7 py-5">
+        <div className="pointer-events-none absolute -top-12 left-10 h-32 w-32 rounded-full bg-white/15" />
+        <div className="pointer-events-none absolute -bottom-8 left-[28%] h-16 w-16 rounded-full bg-amber-400/50" />
+        <div className="relative z-[1] flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-extrabold uppercase tracking-wide leading-tight text-white">
+              {shopName}
+            </h1>
+            <p className="text-[11px] font-semibold uppercase tracking-wider mt-1 text-white">
+              Credit Sale Invoice
+            </p>
+          </div>
+          <div className="text-right shrink-0 text-white">
+            <div className="text-[11px] font-bold uppercase tracking-wide">Invoice No.</div>
+            <div className="text-[15px] font-extrabold mt-1">{invoice.invoice_number || '—'}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Party + meta */}
+      <div className="grid grid-cols-1 sm:grid-cols-[1.4fr_1fr] border-b-2 border-amber-300 bg-amber-50 text-xs">
+        <div className="p-4 sm:border-r border-amber-300">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-amber-900 mb-1.5">
+            Bill To
+          </div>
+          <div className="text-[15px] font-extrabold uppercase tracking-wide leading-tight">
             {invoice.customer_name || '—'}
           </div>
           {invoice.customer_phone ? (
-            <div className="text-sm text-gray-600 mt-1">{invoice.customer_phone}</div>
-          ) : null}
-          {invoice.store_name ? (
-            <div className="text-xs text-gray-500 mt-2">Store: {invoice.store_name}</div>
+            <div className="text-xs text-stone-600 mt-1 font-semibold">{invoice.customer_phone}</div>
           ) : null}
           {invoice.status === 'void' ? (
-            <div className="mt-2 inline-flex px-2 py-0.5 text-xs font-bold uppercase bg-red-100 text-red-700 border border-red-300">
+            <div className="mt-2 inline-flex px-2 py-0.5 text-[11px] font-bold uppercase bg-red-100 text-red-700 border border-red-300 rounded">
               Void
             </div>
           ) : null}
         </div>
-        <div className="p-4 space-y-2 text-sm">
+        <div className="p-4 space-y-1.5 text-xs">
           <div className="flex justify-between gap-4">
-            <span className="font-semibold whitespace-nowrap">Invoice No. :</span>
-            <span className="font-bold text-right">{invoice.invoice_number || '—'}</span>
+            <span className="font-semibold text-amber-900">Invoice No.</span>
+            <span className="font-extrabold text-amber-950 text-right">{invoice.invoice_number || '—'}</span>
           </div>
           <div className="flex justify-between gap-4">
-            <span className="font-semibold whitespace-nowrap">Dated :</span>
-            <span className="text-right">{formatCreditInvoiceDate(invoice.created_at)}</span>
+            <span className="font-semibold text-amber-900">Dated</span>
+            <span className="font-bold text-right">{formatCreditInvoiceDate(invoice.created_at)}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="font-semibold text-amber-900">Payment</span>
+            <span className="font-bold text-amber-600 text-right">On Credit</span>
           </div>
         </div>
       </div>
 
       {/* Items table */}
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
+      <div className="overflow-x-auto flex-shrink-0">
+        <table className="w-full border-collapse text-xs">
           <thead>
-            <tr className="bg-gray-100 border-b border-gray-800">
-              <th className="border-r border-gray-300 px-2 py-2 text-left font-semibold w-12">S.N.</th>
-              <th className="border-r border-gray-300 px-3 py-2 text-left font-semibold">Description of Goods</th>
-              <th className="border-r border-gray-300 px-2 py-2 text-right font-semibold w-20">Qty.</th>
-              <th className="border-r border-gray-300 px-2 py-2 text-center font-semibold w-16">Unit</th>
-              <th className="border-r border-gray-300 px-2 py-2 text-right font-semibold w-24">Price</th>
-              <th className="px-2 py-2 text-right font-semibold w-28">Amount (₹)</th>
+            <tr className="bg-amber-100">
+              <th className="border border-amber-800/30 px-2 py-2 text-center font-bold text-amber-900 w-12 text-[11px]">
+                S.N.
+              </th>
+              <th className="border border-amber-800/30 px-3 py-2 text-left font-bold text-amber-900 text-[11px]">
+                Description of Goods
+              </th>
+              <th className="border border-amber-800/30 px-2 py-2 text-right font-bold text-amber-900 w-20 text-[11px]">
+                Qty.
+              </th>
+              <th className="border border-amber-800/30 px-2 py-2 text-center font-bold text-amber-900 w-16 text-[11px]">
+                Unit
+              </th>
+              <th className="border border-amber-800/30 px-2 py-2 text-right font-bold text-amber-900 w-24 text-[11px]">
+                Rate (₹)
+              </th>
+              <th className="border border-amber-800/30 px-2 py-2 text-right font-bold text-amber-900 w-28 text-[11px]">
+                Amount (₹)
+              </th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-gray-400 border-b border-gray-300">
+                <td colSpan={6} className="px-3 py-8 text-center text-stone-400 border border-amber-300 text-xs">
                   No line items
                 </td>
               </tr>
@@ -156,19 +211,24 @@ export default function CreditInvoiceDocument({ invoice, className = '' }: Props
                 const amount =
                   parseFloat(String(item.line_total ?? qty * price)) || 0;
                 return (
-                  <tr key={item.id ?? idx} className="border-b border-gray-200 align-top">
-                    <td className="border-r border-gray-200 px-2 py-2 text-center">{idx + 1}</td>
-                    <td className="border-r border-gray-200 px-3 py-2 font-medium">
+                  <tr
+                    key={item.id ?? idx}
+                    className={`border-b border-amber-200 align-top ${idx % 2 === 1 ? 'bg-orange-50/60' : ''}`}
+                  >
+                    <td className="border border-amber-300 px-2 py-1.5 text-center font-semibold text-amber-900">
+                      {idx + 1}
+                    </td>
+                    <td className="border border-amber-300 px-3 py-1.5 font-semibold">
                       {item.product_name || '—'}
                     </td>
-                    <td className="border-r border-gray-200 px-2 py-2 text-right tabular-nums">
+                    <td className="border border-amber-300 px-2 py-1.5 text-right tabular-nums font-semibold">
                       {Number.isInteger(qty) ? qty : formatAmountINR(qty)}
                     </td>
-                    <td className="border-r border-gray-200 px-2 py-2 text-center">Pcs.</td>
-                    <td className="border-r border-gray-200 px-2 py-2 text-right tabular-nums">
+                    <td className="border border-amber-300 px-2 py-1.5 text-center text-stone-500">Pcs.</td>
+                    <td className="border border-amber-300 px-2 py-1.5 text-right tabular-nums">
                       {formatAmountINR(price)}
                     </td>
-                    <td className="px-2 py-2 text-right tabular-nums font-medium">
+                    <td className="border border-amber-300 px-2 py-1.5 text-right tabular-nums font-bold text-amber-900">
                       {formatAmountINR(amount)}
                     </td>
                   </tr>
@@ -177,45 +237,92 @@ export default function CreditInvoiceDocument({ invoice, className = '' }: Props
             )}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-gray-800 bg-gray-50 font-bold">
-              <td className="border-r border-gray-300 px-2 py-2" />
-              <td className="border-r border-gray-300 px-3 py-2">Grand Total</td>
-              <td className="border-r border-gray-300 px-2 py-2 text-right tabular-nums" colSpan={2}>
+            <tr className="border-t-2 border-amber-800 bg-amber-100 font-bold text-xs">
+              <td className="border border-amber-800/30 px-2 py-1.5" />
+              <td className="border border-amber-800/30 px-3 py-1.5 text-amber-900">Total Quantity</td>
+              <td className="border border-amber-800/30 px-2 py-1.5 text-right tabular-nums text-amber-900" colSpan={2}>
                 {Number.isInteger(totalQty) ? totalQty : formatAmountINR(totalQty)} Pcs.
               </td>
-              <td className="border-r border-gray-300 px-2 py-2" />
-              <td className="px-2 py-2 text-right tabular-nums">
-                ₹ {formatAmountINR(totalAmt)}
-              </td>
+              <td className="border border-amber-800/30 px-2 py-1.5" />
+              <td className="border border-amber-800/30 px-2 py-1.5" />
             </tr>
           </tfoot>
         </table>
       </div>
 
-      {/* Amount in words + footer */}
-      <div className="border-t border-gray-800 p-4 space-y-4">
-        <div className="text-sm">
-          <span className="font-semibold">Amount in Words: </span>
-          <span>{creditAmountInWords(totalAmt)}</span>
+      <div className="flex-1 min-h-4" />
+
+      {/* Summary + footer */}
+      <div className="relative overflow-hidden border-t-[3px] border-amber-600 bg-amber-50 px-5 py-4 mt-auto">
+        <div className="pointer-events-none absolute bottom-0 right-6 h-14 w-14 rounded-full bg-amber-400/35" />
+        <div className="pointer-events-none absolute top-3 -left-2 h-9 w-9 rotate-[20deg] rounded-lg bg-amber-600/10" />
+
+        <div className="relative border-2 border-amber-600 text-xs">
+          <div className="bg-amber-600 text-white px-3.5 py-2 font-bold uppercase tracking-wide text-[11px]">
+            Invoice Summary
+          </div>
+          <div className="divide-y divide-amber-200 bg-white">
+            <div className="flex justify-between px-3.5 py-2">
+              <span className="font-semibold text-stone-500">Total Items</span>
+              <span className="font-bold">
+                {totalItems} {totalItems === 1 ? 'Line' : 'Lines'} ·{' '}
+                {Number.isInteger(totalQty) ? totalQty : formatAmountINR(totalQty)} Pcs.
+              </span>
+            </div>
+            <div className="flex justify-between px-3.5 py-2">
+              <span className="font-semibold text-stone-500">Sub Total</span>
+              <span className="font-bold">₹ {formatAmountINR(subtotalAmt)}</span>
+            </div>
+            <div className="flex justify-between px-3.5 py-2 bg-amber-600 text-white">
+              <span className="font-bold">Total</span>
+              <span className="font-extrabold">₹ {formatAmountINR(totalAmt)}</span>
+            </div>
+            {hasBalance ? (
+              <>
+                <div className="flex justify-between px-3.5 py-2">
+                  <span className="font-semibold text-stone-500">Previous Balance</span>
+                  <span className="font-bold">₹ {formatAmountINR(previousBal)}</span>
+                </div>
+                <div className="flex justify-between px-3.5 py-2 bg-amber-900 text-white">
+                  <span className="font-bold">Balance (Ledger)</span>
+                  <span className="font-extrabold">₹ {formatAmountINR(closingBal ?? 0)}</span>
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
+
+        <div className="relative mt-3 text-xs p-2.5 bg-white border border-amber-300 border-l-4 border-l-amber-600 leading-relaxed">
+          <span className="font-bold text-amber-900">Amount in Words: </span>
+          <span className="font-semibold">{creditAmountInWords(totalAmt)}</span>
+        </div>
+
         {invoice.notes ? (
-          <div className="text-sm text-gray-600">
-            <span className="font-semibold">Notes: </span>
+          <div className="relative text-xs text-stone-600 mt-2.5">
+            <span className="font-bold text-amber-900">Notes: </span>
             {invoice.notes}
           </div>
         ) : null}
-        <div className="grid grid-cols-2 gap-4 pt-8 text-sm">
+
+        <div className="relative grid grid-cols-2 gap-4 pt-4 text-xs">
           <div>
-            <div className="font-semibold">Terms &amp; Conditions</div>
-            <div className="text-xs text-gray-500 mt-1">Credit sale — payable as per account ledger.</div>
+            <div className="font-bold text-amber-900 uppercase text-[11px] tracking-wide">
+              Terms &amp; Conditions
+            </div>
+            <div className="text-xs text-stone-500 mt-1 leading-relaxed">
+              Credit sale — payable as per account ledger. Goods once sold will not be taken back without prior approval.
+            </div>
           </div>
           <div className="text-center">
-            <div className="h-12" />
-            <div className="font-semibold border-t border-gray-400 inline-block pt-1 px-4">
+            <div className="h-8" />
+            <div className="font-bold border-t-2 border-amber-800 inline-block pt-1 px-4 text-amber-900 text-xs">
               Receiver&apos;s Signature
             </div>
           </div>
         </div>
+        <p className="relative text-center text-[11px] text-stone-500 mt-3">
+          Thank you for your business · {shopName}
+        </p>
       </div>
     </div>
   );

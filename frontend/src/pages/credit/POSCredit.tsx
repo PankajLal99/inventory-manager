@@ -35,6 +35,7 @@ import {
 import CreditPOSModeToggle from './CreditPOSModeToggle';
 import {
   buildCreditInvoiceHtml,
+  CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
 import Button from '../../components/ui/Button';
@@ -122,13 +123,15 @@ async function renderSnapshotHtmlToBlob(
   doc.open();
   doc.write(html);
   doc.close();
-  await new Promise((r) => window.setTimeout(r, 80));
+  await new Promise((r) => window.setTimeout(r, 150));
 
   const root =
     (doc.getElementById('credit-invoice-root') as HTMLElement | null) || doc.body;
   const w = CREDIT_INVOICE_CAPTURE_WIDTH;
-  // Crop to content height — do not force a full A4 page
-  const h = Math.ceil(root.scrollHeight || root.offsetHeight || 1);
+  const h = Math.max(
+    CREDIT_INVOICE_CAPTURE_HEIGHT,
+    Math.ceil(root.scrollHeight || root.offsetHeight || 1)
+  );
   iframe.style.height = `${h + 8}px`;
 
   const canvas = await html2canvas(root, {
@@ -158,6 +161,119 @@ async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+type InvoiceClipboardInput = {
+  invoice_number?: string | null;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  created_at?: string | null;
+  subtotal?: string | number | null;
+  total?: string | number | null;
+  previous_balance?: string | number | null;
+  customer_balance?: string | number | null;
+  status?: string | null;
+  items?: Array<{
+    product_name?: string | null;
+    quantity?: string | number | null;
+    unit_price?: string | number | null;
+    line_total?: string | number | null;
+  }>;
+};
+
+async function buildInvoiceSnapshotBlobs(
+  iframe: HTMLIFrameElement,
+  input: InvoiceClipboardInput
+): Promise<Blob[]> {
+  const items = input.items || [];
+  const rows: CartSnapshotRow[] = items.map((item, idx) => ({
+    idx: idx + 1,
+    name: item.product_name || 'Item',
+    qty: Math.round(parseFloat(String(item.quantity ?? '0')) || 0),
+    unitPrice: parseFloat(String(item.unit_price ?? '0')) || 0,
+    lineTotal: parseFloat(String(item.line_total ?? '0')) || 0,
+  }));
+
+  const totalQty = rows.reduce((sum, row) => sum + row.qty, 0);
+  const totalAmt =
+    parseFloat(String(input.total ?? 0)) ||
+    rows.reduce((sum, row) => sum + row.lineTotal, 0);
+  const rowChunks = chunkSnapshotRows(rows, SNAPSHOT_ROWS_PER_PAGE);
+  const blobs: Blob[] = [];
+  let lineOffset = 0;
+
+  for (let i = 0; i < rowChunks.length; i++) {
+    const chunk = rowChunks[i];
+    const html = buildCreditInvoiceHtml({
+      invoice_number: input.invoice_number,
+      customer_name: input.customer_name,
+      customer_phone: input.customer_phone,
+      created_at: input.created_at,
+      subtotal: input.subtotal ?? totalAmt,
+      total: input.total ?? totalAmt,
+      totalQty,
+      totalItems: rows.length,
+      previous_balance: input.previous_balance,
+      customer_balance: input.customer_balance,
+      status: input.status,
+      items: chunk.map((r) => ({
+        product_name: r.name,
+        quantity: r.qty,
+        unit_price: r.unitPrice,
+        line_total: r.lineTotal,
+      })),
+      partIndex: i + 1,
+      partCount: rowChunks.length,
+      showTotals: i === rowChunks.length - 1,
+      lineOffset,
+    });
+    lineOffset += chunk.length;
+    const blob = await renderSnapshotHtmlToBlob(iframe, html);
+    if (!blob) {
+      throw new Error(`Failed to create invoice image (part ${i + 1}).`);
+    }
+    blobs.push(blob);
+  }
+
+  return blobs;
+}
+
+async function mergePngBlobsVertically(blobs: Blob[]): Promise<Blob | null> {
+  if (blobs.length === 0) return null;
+  if (blobs.length === 1) return blobs[0];
+
+  const bitmaps = await Promise.all(blobs.map((blob) => createImageBitmap(blob)));
+  const width = Math.max(...bitmaps.map((b) => b.width));
+  const height = bitmaps.reduce((sum, b) => sum + b.height, 0);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return blobs[0];
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  let y = 0;
+  for (const bitmap of bitmaps) {
+    ctx.drawImage(bitmap, 0, y);
+    y += bitmap.height;
+    bitmap.close?.();
+  }
+
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
+}
+
+/** Render invoice HTML to PNG and copy a single merged image to the clipboard. */
+async function copyInvoiceImageToClipboard(
+  iframe: HTMLIFrameElement,
+  input: InvoiceClipboardInput
+): Promise<boolean> {
+  const blobs = await buildInvoiceSnapshotBlobs(iframe, input);
+  const merged = await mergePngBlobsVertically(blobs);
+  if (!merged) return false;
+  return copyPngBlobToClipboard(merged);
 }
 
 export default function POSCredit() {
@@ -927,7 +1043,41 @@ export default function POSCredit() {
       }
       const res = await creditApi.carts.checkout(cartId, payload);
       const invoice = res.data;
-      showToast(`Credit invoice ${invoice.invoice_number} created`);
+
+      const iframe = draftSnapshotFrameRef.current;
+      let clipboardCopied = false;
+      if (iframe) {
+        try {
+          clipboardCopied = await copyInvoiceImageToClipboard(iframe, {
+            invoice_number: invoice.invoice_number,
+            customer_name: invoice.customer_name,
+            customer_phone: invoice.customer_phone,
+            created_at: invoice.created_at,
+            subtotal: invoice.subtotal,
+            total: invoice.total,
+            previous_balance: invoice.previous_balance,
+            customer_balance: invoice.customer_balance,
+            status: invoice.status,
+            items: invoice.items || [],
+          });
+        } catch (copyErr) {
+          console.error('Invoice clipboard copy failed:', copyErr);
+        }
+      }
+
+      if (clipboardCopied) {
+        showToast(
+          `Invoice ${invoice.invoice_number} created — image copied to clipboard`,
+          'success'
+        );
+      } else {
+        showToast(
+          iframe
+            ? `Invoice ${invoice.invoice_number} created (clipboard copy unavailable — use Photo on invoice page)`
+            : `Credit invoice ${invoice.invoice_number} created`,
+          'success'
+        );
+      }
 
       if (username && cartId) {
         const newActive = removeCreditCartTab(username, cartId);
@@ -1013,51 +1163,26 @@ export default function POSCredit() {
       const invoiceNo = cart?.cart_number || (cartId ? `DRAFT-${cartId}` : 'DRAFT');
       const customerName = selectedCustomer?.name || cart?.customer_name || 'Walk-in Customer';
       const customerPhone = selectedCustomer?.phone || null;
-      const storeName = defaultStore?.name || cart?.store_name || null;
       const createdAt = new Date().toISOString();
+      const previousBalance = parseFloat(String(selectedCustomer?.balance ?? 0)) || 0;
+      const closingBalance = previousBalance + cartTotal;
 
-      const draftItems: CartSnapshotRow[] = cartItems.map((item: any, idx: number) => ({
-        idx: idx + 1,
-        name: item.product_name || item.product_display_name || 'Item',
-        qty: Math.round(parseFloat(String(item.quantity ?? '0')) || 0),
-        unitPrice: parseFloat(String(item.unit_price ?? '0')) || 0,
-        lineTotal: parseFloat(String(item.line_total ?? '0')) || 0,
-      }));
-
-      const totalQty = draftItems.reduce((sum, row) => sum + row.qty, 0);
-      const rowChunks = chunkSnapshotRows(draftItems, SNAPSHOT_ROWS_PER_PAGE);
-      const blobs: Blob[] = [];
-      let lineOffset = 0;
-
-      for (let i = 0; i < rowChunks.length; i++) {
-        const chunk = rowChunks[i];
-        const html = buildCreditInvoiceHtml({
-          invoice_number: invoiceNo,
-          customer_name: customerName,
-          customer_phone: customerPhone,
-          store_name: storeName,
-          created_at: createdAt,
-          total: cartTotal,
-          totalQty,
-          items: chunk.map((r) => ({
-            product_name: r.name,
-            quantity: r.qty,
-            unit_price: r.unitPrice,
-            line_total: r.lineTotal,
-          })),
-          partIndex: i + 1,
-          partCount: rowChunks.length,
-          showTotals: i === rowChunks.length - 1,
-          lineOffset,
-        });
-        lineOffset += chunk.length;
-        const blob = await renderSnapshotHtmlToBlob(iframe, html);
-        if (!blob) {
-          showToast(`Failed to create snapshot image (part ${i + 1}).`, 'error');
-          return;
-        }
-        blobs.push(blob);
-      }
+      const blobs = await buildInvoiceSnapshotBlobs(iframe, {
+        invoice_number: invoiceNo,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        created_at: createdAt,
+        subtotal: cartTotal,
+        total: cartTotal,
+        previous_balance: previousBalance,
+        customer_balance: closingBalance,
+        items: cartItems.map((item: any) => ({
+          product_name: item.product_name || item.product_display_name || 'Item',
+          quantity: Math.round(parseFloat(String(item.quantity ?? '0')) || 0),
+          unit_price: parseFloat(String(item.unit_price ?? '0')) || 0,
+          line_total: parseFloat(String(item.line_total ?? '0')) || 0,
+        })),
+      });
 
       if (!(await copyPngBlobToClipboard(blobs[0]))) {
         showToast('Image clipboard not supported in this browser.', 'error');
