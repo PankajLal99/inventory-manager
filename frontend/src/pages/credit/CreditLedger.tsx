@@ -39,12 +39,17 @@ export default function CreditLedger() {
     searchParams.get('with_balance') === '1'
   );
   const [customerGroup, setCustomerGroup] = useState(searchParams.get('customer_group') || '');
+  // Default: heart-marked customers only (with_heart omitted or '1')
+  const [withHeartOnly, setWithHeartOnly] = useState(
+    searchParams.get('with_heart') !== '0'
+  );
 
   const buildDetailPath = (customerId: number) => {
     const params = new URLSearchParams();
     if (search.trim()) params.set('search', search.trim());
     if (withBalanceOnly) params.set('with_balance', '1');
     if (customerGroup) params.set('customer_group', customerGroup);
+    if (!withHeartOnly) params.set('with_heart', '0');
     const query = params.toString();
     return query ? `/credit-ledger/${customerId}?${query}` : `/credit-ledger/${customerId}`;
   };
@@ -71,12 +76,13 @@ export default function CreditLedger() {
   });
 
   const { data: customers = [], isLoading, error, refetch } = useQuery({
-    queryKey: ['credit-ledger-customers', search, withBalanceOnly, customerGroup],
+    queryKey: ['credit-ledger-customers', search, withBalanceOnly, customerGroup, withHeartOnly],
     queryFn: async () => {
       const params: Record<string, string> = {};
       if (search.trim()) params.search = search.trim();
       if (withBalanceOnly) params.with_balance = '1';
       if (customerGroup) params.customer_group = customerGroup;
+      params.with_heart = withHeartOnly ? '1' : '0';
       const res = await creditApi.ledger.byCustomer(params);
       return (res.data || []) as CreditLedgerCustomerRow[];
     },
@@ -100,12 +106,13 @@ export default function CreditLedger() {
     };
   }, [customers]);
 
-  const hasActiveFilters = !!(search.trim() || withBalanceOnly || customerGroup);
+  const hasActiveFilters = !!(search.trim() || withBalanceOnly || customerGroup || !withHeartOnly);
 
   const handleResetFilters = () => {
     setSearch('');
     setWithBalanceOnly(false);
     setCustomerGroup('');
+    setWithHeartOnly(true);
     setSearchParams({});
   };
 
@@ -114,6 +121,14 @@ export default function CreditLedger() {
     const next = new URLSearchParams(searchParams);
     if (value.trim()) next.set('search', value.trim());
     else next.delete('search');
+    setSearchParams(next, { replace: true });
+  };
+
+  const setHeartFilter = (heartOnly: boolean) => {
+    setWithHeartOnly(heartOnly);
+    const next = new URLSearchParams(searchParams);
+    if (heartOnly) next.delete('with_heart');
+    else next.set('with_heart', '0');
     setSearchParams(next, { replace: true });
   };
 
@@ -189,6 +204,34 @@ export default function CreditLedger() {
             Ledger Accounts
           </h2>
           <div className="flex flex-wrap items-center gap-2">
+            <div
+              className="inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 p-0.5"
+              role="group"
+              aria-label="Customer heart filter"
+            >
+              <button
+                type="button"
+                onClick={() => setHeartFilter(true)}
+                className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-md transition-colors ${
+                  withHeartOnly
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'text-amber-800 hover:bg-amber-100'
+                }`}
+              >
+                ❤ Heart
+              </button>
+              <button
+                type="button"
+                onClick={() => setHeartFilter(false)}
+                className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-md transition-colors ${
+                  !withHeartOnly
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'text-amber-800 hover:bg-amber-100'
+                }`}
+              >
+                All
+              </button>
+            </div>
             <div className="relative flex-1 min-w-[140px] max-w-[240px]">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
               <Input
@@ -207,7 +250,7 @@ export default function CreditLedger() {
               Filters
               {hasActiveFilters ? (
                 <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                  {[search.trim(), withBalanceOnly, customerGroup].filter(Boolean).length}
+                  {[search.trim(), withBalanceOnly, customerGroup, !withHeartOnly].filter(Boolean).length}
                 </span>
               ) : null}
             </Button>

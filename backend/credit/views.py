@@ -51,6 +51,15 @@ from .serializers import (
     SoldCreditProductSerializer,
 )
 
+# Main-app customers eligible for Credit POS/ledger are marked with a heart in the name
+# (❤ U+2764; also matches ❤️ with variation selector).
+CREDIT_ELIGIBLE_NAME_MARKER = '❤'
+
+
+def _credit_eligible_name_q(field: str = 'name') -> Q:
+    """Filter customers whose name contains the credit heart marker."""
+    return Q(**{f'{field}__contains': CREDIT_ELIGIBLE_NAME_MARKER})
+
 
 def _generate_cart_number():
     while True:
@@ -154,7 +163,9 @@ def ensure_credit_customer(*, credit_customer_id=None, parties_customer_id=None,
 @permission_classes([IsAuthenticated])
 def credit_customer_list_create(request):
     if request.method == 'GET':
-        qs = CreditCustomer.objects.filter(is_active=True).select_related('customer_group', 'linked_customer')
+        qs = CreditCustomer.objects.filter(
+            is_active=True
+        ).filter(_credit_eligible_name_q()).select_related('customer_group', 'linked_customer')
         search = request.query_params.get('search', '').strip()
         if search:
             qs = qs.filter(
@@ -205,6 +216,8 @@ def credit_customer_search(request):
     seen_phones = set()
 
     credit_qs = CreditCustomer.objects.filter(is_active=True).filter(
+        _credit_eligible_name_q()
+    ).filter(
         Q(name__icontains=search) | Q(phone__icontains=search)
     ).select_related('linked_customer', 'customer_group')[:30]
 
@@ -228,6 +241,8 @@ def credit_customer_search(request):
         })
 
     party_qs = Customer.objects.filter(is_active=True).filter(
+        _credit_eligible_name_q()
+    ).filter(
         Q(name__icontains=search) | Q(phone__icontains=search)
     ).select_related('customer_group')[:30]
 
@@ -1049,6 +1064,9 @@ def credit_ledger_by_customer(request):
     """Summary list of credit customers with balances and collection status (ledger index)."""
     search = request.query_params.get('search', '').strip()
     only_with_balance = (request.query_params.get('with_balance') or '').strip().lower()
+    # Default: heart-marked only. Pass with_heart=0 / false / all to show everyone.
+    with_heart_raw = (request.query_params.get('with_heart') or '1').strip().lower()
+    only_with_heart = with_heart_raw not in ('0', 'false', 'all', 'no')
 
     latest_desc = (
         CreditLedgerEntry.objects.filter(customer_id=OuterRef('pk'))
@@ -1071,7 +1089,10 @@ def credit_ledger_by_customer(request):
         .values('created_at')[:1]
     )
 
-    qs = CreditCustomer.objects.filter(is_active=True).select_related(
+    qs = CreditCustomer.objects.filter(is_active=True)
+    if only_with_heart:
+        qs = qs.filter(_credit_eligible_name_q())
+    qs = qs.select_related(
         'customer_group',
         'linked_customer',
     ).annotate(
