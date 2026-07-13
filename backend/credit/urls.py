@@ -28,6 +28,7 @@ urlpatterns = [
 
     # Ledger
     path('credit/ledger/', views.credit_ledger_list, name='credit-ledger-list'),
+    path('credit/ledger/entries/', views.credit_ledger_entry_create, name='credit-ledger-entry-create'),
     path('credit/ledger/statement/', views.credit_ledger_statement, name='credit-ledger-statement'),
     path('credit/ledger/by-customer/', views.credit_ledger_by_customer, name='credit-ledger-by-customer'),
 

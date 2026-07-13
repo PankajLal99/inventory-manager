@@ -378,12 +378,6 @@ export default function Ledger() {
     return raw.filter((c: any) => (c.customer_group_name || '').toUpperCase() !== 'MTSHOP');
   })();
 
-  const formatCustomerWithGroup = (name: string, groupName?: string) => {
-    const safeName = name || 'Anonymous';
-    const safeGroup = (groupName || '').trim();
-    return safeGroup ? `${safeName} (${safeGroup})` : safeName;
-  };
-
   const entries = (() => {
     if (!ledgerEntries) return [];
     if (Array.isArray(ledgerEntries)) return ledgerEntries;
@@ -1258,10 +1252,10 @@ export default function Ledger() {
                                       onClick={() => navigate(buildLedgerDetailPath(group.customer.id))}
                                       className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                                     >
-                                      {formatCustomerWithGroup(group.customer.name, group.customer.groupName)}
+                                      {group.customer.name || 'Anonymous'}
                                     </button>
                                   ) : (
-                                    <span className="text-sm font-semibold text-gray-700">{formatCustomerWithGroup(group.customer.name, group.customer.groupName)}</span>
+                                    <span className="text-sm font-semibold text-gray-700">{group.customer.name || 'Anonymous'}</span>
                                   )}
                                 </div>
                               </td>
@@ -1373,10 +1367,10 @@ export default function Ledger() {
                                 onClick={() => navigate(buildLedgerDetailPath(group.customer.id))}
                                 className="text-base font-semibold text-blue-600 hover:text-blue-800 hover:underline transition-colors text-left"
                               >
-                                {formatCustomerWithGroup(group.customer.name, group.customer.groupName)}
+                                {group.customer.name || 'Anonymous'}
                               </button>
                             ) : (
-                              <span className="text-base font-semibold text-gray-700">{formatCustomerWithGroup(group.customer.name, group.customer.groupName)}</span>
+                              <span className="text-base font-semibold text-gray-700">{group.customer.name || 'Anonymous'}</span>
                             )}
                             <p className="text-xs text-gray-600 mt-0.5">
                               {(group.entryCount ?? group.entries.length)} {(group.entryCount ?? group.entries.length) === 1 ? 'entry' : 'entries'}

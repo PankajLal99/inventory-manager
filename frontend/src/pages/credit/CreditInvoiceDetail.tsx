@@ -79,6 +79,9 @@ export default function CreditInvoiceDetail() {
       refetch();
       showToast('Invoice voided', 'success');
     },
+    onError: (err: any) => {
+      showToast(err?.response?.data?.detail || 'Failed to void invoice', 'error');
+    },
   });
 
   const previewHtml = invoice
@@ -204,13 +207,27 @@ export default function CreditInvoiceDetail() {
     setExporting(true);
     try {
       const canvas = await captureFromIframe();
-      const link = document.createElement('a');
-      link.download = `credit_invoice_${(invoice.invoice_number || id || 'photo').replace(/\s+/g, '_')}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-      showToast('Image saved', 'success');
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png', 1)
+      );
+      if (!blob) {
+        showToast('Failed to create image', 'error');
+        return;
+      }
+      const canWriteImage =
+        typeof navigator !== 'undefined' &&
+        !!navigator.clipboard &&
+        typeof (window as any).ClipboardItem !== 'undefined';
+      if (!canWriteImage) {
+        showToast('Image clipboard not supported in this browser', 'error');
+        return;
+      }
+      await navigator.clipboard.write([
+        new (window as any).ClipboardItem({ 'image/png': blob }),
+      ]);
+      showToast('Invoice image copied to clipboard', 'success');
     } catch (e: any) {
-      showToast(e?.message || 'Failed to capture image', 'error');
+      showToast(e?.message || 'Failed to copy image', 'error');
     } finally {
       setExporting(false);
     }

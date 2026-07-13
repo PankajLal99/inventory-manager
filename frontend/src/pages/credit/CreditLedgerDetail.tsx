@@ -1,22 +1,26 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   BookOpen,
   Calendar,
+  ClipboardCopy,
   FileText,
   Filter,
+  Minus,
   Plus,
   Printer,
   Search,
   X,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { creditApi } from '../../lib/api';
-import { formatAmountINR, formatNumber, toLocalDateString } from '../../lib/utils';
+import { dateStringWithCurrentTimeISO, formatAmountINR, formatNumber, toLocalDateString } from '../../lib/utils';
+import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
@@ -37,6 +41,44 @@ import {
 type PaymentMethod = 'cash' | 'upi' | 'mixed';
 type TxnType = '' | 'sale' | 'payment' | 'return';
 
+function escapeHtml(s: unknown): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function copyPdfBlobToClipboard(blob: Blob): Promise<boolean> {
+  try {
+    if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
+      return false;
+    }
+    await navigator.clipboard.write([
+      new (window as any).ClipboardItem({
+        'application/pdf': blob,
+      }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
+  try {
+    if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
+      return false;
+    }
+    await navigator.clipboard.write([
+      new (window as any).ClipboardItem({ 'image/png': blob }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function CreditLedgerDetail() {
   const { customerId } = useParams<{ customerId: string }>();
   const navigate = useNavigate();
@@ -56,12 +98,18 @@ export default function CreditLedgerDetail() {
   const [search, setSearch] = useState('');
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showDebitModal, setShowDebitModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [cashAmount, setCashAmount] = useState('');
   const [upiAmount, setUpiAmount] = useState('');
   const [paymentDate, setPaymentDate] = useState(() => toLocalDateString(new Date()));
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [debitAmount, setDebitAmount] = useState('');
+  const [debitDate, setDebitDate] = useState(() => toLocalDateString(new Date()));
+  const [debitNotes, setDebitNotes] = useState('');
+  const [copyingPdf, setCopyingPdf] = useState(false);
+  const pdfCopyFrameRef = useRef<HTMLIFrameElement>(null);
 
   const { data: customers = [] } = useQuery({
     queryKey: ['credit-ledger-customers', ''],
@@ -156,8 +204,46 @@ export default function CreditLedgerDetail() {
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
       refetch();
+      toast('Payment recorded', 'success');
+    },
+    onError: (err: any) => {
+      toast(err?.response?.data?.detail || 'Payment failed', 'error');
     },
   });
+
+  const debitMutation = useMutation({
+    mutationFn: async () => {
+      if (!customerId) throw new Error('Customer not found');
+      const res = await creditApi.ledger.createEntry({
+        credit_customer_id: Number(customerId),
+        entry_type: 'debit',
+        amount: parseFloat(debitAmount),
+        description: debitNotes.trim() || undefined,
+        created_at: debitDate ? dateStringWithCurrentTimeISO(debitDate) : undefined,
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      setShowDebitModal(false);
+      setDebitAmount('');
+      setDebitNotes('');
+      setDebitDate(toLocalDateString(new Date()));
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      refetch();
+      toast('Debit recorded', 'success');
+    },
+    onError: (err: any) => {
+      toast(err?.response?.data?.detail || 'Debit failed', 'error');
+    },
+  });
+
+  const openDebitModal = () => {
+    setDebitAmount('');
+    setDebitNotes('');
+    setDebitDate(toLocalDateString(new Date()));
+    setShowDebitModal(true);
+  };
 
   const mixedPreview =
     (parseFloat(cashAmount || '0') || 0) + (parseFloat(upiAmount || '0') || 0);
@@ -172,8 +258,8 @@ export default function CreditLedgerDetail() {
   const closingBalance = statement?.closing_balance ?? selectedCustomer?.balance ?? '0';
   const closingSide = statement?.closing_side ?? 'Dr';
 
-  const exportPDF = () => {
-    if (!selectedCustomer || !statement) return;
+  const buildCreditLedgerPdf = () => {
+    if (!selectedCustomer || !statement) return null;
 
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -270,7 +356,169 @@ export default function CreditLedgerDetail() {
     });
 
     const fileName = `credit_ledger_${(selectedCustomer.name || 'customer').replace(/\s+/g, '_')}_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
-    doc.save(fileName);
+    return { doc, fileName };
+  };
+
+  const buildLedgerCaptureHtml = () => {
+    if (!selectedCustomer || !statement) return '';
+
+    const head = ['Date', 'Type', 'Vch No.', 'Particulars', 'Narration', 'Debit', 'Credit', 'Balance'];
+    const bodyRows: string[][] = [];
+    bodyRows.push([
+      '',
+      '',
+      '',
+      'Opening Balance',
+      '',
+      '',
+      '',
+      balanceLabel(statement.opening_balance, statement.opening_side),
+    ]);
+    for (const row of rows) {
+      bodyRows.push([
+        formatLedgerDate(row.created_at),
+        row.txn_type || '',
+        row.vch_no || '',
+        row.particulars || '',
+        row.narration || '',
+        formatMoneyCell(row.debit),
+        formatMoneyCell(row.credit),
+        balanceLabel(row.running_balance, row.balance_side),
+      ]);
+    }
+    bodyRows.push([
+      '',
+      '',
+      '',
+      'Totals',
+      '',
+      formatMoneyCell(statement.total_debit),
+      formatMoneyCell(statement.total_credit),
+      balanceLabel(statement.closing_balance, statement.closing_side),
+    ]);
+
+    const th = head
+      .map(
+        (h) =>
+          `<th style="border:1px solid #000;padding:6px 5px;font-size:11px;font-weight:700;background:#fff;text-align:left;">${escapeHtml(h)}</th>`
+      )
+      .join('');
+
+    const trs = bodyRows
+      .map((cols, idx) => {
+        const bold = idx === 0 || idx === bodyRows.length - 1;
+        const tds = cols
+          .map((c, ci) => {
+            const align = ci >= 5 ? 'right' : 'left';
+            return `<td style="border:1px solid #000;padding:5px 5px;font-size:10px;text-align:${align};${bold ? 'font-weight:700;' : ''}">${escapeHtml(c)}</td>`;
+          })
+          .join('');
+        return `<tr>${tds}</tr>`;
+      })
+      .join('');
+
+    return `<!doctype html>
+<html><head><meta charset="UTF-8" /></head>
+<body style="margin:0;padding:0;background:#fff;">
+  <div id="credit-ledger-copy-root" style="width:1123px;padding:24px 28px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;">
+    <div style="text-align:center;font-size:14px;font-weight:700;letter-spacing:0.4px;">POS CREDIT</div>
+    <div style="text-align:center;font-size:18px;font-weight:800;margin-top:4px;">LEDGER</div>
+    <div style="text-align:center;font-size:12px;margin-top:4px;">( ${escapeHtml(periodLabel)} )</div>
+    <div style="text-align:center;font-size:13px;font-weight:700;margin:10px 0 14px;">Account : ${escapeHtml((selectedCustomer.name || '').toUpperCase())}</div>
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+      <thead><tr>${th}</tr></thead>
+      <tbody>${trs}</tbody>
+    </table>
+  </div>
+</body></html>`;
+  };
+
+  const exportPDF = () => {
+    const built = buildCreditLedgerPdf();
+    if (!built) return;
+    built.doc.save(built.fileName);
+  };
+
+  const copyPDF = async () => {
+    const built = buildCreditLedgerPdf();
+    if (!built) return;
+
+    setCopyingPdf(true);
+    try {
+      const pdfBlob = built.doc.output('blob');
+      const file = new File([pdfBlob], built.fileName, { type: 'application/pdf' });
+
+      // Mobile / supported browsers: share sheet includes WhatsApp with the real PDF
+      const canShareFiles =
+        typeof navigator !== 'undefined' &&
+        typeof navigator.share === 'function' &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({ files: [file] });
+
+      if (canShareFiles) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: built.fileName,
+            text: `Credit ledger — ${selectedCustomer?.name || 'customer'}`,
+          });
+          toast('Share opened — pick WhatsApp to send the PDF', 'success');
+          return;
+        } catch (err: any) {
+          if (err?.name === 'AbortError') return;
+          // Fall through to clipboard paths
+        }
+      }
+
+      if (await copyPdfBlobToClipboard(pdfBlob)) {
+        toast('PDF copied to clipboard', 'success');
+        return;
+      }
+
+      // Most browsers block PDF clipboard writes — copy a matching image for WhatsApp paste
+      const iframe = pdfCopyFrameRef.current;
+      const doc = iframe?.contentDocument;
+      if (!iframe || !doc) {
+        toast('Copy preview not ready. Try Download PDF instead.', 'error');
+        return;
+      }
+
+      doc.open();
+      doc.write(buildLedgerCaptureHtml());
+      doc.close();
+      await new Promise((r) => window.setTimeout(r, 120));
+
+      const root =
+        (doc.getElementById('credit-ledger-copy-root') as HTMLElement | null) || doc.body;
+      const w = Math.max(root.scrollWidth || 1123, 1123);
+      const h = Math.max(root.scrollHeight || 1, 1);
+      iframe.style.width = `${w}px`;
+      iframe.style.height = `${h + 8}px`;
+
+      const canvas = await html2canvas(root, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        windowWidth: w,
+        windowHeight: h,
+        width: w,
+        height: h,
+      });
+
+      const pngBlob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png', 1)
+      );
+      if (!pngBlob || !(await copyPngBlobToClipboard(pngBlob))) {
+        toast('Could not copy to clipboard. Use Download PDF instead.', 'error');
+        return;
+      }
+      toast('Ledger copied — paste in WhatsApp or anywhere', 'success');
+    } catch (e: any) {
+      toast(e?.message || 'Failed to copy ledger', 'error');
+    } finally {
+      setCopyingPdf(false);
+    }
   };
 
   const handleResetFilters = () => {
@@ -313,15 +561,22 @@ export default function CreditLedgerDetail() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={openPaymentModal}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Payment
-          </Button>
           {statement ? (
-            <Button variant="outline" onClick={exportPDF}>
-              <FileText className="h-4 w-4 mr-2" />
-              PDF
-            </Button>
+            <>
+              <Button variant="outline" onClick={exportPDF}>
+                <FileText className="h-4 w-4 mr-2" />
+                PDF
+              </Button>
+              <Button
+                variant="outline"
+                onClick={copyPDF}
+                disabled={copyingPdf}
+                title="Copy ledger to clipboard for WhatsApp"
+              >
+                <ClipboardCopy className="h-4 w-4 mr-2" />
+                {copyingPdf ? 'Copying…' : 'Copy PDF'}
+              </Button>
+            </>
           ) : null}
         </div>
       </div>
@@ -343,6 +598,20 @@ export default function CreditLedgerDetail() {
                 </Badge>
               </div>
             ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={openPaymentModal} className="bg-green-600 hover:bg-green-700">
+              <Plus className="h-4 w-4 mr-2" />
+              Credit (+)
+            </Button>
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-600 hover:bg-red-50"
+              onClick={openDebitModal}
+            >
+              <Minus className="h-4 w-4 mr-2" />
+              Debit (-)
+            </Button>
           </div>
         </div>
       </div>
@@ -521,7 +790,17 @@ export default function CreditLedgerDetail() {
               </table>
             </div>
 
-            <div className="px-4 py-3 border-t border-gray-200 flex justify-end">
+            <div className="px-4 py-3 border-t border-gray-200 flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={copyPDF}
+                disabled={copyingPdf}
+                title="Copy ledger to clipboard for WhatsApp"
+              >
+                <ClipboardCopy className="h-4 w-4 mr-1" />
+                {copyingPdf ? 'Copying…' : 'Copy PDF'}
+              </Button>
               <Button variant="secondary" size="sm" onClick={exportPDF}>
                 <Printer className="h-4 w-4 mr-1" />
                 Download PDF
@@ -616,6 +895,61 @@ export default function CreditLedgerDetail() {
           </div>
         </div>
       </Modal>
+
+      <Modal
+        isOpen={showDebitModal}
+        onClose={() => setShowDebitModal(false)}
+        title={`Add Debit${selectedCustomer ? ` — ${selectedCustomer.name}` : ''}`}
+      >
+        <div className="space-y-3">
+          <Input
+            label="Amount"
+            type="number"
+            min="0"
+            step="0.01"
+            value={debitAmount}
+            onChange={(e) => setDebitAmount(e.target.value)}
+          />
+          <Input
+            label="Date"
+            type="date"
+            value={debitDate}
+            onChange={(e) => setDebitDate(e.target.value)}
+          />
+          <Input
+            label="Description (optional)"
+            value={debitNotes}
+            onChange={(e) => setDebitNotes(e.target.value)}
+          />
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowDebitModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              disabled={debitMutation.isPending || !(parseFloat(debitAmount) > 0)}
+              onClick={() => debitMutation.mutate()}
+            >
+              {debitMutation.isPending ? 'Saving…' : 'Create Debit'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <iframe
+        ref={pdfCopyFrameRef}
+        title="credit-ledger-pdf-copy"
+        style={{
+          position: 'fixed',
+          left: '-99999px',
+          top: 0,
+          width: '1123px',
+          height: '1px',
+          border: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   );
 }

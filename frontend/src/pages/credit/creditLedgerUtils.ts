@@ -20,12 +20,6 @@ export type CreditLedgerCustomerRow = {
   customer_group_name?: string;
 };
 
-export function formatCustomerWithGroup(name: string, groupName?: string) {
-  const safeName = name || 'Anonymous';
-  const safeGroup = (groupName || '').trim();
-  return safeGroup ? `${safeName} (${safeGroup})` : safeName;
-}
-
 export function formatLedgerDate(value?: string | null) {
   if (!value) return '—';
   try {

@@ -167,7 +167,7 @@ class CreditInvoice(models.Model):
 
     class Meta:
         db_table = 'credit_invoices'
-        ordering = ['-created_at']
+        ordering = ['-id']
         indexes = [
             models.Index(fields=['-created_at'], name='idx_cred_inv_created'),
             models.Index(fields=['status'], name='idx_cred_inv_status'),
@@ -245,6 +245,22 @@ class CreditReturnItem(models.Model):
     invoice_item = models.ForeignKey(
         CreditInvoiceItem,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='return_items',
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='credit_return_items',
+    )
+    credit_product = models.ForeignKey(
+        CreditProduct,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='return_items',
     )
     product_name = models.CharField(max_length=255)

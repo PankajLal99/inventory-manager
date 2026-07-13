@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
+import { useState, useEffect, useRef, Fragment, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
@@ -49,6 +49,63 @@ const getPurchaseItemKey = (item: Pick<PurchaseItem, 'product' | 'variant'>): st
   const variantId = normalizeEntityId(item.variant);
   return `${productId ?? 'null'}::${variantId ?? 'null'}`;
 };
+
+/** Tab cycle in add/edit purchase modal: Search → Qty → Purchase → Selling → (next line…) → Search */
+const PURCHASE_TAB_ATTR = 'data-purchase-tab';
+
+function isPurchaseTabFieldVisible(el: HTMLElement): boolean {
+  if (el.getAttribute('aria-disabled') === 'true') return false;
+  if ((el as HTMLButtonElement).disabled) return false;
+  if ((el as HTMLInputElement).disabled) return false;
+  // Skip mobile/desktop duplicate fields that are display:none
+  if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
+  return true;
+}
+
+function getPurchaseTabFields(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(`[${PURCHASE_TAB_ATTR}]`)).filter(
+    isPurchaseTabFieldVisible
+  );
+}
+
+function focusPurchaseTabField(
+  root: HTMLElement | null,
+  current: HTMLElement | null,
+  reverse: boolean
+) {
+  if (!root) return;
+  const fields = getPurchaseTabFields(root);
+  if (fields.length === 0) return;
+  if (!current) {
+    fields[0]?.focus();
+    return;
+  }
+  const idx = fields.indexOf(current);
+  if (idx < 0) {
+    fields[0]?.focus();
+    return;
+  }
+  const nextIdx = reverse
+    ? (idx - 1 + fields.length) % fields.length
+    : (idx + 1) % fields.length;
+  const next = fields[nextIdx];
+  next?.focus();
+  if (next instanceof HTMLInputElement) next.select?.();
+}
+
+function focusLastPurchaseQty(root: HTMLElement | null) {
+  if (!root) return;
+  const qtys = Array.from(
+    root.querySelectorAll<HTMLElement>(`[${PURCHASE_TAB_ATTR}="qty"]`)
+  ).filter(isPurchaseTabFieldVisible);
+  const last = qtys[qtys.length - 1];
+  if (last) {
+    last.focus();
+    if (last instanceof HTMLInputElement) last.select?.();
+  } else {
+    root.querySelector<HTMLElement>(`[${PURCHASE_TAB_ATTR}="search"]`)?.focus();
+  }
+}
 
 interface LabelStatusState {
   all_generated: boolean;
@@ -219,6 +276,7 @@ export default function Purchases() {
   const queryClient = useQueryClient();
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
   const productDropdownRef = useRef<HTMLDivElement | null>(null);
+  const purchaseWorkflowRef = useRef<HTMLDivElement | null>(null);
   const supplierRef = useRef<HTMLDivElement>(null);
   const supplierFilterRef = useRef<HTMLDivElement>(null);
   const productFilterRef = useRef<HTMLDivElement>(null);
@@ -333,9 +391,9 @@ export default function Purchases() {
           setPurchaseItems((prev) => [...prev, newItem]);
           setProductSearch('');
           setShowProductDropdown(false);
-          // Refocus search input after adding product
+          // Land on Qty of the newly added line (Tab cycle continues from there)
           setTimeout(() => {
-            productSearchInputRef.current?.focus();
+            focusLastPurchaseQty(purchaseWorkflowRef.current);
           }, 50);
         }
         return;
@@ -829,14 +887,25 @@ export default function Purchases() {
     });
 
     if (existingItem) {
-      // If product already exists, increase quantity by 1 instead of adding duplicate
+      // Increase qty and move line to end so Tab cycle targets this product
       const index = purchaseItems.indexOf(existingItem);
       const currentQty = parseInt(existingItem.quantity) || 0;
-      handleItemChange(index, 'quantity', (currentQty + 1).toString());
+      const nextQty = (currentQty + 1).toString();
+      const price = parseFloat(String(existingItem.unit_price).trim() || '0') || 0;
+      setPurchaseItems((prev) => {
+        const updated = [...prev];
+        const [item] = updated.splice(index, 1);
+        updated.push({
+          ...item,
+          quantity: nextQty,
+          line_total: (parseInt(nextQty) || 0) * price,
+        });
+        return updated;
+      });
       setProductSearch('');
       setShowProductDropdown(false);
       setTimeout(() => {
-        productSearchInputRef.current?.focus();
+        focusLastPurchaseQty(purchaseWorkflowRef.current);
       }, 50);
       return;
     }
@@ -856,10 +925,18 @@ export default function Purchases() {
     setPurchaseItems([...purchaseItems, newItem]);
     setProductSearch('');
     setShowProductDropdown(false);
-    // Refocus search input after adding product for quick addition
+    // After add: land on Qty of the latest product
     setTimeout(() => {
-      productSearchInputRef.current?.focus();
+      focusLastPurchaseQty(purchaseWorkflowRef.current);
     }, 50);
+  };
+
+  const handlePurchaseWorkflowKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab') return;
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest?.(`[${PURCHASE_TAB_ATTR}]`)) return;
+    e.preventDefault();
+    focusPurchaseTabField(purchaseWorkflowRef.current, target, e.shiftKey);
   };
 
   const handleProductCreated = (newProduct: any) => {
@@ -2612,8 +2689,8 @@ export default function Purchases() {
               />
             </div>
 
-            {/* Add Products Section */}
-            <div>
+            {/* Add Products Section — Tab: Search → Qty → Purchase → Selling → Search (latest line after add) */}
+            <div ref={purchaseWorkflowRef} onKeyDown={handlePurchaseWorkflowKeyDown}>
               <label className="block text-sm font-medium text-gray-700 mb-2">Products *</label>
 
               {/* Product Search */}
@@ -2624,6 +2701,7 @@ export default function Purchases() {
                     if (el) productSearchInputRef.current = el;
                   }}
                   type="text"
+                  data-purchase-tab="search"
                   placeholder="Search products to add... (Press Enter to add first result)"
                   value={productSearch}
                   onChange={(e) => {
@@ -2649,6 +2727,7 @@ export default function Purchases() {
                           <button
                             key={product.id}
                             type="button"
+                            tabIndex={-1}
                             onClick={() => handleAddProduct(product)}
                             className="w-full text-left px-4 py-2 hover:bg-blue-50 border-b border-gray-100 last:border-b-0"
                           >
@@ -2673,6 +2752,7 @@ export default function Purchases() {
                         {productSearch.trim().length > 0 && (
                           <button
                             type="button"
+                            tabIndex={-1}
                             onClick={() => {
                               setShowProductDropdown(false);
                               setShowProductForm(true);
@@ -2694,6 +2774,7 @@ export default function Purchases() {
                         </div>
                         <button
                           type="button"
+                          tabIndex={-1}
                           onClick={() => {
                             setShowProductDropdown(false);
                             setShowProductForm(true);
@@ -2734,6 +2815,7 @@ export default function Purchases() {
                           const currentQuantity = parseInt(item.quantity) || 0;
                           const minQuantity = editingPurchase ? soldCount : 0;
                           const hasQuantityError = editingPurchase && currentQuantity < soldCount;
+                          const isLatestLine = index === purchaseItems.length - 1;
 
                           return (
                             <tr key={index}>
@@ -2757,6 +2839,7 @@ export default function Purchases() {
                                     min={Math.max(0, minQuantity).toString()}
                                     value={item.quantity}
                                     placeholder="1"
+                                    {...(isLatestLine ? { 'data-purchase-tab': 'qty' } : {})}
                                     onChange={(e) => {
                                       // Only allow positive integers
                                       const val = e.target.value;
@@ -2769,7 +2852,17 @@ export default function Purchases() {
                                       const val = e.target.value === '' ? 1 : Math.max(1, parseInt(e.target.value) || 1);
                                       handleItemChange(index, 'quantity', val.toString());
                                     }}
-                                    className={`w - 20 text - sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && isLatestLine) {
+                                        e.preventDefault();
+                                        focusPurchaseTabField(
+                                          purchaseWorkflowRef.current,
+                                          e.currentTarget,
+                                          false
+                                        );
+                                      }
+                                    }}
+                                    className={`w-20 text-sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
                                     required
                                     title={editingPurchase && soldCount > 0 ? `Minimum quantity: ${soldCount} (${soldCount} items already sold)` : undefined}
                                   />
@@ -2787,11 +2880,22 @@ export default function Purchases() {
                                   min="0"
                                   value={item.unit_price}
                                   placeholder="0"
+                                  {...(isLatestLine ? { 'data-purchase-tab': 'purchase' } : {})}
                                   onChange={(e) => handleItemChange(index, 'unit_price', e.target.value)}
                                   onBlur={(e) => {
                                     // Ensure value is a non-negative number on blur, default to 0 if empty (matching placeholder)
                                     const val = e.target.value === '' ? 0 : Math.max(0, parseFloat(e.target.value) || 0);
                                     handleItemChange(index, 'unit_price', val.toString());
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && isLatestLine) {
+                                      e.preventDefault();
+                                      focusPurchaseTabField(
+                                        purchaseWorkflowRef.current,
+                                        e.currentTarget,
+                                        false
+                                      );
+                                    }
                                   }}
                                   className="w-24 text-sm"
                                   required
@@ -2804,11 +2908,22 @@ export default function Purchases() {
                                   min="0"
                                   value={item.selling_price || ''}
                                   placeholder="Optional"
+                                  {...(isLatestLine ? { 'data-purchase-tab': 'selling' } : {})}
                                   onChange={(e) => handleItemChange(index, 'selling_price', e.target.value)}
                                   onBlur={(e) => {
                                     // Allow empty or non-negative number
                                     const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
                                     handleItemChange(index, 'selling_price', val === '' ? '' : val.toString());
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && isLatestLine) {
+                                      e.preventDefault();
+                                      focusPurchaseTabField(
+                                        purchaseWorkflowRef.current,
+                                        e.currentTarget,
+                                        false
+                                      );
+                                    }
                                   }}
                                   className="w-24 text-sm"
                                 />
@@ -2821,6 +2936,7 @@ export default function Purchases() {
                               <td className="px-3 py-2 text-center">
                                 <button
                                   type="button"
+                                  tabIndex={-1}
                                   onClick={() => handleRemoveItem(index)}
                                   className="text-red-600 hover:text-red-700"
                                 >
@@ -2851,6 +2967,7 @@ export default function Purchases() {
                       const currentQuantity = parseInt(item.quantity) || 0;
                       const minQuantity = editingPurchase ? soldCount : 0;
                       const hasQuantityError = editingPurchase && currentQuantity < soldCount;
+                      const isLatestLine = index === purchaseItems.length - 1;
 
                       return (
                         <div key={index} className="bg-white border border-gray-300 rounded-lg p-4 space-y-3">
@@ -2870,6 +2987,7 @@ export default function Purchases() {
                             </div>
                             <button
                               type="button"
+                              tabIndex={-1}
                               onClick={() => handleRemoveItem(index)}
                               className="text-red-600 hover:text-red-700 flex-shrink-0 p-1"
                             >
@@ -2887,6 +3005,7 @@ export default function Purchases() {
                                 min={Math.max(0, minQuantity).toString()}
                                 value={item.quantity}
                                 placeholder="1"
+                                {...(isLatestLine ? { 'data-purchase-tab': 'qty' } : {})}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   if (val === '' || /^\d+$/.test(val)) {
@@ -2897,7 +3016,17 @@ export default function Purchases() {
                                   const val = e.target.value === '' ? 1 : Math.max(1, parseInt(e.target.value) || 1);
                                   handleItemChange(index, 'quantity', val.toString());
                                 }}
-                                className={`w - full text - sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''} `}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && isLatestLine) {
+                                    e.preventDefault();
+                                    focusPurchaseTabField(
+                                      purchaseWorkflowRef.current,
+                                      e.currentTarget,
+                                      false
+                                    );
+                                  }
+                                }}
+                                className={`w-full text-sm ${hasQuantityError ? 'border-red-500 focus:border-red-500 focus:ring-red-200' : ''}`}
                                 required
                               />
                               {hasQuantityError && (
@@ -2923,10 +3052,21 @@ export default function Purchases() {
                                 min="0"
                                 value={item.unit_price}
                                 placeholder="0"
+                                {...(isLatestLine ? { 'data-purchase-tab': 'purchase' } : {})}
                                 onChange={(e) => handleItemChange(index, 'unit_price', e.target.value)}
                                 onBlur={(e) => {
                                   const val = e.target.value === '' ? 0 : Math.max(0, parseFloat(e.target.value) || 0);
                                   handleItemChange(index, 'unit_price', val.toString());
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && isLatestLine) {
+                                    e.preventDefault();
+                                    focusPurchaseTabField(
+                                      purchaseWorkflowRef.current,
+                                      e.currentTarget,
+                                      false
+                                    );
+                                  }
                                 }}
                                 className="w-full text-sm"
                                 required
@@ -2940,10 +3080,21 @@ export default function Purchases() {
                                 min="0"
                                 value={item.selling_price || ''}
                                 placeholder="Optional"
+                                {...(isLatestLine ? { 'data-purchase-tab': 'selling' } : {})}
                                 onChange={(e) => handleItemChange(index, 'selling_price', e.target.value)}
                                 onBlur={(e) => {
                                   const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
                                   handleItemChange(index, 'selling_price', val === '' ? '' : val.toString());
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && isLatestLine) {
+                                    e.preventDefault();
+                                    focusPurchaseTabField(
+                                      purchaseWorkflowRef.current,
+                                      e.currentTarget,
+                                      false
+                                    );
+                                  }
                                 }}
                                 className="w-full text-sm"
                               />

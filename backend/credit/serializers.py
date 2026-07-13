@@ -179,14 +179,20 @@ class CreditInvoiceSerializer(serializers.ModelSerializer):
 
 
 class CreditReturnItemSerializer(serializers.ModelSerializer):
-    invoice_number = serializers.CharField(source='invoice_item.invoice.invoice_number', read_only=True)
+    invoice_number = serializers.SerializerMethodField()
 
     class Meta:
         model = CreditReturnItem
         fields = [
             'id', 'credit_return', 'invoice_item', 'invoice_number',
+            'product', 'credit_product',
             'product_name', 'quantity', 'unit_price', 'line_total',
         ]
+
+    def get_invoice_number(self, obj):
+        if obj.invoice_item_id and obj.invoice_item and obj.invoice_item.invoice_id:
+            return obj.invoice_item.invoice.invoice_number
+        return None
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -270,7 +276,9 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
             return 'payment'
         if obj.credit_return_id:
             return 'return'
-        return 'sale'
+        if obj.invoice_id:
+            return 'sale'
+        return 'adjustment'
 
     def get_vch_no(self, obj):
         if obj.invoice_id and obj.invoice:
@@ -279,7 +287,7 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
             return obj.credit_return.return_number
         if obj.payment_id:
             return f'PAY-{obj.payment_id}'
-        return ''
+        return f'ADJ-{obj.id}'
 
     def get_particulars(self, obj):
         if obj.payment_id:
@@ -290,6 +298,8 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
             return 'Cr Return'
         if obj.entry_type == 'credit' and obj.invoice_id:
             return 'Cr Void Sale'
+        if not obj.invoice_id and not obj.payment_id and not obj.credit_return_id:
+            return 'Dr Adjustment' if obj.entry_type == 'debit' else 'Cr Adjustment'
         return 'Dr Sales'
 
     def get_narration(self, obj):

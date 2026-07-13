@@ -615,7 +615,17 @@ export const creditApi = {
       parties_customer_id?: number;
       customer?: number;
       notes?: string;
-      items: { invoice_item_id: number; quantity: number | string }[];
+      items: {
+        invoice_item_id?: number;
+        product?: number;
+        product_id?: number;
+        catalog_product_id?: number;
+        credit_product?: number;
+        credit_product_id?: number;
+        product_name?: string;
+        quantity: number | string;
+        unit_price: number | string;
+      }[];
     }) => api.post('/credit/returns/', data),
   },
   payments: {
@@ -635,6 +645,20 @@ export const creditApi = {
   },
   ledger: {
     list: (params?: any) => api.get('/credit/ledger/', { params }),
+    createEntry: (data: {
+      credit_customer_id?: number;
+      customer?: number;
+      parties_customer_id?: number;
+      entry_type: 'credit' | 'debit';
+      amount: number | string;
+      description?: string;
+      notes?: string;
+      created_at?: string;
+      paid_at?: string;
+      payment_method?: 'cash' | 'upi' | 'mixed';
+      cash_amount?: number | string;
+      upi_amount?: number | string;
+    }) => api.post('/credit/ledger/entries/', data),
     statement: (params: {
       customer: number | string;
       date_from?: string;

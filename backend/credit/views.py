@@ -756,7 +756,7 @@ def _credit_invoices_filtered_queryset(request):
     if date_to:
         qs = qs.filter(created_at__date__lte=date_to)
 
-    return qs.order_by('-created_at')
+    return qs.order_by('-id')
 
 
 def _credit_returns_filtered_queryset(request):
@@ -902,6 +902,142 @@ def _ledger_signed_amount(entry):
     """Debit increases outstanding; credit decreases."""
     amt = entry.amount or Decimal('0')
     return amt if entry.entry_type == 'debit' else -amt
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_entry_create(request):
+    """
+    Manual credit / debit against a credit customer.
+    - credit: records a CreditPayment + ledger credit (reduces balance)
+    - debit: records a standalone ledger debit (increases balance)
+    """
+    try:
+        customer = ensure_credit_customer(
+            credit_customer_id=request.data.get('credit_customer_id') or request.data.get('customer'),
+            parties_customer_id=request.data.get('parties_customer_id'),
+        )
+    except ValueError as e:
+        return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    entry_type = (request.data.get('entry_type') or '').strip().lower()
+    if entry_type not in ('credit', 'debit'):
+        return Response(
+            {'detail': 'entry_type must be credit or debit'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    amount = _to_decimal(request.data.get('amount'), '0')
+    if amount <= 0:
+        return Response({'detail': 'Amount must be greater than 0'}, status=status.HTTP_400_BAD_REQUEST)
+
+    description = (request.data.get('description') or request.data.get('notes') or '').strip()
+
+    created_at_raw = request.data.get('created_at') or request.data.get('paid_at')
+    if created_at_raw:
+        raw_str = str(created_at_raw).strip()
+        if raw_str.endswith('Z'):
+            raw_str = raw_str[:-1] + '+00:00'
+        created_at = parse_datetime(raw_str)
+        if created_at is None:
+            return Response({'detail': 'Invalid created_at'}, status=status.HTTP_400_BAD_REQUEST)
+        if timezone.is_naive(created_at):
+            created_at = timezone.make_aware(created_at, timezone.get_current_timezone())
+    else:
+        created_at = timezone.now()
+
+    with transaction.atomic():
+        customer = CreditCustomer.objects.select_for_update().get(pk=customer.pk)
+
+        if entry_type == 'credit':
+            method = (request.data.get('payment_method') or 'cash').strip().lower()
+            if method not in dict(CreditPayment.PAYMENT_METHOD_CHOICES):
+                return Response(
+                    {'detail': 'payment_method must be cash, upi, or mixed'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            cash_amount = None
+            upi_amount = None
+            if method == 'cash':
+                cash_amount = amount
+                upi_amount = Decimal('0.00')
+            elif method == 'upi':
+                upi_amount = amount
+                cash_amount = Decimal('0.00')
+            else:
+                cash_amount = _to_decimal(request.data.get('cash_amount'), '0')
+                upi_amount = _to_decimal(request.data.get('upi_amount'), '0')
+                if cash_amount < 0 or upi_amount < 0:
+                    return Response(
+                        {'detail': 'cash_amount and upi_amount cannot be negative'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                mixed_total = (cash_amount + upi_amount).quantize(Decimal('0.01'))
+                if mixed_total != amount.quantize(Decimal('0.01')):
+                    # If split not provided, put full amount on cash
+                    if cash_amount == 0 and upi_amount == 0:
+                        cash_amount = amount
+                        upi_amount = Decimal('0.00')
+                    else:
+                        return Response(
+                            {
+                                'detail': (
+                                    f'amount ({amount}) must equal cash_amount + upi_amount ({mixed_total})'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+            payment = CreditPayment.objects.create(
+                customer=customer,
+                payment_method=method,
+                amount=amount,
+                cash_amount=cash_amount,
+                upi_amount=upi_amount,
+                notes=description,
+                paid_at=created_at,
+                created_by=request.user,
+            )
+
+            parts = [f'Payment ({_payment_method_label(method)})']
+            if method == 'mixed':
+                parts.append(f'cash ₹{cash_amount} + UPI ₹{upi_amount}')
+            if description:
+                parts.append(description)
+            ledger_description = ' — '.join(parts)
+
+            entry = CreditLedgerEntry.objects.create(
+                customer=customer,
+                payment=payment,
+                entry_type='credit',
+                amount=amount,
+                description=ledger_description,
+                created_by=request.user,
+                created_at=created_at,
+            )
+            customer.balance = F('balance') - amount
+        else:
+            ledger_description = description or 'Manual debit'
+            entry = CreditLedgerEntry.objects.create(
+                customer=customer,
+                entry_type='debit',
+                amount=amount,
+                description=ledger_description,
+                created_by=request.user,
+                created_at=created_at,
+            )
+            customer.balance = F('balance') + amount
+
+        customer.save(update_fields=['balance', 'updated_at'])
+        customer.refresh_from_db(fields=['balance'])
+
+    entry = CreditLedgerEntry.objects.select_related(
+        'customer', 'payment', 'created_by'
+    ).get(pk=entry.pk)
+    data = CreditLedgerEntrySerializer(entry).data
+    data['customer_balance'] = customer.balance
+    return Response(data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -1280,7 +1416,7 @@ def credit_return_list_create(request):
             'results': CreditReturnSerializer(qs[start:start + page_size], many=True).data,
         })
 
-    # POST — create return
+    # POST — create return (any product + editable unit price)
     store_id = request.data.get('store')
     if not store_id:
         return Response({'detail': 'store is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1301,18 +1437,55 @@ def credit_return_list_create(request):
     if not raw_items:
         return Response({'detail': 'items are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Normalize + validate before locking
     pending = []
-    for row in raw_items:
-        try:
-            invoice_item_id = int(row.get('invoice_item_id'))
-        except (TypeError, ValueError):
-            return Response({'detail': 'Each item needs invoice_item_id'}, status=status.HTTP_400_BAD_REQUEST)
+    for idx, row in enumerate(raw_items):
         qty = _to_decimal(row.get('quantity', '0'), '0')
         qty_err = _require_whole_quantity(qty)
         if qty_err:
             return Response({'detail': qty_err}, status=status.HTTP_400_BAD_REQUEST)
-        pending.append((invoice_item_id, qty.to_integral_value()))
+
+        unit_price = _to_decimal(row.get('unit_price', '0'), '0')
+        if unit_price < 0:
+            return Response(
+                {'detail': 'Unit prices cannot be negative'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invoice_item_id = row.get('invoice_item_id')
+        if invoice_item_id in (None, ''):
+            invoice_item_id = None
+        else:
+            try:
+                invoice_item_id = int(invoice_item_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': f'Invalid invoice_item_id on item {idx + 1}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        catalog_product_id = row.get('product') or row.get('product_id') or row.get('catalog_product_id')
+        credit_product_id = row.get('credit_product') or row.get('credit_product_id')
+        try:
+            catalog_product_id = int(catalog_product_id) if catalog_product_id not in (None, '') else None
+        except (TypeError, ValueError):
+            return Response({'detail': f'Invalid product on item {idx + 1}'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            credit_product_id = int(credit_product_id) if credit_product_id not in (None, '') else None
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': f'Invalid credit_product on item {idx + 1}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        product_name = (row.get('product_name') or '').strip()
+        pending.append({
+            'invoice_item_id': invoice_item_id,
+            'catalog_product_id': catalog_product_id,
+            'credit_product_id': credit_product_id,
+            'product_name': product_name,
+            'quantity': qty.to_integral_value(),
+            'unit_price': unit_price,
+        })
 
     notes = request.data.get('notes', '') or ''
 
@@ -1320,41 +1493,60 @@ def credit_return_list_create(request):
         with transaction.atomic():
             customer = CreditCustomer.objects.select_for_update().get(pk=customer.pk)
 
-            # Lock invoice items in stable id order to avoid deadlocks
-            item_ids = sorted({iid for iid, _ in pending})
-            locked = {
-                i.id: i
-                for i in CreditInvoiceItem.objects.select_for_update()
-                .select_related('invoice')
-                .filter(id__in=item_ids)
-            }
-
             return_lines = []
             total = Decimal('0.00')
 
-            for invoice_item_id, qty in pending:
-                item = locked.get(invoice_item_id)
-                if not item:
-                    raise ValueError(f'Invoice item {invoice_item_id} not found')
-                if item.invoice.status != 'open':
-                    raise ValueError(f'Invoice {item.invoice.invoice_number} is not open')
-                if item.invoice.customer_id != customer.id:
-                    raise ValueError(
-                        f'Invoice item {invoice_item_id} does not belong to this customer'
-                    )
-                remaining = item.quantity - (item.returned_quantity or Decimal('0'))
-                if qty > remaining:
-                    raise ValueError(
-                        f'Cannot return {qty} of "{item.product_name}" — only {remaining} left '
-                        f'(sold {item.quantity} on {item.invoice.invoice_number})'
-                    )
+            for row in pending:
+                invoice_item = None
+                product = None
+                credit_product = None
+                product_name = row['product_name']
 
-                line_total = (qty * item.unit_price).quantize(Decimal('0.01'))
+                if row['invoice_item_id'] is not None:
+                    try:
+                        invoice_item = CreditInvoiceItem.objects.select_related('invoice').get(
+                            pk=row['invoice_item_id']
+                        )
+                    except CreditInvoiceItem.DoesNotExist:
+                        raise ValueError(f'Invoice item {row["invoice_item_id"]} not found')
+                    if not product_name:
+                        product_name = invoice_item.product_name
+                    if row['catalog_product_id'] is None:
+                        row['catalog_product_id'] = invoice_item.product_id
+                    if row['credit_product_id'] is None:
+                        row['credit_product_id'] = invoice_item.credit_product_id
+
+                if row['catalog_product_id'] is not None:
+                    try:
+                        product = Product.objects.get(pk=row['catalog_product_id'])
+                    except Product.DoesNotExist:
+                        raise ValueError(f'Product {row["catalog_product_id"]} not found')
+                    if not product_name:
+                        product_name = product.name
+
+                if row['credit_product_id'] is not None:
+                    try:
+                        credit_product = CreditProduct.objects.get(
+                            pk=row['credit_product_id'], is_active=True
+                        )
+                    except CreditProduct.DoesNotExist:
+                        raise ValueError(f'Credit product {row["credit_product_id"]} not found')
+                    if not product_name:
+                        product_name = credit_product.name
+
+                if not product_name:
+                    raise ValueError('Each return item needs a product name')
+
+                qty = row['quantity']
+                unit_price = row['unit_price']
+                line_total = (qty * unit_price).quantize(Decimal('0.01'))
                 return_lines.append({
-                    'invoice_item': item,
-                    'product_name': item.product_name,
+                    'invoice_item': invoice_item,
+                    'product': product,
+                    'credit_product': credit_product,
+                    'product_name': product_name,
                     'quantity': qty,
-                    'unit_price': item.unit_price,
+                    'unit_price': unit_price,
                     'line_total': line_total,
                 })
                 total += line_total
@@ -1373,14 +1565,17 @@ def credit_return_list_create(request):
                 CreditReturnItem.objects.create(
                     credit_return=credit_return,
                     invoice_item=line['invoice_item'],
+                    product=line['product'],
+                    credit_product=line['credit_product'],
                     product_name=line['product_name'],
                     quantity=line['quantity'],
                     unit_price=line['unit_price'],
                     line_total=line['line_total'],
                 )
                 inv_item = line['invoice_item']
-                inv_item.returned_quantity = F('returned_quantity') + line['quantity']
-                inv_item.save(update_fields=['returned_quantity'])
+                if inv_item is not None:
+                    inv_item.returned_quantity = F('returned_quantity') + line['quantity']
+                    inv_item.save(update_fields=['returned_quantity'])
 
             CreditLedgerEntry.objects.create(
                 customer=customer,
@@ -1389,6 +1584,7 @@ def credit_return_list_create(request):
                 amount=total,
                 description=f'Credit return {credit_return.return_number}',
                 created_by=request.user,
+                created_at=credit_return.created_at,
             )
             customer.balance = F('balance') - total
             customer.save(update_fields=['balance', 'updated_at'])
@@ -1400,6 +1596,7 @@ def credit_return_list_create(request):
         'customer', 'store', 'created_by'
     ).prefetch_related('items__invoice_item__invoice').get(pk=credit_return.pk)
     return Response(CreditReturnSerializer(credit_return).data, status=status.HTTP_201_CREATED)
+
 
 
 @api_view(['GET'])

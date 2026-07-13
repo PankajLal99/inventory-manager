@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -7,16 +7,69 @@ import {
   Trash2,
   User,
   X,
-  CheckCircle,
   Package,
 } from 'lucide-react';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
 import { catalogApi, creditApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { amountForInput, formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
+
+/** Tab cycle: Product Search → Qty → Price → Delete → Product Search */
+const CREDIT_RETURN_TAB_ATTR = 'data-credit-pos-tab';
+
+function getCreditReturnTabFields(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(`[${CREDIT_RETURN_TAB_ATTR}]`)).filter(
+    (el) => {
+      if (el.getAttribute('aria-disabled') === 'true') return false;
+      if ((el as HTMLButtonElement).disabled) return false;
+      if ((el as HTMLInputElement).disabled) return false;
+      return true;
+    }
+  );
+}
+
+function focusCreditReturnTabField(
+  root: HTMLElement | null,
+  current: HTMLElement | null,
+  reverse: boolean
+) {
+  if (!root) return;
+  const fields = getCreditReturnTabFields(root);
+  if (fields.length === 0) return;
+  if (!current) {
+    fields[0]?.focus();
+    return;
+  }
+  const idx = fields.indexOf(current);
+  if (idx < 0) {
+    fields[0]?.focus();
+    return;
+  }
+  const nextIdx = reverse
+    ? (idx - 1 + fields.length) % fields.length
+    : (idx + 1) % fields.length;
+  fields[nextIdx]?.focus();
+  if (fields[nextIdx] instanceof HTMLInputElement) {
+    fields[nextIdx].select?.();
+  }
+}
+
+function focusLastReturnQty(root: HTMLElement | null) {
+  if (!root) return;
+  const qtys = Array.from(
+    root.querySelectorAll<HTMLElement>(`[${CREDIT_RETURN_TAB_ATTR}="qty"]`)
+  ).filter((el) => !(el as HTMLInputElement).disabled);
+  const last = qtys[qtys.length - 1];
+  if (last) {
+    last.focus();
+    if (last instanceof HTMLInputElement) last.select?.();
+  } else {
+    root.querySelector<HTMLElement>(`[${CREDIT_RETURN_TAB_ATTR}="search"]`)?.focus();
+  }
+}
 
 type MergedCustomer = {
   id: number;
@@ -35,20 +88,23 @@ type SelectedCustomer = {
   balance?: string | number;
 };
 
-type SoldLine = {
-  invoice_item_id: number;
-  invoice_id: number;
-  invoice_number: string;
-  product_name: string;
-  sold_unit_price: string | number;
-  sold_quantity: string | number;
-  returned_quantity: string | number;
-  returnable_quantity: string | number;
-  sold_at?: string;
+type MergedProduct = {
+  id: number;
+  name: string;
+  sku?: string | null;
+  source: 'credit' | 'catalog';
+  credit_product_id?: number | null;
+  catalog_product_id?: number | null;
+  unit_price?: string | number | null;
 };
 
-type BasketRow = SoldLine & {
+type BasketRow = {
+  key: string;
+  product_name: string;
+  catalog_product_id?: number | null;
+  credit_product_id?: number | null;
   quantity: number;
+  unit_price: number;
 };
 
 function num(v: string | number | undefined | null) {
@@ -56,9 +112,15 @@ function num(v: string | number | undefined | null) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function productKey(p: MergedProduct) {
+  if (p.source === 'credit') return `credit-${p.credit_product_id || p.id}`;
+  return `catalog-${p.catalog_product_id || p.id}`;
+}
+
 export default function POSCreditReturn() {
   const navigate = useNavigate();
   const productInputRef = useRef<HTMLInputElement>(null);
+  const posWorkflowRef = useRef<HTMLDivElement>(null);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -71,7 +133,8 @@ export default function POSCreditReturn() {
   const [debouncedProductSearch, setDebouncedProductSearch] = useState('');
   const [productIndex, setProductIndex] = useState(-1);
   const [basket, setBasket] = useState<BasketRow[]>([]);
-  const [editingReturnQty, setEditingReturnQty] = useState<Record<number, string>>({});
+  const [editingQty, setEditingQty] = useState<Record<string, string>>({});
+  const [editingPrice, setEditingPrice] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -84,6 +147,11 @@ export default function POSCreditReturn() {
     const t = window.setTimeout(() => setDebouncedCustomerSearch(customerSearch), 300);
     return () => window.clearTimeout(t);
   }, [customerSearch]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedProductSearch(productSearch), 300);
+    return () => window.clearTimeout(t);
+  }, [productSearch]);
 
   const { data: stores = [] } = useQuery({
     queryKey: ['stores'],
@@ -101,11 +169,6 @@ export default function POSCreditReturn() {
 
   const defaultStore = useMemo(() => filteredStores[0], [filteredStores]);
 
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedProductSearch(productSearch), 300);
-    return () => window.clearTimeout(t);
-  }, [productSearch]);
-
   const { data: customerResults = [], isFetching: isCustomerSearching } = useQuery({
     queryKey: ['credit-customer-search', debouncedCustomerSearch],
     queryFn: async () => {
@@ -117,33 +180,24 @@ export default function POSCreditReturn() {
     enabled: debouncedCustomerSearch.trim().length >= 1 && !selectedCustomer,
   });
 
-  const { data: soldResults = [], isFetching: searchingSold } = useQuery({
-    queryKey: ['credit-sold-products', selectedCustomer?.credit_customer_id, debouncedProductSearch],
+  const { data: productResults = [], isFetching: searchingProducts } = useQuery({
+    queryKey: ['credit-product-search', debouncedProductSearch],
     queryFn: async () => {
-      if (!selectedCustomer?.credit_customer_id) return [];
       const q = debouncedProductSearch.trim();
       if (q.length < 1) return [];
-      const res = await creditApi.returns.soldProducts({
-        credit_customer_id: selectedCustomer.credit_customer_id,
-        search: q,
-      });
+      const res = await creditApi.products.search({ search: q });
       return res.data || [];
     },
-    enabled: !!selectedCustomer?.credit_customer_id && debouncedProductSearch.trim().length >= 1,
+    enabled: !!selectedCustomer && debouncedProductSearch.trim().length >= 1,
   });
 
   const customersList = (customerResults as MergedCustomer[]) || [];
-  const soldList = (soldResults as SoldLine[]) || [];
+  const productsList = (productResults as MergedProduct[]) || [];
 
   const basketTotal = useMemo(
-    () => basket.reduce((sum, row) => sum + row.quantity * num(row.sold_unit_price), 0),
+    () => basket.reduce((sum, row) => sum + row.quantity * row.unit_price, 0),
     [basket]
   );
-
-  const qtyAlreadyInBasket = (invoiceItemId: number) =>
-    basket
-      .filter((r) => r.invoice_item_id === invoiceItemId)
-      .reduce((s, r) => s + r.quantity, 0);
 
   const selectCustomer = async (c: MergedCustomer) => {
     try {
@@ -177,80 +231,126 @@ export default function POSCreditReturn() {
     setProductSearch('');
   };
 
-  const addSoldLine = (line: SoldLine) => {
-    const maxQty = Math.floor(num(line.returnable_quantity));
-    const already = qtyAlreadyInBasket(line.invoice_item_id);
-    if (already >= maxQty) {
-      showToast(
-        `Already returning max ${maxQty} for ${line.product_name} (${line.invoice_number})`,
-        'error'
-      );
-      return;
-    }
+  const addProduct = (product: MergedProduct) => {
+    const key = productKey(product);
+    const defaultPrice = num(product.unit_price);
     setBasket((prev) => {
-      const existing = prev.find((r) => r.invoice_item_id === line.invoice_item_id);
+      const existing = prev.find((r) => r.key === key);
       if (existing) {
         return prev.map((r) =>
-          r.invoice_item_id === line.invoice_item_id
-            ? { ...r, quantity: Math.min(r.quantity + 1, maxQty) }
-            : r
+          r.key === key ? { ...r, quantity: r.quantity + 1 } : r
         );
       }
-      return [...prev, { ...line, quantity: 1 }];
+      return [
+        ...prev,
+        {
+          key,
+          product_name: product.name,
+          catalog_product_id:
+            product.source === 'catalog'
+              ? product.catalog_product_id || product.id
+              : product.catalog_product_id || null,
+          credit_product_id:
+            product.source === 'credit'
+              ? product.credit_product_id || product.id
+              : product.credit_product_id || null,
+          quantity: 1,
+          unit_price: defaultPrice,
+        },
+      ];
     });
     setProductSearch('');
     setProductIndex(-1);
-    productInputRef.current?.focus();
+    window.setTimeout(() => focusLastReturnQty(posWorkflowRef.current), 40);
   };
 
-  const setQty = (invoiceItemId: number, raw: string) => {
-    const line = basket.find((r) => r.invoice_item_id === invoiceItemId);
-    if (!line) return;
+  const handlePosWorkflowKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab') return;
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest?.(`[${CREDIT_RETURN_TAB_ATTR}]`)) return;
+    e.preventDefault();
+    focusCreditReturnTabField(posWorkflowRef.current, target, e.shiftKey);
+  };
+
+  const setQty = (key: string, raw: string) => {
     const trimmed = raw.trim();
     if (trimmed === '') {
-      setEditingReturnQty((prev) => {
+      setEditingQty((prev) => {
         const next = { ...prev };
-        delete next[invoiceItemId];
+        delete next[key];
         return next;
       });
       return;
     }
     if (!/^\d+$/.test(trimmed)) {
       showToast('Quantity must be a whole number', 'error');
-      setEditingReturnQty((prev) => {
+      setEditingQty((prev) => {
         const next = { ...prev };
-        delete next[invoiceItemId];
+        delete next[key];
         return next;
       });
       return;
     }
-    const maxQty = Math.floor(num(line.returnable_quantity));
-    let qty = parseInt(trimmed, 10);
+    const qty = parseInt(trimmed, 10);
     if (!Number.isFinite(qty) || qty <= 0) {
       showToast('Quantity must be greater than 0', 'error');
-      setEditingReturnQty((prev) => {
+      setEditingQty((prev) => {
         const next = { ...prev };
-        delete next[invoiceItemId];
+        delete next[key];
         return next;
       });
       return;
     }
-    if (qty > maxQty) {
-      showToast(`Max returnable qty is ${maxQty} (sold on ${line.invoice_number})`, 'error');
-      qty = maxQty;
-    }
-    setBasket((prev) =>
-      prev.map((r) => (r.invoice_item_id === invoiceItemId ? { ...r, quantity: qty } : r))
-    );
-    setEditingReturnQty((prev) => {
+    setBasket((prev) => prev.map((r) => (r.key === key ? { ...r, quantity: qty } : r)));
+    setEditingQty((prev) => {
       const next = { ...prev };
-      delete next[invoiceItemId];
+      delete next[key];
       return next;
     });
   };
 
-  const removeRow = (invoiceItemId: number) => {
-    setBasket((prev) => prev.filter((r) => r.invoice_item_id !== invoiceItemId));
+  const setPrice = (key: string, raw: string) => {
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+      setEditingPrice((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    const price = parseFloat(trimmed);
+    if (!Number.isFinite(price) || price < 0) {
+      showToast('Price cannot be negative', 'error');
+      setEditingPrice((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    setBasket((prev) =>
+      prev.map((r) => (r.key === key ? { ...r, unit_price: price } : r))
+    );
+    setEditingPrice((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const removeRow = (key: string) => {
+    setBasket((prev) => prev.filter((r) => r.key !== key));
+    setEditingQty((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setEditingPrice((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const handleSubmit = async () => {
@@ -267,9 +367,12 @@ export default function POSCreditReturn() {
       return;
     }
     for (const row of basket) {
-      const maxQty = Math.floor(num(row.returnable_quantity));
-      if (!Number.isInteger(row.quantity) || row.quantity <= 0 || row.quantity > maxQty) {
-        showToast(`Invalid qty for ${row.product_name} (max ${maxQty})`, 'error');
+      if (!Number.isInteger(row.quantity) || row.quantity <= 0) {
+        showToast(`Invalid qty for ${row.product_name}`, 'error');
+        return;
+      }
+      if (row.unit_price < 0) {
+        showToast(`Invalid price for ${row.product_name}`, 'error');
         return;
       }
     }
@@ -280,8 +383,11 @@ export default function POSCreditReturn() {
         store: defaultStore.id,
         credit_customer_id: selectedCustomer.credit_customer_id,
         items: basket.map((r) => ({
-          invoice_item_id: r.invoice_item_id,
+          product_name: r.product_name,
+          catalog_product_id: r.catalog_product_id || undefined,
+          credit_product_id: r.credit_product_id || undefined,
           quantity: r.quantity,
+          unit_price: r.unit_price,
         })),
       });
       const ret = res.data;
@@ -306,7 +412,8 @@ export default function POSCreditReturn() {
             POS Credit Return
           </h1>
           <p className="text-sm text-gray-500">
-            Return products from this customer&apos;s credit invoices at the sold price. Qty cannot exceed what was sold.
+            Return any products for this customer. Qty and price are editable; this credits their
+            ledger balance.
           </p>
         </div>
         <div className="flex justify-center">
@@ -315,7 +422,12 @@ export default function POSCreditReturn() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 space-y-4">
+        <div
+          ref={posWorkflowRef}
+          className="lg:col-span-2 space-y-4"
+          onKeyDown={handlePosWorkflowKeyDown}
+          data-credit-pos-workflow
+        >
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
             <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
               <User className="h-4 w-4" />
@@ -395,17 +507,16 @@ export default function POSCreditReturn() {
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
             <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
               <Package className="h-4 w-4" />
-              Sold products (this customer)
+              Products
             </label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
                 ref={productInputRef}
+                data-credit-pos-tab="search"
                 className="pl-9"
                 placeholder={
-                  selectedCustomer
-                    ? 'Search product sold on their credit invoices…'
-                    : 'Select a customer first'
+                  selectedCustomer ? 'Search any product…' : 'Select a customer first'
                 }
                 disabled={!selectedCustomer}
                 value={productSearch}
@@ -416,128 +527,148 @@ export default function POSCreditReturn() {
                 onKeyDown={(e) => {
                   if (e.key === 'ArrowDown') {
                     e.preventDefault();
-                    setProductIndex((i) => Math.min(i + 1, soldList.length - 1));
+                    setProductIndex((i) => Math.min(i + 1, productsList.length - 1));
                   } else if (e.key === 'ArrowUp') {
                     e.preventDefault();
                     setProductIndex((i) => Math.max(i - 1, 0));
-                  } else if (e.key === 'Enter' && soldList.length > 0) {
+                  } else if (e.key === 'Enter' && productsList.length > 0) {
                     e.preventDefault();
                     const idx = productIndex >= 0 ? productIndex : 0;
-                    addSoldLine(soldList[idx]);
+                    addProduct(productsList[idx]);
                   }
                 }}
               />
-              {selectedCustomer && productSearch.trim() && (
-                <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-72 overflow-auto">
-                  {searchingSold || productSearch.trim() !== debouncedProductSearch.trim() ? (
+              {selectedCustomer && productSearch.trim() ? (
+                <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-56 overflow-auto">
+                  {searchingProducts || productSearch.trim() !== debouncedProductSearch.trim() ? (
                     <div className="px-3 py-2 text-sm text-gray-400">Searching…</div>
-                  ) : soldList.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-gray-400">
-                      No matching sold products with remaining qty for this customer.
-                    </div>
+                  ) : productsList.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-gray-400">No products found</div>
                   ) : (
-                    soldList.map((line, idx) => (
+                    productsList.map((p, idx) => (
                       <button
-                        key={line.invoice_item_id}
+                        key={productKey(p)}
                         type="button"
+                        tabIndex={-1}
                         className={`w-full text-left px-3 py-2 text-sm hover:bg-amber-50 ${
                           idx === productIndex ? 'bg-amber-50' : ''
                         }`}
                         onMouseDown={(e) => {
                           e.preventDefault();
-                          addSoldLine(line);
+                          addProduct(p);
                         }}
                       >
                         <div className="flex justify-between gap-2">
-                          <span className="font-medium">{line.product_name}</span>
-                          <span className="text-amber-700">
-                            ₹{formatNumber(num(line.sold_unit_price))}
+                          <span className="font-medium text-gray-900">{p.name}</span>
+                          <span className="text-xs text-gray-500 shrink-0">
+                            ₹{formatNumber(num(p.unit_price))}
                           </span>
                         </div>
-                        <div className="text-xs text-gray-400 flex flex-wrap gap-x-3">
-                          <span>{line.invoice_number}</span>
-                          <span>
-                            Returnable {formatNumber(num(line.returnable_quantity))} / sold{' '}
-                            {formatNumber(num(line.sold_quantity))}
-                          </span>
+                        <div className="text-xs text-gray-400 flex justify-between">
+                          <span>{p.sku || '—'}</span>
+                          <span className="uppercase">{p.source}</span>
                         </div>
                       </button>
                     ))
                   )}
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-medium text-gray-900">Return basket</h2>
-              <span className="text-sm text-gray-500">{basket.length} line(s)</span>
-            </div>
             {basket.length === 0 ? (
-              <div className="p-8 text-center text-gray-400 text-sm">
-                Select a customer, then search products from their credit invoices.
+              <div className="p-8 text-center text-sm text-gray-400">
+                Select a customer, then search any product to return.
               </div>
             ) : (
               <div className="divide-y divide-gray-100">
-                <div className="px-3 py-2 text-xs text-gray-400 flex flex-wrap gap-3 bg-gray-50">
-                  <div className="flex-1 min-w-[140px]">Product / invoice</div>
-                  <div className="w-24">Qty</div>
-                  <div className="w-28">Sold price</div>
-                  <div className="w-24 text-right">Credit</div>
-                  <div className="w-8" />
+                <div className="hidden sm:grid grid-cols-[1fr_7rem_7rem_7rem_2.5rem] gap-2 px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50">
+                  <div>Product</div>
+                  <div className="text-right">Qty</div>
+                  <div className="text-right">Price</div>
+                  <div className="text-right">Total</div>
+                  <div />
                 </div>
                 {basket.map((row) => {
-                  const maxQty = Math.floor(num(row.returnable_quantity));
-                  const lineTotal = row.quantity * num(row.sold_unit_price);
+                  const lineTotal = row.quantity * row.unit_price;
                   return (
-                    <div key={row.invoice_item_id} className="p-3 flex flex-wrap items-center gap-3">
-                      <div className="flex-1 min-w-[140px]">
-                        <div className="font-medium text-gray-900 text-sm">{row.product_name}</div>
-                        <div className="text-xs text-gray-400">
-                          {row.invoice_number} · max {maxQty}
-                        </div>
-                      </div>
-                      <div className="w-24">
-                        <Input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          value={
-                            editingReturnQty[row.invoice_item_id] ?? String(row.quantity)
+                    <div
+                      key={row.key}
+                      className="grid grid-cols-1 sm:grid-cols-[1fr_7rem_7rem_7rem_2.5rem] gap-2 px-4 py-3 items-center"
+                    >
+                      <div className="font-medium text-gray-900 text-sm">{row.product_name}</div>
+                      <Input
+                        type="text"
+                        inputMode="numeric"
+                        data-credit-pos-tab="qty"
+                        className="h-9 text-right"
+                        value={
+                          editingQty[row.key] !== undefined
+                            ? editingQty[row.key]
+                            : String(row.quantity)
+                        }
+                        onFocus={() =>
+                          setEditingQty((prev) => ({ ...prev, [row.key]: '' }))
+                        }
+                        onChange={(e) =>
+                          setEditingQty((prev) => ({
+                            ...prev,
+                            [row.key]: e.target.value.replace(/\D/g, ''),
+                          }))
+                        }
+                        onBlur={(e) => setQty(row.key, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            focusCreditReturnTabField(
+                              posWorkflowRef.current,
+                              e.currentTarget,
+                              false
+                            );
                           }
-                          onFocus={() =>
-                            setEditingReturnQty((prev) => ({
-                              ...prev,
-                              [row.invoice_item_id]: '',
-                            }))
+                        }}
+                        aria-label="Quantity"
+                      />
+                      <Input
+                        type="text"
+                        inputMode="decimal"
+                        data-credit-pos-tab="price"
+                        className="h-9 text-right"
+                        value={
+                          editingPrice[row.key] !== undefined
+                            ? editingPrice[row.key]
+                            : amountForInput(row.unit_price)
+                        }
+                        onFocus={() =>
+                          setEditingPrice((prev) => ({ ...prev, [row.key]: '' }))
+                        }
+                        onChange={(e) =>
+                          setEditingPrice((prev) => ({ ...prev, [row.key]: e.target.value }))
+                        }
+                        onBlur={(e) => setPrice(row.key, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            focusCreditReturnTabField(
+                              posWorkflowRef.current,
+                              e.currentTarget,
+                              false
+                            );
                           }
-                          onChange={(e) => {
-                            const digits = e.target.value.replace(/\D/g, '');
-                            setEditingReturnQty((prev) => ({
-                              ...prev,
-                              [row.invoice_item_id]: digits,
-                            }));
-                          }}
-                          onBlur={(e) => setQty(row.invoice_item_id, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                          }}
-                          className="text-sm"
-                          placeholder="Qty"
-                          aria-label="Return quantity"
-                        />
-                      </div>
-                      <div className="w-28 text-sm text-gray-700">
-                        ₹{formatNumber(num(row.sold_unit_price))}
-                      </div>
-                      <div className="w-24 text-right text-sm font-medium">
+                        }}
+                        aria-label="Unit price"
+                      />
+                      <div className="text-right text-sm font-semibold text-gray-900">
                         ₹{formatNumber(lineTotal)}
                       </div>
                       <button
                         type="button"
-                        className="p-1.5 text-red-500 hover:bg-red-50 rounded"
-                        onClick={() => removeRow(row.invoice_item_id)}
+                        data-credit-pos-tab="delete"
+                        className="p-1.5 text-red-500 hover:bg-red-50 rounded justify-self-end focus:outline-none focus:ring-2 focus:ring-red-300"
+                        onClick={() => removeRow(row.key)}
+                        title="Remove"
+                        aria-label="Remove line"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -552,23 +683,23 @@ export default function POSCreditReturn() {
         <div className="space-y-4">
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
             <div className="flex justify-between text-sm">
-              <span className="text-gray-500">Return credit</span>
-              <span className="font-semibold text-amber-700">₹{formatNumber(basketTotal)}</span>
+              <span className="text-gray-500">Lines</span>
+              <span className="font-medium text-gray-900">{basket.length}</span>
+            </div>
+            <div className="flex justify-between text-base font-semibold border-t border-gray-100 pt-3">
+              <span>Return total</span>
+              <span className="text-amber-700">₹{formatNumber(basketTotal)}</span>
             </div>
             <p className="text-xs text-gray-500">
-              Price is locked to what was sold on the credit invoice. This reduces the customer&apos;s credit balance.
+              Any product can be returned. Edit qty and price freely — this reduces the
+              customer&apos;s credit balance.
             </p>
             <Button
-              type="button"
-              className="w-full"
+              className="w-full bg-amber-600 hover:bg-amber-700"
               disabled={submitting || !basket.length || !selectedCustomer}
               onClick={handleSubmit}
             >
-              <CheckCircle className="h-4 w-4 mr-2" />
-              {submitting ? 'Submitting…' : 'Complete return'}
-            </Button>
-            <Button type="button" variant="secondary" className="w-full" onClick={() => navigate('/pos-credit')}>
-              Back to POS Credit
+              {submitting ? 'Submitting…' : 'Complete Return'}
             </Button>
           </div>
         </div>

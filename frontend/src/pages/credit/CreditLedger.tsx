@@ -25,7 +25,6 @@ import {
   collectionStatusDotClass,
   collectionStatusLabel,
   collectionStatusRowClass,
-  formatCustomerWithGroup,
   type CreditLedgerCustomerRow,
 } from './creditLedgerUtils';
 
@@ -357,7 +356,7 @@ export default function CreditLedger() {
                               onClick={() => navigate(buildDetailPath(row.id))}
                               className="text-sm font-semibold text-blue-600 hover:text-blue-800 hover:underline text-left"
                             >
-                              {formatCustomerWithGroup(row.name, row.customer_group_name)}
+                              {row.name || 'Anonymous'}
                             </button>
                             {row.phone ? (
                               <span className="text-xs text-gray-500">({row.phone})</span>
@@ -446,7 +445,7 @@ export default function CreditLedger() {
                           onClick={() => navigate(buildDetailPath(row.id))}
                           className="text-base font-semibold text-blue-600 hover:underline text-left"
                         >
-                          {formatCustomerWithGroup(row.name, row.customer_group_name)}
+                          {row.name || 'Anonymous'}
                         </button>
                         {row.phone ? (
                           <p className="text-xs text-gray-500 mt-0.5">{row.phone}</p>
