@@ -756,6 +756,22 @@ export default function POSCredit() {
     return cartItems.reduce((sum: number, item: any) => sum + parseFloat(item.line_total || 0), 0);
   }, [cartItems]);
 
+  const cartLinesReady = useMemo(() => {
+    if (!cartItems.length) return false;
+    return cartItems.every((i: any) => {
+      const qtyRaw =
+        editingQty[i.id] !== undefined ? editingQty[i.id] : String(i.quantity ?? '');
+      const priceRaw =
+        editingPrice[i.id] !== undefined ? editingPrice[i.id] : String(i.unit_price ?? '');
+      const qty = parseFloat(String(qtyRaw).trim());
+      const price = parseFloat(String(priceRaw).trim());
+      return Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
+    });
+  }, [cartItems, editingQty, editingPrice]);
+
+  const canCheckout =
+    !!selectedCustomer && cartLinesReady && !isCartLocked && !checkingOut;
+
   const handleNewSale = () => {
     if (!defaultStore) {
       showToast('No store configured for credit POS', 'error');
@@ -1962,7 +1978,7 @@ export default function POSCredit() {
             <Button
               type="button"
               className="w-full"
-              disabled={checkingOut || !cartItems.length || isCartLocked}
+              disabled={!canCheckout}
               onClick={handleCheckout}
             >
               <CheckCircle className="h-4 w-4 mr-2" />
