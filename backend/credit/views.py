@@ -89,9 +89,12 @@ def _to_decimal(value, default='0'):
         return Decimal(default)
 
 
-def _require_whole_quantity(qty: Decimal):
+def _require_whole_quantity(qty: Decimal, *, allow_zero: bool = False):
     """Credit qty matches POS: whole units only (no fractional pcs)."""
-    if qty <= 0:
+    if allow_zero:
+        if qty < 0:
+            return 'Quantity cannot be negative'
+    elif qty <= 0:
         return 'Quantity must be a positive whole number'
     if qty != qty.to_integral_value():
         return 'Quantity must be a whole number (decimals not allowed)'
@@ -511,11 +514,12 @@ def credit_cart_items(request, pk):
 
     catalog_product_id = request.data.get('catalog_product_id') or request.data.get('product')
     credit_product_id = request.data.get('credit_product_id') or request.data.get('credit_product')
-    quantity = _to_decimal(request.data.get('quantity', '1'), '1')
+    # Draft lines may start at qty 0 / price 0; checkout enforces both > 0.
+    quantity = _to_decimal(request.data.get('quantity', '0'), '0')
     # Qty and price are always cart-driven — never take cost/price from product master data.
     unit_price = _to_decimal(request.data.get('unit_price', '0'), '0')
 
-    qty_err = _require_whole_quantity(quantity)
+    qty_err = _require_whole_quantity(quantity, allow_zero=True)
     if qty_err:
         return Response({'detail': qty_err}, status=status.HTTP_400_BAD_REQUEST)
     quantity = quantity.to_integral_value()
@@ -578,12 +582,15 @@ def credit_cart_item_detail(request, pk, item_id):
 
     if 'quantity' in request.data:
         qty = _to_decimal(request.data.get('quantity'), str(item.quantity))
-        qty_err = _require_whole_quantity(qty)
+        qty_err = _require_whole_quantity(qty, allow_zero=True)
         if qty_err:
             return Response({'detail': qty_err}, status=status.HTTP_400_BAD_REQUEST)
         item.quantity = qty.to_integral_value()
     if 'unit_price' in request.data:
-        item.unit_price = _to_decimal(request.data.get('unit_price'), str(item.unit_price))
+        price = _to_decimal(request.data.get('unit_price'), str(item.unit_price))
+        if price < 0:
+            return Response({'detail': 'Unit prices cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+        item.unit_price = price
     item.line_total = (item.quantity * item.unit_price).quantize(Decimal('0.01'))
     item.save()
     cart.save(update_fields=['updated_at'])
@@ -643,8 +650,15 @@ def credit_cart_checkout(request, pk):
         created_at_override = parsed_created_at
 
     for item in items:
-        if item.unit_price < 0:
-            return Response({'detail': 'Unit prices cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+        if item.unit_price <= 0:
+            return Response(
+                {
+                    'detail': (
+                        f'{item.product_name}: Selling price must be greater than 0'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         qty_err = _require_whole_quantity(item.quantity)
         if qty_err:
             return Response(

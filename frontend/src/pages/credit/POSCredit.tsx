@@ -896,7 +896,7 @@ export default function POSCredit() {
     if (id == null) return;
     try {
       const payload: any = {
-        quantity: 1,
+        quantity: 0,
         unit_price: 0,
         product_name: product.name,
       };
@@ -928,11 +928,18 @@ export default function POSCredit() {
     if (!cartId || isCartLocked) return;
     const trimmed = unitPrice.trim();
     if (trimmed === '') {
-      setEditingPrice((prev) => {
-        const next = { ...prev };
-        delete next[itemId];
-        return next;
-      });
+      // Empty = not entered → persist 0 so checkout can reject
+      try {
+        await creditApi.carts.updateItem(cartId, itemId, { unit_price: 0 });
+        setEditingPrice((prev) => {
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
+        await refetchCart();
+      } catch (err: any) {
+        showToast(err?.response?.data?.detail || 'Failed to update price', 'error');
+      }
       return;
     }
     const price = parseFloat(trimmed);
@@ -962,11 +969,18 @@ export default function POSCredit() {
     if (!cartId || isCartLocked) return;
     const trimmed = quantity.trim();
     if (trimmed === '') {
-      setEditingQty((prev) => {
-        const next = { ...prev };
-        delete next[itemId];
-        return next;
-      });
+      // Empty = not entered → persist 0 so checkout can reject
+      try {
+        await creditApi.carts.updateItem(cartId, itemId, { quantity: 0 });
+        setEditingQty((prev) => {
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
+        await refetchCart();
+      } catch (err: any) {
+        showToast(err?.response?.data?.detail || 'Failed to update quantity', 'error');
+      }
       return;
     }
     // Whole units only (same as POS +/- qty) — decimals break returns / returnable counts.
@@ -980,7 +994,7 @@ export default function POSCredit() {
       return;
     }
     const qty = parseInt(trimmed, 10);
-    if (!Number.isFinite(qty) || qty <= 0) {
+    if (!Number.isFinite(qty) || qty < 0) {
       showToast('Enter a valid quantity', 'error');
       setEditingQty((prev) => {
         const next = { ...prev };
@@ -1118,9 +1132,17 @@ export default function POSCredit() {
       showToast('Cart is empty', 'error');
       return;
     }
-    const badPrice = cartItems.some((i: any) => parseFloat(i.unit_price) <= 0);
-    if (badPrice) {
-      showToast('All items need a selling price > 0', 'error');
+    const invalidLine = cartItems.find((i: any) => {
+      const qtyRaw =
+        editingQty[i.id] !== undefined ? editingQty[i.id] : String(i.quantity ?? '');
+      const priceRaw =
+        editingPrice[i.id] !== undefined ? editingPrice[i.id] : String(i.unit_price ?? '');
+      const qty = parseFloat(String(qtyRaw).trim());
+      const price = parseFloat(String(priceRaw).trim());
+      return !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0;
+    });
+    if (invalidLine) {
+      showToast('Every item needs quantity > 0 and selling price > 0', 'error');
       return;
     }
     if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
@@ -1847,7 +1869,12 @@ export default function POSCredit() {
                         inputMode="decimal"
                         data-credit-pos-tab="price"
                         value={
-                          editingPrice[item.id] ?? amountForInput(item.unit_price)
+                          editingPrice[item.id] ??
+                          (() => {
+                            const n = parseFloat(String(item.unit_price ?? '0'));
+                            if (!Number.isFinite(n) || n <= 0) return '';
+                            return amountForInput(item.unit_price);
+                          })()
                         }
                         disabled={isCartLocked}
                         onFocus={() => {
