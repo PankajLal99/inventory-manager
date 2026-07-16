@@ -1853,9 +1853,15 @@ export default function POSCredit() {
                           })()
                         }
                         disabled={isCartLocked}
-                        onFocus={() => {
+                        onFocus={(e) => {
                           if (isCartLocked) return;
-                          setEditingQty((prev) => ({ ...prev, [item.id]: '' }));
+                          const n = parseFloat(String(item.quantity ?? '0'));
+                          // Only clear placeholder zeros — keep real qty values when tabbing in
+                          if (!Number.isFinite(n) || n <= 0) {
+                            setEditingQty((prev) => ({ ...prev, [item.id]: '' }));
+                          } else {
+                            e.currentTarget.select();
+                          }
                         }}
                         onChange={(e) => {
                           if (isCartLocked) return;
@@ -1893,9 +1899,15 @@ export default function POSCredit() {
                           })()
                         }
                         disabled={isCartLocked}
-                        onFocus={() => {
+                        onFocus={(e) => {
                           if (isCartLocked) return;
-                          setEditingPrice((prev) => ({ ...prev, [item.id]: '' }));
+                          const n = parseFloat(String(item.unit_price ?? '0'));
+                          // Only clear placeholder zeros — keep real prices when tabbing in
+                          if (!Number.isFinite(n) || n <= 0) {
+                            setEditingPrice((prev) => ({ ...prev, [item.id]: '' }));
+                          } else {
+                            e.currentTarget.select();
+                          }
                         }}
                         onChange={(e) => {
                           if (isCartLocked) return;

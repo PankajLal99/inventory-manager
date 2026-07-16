@@ -608,9 +608,14 @@ export default function POSCreditReturn() {
                             ? editingQty[row.key]
                             : String(row.quantity)
                         }
-                        onFocus={() =>
-                          setEditingQty((prev) => ({ ...prev, [row.key]: '' }))
-                        }
+                        onFocus={(e) => {
+                          // Only clear placeholder zeros — keep real qty when tabbing in
+                          if (!Number.isFinite(row.quantity) || row.quantity <= 0) {
+                            setEditingQty((prev) => ({ ...prev, [row.key]: '' }));
+                          } else {
+                            e.currentTarget.select();
+                          }
+                        }}
                         onChange={(e) =>
                           setEditingQty((prev) => ({
                             ...prev,
@@ -640,9 +645,14 @@ export default function POSCreditReturn() {
                             ? editingPrice[row.key]
                             : amountForInput(row.unit_price)
                         }
-                        onFocus={() =>
-                          setEditingPrice((prev) => ({ ...prev, [row.key]: '' }))
-                        }
+                        onFocus={(e) => {
+                          // Only clear placeholder zeros — keep real prices when tabbing in
+                          if (!Number.isFinite(row.unit_price) || row.unit_price <= 0) {
+                            setEditingPrice((prev) => ({ ...prev, [row.key]: '' }));
+                          } else {
+                            e.currentTarget.select();
+                          }
+                        }}
                         onChange={(e) =>
                           setEditingPrice((prev) => ({ ...prev, [row.key]: e.target.value }))
                         }
