@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { customersApi, purchasingApi } from '../../lib/api';
@@ -13,7 +13,7 @@ import {
   Plus, Minus, FileText, Users, TrendingUp, TrendingDown, 
   FileSpreadsheet, FileText as FileTextIcon, Printer,
   Filter, X, Calendar, Search,
-  UserPlus, Building2
+  UserPlus, Building2, Lock
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -21,8 +21,15 @@ import 'jspdf-autotable';
 import { format } from 'date-fns';
 import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 
+const PIN_LENGTH = 6;
+const PERSONAL_LEDGER_PIN = '980980';
+
 export default function PersonalLedger() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [unlocked, setUnlocked] = useState(false);
+  const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
+  const [pinError, setPinError] = useState('');
+  const pinInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [entryType, setEntryType] = useState<'credit' | 'debit'>('credit');
@@ -86,6 +93,44 @@ export default function PersonalLedger() {
     }
   }, [filters, datePreset, searchParams, setSearchParams]);
 
+  useEffect(() => {
+    if (!unlocked) {
+      const t = setTimeout(() => pinInputRefs.current[0]?.focus(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [unlocked]);
+
+  const clearPin = () => {
+    setPinDigits(Array(PIN_LENGTH).fill(''));
+    setPinError('');
+    pinInputRefs.current[0]?.focus();
+  };
+
+  const handlePinChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const next = [...pinDigits];
+    next[index] = digit;
+    setPinDigits(next);
+    setPinError('');
+    if (digit && index < PIN_LENGTH - 1) pinInputRefs.current[index + 1]?.focus();
+    if (next.every(Boolean)) {
+      const pin = next.join('');
+      if (pin === PERSONAL_LEDGER_PIN) {
+        setUnlocked(true);
+      } else {
+        setPinError('Wrong PIN');
+        clearPin();
+      }
+    }
+  };
+
+  const handlePinKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      clearPin();
+    }
+  };
+
   // Fetch personal customers for personal ledger (separate from regular customers)
   const { data: customersResponse } = useQuery({
     queryKey: ['personal-customers', customerSearch],
@@ -93,7 +138,7 @@ export default function PersonalLedger() {
       const response = await customersApi.personalCustomers.list({ search: customerSearch });
       return response.data;
     },
-    enabled: customerSearch.trim().length > 0,
+    enabled: unlocked && customerSearch.trim().length > 0,
     retry: false,
   });
 
@@ -104,7 +149,7 @@ export default function PersonalLedger() {
       const response = await purchasingApi.suppliers.list({ search: customerSearch });
       return response.data;
     },
-    enabled: customerSearch.trim().length > 0,
+    enabled: unlocked && customerSearch.trim().length > 0,
     retry: false,
   });
 
@@ -114,6 +159,7 @@ export default function PersonalLedger() {
       const response = await customersApi.personalCustomers.list();
       return response.data;
     },
+    enabled: unlocked,
     retry: false,
   });
 
@@ -124,7 +170,7 @@ export default function PersonalLedger() {
       const response = await customersApi.personalCustomers.list({ search: customerListSearch });
       return response.data;
     },
-    enabled: showCustomerListModal,
+    enabled: unlocked && showCustomerListModal,
     retry: false,
   });
 
@@ -135,7 +181,7 @@ export default function PersonalLedger() {
       const response = await purchasingApi.suppliers.list({ search: customerListSearch });
       return response.data;
     },
-    enabled: showCustomerListModal,
+    enabled: unlocked && showCustomerListModal,
     retry: false,
   });
 
@@ -145,6 +191,7 @@ export default function PersonalLedger() {
       const response = await customersApi.personalLedger.summary({});
       return response.data;
     },
+    enabled: unlocked,
     retry: false,
   });
 
@@ -161,6 +208,7 @@ export default function PersonalLedger() {
       const response = await customersApi.personalLedger.entries.list(params);
       return response.data;
     },
+    enabled: unlocked,
     retry: false,
   });
 
@@ -573,6 +621,41 @@ export default function PersonalLedger() {
   };
 
   const hasActiveFilters = filters.entryType || filters.customer || filters.search || filters.dateFrom || filters.dateTo;
+
+  if (!unlocked) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-gray-200 p-8">
+          <div className="flex flex-col items-center">
+            <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mb-6">
+              <Lock className="h-7 w-7 text-gray-600" />
+            </div>
+            <h2 className="text-xl font-semibold text-gray-900 mb-1">Personal Ledger locked</h2>
+            <p className="text-sm text-gray-500 mb-6">Enter 6-digit PIN</p>
+            <div className="flex gap-2 justify-center mb-2">
+              {Array.from({ length: PIN_LENGTH }, (_, i) => (
+                <input
+                  key={i}
+                  ref={(el) => {
+                    pinInputRefs.current[i] = el;
+                  }}
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={1}
+                  autoFocus={i === 0}
+                  value={pinDigits[i]}
+                  onChange={(e) => handlePinChange(i, e.target.value)}
+                  onKeyDown={handlePinKeyDown}
+                  className="w-14 h-14 text-center text-lg font-semibold border-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 border-gray-300"
+                />
+              ))}
+            </div>
+            {pinError ? <p className="text-sm text-red-600 font-medium mt-2">{pinError}</p> : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
