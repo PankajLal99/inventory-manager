@@ -43,6 +43,7 @@ import {
   loadThermalPrintSettings,
   truncateThermalItemName,
 } from '../../utils/thermalPrintStyles';
+import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
 
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
@@ -2172,6 +2173,8 @@ export default function POS() {
     },
   });
 
+  const checkoutSubmitLock = useSubmitLock();
+
   const checkoutMutation = useMutation({
     mutationFn: (data: any) => posApi.carts.checkout(cartId!, data),
     onSuccess: () => {
@@ -2225,6 +2228,7 @@ export default function POS() {
       // Don't close repair modal on error so user can retry
       alert(error?.response?.data?.message || 'Checkout failed. Please try again.');
     },
+    onSettled: () => checkoutSubmitLock.release(),
   });
 
   // Auto-save cart state to localStorage whenever cart data changes
@@ -2447,6 +2451,8 @@ export default function POS() {
   };
 
   const handleCheckout = () => {
+    if (isCheckoutSubmitting) return;
+
     if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
       alert('Please select a valid invoice date');
       return;
@@ -2584,6 +2590,7 @@ export default function POS() {
       checkoutData.upi_amount = parseFloat(upiAmount);
     }
 
+    if (!checkoutSubmitLock.tryAcquire()) return;
     checkoutMutation.mutate(checkoutData);
   };
 
@@ -2767,9 +2774,18 @@ export default function POS() {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to checkout invoice';
       alert(errorMsg);
     },
+    onSettled: () => checkoutSubmitLock.release(),
   });
 
+  const isCheckoutSubmitting = isSubmitBlocked(
+    checkoutMutation.isPending,
+    checkoutAndPrintThermalMutation.isPending,
+    checkoutSubmitLock.isLocked,
+  );
+
   const handleCheckoutAndPrintThermal = () => {
+    if (isCheckoutSubmitting) return;
+
     if (!invoiceDate || !/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
       alert('Please select a valid invoice date');
       return;
@@ -2810,7 +2826,6 @@ export default function POS() {
       }
     }
 
-    // Frontend safeguard: ensure all items have a valid selling price for non-pending invoices
     const isPendingInvoice = invoiceType === 'pending';
     if (!isPendingInvoice) {
       const itemsWithMissingPrice =
@@ -2835,7 +2850,6 @@ export default function POS() {
       }
     }
 
-    // Validate purchase price for custom products (must be > 0 regardless of invoice type)
     const customItemsMissingPP = cart.data.items?.filter((item: any) => {
       if (!item.product_name?.startsWith('Other -')) return false;
       const qty = parseFloat(item.quantity) || 0;
@@ -2854,7 +2868,6 @@ export default function POS() {
       return;
     }
 
-    // Validate split payments for mixed type
     if (invoiceType === 'mixed') {
       const total = calculateTotal();
       const cash = parseFloat(cashAmount) || 0;
@@ -2865,7 +2878,7 @@ export default function POS() {
         return;
       }
 
-      if (Math.abs((cash + upi) - total) > 0.01) { // Allow small floating point differences
+      if (Math.abs((cash + upi) - total) > 0.01) {
         alert(`Split payment amounts (₹${formatNumber(cash + upi)}) do not match invoice total (₹${formatNumber(total)})`);
         return;
       }
@@ -2880,12 +2893,12 @@ export default function POS() {
       checkoutData.pos_trade_ins = posTradeInPayload(tradeInLines);
     }
 
-    // Add split payment amounts for mixed type
     if (invoiceType === 'mixed') {
       checkoutData.cash_amount = parseFloat(cashAmount);
       checkoutData.upi_amount = parseFloat(upiAmount);
     }
 
+    if (!checkoutSubmitLock.tryAcquire()) return;
     checkoutAndPrintThermalMutation.mutate(checkoutData);
   };
 
@@ -3449,8 +3462,8 @@ export default function POS() {
     onNewSale: handleNewSale,
     onTogglePaymentMode: handleToggleInvoiceType,
     onOpenCustomProduct: handleOpenCustomProductModal,
-    onCheckout: () => { if (!isCartLocked) handleCheckoutAndPrintThermal(); }, // F9: Thermal Print checkout
-    onCompleteSale: () => { if (!isCartLocked) handleCheckout(); }, // F8: Simple checkout
+    onCheckout: () => { if (!isCartLocked && !isCheckoutSubmitting) handleCheckoutAndPrintThermal(); },
+    onCompleteSale: () => { if (!isCartLocked && !isCheckoutSubmitting) handleCheckout(); },
     onDeleteCart: handleDeleteCurrentCart,
     onCancel: () => {
       // Clear search if focused
@@ -5557,9 +5570,10 @@ export default function POS() {
                 className="w-full mb-2 shadow-md hover:shadow-lg transition-shadow"
                 size="lg"
                 onClick={handleCheckout}
+                loading={isCheckoutSubmitting}
                 disabled={
                   isCartLocked ||
-                  checkoutMutation.isPending ||
+                  isCheckoutSubmitting ||
                   !selectedCustomer?.id ||
                   !cart?.data?.items ||
                   cart.data.items.length === 0 ||
@@ -5580,16 +5594,17 @@ export default function POS() {
                           : undefined
                 }
               >
-                {checkoutMutation.isPending ? 'Processing...' : 'Complete Order (F8)'}
+                {isCheckoutSubmitting ? 'Processing...' : 'Complete Order (F8)'}
               </Button>
               <Button
                 className="w-full shadow-md hover:shadow-lg transition-shadow"
                 size="lg"
                 variant="outline"
                 onClick={handleCheckoutAndPrintThermal}
+                loading={isCheckoutSubmitting}
                 disabled={
                   isCartLocked ||
-                  checkoutAndPrintThermalMutation.isPending ||
+                  isCheckoutSubmitting ||
                   !selectedCustomer?.id ||
                   !cart?.data?.items ||
                   cart.data.items.length === 0 ||
@@ -5610,7 +5625,7 @@ export default function POS() {
                           : undefined
                 }
               >
-                {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
+                {isCheckoutSubmitting ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
               </Button>
             </div>
           </div>

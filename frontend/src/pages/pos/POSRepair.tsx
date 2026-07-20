@@ -34,6 +34,7 @@ import {
   loadThermalPrintSettings,
   truncateThermalItemName,
 } from '../../utils/thermalPrintStyles';
+import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
 
 export default function POS() {
   const [username, setUsername] = useState<string | null>(null);
@@ -1490,6 +1491,8 @@ export default function POS() {
     },
   });
 
+  const checkoutSubmitLock = useSubmitLock();
+
   const checkoutMutation = useMutation({
     mutationFn: (data: any) => posApi.carts.checkout(cartId!, data),
     onSuccess: () => {
@@ -1540,6 +1543,7 @@ export default function POS() {
       // Don't close repair modal on error so user can retry
       alert(error?.response?.data?.message || 'Checkout failed. Please try again.');
     },
+    onSettled: () => checkoutSubmitLock.release(),
   });
 
   // Auto-save cart state to localStorage whenever cart data changes
@@ -1724,6 +1728,8 @@ export default function POS() {
   };
 
   const handleCheckout = () => {
+    if (isCheckoutSubmitting) return;
+
     if (!cart?.data?.items || cart.data.items.length === 0) {
       alert('Cart is empty');
       return;
@@ -1778,6 +1784,7 @@ export default function POS() {
       checkoutData.upi_amount = parseFloat(upiAmount);
     }
 
+    if (!checkoutSubmitLock.tryAcquire()) return;
     checkoutMutation.mutate(checkoutData);
   };
 
@@ -1959,9 +1966,18 @@ export default function POS() {
       const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to checkout invoice';
       alert(errorMsg);
     },
+    onSettled: () => checkoutSubmitLock.release(),
   });
 
+  const isCheckoutSubmitting = isSubmitBlocked(
+    checkoutMutation.isPending,
+    checkoutAndPrintThermalMutation.isPending,
+    checkoutSubmitLock.isLocked,
+  );
+
   const handleCheckoutAndPrintThermal = () => {
+    if (isCheckoutSubmitting) return;
+
     if (!cart?.data?.items || cart.data.items.length === 0) {
       alert('Cart is empty');
       return;
@@ -1995,6 +2011,7 @@ export default function POS() {
       checkoutData.upi_amount = parseFloat(upiAmount);
     }
 
+    if (!checkoutSubmitLock.tryAcquire()) return;
     checkoutAndPrintThermalMutation.mutate(checkoutData);
   };
 
@@ -2349,8 +2366,8 @@ export default function POS() {
     onNewSale: handleNewSale,
     onTogglePaymentMode: handleToggleInvoiceType,
     onOpenCustomProduct: handleOpenCustomProductModal,
-    onCheckout: handleCheckoutAndPrintThermal, // F9: Thermal Print checkout
-    onCompleteSale: handleCheckout, // F8: Simple checkout
+    onCheckout: () => { if (!isCheckoutSubmitting) handleCheckoutAndPrintThermal(); },
+    onCompleteSale: () => { if (!isCheckoutSubmitting) handleCheckout(); },
     onDeleteCart: handleDeleteCurrentCart,
     onCancel: () => {
       // Clear search if focused
@@ -4132,8 +4149,9 @@ export default function POS() {
                 className="w-full mb-2 shadow-md hover:shadow-lg transition-shadow"
                 size="lg"
                 onClick={handleCheckout}
+                loading={isCheckoutSubmitting}
                 disabled={
-                  checkoutMutation.isPending ||
+                  isCheckoutSubmitting ||
                   !cart?.data?.items ||
                   cart.data.items.length === 0 ||
                   (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
@@ -4149,15 +4167,16 @@ export default function POS() {
                         : undefined
                 }
               >
-                {checkoutMutation.isPending ? 'Processing...' : 'Complete Order (F8)'}
+                {isCheckoutSubmitting ? 'Processing...' : 'Complete Order (F8)'}
               </Button>
               <Button
                 className="w-full shadow-md hover:shadow-lg transition-shadow"
                 size="lg"
                 variant="outline"
                 onClick={handleCheckoutAndPrintThermal}
+                loading={isCheckoutSubmitting}
                 disabled={
-                  checkoutAndPrintThermalMutation.isPending ||
+                  isCheckoutSubmitting ||
                   !cart?.data?.items ||
                   cart.data.items.length === 0 ||
                   (invoiceType !== 'pending' && (!allItemsHavePrices() || hasPriceErrors())) ||
@@ -4173,7 +4192,7 @@ export default function POS() {
                         : undefined
                 }
               >
-                {checkoutAndPrintThermalMutation.isPending ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
+                {isCheckoutSubmitting ? 'Processing...' : 'Complete Order and Print Thermal (F9)'}
               </Button>
             </div>
           </div>

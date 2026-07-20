@@ -21,6 +21,7 @@ import {
 import { catalogApi, creditApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { amountForInput, dateStringWithCurrentTimeISO, formatNumber, toLocalDateString } from '../../lib/utils';
+import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import {
   addCreditCartTab,
   getActiveCreditTabId,
@@ -389,7 +390,7 @@ export default function POSCredit() {
   const [showCreateProduct, setShowCreateProduct] = useState(false);
   const [newProductName, setNewProductName] = useState('');
 
-  const [checkingOut, setCheckingOut] = useState(false);
+  const { runGuarded, isSubmitting: isCheckingOut } = useGuardedAsync();
   const [invoiceDate, setInvoiceDate] = useState(loadPersistedCreditInvoiceDate);
   /** Local draft values while editing cart lines (cleared on focus for easy re-entry). */
   const [editingQty, setEditingQty] = useState<Record<number, string>>({});
@@ -770,7 +771,7 @@ export default function POSCredit() {
   }, [cartItems, editingQty, editingPrice]);
 
   const canCheckout =
-    !!selectedCustomer && cartLinesReady && !isCartLocked && !checkingOut;
+    !!selectedCustomer && cartLinesReady && !isCartLocked && !isCheckingOut;
 
   const handleNewSale = () => {
     if (!defaultStore) {
@@ -1134,7 +1135,9 @@ export default function POSCredit() {
     },
   });
 
-  const handleCheckout = async () => {
+  const handleCheckout = () => {
+    if (isCheckingOut) return;
+    runGuarded(async () => {
     if (!cartId) return;
     if (isCartLocked) {
       showToast('Unlock the cart before checkout.', 'info');
@@ -1166,8 +1169,6 @@ export default function POSCredit() {
       return;
     }
 
-    setCheckingOut(true);
-    try {
       const payload: any = {
         created_at: dateStringWithCurrentTimeISO(invoiceDate),
       };
@@ -1231,11 +1232,9 @@ export default function POSCredit() {
       setSelectedCustomer(null);
       queryClient.invalidateQueries({ queryKey: ['credit-cart'] });
       navigate(`/credit-invoices/${invoice.id}`);
-    } catch (err: any) {
+    }).catch((err: any) => {
       showToast(err?.response?.data?.detail || 'Checkout failed', 'error');
-    } finally {
-      setCheckingOut(false);
-    }
+    });
   };
 
   const snapshotExpectedParts = useMemo(() => {
@@ -1991,10 +1990,11 @@ export default function POSCredit() {
               type="button"
               className="w-full"
               disabled={!canCheckout}
+              loading={isCheckingOut}
               onClick={handleCheckout}
             >
               <CheckCircle className="h-4 w-4 mr-2" />
-              {checkingOut ? 'Creating…' : 'Checkout (Credit)'}
+              {isCheckingOut ? 'Creating…' : 'Checkout (Credit)'}
             </Button>
             <Button
               type="button"

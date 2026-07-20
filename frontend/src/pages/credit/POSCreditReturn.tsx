@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import {
   Search,
   Undo2,
@@ -135,7 +136,7 @@ export default function POSCreditReturn() {
   const [basket, setBasket] = useState<BasketRow[]>([]);
   const [editingQty, setEditingQty] = useState<Record<string, string>>({});
   const [editingPrice, setEditingPrice] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
+  const { runGuarded, isSubmitting: isSubmittingReturn } = useGuardedAsync();
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Math.random().toString(36).substring(7);
@@ -353,7 +354,9 @@ export default function POSCreditReturn() {
     });
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
+    if (isSubmittingReturn) return;
+    runGuarded(async () => {
     if (!selectedCustomer) {
       showToast('Select a customer first', 'error');
       return;
@@ -377,8 +380,6 @@ export default function POSCreditReturn() {
       }
     }
 
-    setSubmitting(true);
-    try {
       const res = await creditApi.returns.create({
         store: defaultStore.id,
         credit_customer_id: selectedCustomer.credit_customer_id,
@@ -394,11 +395,9 @@ export default function POSCreditReturn() {
       showToast(`Credit return ${ret.return_number} created`);
       setBasket([]);
       navigate(`/credit-ledger/${selectedCustomer.credit_customer_id}`);
-    } catch (err: any) {
+    }).catch((err: any) => {
       showToast(err?.response?.data?.detail || 'Return failed', 'error');
-    } finally {
-      setSubmitting(false);
-    }
+    });
   };
 
   return (
@@ -706,10 +705,11 @@ export default function POSCreditReturn() {
             </p>
             <Button
               className="w-full bg-amber-600 hover:bg-amber-700"
-              disabled={submitting || !basket.length || !selectedCustomer}
+              disabled={isSubmittingReturn || !basket.length || !selectedCustomer}
+              loading={isSubmittingReturn}
               onClick={handleSubmit}
             >
-              {submitting ? 'Submitting…' : 'Complete Return'}
+              {isSubmittingReturn ? 'Submitting…' : 'Complete Return'}
             </Button>
           </div>
         </div>

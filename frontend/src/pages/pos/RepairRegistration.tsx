@@ -8,6 +8,7 @@ import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
+import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
 import {
     User,
     Phone,
@@ -212,6 +213,8 @@ export default function RepairRegistration() {
         },
     });
 
+    const registerSubmitLock = useSubmitLock();
+
     const registerMutation = useMutation({
         mutationFn: async (data: any) => {
             // 1. Create a cart with the store and selected customer
@@ -245,7 +248,10 @@ export default function RepairRegistration() {
             setSelectedCustomer(null);
         },
         onError: (err: any) => showToast(err.response?.data?.error || 'Failed to register repair', 'error'),
+        onSettled: () => registerSubmitLock.release(),
     });
+
+    const isRegistering = isSubmitBlocked(registerMutation.isPending, registerSubmitLock.isLocked);
 
     const generateLabelMutation = useMutation({
         mutationFn: async (invoiceId: number) => {
@@ -277,9 +283,11 @@ export default function RepairRegistration() {
     };
 
     const handleRegister = () => {
+        if (isRegistering) return;
         if (!selectedCustomer) return showToast('Please select a customer', 'error');
         if (!repairModelName.trim()) return showToast('Please fill required fields', 'error');
         if (!currentStore) return showToast('No store selected', 'error');
+        if (!registerSubmitLock.tryAcquire()) return;
 
         registerMutation.mutate({
             contact_no: repairContactNo,
@@ -661,10 +669,11 @@ export default function RepairRegistration() {
                     <div className="pt-4">
                         <Button
                             onClick={handleRegister}
-                            disabled={registerMutation.isPending || !selectedCustomer || !repairModelName.trim()}
+                            disabled={isRegistering || !selectedCustomer || !repairModelName.trim()}
+                            loading={isRegistering}
                             className="w-full h-16 text-xl font-black rounded-2xl shadow-2xl hover:shadow-blue-200 hover:-translate-y-1 transition-all bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:translate-y-0 disabled:shadow-none"
                         >
-                            {registerMutation.isPending ? 'PROCESSING...' : 'REGISTER REPAIR & PRINT TICKET'}
+                            {isRegistering ? 'PROCESSING...' : 'REGISTER REPAIR & PRINT TICKET'}
                         </Button>
                     </div>
                 </div>

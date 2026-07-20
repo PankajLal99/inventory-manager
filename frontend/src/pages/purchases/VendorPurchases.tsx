@@ -14,6 +14,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import Badge from '../../components/ui/Badge';
 import ProductForm from '../products/ProductForm';
 import { Plus, Edit, X, Eye, Search, XCircle, FileText, Copy } from 'lucide-react';
+import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
 
 interface PurchaseItem {
   id?: number;
@@ -172,6 +173,8 @@ export default function VendorPurchases() {
     });
   };
 
+  const purchaseSubmitLock = useSubmitLock();
+
   const createMutation = useMutation({
     mutationFn: (data: any) => purchasingApi.vendorPurchases.create(supplierId!, data),
     onSuccess: async (response) => {
@@ -196,6 +199,7 @@ export default function VendorPurchases() {
     onError: (error: any) => {
       alert(error?.response?.data?.message || 'Failed to create purchase');
     },
+    onSettled: () => purchaseSubmitLock.release(),
   });
 
   const updateMutation = useMutation({
@@ -224,6 +228,7 @@ export default function VendorPurchases() {
     onError: (error: any) => {
       alert(error?.response?.data?.message || 'Failed to update purchase');
     },
+    onSettled: () => purchaseSubmitLock.release(),
   });
 
   const cancelMutation = useMutation({
@@ -345,8 +350,16 @@ export default function VendorPurchases() {
     }, 0);
   };
 
+  const isSavingPurchase = isSubmitBlocked(
+    createMutation.isPending,
+    updateMutation.isPending,
+    purchaseSubmitLock.isLocked,
+  );
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isSavingPurchase) return;
     
     if (purchaseItems.length === 0) {
       alert('Please add at least one product to the purchase');
@@ -364,6 +377,8 @@ export default function VendorPurchases() {
 
     if (formData.bill_number) submitData.bill_number = formData.bill_number;
     if (formData.notes) submitData.notes = formData.notes;
+
+    if (!purchaseSubmitLock.tryAcquire()) return;
 
     if (editingPurchase) {
       updateMutation.mutate({ id: editingPurchase, data: submitData });
@@ -856,9 +871,10 @@ export default function VendorPurchases() {
                 </Button>
                 <Button 
                   type="submit" 
-                  disabled={createMutation.isPending || updateMutation.isPending || purchaseItems.length === 0}
+                  disabled={isSavingPurchase || purchaseItems.length === 0}
+                  loading={isSavingPurchase}
                 >
-                  {(createMutation.isPending || updateMutation.isPending) ? 'Saving...' : 'Save Purchase'}
+                  {(isSavingPurchase) ? 'Saving...' : 'Save Purchase'}
                 </Button>
               </div>
             </form>

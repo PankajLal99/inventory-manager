@@ -54,6 +54,8 @@ import {
   loadThermalPrintSettings,
   truncateThermalItemName,
 } from '../../utils/thermalPrintStyles';
+import { useGuardedAsync } from '../../hooks/useGuardedAsync';
+import { isSubmitBlocked } from '../../hooks/useSubmitLock';
 
 /** A4 width at 96dpi — fixed capture size for sharp images regardless of on-screen preview scale */
 const INVOICE_CAPTURE_WIDTH_PX = 794;
@@ -541,6 +543,8 @@ export default function InvoiceDetail() {
 
   const stores = storesData?.data || [];
 
+  const { runGuarded, isSubmitting: isCheckoutGuardActive } = useGuardedAsync();
+
   // Mutations - must be defined before any early returns
   const checkoutMutation = useMutation({
     mutationFn: (data: { invoice_type: 'cash' | 'upi' | 'pending' | 'mixed' | 'credit'; items: any[]; cash_amount?: number; upi_amount?: number }) => {
@@ -601,6 +605,12 @@ export default function InvoiceDetail() {
       alert(errorMsg);
     },
   });
+
+  const isCheckoutSubmitting = isSubmitBlocked(
+    isCheckoutGuardActive,
+    checkoutMutation.isPending,
+    markCreditMutation.isPending,
+  );
 
   // Finalize a pending replacement-return invoice (settlement only — no price editing)
   const finalizeReplacementMutation = useMutation({
@@ -1434,7 +1444,9 @@ export default function InvoiceDetail() {
     setShowCheckoutModal(true);
   };
 
-  const handleCheckoutSubmit = async () => {
+  const handleCheckoutSubmit = () => {
+    if (isCheckoutSubmitting) return;
+    runGuarded(async () => {
     // Refetch invoice to ensure we have the latest data (in case items were deleted)
     await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
 
@@ -1613,7 +1625,8 @@ export default function InvoiceDetail() {
       }
     }
 
-    checkoutMutation.mutate(checkoutData);
+    await checkoutMutation.mutateAsync(checkoutData);
+    });
   };
 
   const handleUpdateQuantity = (item: any, delta: number) => {
@@ -2309,7 +2322,8 @@ export default function InvoiceDetail() {
                   variant="primary"
                   onClick={handleCheckout}
                   className="w-full sm:w-auto sm:min-w-[160px]"
-                  disabled={checkoutMutation.isPending}
+                  disabled={isCheckoutSubmitting}
+                  loading={isCheckoutSubmitting}
                 >
                   <ShoppingCart className="h-4 w-4 mr-2" />
                   {checkoutMutation.isPending ? 'Processing...' : 'Checkout'}
@@ -5073,8 +5087,9 @@ export default function InvoiceDetail() {
               </Button>
               <Button
                 onClick={handleCheckoutSubmit}
+                loading={isCheckoutSubmitting}
                 disabled={
-                  checkoutMutation.isPending ||
+                  isCheckoutSubmitting ||
                   markCreditMutation.isPending ||
                   checkoutInvoiceType === 'credit' ||
                   (
@@ -5084,7 +5099,7 @@ export default function InvoiceDetail() {
                 }
                 className="w-full sm:w-auto"
               >
-                {checkoutMutation.isPending ? 'Processing...' : 'Complete Checkout'}
+                {isCheckoutSubmitting ? 'Processing...' : 'Complete Checkout'}
               </Button>
             </div>
             </>
