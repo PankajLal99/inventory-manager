@@ -239,67 +239,62 @@ export function buildThermalPrintCss(
 
   const watermarkBlock = options.includeWatermark
     ? `
+            body { position: relative; }
             .watermark {
-              position: fixed;
+              position: absolute;
               top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%) rotate(-45deg);
+              left: 0;
+              right: 0;
+              transform: translateY(-50%) rotate(-45deg);
               font-size: 60px;
               font-weight: bold;
               color: rgba(0, 0, 0, 0.08);
-              z-index: -1;
+              z-index: 0;
               pointer-events: none;
               white-space: nowrap;
               text-transform: uppercase;
               letter-spacing: 5px;
-              width: 100%;
               text-align: center;
-            }`
+            }
+            body > :not(.watermark) { position: relative; z-index: 1; }`
     : '';
 
   const watermarkPrintBlock = options.includeWatermark
     ? `
             .watermark {
-              position: fixed;
+              position: absolute;
               top: 50%;
-              left: 50%;
-              transform: translate(-50%, -50%) rotate(-45deg);
-              font-size: 60px;
-              font-weight: bold;
-              color: rgba(0, 0, 0, 0.08);
-              z-index: -1;
-              pointer-events: none;
-              white-space: nowrap;
-              text-transform: uppercase;
-              letter-spacing: 5px;
-              width: 100%;
-              text-align: center;
+              left: 0;
+              right: 0;
+              transform: translateY(-50%) rotate(-45deg);
+              print-color-adjust: exact;
+              -webkit-print-color-adjust: exact;
             }`
     : '';
 
   const paperWidthMm = settings.paperWidthMm;
-  const pageMarginMm = settings.pageMarginMm;
 
   return `
             * { margin: 0; padding: 0; box-sizing: border-box; }
             html {
               height: auto;
-              min-height: auto;
+              min-height: 0;
               overflow: visible;
             }
             @page {
-              size: ${paperWidthMm}mm auto;
-              margin: ${pageMarginMm}mm;
+              size: ${paperWidthMm}mm 2000mm;
+              margin: 0;
             }
             body {
               font-family: ${fontStack};
               font-size: ${settings.fontSizeBody}px;
               width: ${paperWidthIn}in;
               max-width: ${paperWidthIn}in;
-              min-height: auto;
+              min-height: 0;
               height: auto;
               overflow: visible;
-              padding: ${settings.contentPaddingPx}px;
+              margin: 0;
+              padding: ${settings.pageMarginMm}mm ${settings.contentPaddingPx}px;
               color: #000;
             }
             .header {
@@ -343,29 +338,22 @@ export function buildThermalPrintCss(
                 width: ${paperWidthIn}in !important;
                 max-width: ${paperWidthIn}in !important;
                 height: auto !important;
-                min-height: auto !important;
+                min-height: 0 !important;
                 max-height: none !important;
                 overflow: visible !important;
               }
               body {
-                padding: ${settings.contentPaddingPx}px;
-                margin: 0;
+                margin: 0 !important;
+                padding: ${settings.pageMarginMm}mm ${settings.contentPaddingPx}px !important;
               }
               .no-print { display: none; }
-              thead { display: table-header-group; }
-              tbody { display: table-row-group; }
-              tfoot { display: table-footer-group; }
               table {
                 page-break-inside: auto;
                 break-inside: auto;
               }
-              tr, .summary-row {
-                page-break-inside: avoid;
-                break-inside: avoid;
-              }
-              .header, .summary, .footer {
-                page-break-inside: avoid;
-                break-inside: avoid;
+              tr {
+                page-break-inside: auto;
+                break-inside: auto;
               }
               ${watermarkPrintBlock}
             }`;
@@ -445,7 +433,39 @@ export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): strin
       </html>`;
 }
 
-export function printThermalHtml(html: string): boolean {
+function pxToMm(px: number): number {
+  return (px / 96) * 25.4;
+}
+
+/** Match one @page to receipt content so Chrome does not add a trailing blank page. */
+export function applyThermalContinuousPageSize(
+  doc: Document,
+  paperWidthMm: number = loadThermalPrintSettings().paperWidthMm,
+): void {
+  const root = doc.documentElement;
+  const body = doc.body;
+  if (!body) return;
+
+  const contentHeightPx = Math.max(
+    body.scrollHeight,
+    body.offsetHeight,
+    root.scrollHeight,
+    root.offsetHeight,
+  );
+  const contentHeightMm = Math.ceil(pxToMm(contentHeightPx)) + 2;
+
+  const styleEl = doc.createElement('style');
+  styleEl.setAttribute('data-thermal-page-size', 'true');
+  styleEl.textContent = `
+    @page {
+      size: ${paperWidthMm}mm ${contentHeightMm}mm;
+      margin: 0;
+    }
+  `;
+  doc.head.appendChild(styleEl);
+}
+
+export function printThermalHtml(html: string, paperWidthMm?: number): boolean {
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
     alert('Please allow popups to print the test receipt');
@@ -456,7 +476,8 @@ export function printThermalHtml(html: string): boolean {
   printWindow.document.close();
 
   const triggerPrint = () => {
-    // Allow layout to settle so long receipts measure full height before printing.
+    applyThermalContinuousPageSize(printWindow.document, paperWidthMm);
+    // Allow layout to settle after @page override before opening print preview.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         printWindow.print();
