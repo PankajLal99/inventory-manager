@@ -282,7 +282,7 @@ export function buildThermalPrintCss(
               overflow: visible;
             }
             @page {
-              size: ${paperWidthMm}mm 2000mm;
+              size: ${paperWidthMm}mm auto;
               margin: 0;
             }
             body {
@@ -334,6 +334,10 @@ export function buildThermalPrintCss(
             .footer { margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: ${settings.fontSizeFooter}px; }
             ${watermarkBlock}
             @media print {
+              @page {
+                size: ${paperWidthMm}mm auto;
+                margin: 0;
+              }
               html, body {
                 width: ${paperWidthIn}in !important;
                 max-width: ${paperWidthIn}in !important;
@@ -433,39 +437,7 @@ export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): strin
       </html>`;
 }
 
-function pxToMm(px: number): number {
-  return (px / 96) * 25.4;
-}
-
-/** Match one @page to receipt content so Chrome does not add a trailing blank page. */
-export function applyThermalContinuousPageSize(
-  doc: Document,
-  paperWidthMm: number = loadThermalPrintSettings().paperWidthMm,
-): void {
-  const root = doc.documentElement;
-  const body = doc.body;
-  if (!body) return;
-
-  const contentHeightPx = Math.max(
-    body.scrollHeight,
-    body.offsetHeight,
-    root.scrollHeight,
-    root.offsetHeight,
-  );
-  const contentHeightMm = Math.ceil(pxToMm(contentHeightPx)) + 2;
-
-  const styleEl = doc.createElement('style');
-  styleEl.setAttribute('data-thermal-page-size', 'true');
-  styleEl.textContent = `
-    @page {
-      size: ${paperWidthMm}mm ${contentHeightMm}mm;
-      margin: 0;
-    }
-  `;
-  doc.head.appendChild(styleEl);
-}
-
-export function printThermalHtml(html: string, paperWidthMm?: number): boolean {
+export function printThermalHtml(html: string): boolean {
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
     alert('Please allow popups to print the test receipt');
@@ -476,8 +448,6 @@ export function printThermalHtml(html: string, paperWidthMm?: number): boolean {
   printWindow.document.close();
 
   const triggerPrint = () => {
-    applyThermalContinuousPageSize(printWindow.document, paperWidthMm);
-    // Allow layout to settle after @page override before opening print preview.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         printWindow.print();
