@@ -209,6 +209,11 @@ export default function Payments() {
     });
   };
 
+  const invalidateCreditLedgerQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+    queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+  };
+
   const createPaymentMutation = useMutation({
     mutationFn: (payload: any) => customersApi.ledger.entries.create(payload),
     onSuccess: async () => {
@@ -216,6 +221,7 @@ export default function Payments() {
       setShowAddPaymentModal(false);
       resetForm();
       await queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'] });
+      invalidateCreditLedgerQueries();
     },
     onError: (err: any) => {
       toast(err?.response?.data?.error || 'Failed to add payment', 'error');
@@ -228,6 +234,7 @@ export default function Payments() {
       toast('Payment updated successfully', 'success');
       setEditingEntry(null);
       await queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'] });
+      invalidateCreditLedgerQueries();
     },
     onError: (err: any) => {
       toast(err?.response?.data?.error || 'Failed to update payment', 'error');
@@ -240,6 +247,7 @@ export default function Payments() {
       toast('Payment deleted successfully', 'success');
       setDeletingEntry(null);
       await queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'] });
+      invalidateCreditLedgerQueries();
     },
     onError: (err: any) => {
       toast(err?.response?.data?.error || 'Failed to delete payment', 'error');
@@ -274,6 +282,7 @@ export default function Payments() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'], refetchType: 'none' });
+      invalidateCreditLedgerQueries();
     },
   });
 

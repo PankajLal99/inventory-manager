@@ -276,7 +276,8 @@ export default function Layout() {
     {
       title: 'Financial',
       items: [
-        { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        // { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/credit-ledger', icon: BookOpen, label: 'Credit Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
         { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },

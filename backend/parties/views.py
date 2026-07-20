@@ -12,6 +12,7 @@ from decimal import Decimal
 from .models import Customer, CustomerGroup, Supplier, LedgerEntry, PersonalCustomer, PersonalLedgerEntry, InternalCustomer, InternalLedgerEntry, PaymentReminder
 from .serializers import CustomerSerializer, CustomerGroupSerializer, SupplierSerializer, LedgerEntrySerializer, PersonalCustomerSerializer, PersonalLedgerEntrySerializer, InternalCustomerSerializer, InternalLedgerEntrySerializer, PaymentReminderSerializer
 from .internal_ledger_utils import resolve_invoices_for_internal_entries
+from backend.credit.ledger_sync import sync_main_ledger_payment, unsync_main_ledger_payment
 
 INTERNAL_LEDGER_GROUP_NAME = 'MTSHOP'
 
@@ -783,6 +784,8 @@ def ledger_entry_list_create(request):
             # Invoice-linked entries always affect ledger balance.
             if _entry_affects_customer_balance(entry):
                 _apply_ledger_entry_balance(entry)
+            if entry.invoice_id is None and entry.entry_type == 'credit':
+                sync_main_ledger_payment(entry, request.user)
             
             return Response(LedgerEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -865,11 +868,15 @@ def ledger_entry_retrieve_update_destroy(request, entry_id):
             entry = serializer.save()
             if _entry_affects_customer_balance(entry):
                 _apply_ledger_entry_balance(entry)
+            if entry.invoice_id is None and entry.entry_type == 'credit':
+                sync_main_ledger_payment(entry, request.user)
             return Response(LedgerEntrySerializer(entry).data)
         if old_affects_balance:
             _apply_ledger_entry_balance(entry)  # Restore on validation error
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     if request.method == 'DELETE':
+        if entry.invoice_id is None and entry.entry_type == 'credit':
+            unsync_main_ledger_payment(entry)
         if _entry_affects_customer_balance(entry):
             _reverse_ledger_entry_balance(entry)
         entry.delete()
