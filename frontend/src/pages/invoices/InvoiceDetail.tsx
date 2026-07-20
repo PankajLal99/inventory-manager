@@ -52,6 +52,7 @@ import {
   buildThermalReceiptHeaderHtml,
   buildThermalReceiptFooterHtml,
   loadThermalPrintSettings,
+  printThermalHtml,
   truncateThermalItemName,
 } from '../../utils/thermalPrintStyles';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
@@ -2210,21 +2211,7 @@ export default function InvoiceDetail() {
     if (!inv) return;
 
     const thermalHTML = generateThermalInvoiceHTML(inv);
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('Please allow popups to print invoice');
-      return;
-    }
-
-    printWindow.document.write(thermalHTML);
-    printWindow.document.close();
-
-    // Wait for content to load, then trigger print
-    printWindow.onload = () => {
-      setTimeout(() => {
-        printWindow.print();
-      }, 250);
-    };
+    printThermalHtml(thermalHTML);
   };
 
   return (

@@ -235,14 +235,12 @@ export function buildThermalPrintCss(
   options: { includeWatermark?: boolean } = {},
 ): string {
   const paperWidthIn = mmToIn(settings.paperWidthMm);
-  const pageMarginIn = mmToIn(settings.pageMarginMm);
   const fontStack = resolveThermalFont(settings.fontFamily, settings.fontFamily);
 
   const watermarkBlock = options.includeWatermark
     ? `
-            body { position: relative; }
             .watermark {
-              position: absolute;
+              position: fixed;
               top: 50%;
               left: 50%;
               transform: translate(-50%, -50%) rotate(-45deg);
@@ -262,7 +260,7 @@ export function buildThermalPrintCss(
   const watermarkPrintBlock = options.includeWatermark
     ? `
             .watermark {
-              position: absolute;
+              position: fixed;
               top: 50%;
               left: 50%;
               transform: translate(-50%, -50%) rotate(-45deg);
@@ -279,14 +277,28 @@ export function buildThermalPrintCss(
             }`
     : '';
 
+  const paperWidthMm = settings.paperWidthMm;
+  const pageMarginMm = settings.pageMarginMm;
+
   return `
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            @page { size: ${paperWidthIn}in auto; margin: ${pageMarginIn}in; }
+            html {
+              height: auto;
+              min-height: auto;
+              overflow: visible;
+            }
+            @page {
+              size: ${paperWidthMm}mm auto;
+              margin: ${pageMarginMm}mm;
+            }
             body {
               font-family: ${fontStack};
               font-size: ${settings.fontSizeBody}px;
               width: ${paperWidthIn}in;
               max-width: ${paperWidthIn}in;
+              min-height: auto;
+              height: auto;
+              overflow: visible;
               padding: ${settings.contentPaddingPx}px;
               color: #000;
             }
@@ -302,9 +314,23 @@ export function buildThermalPrintCss(
             .sub-header { color: #000; }
             .info { margin-bottom: 6px; font-size: ${settings.fontSizeSmall}px; }
             .info-row { margin: 2px 0; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: ${settings.fontSizeTable}px; }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 6px;
+              font-size: ${settings.fontSizeTable}px;
+              font-weight: bold;
+              table-layout: fixed;
+            }
             th { padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
-            td { padding: 2px; border-bottom: 1px dotted #ccc; }
+            td {
+              padding: 2px;
+              border-bottom: 1px dotted #ccc;
+              vertical-align: top;
+              font-weight: bold;
+              word-wrap: break-word;
+              overflow-wrap: anywhere;
+            }
             .text-right { text-align: right; }
             .text-center { text-align: center; }
             .summary { margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
@@ -313,8 +339,34 @@ export function buildThermalPrintCss(
             .footer { margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: ${settings.fontSizeFooter}px; }
             ${watermarkBlock}
             @media print {
-              body { padding: ${settings.contentPaddingPx}px; margin: 0;${options.includeWatermark ? ' position: relative;' : ''} }
+              html, body {
+                width: ${paperWidthIn}in !important;
+                max-width: ${paperWidthIn}in !important;
+                height: auto !important;
+                min-height: auto !important;
+                max-height: none !important;
+                overflow: visible !important;
+              }
+              body {
+                padding: ${settings.contentPaddingPx}px;
+                margin: 0;
+              }
               .no-print { display: none; }
+              thead { display: table-header-group; }
+              tbody { display: table-row-group; }
+              tfoot { display: table-footer-group; }
+              table {
+                page-break-inside: auto;
+                break-inside: auto;
+              }
+              tr, .summary-row {
+                page-break-inside: avoid;
+                break-inside: avoid;
+              }
+              .header, .summary, .footer {
+                page-break-inside: avoid;
+                break-inside: avoid;
+              }
               ${watermarkPrintBlock}
             }`;
 }
@@ -403,11 +455,29 @@ export function printThermalHtml(html: string): boolean {
   printWindow.document.write(html);
   printWindow.document.close();
 
-  printWindow.onload = () => {
-    setTimeout(() => {
-      printWindow.print();
-    }, 250);
+  const triggerPrint = () => {
+    // Allow layout to settle so long receipts measure full height before printing.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        printWindow.print();
+      });
+    });
   };
+
+  const schedulePrint = () => {
+    const doc = printWindow.document;
+    if (doc.fonts?.ready) {
+      doc.fonts.ready.then(triggerPrint).catch(triggerPrint);
+      return;
+    }
+    setTimeout(triggerPrint, 300);
+  };
+
+  if (printWindow.document.readyState === 'complete') {
+    schedulePrint();
+  } else {
+    printWindow.onload = schedulePrint;
+  }
 
   return true;
 }

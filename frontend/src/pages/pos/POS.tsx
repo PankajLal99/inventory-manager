@@ -41,6 +41,7 @@ import {
   buildThermalReceiptHeaderHtml,
   buildThermalReceiptFooterHtml,
   loadThermalPrintSettings,
+  printThermalHtml,
   truncateThermalItemName,
 } from '../../utils/thermalPrintStyles';
 import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
@@ -2725,23 +2726,7 @@ export default function POS() {
 
         // Generate thermal print HTML
         const thermalHTML = generateThermalInvoiceHTML(invoiceData);
-
-        // Open print window
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-          alert('Please allow popups to print invoice');
-          return;
-        }
-
-        printWindow.document.write(thermalHTML);
-        printWindow.document.close();
-
-        // Wait for content to load, then trigger print
-        printWindow.onload = () => {
-          setTimeout(() => {
-            printWindow.print();
-          }, 250);
-        };
+        printThermalHtml(thermalHTML);
 
         // Also handle the normal checkout success logic
         queryClient.invalidateQueries({ queryKey: ['pos/invoices'] });
