@@ -184,9 +184,9 @@ export default function CreditInvoices() {
         </div>
 
         {showFilters ? (
-          <div className="p-4 border-b border-gray-100 overflow-x-auto">
-            <div className="flex items-end gap-3 min-w-[920px] xl:min-w-0 xl:w-full">
-              <div className="relative flex-1 min-w-[200px]">
+          <div className="p-4 border-b border-gray-100 overflow-visible">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-12 gap-4 items-end">
+              <div className="relative sm:col-span-2 xl:col-span-4">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
                 <Input
                   type="text"
@@ -199,7 +199,7 @@ export default function CreditInvoices() {
                   className="pl-10 h-10"
                 />
               </div>
-              <div className="w-36 shrink-0">
+              <div className="xl:col-span-2">
                 <Select
                   label="Status"
                   value={status}
@@ -214,7 +214,7 @@ export default function CreditInvoices() {
                   <option value="void">Void</option>
                 </Select>
               </div>
-              <div className="w-44 shrink-0">
+              <div className="xl:col-span-2">
                 <Select
                   label="Customer Group"
                   value={customerGroup}
@@ -232,7 +232,7 @@ export default function CreditInvoices() {
                   ))}
                 </Select>
               </div>
-              <div className="w-56 shrink-0">
+              <div className="sm:col-span-2 xl:col-span-3 min-w-0">
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Date range</label>
                 <DateRangeSelector
                   preset={datePreset}
@@ -246,13 +246,15 @@ export default function CreditInvoices() {
                 />
               </div>
               {hasActiveFilters ? (
-                <Button
-                  variant="outline"
-                  onClick={handleResetFilters}
-                  className="shrink-0 h-10 mb-0.5"
-                >
-                  Reset
-                </Button>
+                <div className="sm:col-span-2 xl:col-span-1 flex xl:justify-end">
+                  <Button
+                    variant="outline"
+                    onClick={handleResetFilters}
+                    className="h-10 w-full xl:w-auto"
+                  >
+                    Reset
+                  </Button>
+                </div>
               ) : null}
             </div>
           </div>
