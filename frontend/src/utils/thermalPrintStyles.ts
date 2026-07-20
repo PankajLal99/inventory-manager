@@ -57,12 +57,12 @@ export const THERMAL_79MM_ROLL_SETTINGS: Partial<ThermalPrintSettings> = {
   fontSizeBody: 9,
   fontSizeHeader: 13,
   fontSizeSmall: 8,
-  fontSizeTable: 8,
+  fontSizeTable: 9,
   fontSizeTotal: 10,
   fontSizeFooter: 7,
   shopNameFontSize: 14,
   subHeaderFontSize: 8,
-  itemNameMaxChars: 16,
+  itemNameMaxChars: 0,
 };
 
 export const THERMAL_ROLL_SPEC_GUIDE = [
@@ -89,10 +89,10 @@ export const DEFAULT_THERMAL_PRINT_SETTINGS: ThermalPrintSettings = {
   fontSizeBody: 9,
   fontSizeHeader: 13,
   fontSizeSmall: 8,
-  fontSizeTable: 8,
+  fontSizeTable: 9,
   fontSizeTotal: 10,
   fontSizeFooter: 7,
-  itemNameMaxChars: 16,
+  itemNameMaxChars: 0,
 
   shopName: 'MANISH TRADERS',
   shopNameBold: true,
@@ -160,8 +160,23 @@ export function resolveThermalFont(preferred: string, fallback: string): string 
 
 export function truncateThermalItemName(name: string, settings?: ThermalPrintSettings): string {
   const max = settings?.itemNameMaxChars ?? DEFAULT_THERMAL_PRINT_SETTINGS.itemNameMaxChars;
+  if (max <= 0) return name;
   return name.substring(0, max);
 }
+
+export function formatThermalItemName(name: string, settings?: ThermalPrintSettings): string {
+  return escapeThermalHtml(truncateThermalItemName(name, settings));
+}
+
+export const THERMAL_ITEMS_TABLE_HEAD_HTML = `
+            <thead>
+              <tr>
+                <th class="col-item">Item</th>
+                <th class="col-qty text-right">Qty</th>
+                <th class="col-price text-right">Price</th>
+                <th class="col-total text-right">Total</th>
+              </tr>
+            </thead>`;
 
 export interface ThermalReceiptMeta {
   invoiceNumber?: string;
@@ -314,15 +329,58 @@ export function buildThermalPrintCss(
               border-collapse: collapse;
               margin-bottom: 6px;
               font-size: ${settings.fontSizeTable}px;
-              font-weight: bold;
               table-layout: fixed;
+            }
+            table.items-table {
+              width: 100%;
+              font-weight: 900;
+            }
+            table.items-table thead th {
+              padding: 3px 1px;
+              text-align: left;
+              border-bottom: 1px dashed #000;
+              font-weight: 900;
+              -webkit-text-stroke: 0.2px #000;
+            }
+            table.items-table tbody td {
+              padding: 2px 1px;
+              border-bottom: 1px dotted #ccc;
+              vertical-align: top;
+              font-weight: 900;
+              line-height: 1.2;
+              -webkit-text-stroke: 0.2px #000;
+              word-wrap: break-word;
+              overflow-wrap: anywhere;
+            }
+            table.items-table .col-item {
+              width: 44%;
+              max-width: 44%;
+            }
+            table.items-table .col-qty {
+              width: 9%;
+              white-space: nowrap;
+            }
+            table.items-table .col-price {
+              width: 23%;
+              white-space: nowrap;
+            }
+            table.items-table .col-total {
+              width: 24%;
+              white-space: nowrap;
+            }
+            table.items-table tr.sub-row td {
+              font-weight: normal;
+              font-size: ${settings.fontSizeSmall}px;
+              -webkit-text-stroke: 0;
+              padding-top: 0;
+              padding-bottom: 4px;
+              line-height: 1.25;
             }
             th { padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
             td {
               padding: 2px;
               border-bottom: 1px dotted #ccc;
               vertical-align: top;
-              font-weight: bold;
               word-wrap: break-word;
               overflow-wrap: anywhere;
             }
@@ -351,6 +409,17 @@ export function buildThermalPrintCss(
                 padding: ${settings.pageMarginMm}mm ${settings.contentPaddingPx}px !important;
               }
               .no-print { display: none; }
+              table.items-table tbody td,
+              table.items-table thead th {
+                font-weight: 900 !important;
+                -webkit-text-stroke: 0.2px #000;
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+              }
+              table.items-table tr.sub-row td {
+                font-weight: normal !important;
+                -webkit-text-stroke: 0;
+              }
               table {
                 page-break-inside: auto;
                 break-inside: auto;
@@ -388,10 +457,10 @@ export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): strin
   const itemRows = THERMAL_TEST_PRODUCTS.map(
     (item) => `
                 <tr>
-                  <td>${escapeThermalHtml(truncateThermalItemName(item.name, settings))}</td>
-                  <td class="text-right">${item.qty}</td>
-                  <td class="text-right">₹${formatThermalAmount(item.unitPrice)}</td>
-                  <td class="text-right">₹${formatThermalAmount(item.lineTotal)}</td>
+                  <td class="col-item">${escapeThermalHtml(truncateThermalItemName(item.name, settings))}</td>
+                  <td class="col-qty text-right">${item.qty}</td>
+                  <td class="col-price text-right">₹${formatThermalAmount(item.unitPrice)}</td>
+                  <td class="col-total text-right">₹${formatThermalAmount(item.lineTotal)}</td>
                 </tr>`,
   ).join('');
 
@@ -410,15 +479,8 @@ export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): strin
             customerName: 'Test Customer',
             formatDate: () => formatDate(now),
           })}
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th class="text-right">Qty</th>
-                <th class="text-right">Price</th>
-                <th class="text-right">Total</th>
-              </tr>
-            </thead>
+          <table class="items-table">
+            ${THERMAL_ITEMS_TABLE_HEAD_HTML}
             <tbody>${itemRows}
             </tbody>
           </table>

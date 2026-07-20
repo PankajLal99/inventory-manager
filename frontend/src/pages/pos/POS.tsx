@@ -40,9 +40,10 @@ import {
   buildThermalPrintCss,
   buildThermalReceiptHeaderHtml,
   buildThermalReceiptFooterHtml,
+  formatThermalItemName,
   loadThermalPrintSettings,
   printThermalHtml,
-  truncateThermalItemName,
+  THERMAL_ITEMS_TABLE_HEAD_HTML,
 } from '../../utils/thermalPrintStyles';
 import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
 
@@ -2639,22 +2640,15 @@ export default function POS() {
             customerName: invoice.customer_name,
             formatDate,
           })}
-          <table>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th class="text-right">Qty</th>
-                <th class="text-right">Price</th>
-                <th class="text-right">Total</th>
-              </tr>
-            </thead>
+          <table class="items-table">
+            ${THERMAL_ITEMS_TABLE_HEAD_HTML}
             <tbody>
               ${invoice.items && Array.isArray(invoice.items) ? invoice.items.map((item: any) => `
                 <tr>
-                  <td>${truncateThermalItemName(item.product_name || '-', thermalSettings)}</td>
-                  <td class="text-right">${item.quantity}</td>
-                  <td class="text-right">₹{formatNumber(item.manual_unit_price ?? '0')}</td>
-                  <td class="text-right">₹{formatNumber(item.line_total || '0')}</td>
+                  <td class="col-item">${formatThermalItemName(item.product_name || '-', thermalSettings)}</td>
+                  <td class="col-qty text-right">${item.quantity}</td>
+                  <td class="col-price text-right">₹{formatNumber(item.manual_unit_price ?? '0')}</td>
+                  <td class="col-total text-right">₹{formatNumber(item.line_total || '0')}</td>
                 </tr>
               `).join('') : '<tr><td colspan="4">No items</td></tr>'}
             </tbody>

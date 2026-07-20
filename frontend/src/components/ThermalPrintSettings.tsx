@@ -15,6 +15,7 @@ import {
   saveThermalPrintSettings,
   resolveThermalFont,
   printThermalTestReceipt,
+  truncateThermalItemName,
 } from '../utils/thermalPrintStyles';
 
 interface ThermalPrintSettingsModalProps {
@@ -221,7 +222,7 @@ function ThermalReceiptPreview({ settings }: { settings: ThermalPrintSettings })
             </thead>
             <tbody>
               <tr>
-                <td>{'Sample Product'.substring(0, settings.itemNameMaxChars)}</td>
+                <td>{truncateThermalItemName('Sample Product', settings)}</td>
                 <td style={{ textAlign: 'right' }}>2</td>
                 <td style={{ textAlign: 'right' }}>₹500</td>
               </tr>
@@ -583,8 +584,8 @@ export default function ThermalPrintSettingsModal({ isOpen, onClose }: ThermalPr
             </Select>
             <NumberField
               label="Item Name Max Characters"
-              hint="Longer names are truncated on thermal receipts"
-              min={10}
+              hint="0 = full name using available width (wraps). Set a limit to truncate."
+              min={0}
               max={40}
               step={1}
               value={settings.itemNameMaxChars}

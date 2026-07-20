@@ -51,9 +51,10 @@ import {
   buildThermalPrintCss,
   buildThermalReceiptHeaderHtml,
   buildThermalReceiptFooterHtml,
+  formatThermalItemName,
   loadThermalPrintSettings,
   printThermalHtml,
-  truncateThermalItemName,
+  THERMAL_ITEMS_TABLE_HEAD_HTML,
 } from '../../utils/thermalPrintStyles';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import { isSubmitBlocked } from '../../hooks/useSubmitLock';
@@ -2057,15 +2058,8 @@ export default function InvoiceDetail() {
           customerName: invoice.customer_name,
           formatDate,
         })}
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th class="text-right">Qty</th>
-              <th class="text-right">Price</th>
-              <th class="text-right">Total</th>
-            </tr>
-          </thead>
+        <table class="items-table">
+          ${THERMAL_ITEMS_TABLE_HEAD_HTML}
           <tbody>
             ${printableItems.length > 0 ? (() => {
         // Group items by product name AND brand for thermal layout
@@ -2113,7 +2107,7 @@ export default function InvoiceDetail() {
           const productDisplay = group.brand
             ? `${group.name} (${group.brand})`
             : group.name;
-          const displayText = truncateThermalItemName(productDisplay, thermalSettings);
+          const displayText = formatThermalItemName(productDisplay, thermalSettings);
           const productColor = getProductNameColor(group.name);
           const productColorStyle = productColor ? ` style="color: ${productColor};"` : '';
 
@@ -2121,7 +2115,7 @@ export default function InvoiceDetail() {
             .map((item: any) => {
               const note = formatExchangeSnapshotNote(exchangeSnapshotForItem(invoice, item.id));
               if (!note) return '';
-              return `<tr><td colspan="4" style="font-size:8px;padding-top:0;padding-bottom:4px;line-height:1.25;">${escapeHtml(note)}</td></tr>`;
+              return `<tr class="sub-row"><td colspan="4">${escapeHtml(note)}</td></tr>`;
             })
             .join('');
           const replacementRows = group.items
@@ -2130,16 +2124,16 @@ export default function InvoiceDetail() {
               if (!rep) return '';
               const tag = rep?.return_tag ? escapeHtml(formatTradeInReturnTag(rep.return_tag)) : '—';
               const ref = rep?.invoice_number || rep?.invoice_id || '—';
-              return `<tr><td colspan="4" style="font-size:8px;padding-top:0;padding-bottom:4px;line-height:1.25;color:#065f46;">Replacement ${escapeHtml(String(ref))} · ${tag}</td></tr>`;
+              return `<tr class="sub-row"><td colspan="4" style="color:#065f46;">Replacement ${escapeHtml(String(ref))} · ${tag}</td></tr>`;
             })
             .join('');
 
           return `
                     <tr>
-                      <td${productColorStyle}>${displayText}</td>
-                      <td class="text-right">${group.totalQuantity}</td>
-                      <td class="text-right">₹${formatNumber(group.avgPrice)}</td>
-                      <td class="text-right">₹${formatNumber(group.totalAmount)}</td>
+                      <td class="col-item"${productColorStyle}>${displayText}</td>
+                      <td class="col-qty text-right">${group.totalQuantity}</td>
+                      <td class="col-price text-right">₹${formatNumber(group.avgPrice)}</td>
+                      <td class="col-total text-right">₹${formatNumber(group.totalAmount)}</td>
                 </tr>
                   ${exchangeRows}${replacementRows}`;
         }).join('');
