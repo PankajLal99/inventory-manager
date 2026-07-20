@@ -47,6 +47,13 @@ import CartLineScannedTime from '../../components/pos/CartLineScannedTime';
 import { addScannedBarcodeToInvoice } from '../../lib/scanningQueue';
 import InvoiceTagEditor, { InvoiceTagChip } from '../../components/invoices/InvoiceTagEditor';
 import type { InvoiceTag } from '../../lib/invoiceTags';
+import {
+  buildThermalPrintCss,
+  buildThermalReceiptHeaderHtml,
+  buildThermalReceiptFooterHtml,
+  loadThermalPrintSettings,
+  truncateThermalItemName,
+} from '../../utils/thermalPrintStyles';
 
 /** A4 width at 96dpi — fixed capture size for sharp images regardless of on-screen preview scale */
 const INVOICE_CAPTURE_WIDTH_PX = 794;
@@ -2000,6 +2007,7 @@ export default function InvoiceDetail() {
   };
 
   const generateThermalInvoiceHTML = (invoice: any) => {
+    const thermalSettings = loadThermalPrintSettings();
     const printableItems = Array.isArray(invoice?.items)
       ? invoice.items.filter((item: any) => !item?.replacement_ref)
       : [];
@@ -2021,89 +2029,20 @@ export default function InvoiceDetail() {
       <head>
         <title>Invoice ${invoice.invoice_number || invoice.id}</title>
         <meta charset="UTF-8">
-          <style>
-            * {margin: 0; padding: 0; box-sizing: border-box; }
-            @page {size: 4in auto; margin: 0.1in; }
-            body {
-              font-family: 'Courier New', monospace;
-            font-size: 10px;
-            width: 4in;
-            max-width: 4in;
-            padding: 5px;
-            color: #000;
-            }
-            .header {
-              text-align: center;
-            margin-bottom: 8px;
-            border-bottom: 1px dashed #000;
-            padding-bottom: 5px; 
-            }
-            .header h1 {font-size: 14px; margin-bottom: 3px; font-weight: bold; }
-            .header p {font-size: 9px; margin: 1px 0; }
-            .info {margin-bottom: 6px; font-size: 9px; }
-            .info-row {margin: 2px 0; }
-            table {width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9px; }
-            th {padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
-            td {padding: 2px; border-bottom: 1px dotted #ccc; }
-            .text-right {text-align: right; }
-            .text-center {text-align: center; }
-            .summary {margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
-            .summary-row {display: flex; justify-content: space-between; padding: 2px 0; font-size: 9px; }
-            .summary-total {border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; font-weight: bold; font-size: 11px; }
-            .footer {margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: 8px; }
-            /* Watermark - positioned relative to content area */
-            body {position: relative; }
-            .watermark {
-              position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-45deg);
-            font-size: 60px;
-            font-weight: bold;
-            color: rgba(0, 0, 0, 0.08);
-            z-index: -1;
-            pointer-events: none;
-            white-space: nowrap;
-            text-transform: uppercase;
-            letter-spacing: 5px;
-            width: 100%;
-            text-align: center;
-            }
-            @media print {
-              body {padding: 0; margin: 0; position: relative; }
-            .no-print {display: none; }
-            .watermark {
-              position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-45deg);
-            font-size: 60px;
-            font-weight: bold;
-            color: rgba(0, 0, 0, 0.08);
-            z-index: -1;
-            pointer-events: none;
-            white-space: nowrap;
-            text-transform: uppercase;
-            letter-spacing: 5px;
-            width: 100%;
-            text-align: center;
-              }
-            }
-          </style>
+          <style>${buildThermalPrintCss(thermalSettings, { includeWatermark: true })}</style>
       </head>
       <body>
         <!-- Watermark -->
         <div class="watermark">${(invoice.invoice_type || 'sale').toUpperCase()}</div>
 
-        <div class="header">
-          <h1>INVOICE</h1>
-          <p>${invoice.invoice_number || `#${invoice.id}`}</p>
-          <p>${formatDate(invoice.created_at)}</p>
-        </div>
-        <div class="info">
-          <div class="info-row"><strong>Store:</strong> ${invoice.store_name || '-'}</div>
-          <div class="info-row"><strong>Customer:</strong> ${invoice.customer_name || 'Walk-in Customer'}</div>
-        </div>
+        ${buildThermalReceiptHeaderHtml(thermalSettings, {
+          invoiceNumber: invoice.invoice_number,
+          invoiceId: invoice.id,
+          createdAt: invoice.created_at,
+          storeName: invoice.store_name,
+          customerName: invoice.customer_name,
+          formatDate,
+        })}
         <table>
           <thead>
             <tr>
@@ -2160,8 +2099,7 @@ export default function InvoiceDetail() {
           const productDisplay = group.brand
             ? `${group.name} (${group.brand})`
             : group.name;
-          // Truncate for thermal printer (max 20 chars)
-          const displayText = productDisplay.substring(0, 20);
+          const displayText = truncateThermalItemName(productDisplay, thermalSettings);
           const productColor = getProductNameColor(group.name);
           const productColorStyle = productColor ? ` style="color: ${productColor};"` : '';
 
@@ -2249,9 +2187,7 @@ export default function InvoiceDetail() {
             </div>
             ` : ''}
         </div>
-        <div class="footer">
-          <p>Thank you for your business!</p>
-        </div>
+        ${buildThermalReceiptFooterHtml(thermalSettings)}
       </body>
     </html>
 `;

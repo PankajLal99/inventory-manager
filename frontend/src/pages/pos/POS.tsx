@@ -36,6 +36,13 @@ import PosTradeInCartModal, {
   posTradeInPayload,
   type PosTradeInLine,
 } from './PosTradeInCartModal';
+import {
+  buildThermalPrintCss,
+  buildThermalReceiptHeaderHtml,
+  buildThermalReceiptFooterHtml,
+  loadThermalPrintSettings,
+  truncateThermalItemName,
+} from '../../utils/thermalPrintStyles';
 
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
@@ -2594,6 +2601,7 @@ export default function POS() {
 
 
   const generateThermalInvoiceHTML = (invoice: any) => {
+    const thermalSettings = loadThermalPrintSettings();
 
     const formatDate = (dateString: string) => {
       const date = new Date(dateString);
@@ -2612,52 +2620,17 @@ export default function POS() {
         <head>
           <title>Invoice ${invoice.invoice_number || invoice.id}</title>
           <meta charset="UTF-8">
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            @page { size: 4in auto; margin: 0.1in; }
-            body { 
-              font-family: 'Courier New', monospace; 
-              font-size: 10px;
-              width: 4in;
-              max-width: 4in;
-              padding: 5px;
-              color: #000;
-            }
-            .header { 
-              text-align: center; 
-              margin-bottom: 8px; 
-              border-bottom: 1px dashed #000; 
-              padding-bottom: 5px; 
-            }
-            .header h1 { font-size: 14px; margin-bottom: 3px; font-weight: bold; }
-            .header p { font-size: 9px; margin: 1px 0; }
-            .info { margin-bottom: 6px; font-size: 9px; }
-            .info-row { margin: 2px 0; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9px; }
-            th { padding: 3px 2px; text-align: left; border-bottom: 1px dashed #000; font-weight: bold; }
-            td { padding: 2px; border-bottom: 1px dotted #ccc; }
-            .text-right { text-align: right; }
-            .text-center { text-align: center; }
-            .summary { margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
-            .summary-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 9px; }
-            .summary-total { border-top: 1px solid #000; margin-top: 4px; padding-top: 4px; font-weight: bold; font-size: 11px; }
-            .footer { margin-top: 8px; padding-top: 4px; border-top: 1px dashed #000; text-align: center; font-size: 8px; }
-            @media print {
-              body { padding: 0; margin: 0; }
-              .no-print { display: none; }
-            }
-          </style>
+          <style>${buildThermalPrintCss(thermalSettings)}</style>
         </head>
         <body>
-          <div class="header">
-            <h1>INVOICE</h1>
-            <p>${invoice.invoice_number || `#${invoice.id}`}</p>
-            <p>${formatDate(invoice.created_at)}</p>
-          </div>
-          <div class="info">
-            <div class="info-row"><strong>Store:</strong> ${invoice.store_name || '-'}</div>
-            <div class="info-row"><strong>Customer:</strong> ${invoice.customer_name || 'Walk-in Customer'}</div>
-          </div>
+          ${buildThermalReceiptHeaderHtml(thermalSettings, {
+            invoiceNumber: invoice.invoice_number,
+            invoiceId: invoice.id,
+            createdAt: invoice.created_at,
+            storeName: invoice.store_name,
+            customerName: invoice.customer_name,
+            formatDate,
+          })}
           <table>
             <thead>
               <tr>
@@ -2670,7 +2643,7 @@ export default function POS() {
             <tbody>
               ${invoice.items && Array.isArray(invoice.items) ? invoice.items.map((item: any) => `
                 <tr>
-                  <td>${(item.product_name || '-').substring(0, 20)}</td>
+                  <td>${truncateThermalItemName(item.product_name || '-', thermalSettings)}</td>
                   <td class="text-right">${item.quantity}</td>
                   <td class="text-right">₹{formatNumber(item.manual_unit_price ?? '0')}</td>
                   <td class="text-right">₹{formatNumber(item.line_total || '0')}</td>
@@ -2718,9 +2691,7 @@ export default function POS() {
             </div>
             ` : ''}
           </div>
-          <div class="footer">
-            <p>Thank you for your business!</p>
-          </div>
+          ${buildThermalReceiptFooterHtml(thermalSettings)}
         </body>
       </html>
     `;
