@@ -318,3 +318,101 @@ export function buildThermalPrintCss(
               ${watermarkPrintBlock}
             }`;
 }
+
+const THERMAL_TEST_PRODUCTS = [
+  { name: 'Sample Product A', qty: 2, unitPrice: 250, lineTotal: 500 },
+  { name: 'USB Cable Type-C 1m', qty: 1, unitPrice: 199, lineTotal: 199 },
+  { name: 'Very Long Product Name For Width Test', qty: 3, unitPrice: 150, lineTotal: 450 },
+] as const;
+
+function formatThermalAmount(amount: number): string {
+  return amount.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): string {
+  const now = new Date();
+  const formatDate = (date: Date) =>
+    date.toLocaleDateString('en-IN', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+  const subtotal = THERMAL_TEST_PRODUCTS.reduce((sum, item) => sum + item.lineTotal, 0);
+  const itemRows = THERMAL_TEST_PRODUCTS.map(
+    (item) => `
+                <tr>
+                  <td>${escapeThermalHtml(truncateThermalItemName(item.name, settings))}</td>
+                  <td class="text-right">${item.qty}</td>
+                  <td class="text-right">₹${formatThermalAmount(item.unitPrice)}</td>
+                  <td class="text-right">₹${formatThermalAmount(item.lineTotal)}</td>
+                </tr>`,
+  ).join('');
+
+  return `<!DOCTYPE html>
+      <html>
+        <head>
+          <title>Thermal Test Print</title>
+          <meta charset="UTF-8">
+          <style>${buildThermalPrintCss(settings)}</style>
+        </head>
+        <body>
+          ${buildThermalReceiptHeaderHtml(settings, {
+            invoiceNumber: 'TEST-PRINT-001',
+            createdAt: now.toISOString(),
+            storeName: 'Test Store',
+            customerName: 'Test Customer',
+            formatDate: () => formatDate(now),
+          })}
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th class="text-right">Qty</th>
+                <th class="text-right">Price</th>
+                <th class="text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody>${itemRows}
+            </tbody>
+          </table>
+          <div class="summary">
+            <div class="summary-row">
+              <span>Subtotal:</span>
+              <span>₹${formatThermalAmount(subtotal)}</span>
+            </div>
+            <div class="summary-row summary-total">
+              <span>TOTAL:</span>
+              <span>₹${formatThermalAmount(subtotal)}</span>
+            </div>
+          </div>
+          ${buildThermalReceiptFooterHtml(settings)}
+        </body>
+      </html>`;
+}
+
+export function printThermalHtml(html: string): boolean {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    alert('Please allow popups to print the test receipt');
+    return false;
+  }
+
+  printWindow.document.write(html);
+  printWindow.document.close();
+
+  printWindow.onload = () => {
+    setTimeout(() => {
+      printWindow.print();
+    }, 250);
+  };
+
+  return true;
+}
+
+export function printThermalTestReceipt(settings: ThermalPrintSettings): boolean {
+  return printThermalHtml(buildThermalTestPrintHtml(settings));
+}
+

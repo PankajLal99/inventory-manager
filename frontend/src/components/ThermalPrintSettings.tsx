@@ -14,6 +14,7 @@ import {
   loadThermalPrintSettings,
   saveThermalPrintSettings,
   resolveThermalFont,
+  printThermalTestReceipt,
 } from '../utils/thermalPrintStyles';
 
 interface ThermalPrintSettingsModalProps {
@@ -307,6 +308,10 @@ export default function ThermalPrintSettingsModal({ isOpen, onClose }: ThermalPr
     onClose();
   };
 
+  const handleTestPrint = () => {
+    printThermalTestReceipt(settings);
+  };
+
   const handleApply79mmRoll = () => {
     setSettings((prev) => ({ ...prev, ...THERMAL_79MM_ROLL_SETTINGS }));
     setHasChanges(true);
@@ -593,7 +598,21 @@ export default function ThermalPrintSettingsModal({ isOpen, onClose }: ThermalPr
         </div>
 
         <div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Preview</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Preview</h3>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleTestPrint}
+              className="flex items-center gap-2 shrink-0"
+            >
+              <Printer className="h-4 w-4" />
+              Test Print (3 products)
+            </Button>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            Uses your current settings above — saved or unsaved — with 3 sample line items.
+          </p>
           <div className="bg-gray-100 border-2 border-gray-300 rounded-lg p-6 flex justify-center overflow-auto">
             <ThermalReceiptPreview settings={settings} />
           </div>
