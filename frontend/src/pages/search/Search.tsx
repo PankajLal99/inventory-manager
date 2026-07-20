@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useNavigationType } from 'react-router-dom';
 import { searchApi, productsApi } from '../../lib/api';
 import {
   Search as SearchIcon,
@@ -44,20 +44,95 @@ interface SearchResults {
 }
 
 const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_UI_STATE_KEY = 'search:ui-state:v1';
+
+type SearchUiState = {
+  q: string;
+  type: string;
+  productLimit: number;
+  showZeroRows: boolean;
+  scrollY: number;
+};
+
+const readPersistedSearchUiState = (): SearchUiState | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(SEARCH_UI_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SearchUiState>;
+    return {
+      q: typeof parsed.q === 'string' ? parsed.q : '',
+      type: typeof parsed.type === 'string' ? parsed.type : 'product',
+      productLimit:
+        typeof parsed.productLimit === 'number' && Number.isFinite(parsed.productLimit)
+          ? parsed.productLimit
+          : 40,
+      showZeroRows: typeof parsed.showZeroRows === 'boolean' ? parsed.showZeroRows : false,
+      scrollY:
+        typeof parsed.scrollY === 'number' && Number.isFinite(parsed.scrollY) ? parsed.scrollY : 0,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const buildSearchParams = (q: string, type: string) => {
+  const params = new URLSearchParams();
+  const trimmed = q.trim();
+  if (trimmed) params.set('q', trimmed);
+  if (type !== 'product') params.set('type', type);
+  return params;
+};
 
 export default function Search() {
   const navigate = useNavigate();
+  const navigationType = useNavigationType();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialQuery = searchParams.get('q') || '';
-  const initialType = searchParams.get('type') || 'product';
+  const persistedRef = useRef<SearchUiState | null>(readPersistedSearchUiState());
+  const restoreFromSession = navigationType === 'POP';
+  const initialQuery =
+    searchParams.get('q') || (restoreFromSession ? persistedRef.current?.q || '' : '');
+  const initialType =
+    searchParams.get('type') ||
+    (restoreFromSession ? persistedRef.current?.type || 'product' : 'product');
   const [inputValue, setInputValue] = useState(initialQuery);
   const [debouncedQuery, setDebouncedQuery] = useState(initialQuery);
   const [searchType, setSearchType] = useState(initialType);
-  const [showZeroRows, setShowZeroRows] = useState(false);
+  const [showZeroRows, setShowZeroRows] = useState(() => {
+    const persisted = persistedRef.current;
+    if (
+      restoreFromSession &&
+      persisted &&
+      persisted.q === initialQuery &&
+      persisted.type === initialType
+    ) {
+      return persisted.showZeroRows;
+    }
+    return false;
+  });
   const [showScanner, setShowScanner] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [productLimit, setProductLimit] = useState(40);
+  const [productLimit, setProductLimit] = useState(() => {
+    const persisted = persistedRef.current;
+    if (
+      restoreFromSession &&
+      persisted &&
+      persisted.q === initialQuery &&
+      persisted.type === initialType
+    ) {
+      return persisted.productLimit;
+    }
+    return 40;
+  });
   const scrollYRef = useRef<number | null>(null);
+  const restoreScrollRef = useRef<number | null>(
+    restoreFromSession &&
+      persistedRef.current &&
+      persistedRef.current.q === initialQuery &&
+      persistedRef.current.type === initialType
+      ? persistedRef.current.scrollY
+      : null
+  );
   const [productImagePreview, setProductImagePreview] = useState<{ src: string; title: string } | null>(null);
 
   // Debounce input so we only search after user stops typing
@@ -68,8 +143,29 @@ export default function Search() {
     return () => clearTimeout(handler);
   }, [inputValue]);
 
+  // Keep URL in sync so back-navigation restores the active search
+  useEffect(() => {
+    const next = buildSearchParams(debouncedQuery, searchType);
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [debouncedQuery, searchType, searchParams, setSearchParams]);
+
+  // Persist UI state (limit / filters / scroll) for return from result pages
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const snapshot: SearchUiState = {
+      q: debouncedQuery.trim(),
+      type: searchType,
+      productLimit,
+      showZeroRows,
+      scrollY: window.scrollY,
+    };
+    window.sessionStorage.setItem(SEARCH_UI_STATE_KEY, JSON.stringify(snapshot));
+  }, [debouncedQuery, searchType, productLimit, showZeroRows]);
+
   const { data, isLoading, error, isFetching } = useQuery<SearchResults>({
-    queryKey: ['global-search', debouncedQuery, searchType, productLimit, showZeroRows],
+    queryKey: ['global-search', debouncedQuery.trim(), searchType, productLimit, showZeroRows],
     queryFn: async () => {
       if (!debouncedQuery.trim()) {
         return {
@@ -96,20 +192,30 @@ export default function Search() {
     enabled: debouncedQuery.trim().length > 0,
     retry: false,
     placeholderData: keepPreviousData,
+    // Global client uses gcTime: 0; keep this query cached so back navigation is instant
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
   });
 
-  // Sync from URL (e.g. back button) and reset product limit when search changes
+  // Sync from URL on browser back/forward (when URL diverges from local state)
   useEffect(() => {
     const urlQuery = searchParams.get('q') || '';
     const urlType = searchParams.get('type') || 'product';
-    if (urlQuery !== debouncedQuery) {
+    if (urlQuery !== debouncedQuery.trim()) {
       setInputValue(urlQuery);
       setDebouncedQuery(urlQuery);
-      setProductLimit(40);
+      const persisted = readPersistedSearchUiState();
+      if (persisted && persisted.q === urlQuery && persisted.type === urlType) {
+        setProductLimit(persisted.productLimit);
+        setShowZeroRows(persisted.showZeroRows);
+        restoreScrollRef.current = persisted.scrollY;
+      } else {
+        setProductLimit(40);
+        setShowZeroRows(false);
+      }
     }
     if (urlType !== searchType) {
       setSearchType(urlType);
-      setProductLimit(40);
     }
   }, [searchParams]);
 
@@ -126,32 +232,60 @@ export default function Search() {
     return () => cancelAnimationFrame(id);
   }, [data, isFetching]);
 
+  // Restore scroll after returning from a result (once results are available)
+  useEffect(() => {
+    if (restoreScrollRef.current === null || isFetching || !data) return;
+    const saved = restoreScrollRef.current;
+    restoreScrollRef.current = null;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo(0, saved);
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [data, isFetching]);
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    const params: any = {};
     const q = inputValue.trim();
-    if (q) params.q = q;
-    if (searchType !== 'product') params.type = searchType;
-    setSearchParams(params);
     setDebouncedQuery(q);
-    // Query will trigger automatically via useQuery
+    setSearchParams(buildSearchParams(q, searchType), { replace: true });
   };
 
   const handleTypeChange = (type: string) => {
     setSearchType(type);
+    setProductLimit(40);
     if (debouncedQuery.trim()) {
-      const params: any = { q: debouncedQuery.trim() };
-      if (type !== 'product') params.type = type;
-      setSearchParams(params);
+      setSearchParams(buildSearchParams(debouncedQuery, type), { replace: true });
     }
   };
 
   const handleClearSearch = () => {
     setInputValue('');
     setDebouncedQuery('');
-    const params: any = {};
-    if (searchType !== 'product') params.type = searchType;
-    setSearchParams(params);
+    setProductLimit(40);
+    setShowZeroRows(false);
+    setSearchParams(buildSearchParams('', searchType), { replace: true });
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(SEARCH_UI_STATE_KEY);
+    }
+  };
+
+  const navigateToResult = (path: string) => {
+    const q = debouncedQuery.trim();
+    // Ensure the search URL is current before leaving so Back lands on the same query
+    setSearchParams(buildSearchParams(q, searchType), { replace: true });
+    if (typeof window !== 'undefined') {
+      const snapshot: SearchUiState = {
+        q,
+        type: searchType,
+        productLimit,
+        showZeroRows,
+        scrollY: window.scrollY,
+      };
+      window.sessionStorage.setItem(SEARCH_UI_STATE_KEY, JSON.stringify(snapshot));
+    }
+    navigate(path);
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -166,7 +300,7 @@ export default function Search() {
 
       if (barcodeResponse.data && barcodeResponse.data.id) {
         // Product found - navigate to product page
-        navigate(`/products/${barcodeResponse.data.id}`);
+        navigateToResult(`/products/${barcodeResponse.data.id}`);
         setShowScanner(false);
       } else {
         // Product not found - update search query to search for the barcode
@@ -394,7 +528,7 @@ export default function Search() {
                     items={data.products || []}
                     onItemClick={(item) => {
                       // Navigate to product detail page (same as barcode scan)
-                      navigate(`/products/${item.id}`);
+                      navigateToResult(`/products/${item.id}`);
                     }}
                     getItemLabel={(item) => item.name}
                     getItemSubLabel={(item) => {
@@ -470,7 +604,7 @@ export default function Search() {
                       return (
                         <div
                           key={idx}
-                          onClick={() => navigate(`/products/${item.id}`)}
+                          onClick={() => navigateToResult(`/products/${item.id}`)}
                           className="p-3 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
                         >
                           <div className="flex items-start justify-between gap-4">
@@ -653,7 +787,7 @@ export default function Search() {
                 title="Product Variants"
                 icon={Box}
                 items={data.variants}
-                onItemClick={(item) => navigate(`/products/${item.product}`)}
+                onItemClick={(item) => navigateToResult(`/products/${item.product}`)}
                 getItemLabel={(item) => item.name}
                 getItemSubLabel={(item) => `SKU: ${item.sku}`}
               />
@@ -665,9 +799,9 @@ export default function Search() {
                 items={data.barcodes || []}
                 onItemClick={(item) => {
                   if (item.invoice_id) {
-                    navigate(`/invoices/${item.invoice_id}`);
+                    navigateToResult(`/invoices/${item.invoice_id}`);
                   } else if (item.product) {
-                    navigate(`/products/${item.product}`);
+                    navigateToResult(`/products/${item.product}`);
                   }
                 }}
                 getItemLabel={(item) => item.short_code || item.barcode || 'N/A'}
@@ -684,9 +818,9 @@ export default function Search() {
                     key={idx}
                     onClick={() => {
                       if (item.invoice_id) {
-                        navigate(`/invoices/${item.invoice_id}`);
+                        navigateToResult(`/invoices/${item.invoice_id}`);
                       } else if (item.product) {
-                        navigate(`/products/${item.product}`);
+                        navigateToResult(`/products/${item.product}`);
                       }
                     }}
                     className="p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
@@ -804,7 +938,7 @@ export default function Search() {
                   params.set('search', debouncedQuery);
                   params.set('is_active', item.is_active ? 'true' : 'false');
                   if (item.customer_group) params.set('customer_group', item.customer_group.toString());
-                  navigate(`/customers?${params.toString()}`);
+                  navigateToResult(`/customers?${params.toString()}`);
                 }}
                 getItemLabel={(item) => item.name}
                 getItemSubLabel={(item) => `${item.phone || ''} ${item.email ? `| ${item.email}` : ''}`.trim()}
@@ -819,7 +953,7 @@ export default function Search() {
                   const params = new URLSearchParams();
                   params.set('search', debouncedQuery);
                   params.set('status', item.status);
-                  navigate(`/invoices?${params.toString()}`);
+                  navigateToResult(`/invoices?${params.toString()}`);
                 }}
                 getItemLabel={(item) => item.invoice_number}
                 getItemSubLabel={(item) => {
@@ -833,7 +967,7 @@ export default function Search() {
                 title="Carts"
                 icon={ShoppingCart}
                 items={data.carts}
-                onItemClick={(_item) => navigate('/pos')}
+                onItemClick={(_item) => navigateToResult('/pos')}
                 getItemLabel={(item) => item.cart_number}
                 getItemSubLabel={(item) => `Status: ${item.status} | Customer: ${item.customer_name || 'N/A'}`}
                 getItemBadge={(item) => item.status}
@@ -843,7 +977,7 @@ export default function Search() {
                 title="Suppliers"
                 icon={Building2}
                 items={data.suppliers}
-                onItemClick={(_item) => navigate('/purchases')}
+                onItemClick={(_item) => navigateToResult('/purchases')}
                 getItemLabel={(item) => item.name}
                 getItemSubLabel={(item) => `${item.code ? `Code: ${item.code} | ` : ''}${item.phone || ''} ${item.email ? `| ${item.email}` : ''}`.trim()}
                 getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
@@ -853,7 +987,7 @@ export default function Search() {
                 title="Categories"
                 icon={Tag}
                 items={data.categories}
-                onItemClick={(_item) => navigate('/products')}
+                onItemClick={(_item) => navigateToResult('/products')}
                 getItemLabel={(item) => item.name}
                 getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
               />
@@ -862,7 +996,7 @@ export default function Search() {
                 title="Brands"
                 icon={Tag}
                 items={data.brands}
-                onItemClick={(_item) => navigate('/products')}
+                onItemClick={(_item) => navigateToResult('/products')}
                 getItemLabel={(item) => item.name}
                 getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
               />
@@ -875,7 +1009,7 @@ export default function Search() {
                   const params = new URLSearchParams();
                   params.set('is_active', item.is_active ? 'true' : 'false');
                   params.set('shop_type', item.shop_type || '');
-                  navigate(`/stores?${params.toString()}`);
+                  navigateToResult(`/stores?${params.toString()}`);
                 }}
                 getItemLabel={(item) => item.name}
                 getItemSubLabel={(item) => `Code: ${item.code} | Type: ${item.shop_type}`}
@@ -886,7 +1020,7 @@ export default function Search() {
                 title="Warehouses"
                 icon={Warehouse}
                 items={data.warehouses}
-                onItemClick={(_item) => navigate('/purchases')}
+                onItemClick={(_item) => navigateToResult('/purchases')}
                 getItemLabel={(item) => item.name}
                 getItemSubLabel={(item) => `Code: ${item.code}`}
                 getItemBadge={(item) => item.is_active ? 'Active' : 'Inactive'}
@@ -903,7 +1037,7 @@ export default function Search() {
                     params.set('date_from', item.purchase_date);
                     params.set('date_to', item.purchase_date);
                   }
-                  navigate(`/purchases?${params.toString()}`);
+                  navigateToResult(`/purchases?${params.toString()}`);
                 }}
                 getItemLabel={(item) => item.purchase_number || `PUR-${item.id}`}
                 getItemSubLabel={(item) => `Supplier: ${item.supplier_name || 'N/A'} | Total: ₹${item.total || '0.00'}`}
