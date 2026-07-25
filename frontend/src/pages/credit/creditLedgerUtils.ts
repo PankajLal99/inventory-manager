@@ -10,6 +10,10 @@ export type CreditLedgerCustomerRow = {
   balance?: string | number;
   total_debit?: string | number;
   total_credit?: string | number;
+  /** Payments received (CreditPayment only — not returns / manual non-payment credits) */
+  total_received?: string | number;
+  /** Sum of completed CreditReturn.total for the customer */
+  total_returns?: string | number;
   net_amount?: string | number;
   entry_count?: number;
   latest_description?: string;

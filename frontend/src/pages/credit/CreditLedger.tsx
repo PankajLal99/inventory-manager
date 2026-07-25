@@ -53,7 +53,6 @@ function customerInitial(name?: string | null) {
 }
 
 type EntryType = 'credit' | 'debit';
-type PaymentMethod = 'cash' | 'upi' | 'mixed';
 
 type PickedCustomer = {
   credit_customer_id?: number | null;
@@ -89,9 +88,6 @@ export default function CreditLedger() {
   const [entryAmount, setEntryAmount] = useState('');
   const [entryDate, setEntryDate] = useState(() => toLocalDateString(new Date()));
   const [entryNotes, setEntryNotes] = useState('Opening Balance');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [cashAmount, setCashAmount] = useState('');
-  const [upiAmount, setUpiAmount] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [creatingNewCustomer, setCreatingNewCustomer] = useState(false);
 
@@ -232,11 +228,8 @@ export default function CreditLedger() {
     setCustomerSearch('');
     setDebouncedCustomerSearch('');
     setEntryAmount('');
-    setCashAmount('');
-    setUpiAmount('');
     setEntryDate(toLocalDateString(new Date()));
     setEntryNotes('Opening Balance');
-    setPaymentMethod('cash');
     setNewCustomerPhone('');
     setCreatingNewCustomer(false);
   };
@@ -247,18 +240,12 @@ export default function CreditLedger() {
     setCustomerSearch('');
     setDebouncedCustomerSearch('');
     setEntryAmount('');
-    setCashAmount('');
-    setUpiAmount('');
     setEntryDate(toLocalDateString(new Date()));
     setEntryNotes('Opening Balance');
-    setPaymentMethod('cash');
     setNewCustomerPhone('');
     setCreatingNewCustomer(false);
     setShowEntryForm(true);
   };
-
-  const mixedPreview =
-    (parseFloat(cashAmount || '0') || 0) + (parseFloat(upiAmount || '0') || 0);
 
   const createEntryMutation = useMutation({
     mutationFn: async () => {
@@ -280,10 +267,7 @@ export default function CreditLedger() {
         creditCustomerId = ensured.data.id;
       }
 
-      const amount =
-        entryType === 'credit' && paymentMethod === 'mixed'
-          ? mixedPreview
-          : parseFloat(entryAmount || '0');
+      const amount = parseFloat(entryAmount || '0');
       if (!(amount > 0)) throw new Error('Amount must be greater than 0');
 
       const payload: Parameters<typeof creditApi.ledger.createEntry>[0] = {
@@ -295,12 +279,9 @@ export default function CreditLedger() {
       if (creditCustomerId) payload.credit_customer_id = creditCustomerId;
       else if (partiesCustomerId) payload.parties_customer_id = partiesCustomerId;
 
+      // Backend requires a method for credit entries; opening balance is not a till payment.
       if (entryType === 'credit') {
-        payload.payment_method = paymentMethod;
-        if (paymentMethod === 'mixed') {
-          payload.cash_amount = parseFloat(cashAmount || '0');
-          payload.upi_amount = parseFloat(upiAmount || '0');
-        }
+        payload.payment_method = 'cash';
       }
 
       const res = await creditApi.ledger.createEntry(payload);
@@ -714,6 +695,7 @@ export default function CreditLedger() {
                     <th className={`${thClass} text-left`}>Group</th>
                     <th className={`${thClass} text-right`}>Sales</th>
                     <th className={`${thClass} text-right`}>Received</th>
+                    <th className={`${thClass} text-right`}>Returns</th>
                     <th className={`${thClass} text-right`}>Outstanding</th>
                     <th className={`${thClass} text-left min-w-[200px]`}>Reason</th>
                     <th className={`${thClass} text-left min-w-[148px]`}>Next follow-up</th>
@@ -728,7 +710,8 @@ export default function CreditLedger() {
                     const balance = parseFloat(String(row.balance || 0));
                     const status = row.collection_status || 'good';
                     const sales = parseFloat(String(row.total_debit || 0));
-                    const received = parseFloat(String(row.total_credit || 0));
+                    const received = parseFloat(String(row.total_received || 0));
+                    const returns = parseFloat(String(row.total_returns || 0));
                     const isSaving = !!savingIds[row.id];
                     return (
                       <tr key={row.id} className={collectionStatusRowClass(status)}>
@@ -768,9 +751,16 @@ export default function CreditLedger() {
                             <span className="text-stone-300">—</span>
                           )}
                         </td>
-                        <td className={`${tdClass} text-right tabular-nums text-stone-700 whitespace-nowrap`}>
+                        <td className={`${tdClass} text-right tabular-nums text-emerald-700 whitespace-nowrap`}>
                           {received ? (
                             `₹${formatAmountINR(received)}`
+                          ) : (
+                            <span className="text-stone-300">—</span>
+                          )}
+                        </td>
+                        <td className={`${tdClass} text-right tabular-nums text-blue-700 whitespace-nowrap`}>
+                          {returns ? (
+                            `₹${formatAmountINR(returns)}`
                           ) : (
                             <span className="text-stone-300">—</span>
                           )}
@@ -871,7 +861,8 @@ export default function CreditLedger() {
               const balance = parseFloat(String(row.balance || 0));
               const status = row.collection_status || 'good';
               const sales = parseFloat(String(row.total_debit || 0));
-              const received = parseFloat(String(row.total_credit || 0));
+              const received = parseFloat(String(row.total_received || 0));
+              const returns = parseFloat(String(row.total_returns || 0));
               const isSaving = !!savingIds[row.id];
               return (
                 <div
@@ -930,7 +921,7 @@ export default function CreditLedger() {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                     <div className="rounded-lg bg-stone-50 border border-stone-100 px-2.5 py-1.5">
                       <p className="text-[10px] uppercase tracking-wide text-stone-400">Sales</p>
                       <p className="font-semibold tabular-nums text-stone-800">
@@ -939,8 +930,14 @@ export default function CreditLedger() {
                     </div>
                     <div className="rounded-lg bg-stone-50 border border-stone-100 px-2.5 py-1.5">
                       <p className="text-[10px] uppercase tracking-wide text-stone-400">Received</p>
-                      <p className="font-semibold tabular-nums text-stone-800">
+                      <p className="font-semibold tabular-nums text-emerald-800">
                         ₹{formatAmountINR(received)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-stone-50 border border-stone-100 px-2.5 py-1.5">
+                      <p className="text-[10px] uppercase tracking-wide text-stone-400">Returns</p>
+                      <p className="font-semibold tabular-nums text-blue-800">
+                        ₹{formatAmountINR(returns)}
                       </p>
                     </div>
                     <div className="rounded-lg bg-stone-50 border border-stone-100 px-2.5 py-1.5">
@@ -1149,64 +1146,15 @@ export default function CreditLedger() {
               : 'Credit decreases outstanding — use for advance / overpayment opening balance.'}
           </p>
 
-          {entryType === 'credit' ? (
-            <>
-              <Select
-                label="Payment type"
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-              >
-                <option value="cash">Cash</option>
-                <option value="upi">UPI</option>
-                <option value="mixed">Cash + UPI</option>
-              </Select>
-              {paymentMethod === 'mixed' ? (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      label="Cash"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={cashAmount}
-                      onChange={(e) => setCashAmount(e.target.value)}
-                      required
-                    />
-                    <Input
-                      label="UPI"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={upiAmount}
-                      onChange={(e) => setUpiAmount(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <p className="text-xs text-gray-600">Total: ₹{formatAmountINR(mixedPreview)}</p>
-                </div>
-              ) : (
-                <Input
-                  label="Amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={entryAmount}
-                  onChange={(e) => setEntryAmount(e.target.value)}
-                  required
-                />
-              )}
-            </>
-          ) : (
-            <Input
-              label="Amount"
-              type="number"
-              min="0"
-              step="0.01"
-              value={entryAmount}
-              onChange={(e) => setEntryAmount(e.target.value)}
-              required
-            />
-          )}
+          <Input
+            label="Amount"
+            type="number"
+            min="0"
+            step="0.01"
+            value={entryAmount}
+            onChange={(e) => setEntryAmount(e.target.value)}
+            required
+          />
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Date</label>
@@ -1229,9 +1177,7 @@ export default function CreditLedger() {
               disabled={
                 createEntryMutation.isPending ||
                 !selectedCustomer ||
-                (entryType === 'credit' && paymentMethod === 'mixed'
-                  ? mixedPreview <= 0
-                  : !(parseFloat(entryAmount) > 0))
+                !(parseFloat(entryAmount) > 0)
               }
               className={
                 entryType === 'credit'

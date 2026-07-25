@@ -1566,6 +1566,15 @@ def credit_ledger_by_customer(request):
         .order_by('-created_at')
         .values('created_at')[:1]
     )
+    returns_total_sq = (
+        CreditReturn.objects.filter(
+            customer_id=OuterRef('pk'),
+            status='completed',
+        )
+        .values('customer_id')
+        .annotate(s=Sum('total'))
+        .values('s')[:1]
+    )
 
     qs = CreditCustomer.objects.filter(is_active=True)
     if only_with_heart:
@@ -1592,6 +1601,23 @@ def credit_ledger_by_customer(request):
             ),
             Decimal('0'),
         ),
+        # Payments received (CreditPayment-linked credits only — not returns)
+        total_received=Coalesce(
+            Sum(
+                Case(
+                    When(
+                        ledger_entries__entry_type='credit',
+                        ledger_entries__payment__isnull=False,
+                        ledger_entries__credit_return__isnull=True,
+                        then=F('ledger_entries__amount'),
+                    ),
+                    default=Value(Decimal('0')),
+                )
+            ),
+            Decimal('0'),
+        ),
+        # Sum of CreditReturn.total (completed) — not ledger / manual credits
+        total_returns=Coalesce(Subquery(returns_total_sq), Decimal('0')),
         entry_count=Count('ledger_entries', distinct=True),
         latest_description=Subquery(latest_desc),
         last_activity_at=Subquery(latest_activity),
@@ -1629,6 +1655,8 @@ def credit_ledger_by_customer(request):
         collection_status = _credit_collection_status(balance, days_since)
         total_debit = row.total_debit or Decimal('0')
         total_credit = row.total_credit or Decimal('0')
+        total_received = row.total_received or Decimal('0')
+        total_returns = row.total_returns or Decimal('0')
         fu_delta = follow_up_delta_days(row.next_follow_up_date)
         out.append({
             'id': row.id,
@@ -1639,6 +1667,8 @@ def credit_ledger_by_customer(request):
             'balance': str(balance),
             'total_debit': str(total_debit),
             'total_credit': str(total_credit),
+            'total_received': str(total_received),
+            'total_returns': str(total_returns),
             'net_amount': str(total_debit - total_credit),
             'entry_count': row.entry_count or 0,
             'latest_description': row.latest_description or '',
