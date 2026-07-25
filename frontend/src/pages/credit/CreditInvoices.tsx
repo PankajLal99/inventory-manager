@@ -6,6 +6,7 @@ import {
   Eye,
   FileText,
   Filter,
+  Pencil,
   RefreshCw,
   Search,
   TrendingUp,
@@ -302,14 +303,26 @@ export default function CreditInvoices() {
                     {inv.created_at ? new Date(inv.created_at).toLocaleString() : '—'}
                   </TableCell>
                   <TableCell>
-                    <button
-                      type="button"
-                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
-                      onClick={() => navigate(`/credit-invoices/${inv.id}`)}
-                      title="View"
-                    >
-                      <Eye className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      {inv.status === 'open' ? (
+                        <button
+                          type="button"
+                          className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
+                          onClick={() => navigate(`/credit-invoices/${inv.id}?edit=1`)}
+                          title="Edit"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+                        onClick={() => navigate(`/credit-invoices/${inv.id}`)}
+                        title="View"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

@@ -14,16 +14,42 @@ export type CreditLedgerCustomerRow = {
   entry_count?: number;
   latest_description?: string;
   last_payment_at?: string | null;
+  last_sale_at?: string | null;
   days_since_last_payment?: number | null;
   collection_status?: CollectionStatus;
   customer_group_id?: number | null;
   customer_group_name?: string;
+  collection_reason?: string;
+  next_follow_up_date?: string | null;
+  follow_up_delta_days?: number | null;
+};
+
+export type CreditCollectionHistoryEvent = {
+  id: number;
+  event_type: string;
+  event_type_label: string;
+  reason: string;
+  follow_up_date: string | null;
+  previous_follow_up_date: string | null;
+  note: string;
+  created_by: number | null;
+  created_by_name: string;
+  created_at: string | null;
 };
 
 export function formatLedgerDate(value?: string | null) {
   if (!value) return '—';
   try {
     return format(new Date(value), 'dd-MM-yyyy');
+  } catch {
+    return '—';
+  }
+}
+
+export function formatLedgerDateTime(value?: string | null) {
+  if (!value) return '—';
+  try {
+    return format(new Date(value), 'dd-MM-yyyy HH:mm');
   } catch {
     return '—';
   }
@@ -53,6 +79,22 @@ export function collectionStatusLabel(status: CollectionStatus | string | undefi
   }
 }
 
+export function daysSincePaymentLabel(days: number | null | undefined, balance: number): string {
+  if (balance <= 0) return 'Paid';
+  if (days == null) return 'No payment yet';
+  if (days === 0) return 'Paid today';
+  if (days === 1) return '1 day since pay';
+  return `${days} days since pay`;
+}
+
+export function followUpDeltaLabel(delta: number | null | undefined): string {
+  if (delta == null) return 'No follow-up';
+  if (delta === 0) return 'Follow-up today';
+  if (delta > 0) return delta === 1 ? 'Follow-up in 1 day' : `Follow-up in ${delta} days`;
+  const overdue = Math.abs(delta);
+  return overdue === 1 ? 'Follow-up overdue 1 day' : `Follow-up overdue ${overdue} days`;
+}
+
 export function collectionStatusBadgeVariant(
   status: CollectionStatus | string | undefined
 ): 'success' | 'warning' | 'danger' | 'default' {
@@ -71,13 +113,13 @@ export function collectionStatusBadgeVariant(
 export function collectionStatusRowClass(status: CollectionStatus | string | undefined): string {
   switch (status) {
     case 'good':
-      return 'bg-green-50 hover:bg-green-100/80 border-l-4 border-l-green-500';
+      return 'bg-white hover:bg-gray-50 border-l-[3px] border-l-green-500';
     case 'warning':
-      return 'bg-yellow-50 hover:bg-yellow-100/80 border-l-4 border-l-yellow-500';
+      return 'bg-white hover:bg-amber-50/40 border-l-[3px] border-l-amber-400';
     case 'danger':
-      return 'bg-red-50 hover:bg-red-100/80 border-l-4 border-l-red-500';
+      return 'bg-white hover:bg-red-50/40 border-l-[3px] border-l-red-500';
     default:
-      return 'bg-blue-50 hover:bg-blue-100';
+      return 'bg-white hover:bg-gray-50 border-l-[3px] border-l-transparent';
   }
 }
 
@@ -91,5 +133,45 @@ export function collectionStatusDotClass(status: CollectionStatus | string | und
       return 'bg-red-500';
     default:
       return 'bg-gray-400';
+  }
+}
+
+export function followUpDeltaClass(delta: number | null | undefined): string {
+  if (delta == null) return 'text-stone-500';
+  if (delta < 0) return 'text-red-700 font-semibold';
+  if (delta === 0) return 'text-amber-800 font-semibold';
+  return 'text-stone-700';
+}
+
+export function collectionEventStyle(eventType: string | undefined): {
+  dot: string;
+  badge: string;
+} {
+  switch (eventType) {
+    case 'reason':
+      return {
+        dot: 'bg-blue-600',
+        badge: 'bg-blue-100 text-blue-900 border border-blue-200',
+      };
+    case 'follow_up':
+      return {
+        dot: 'bg-amber-600',
+        badge: 'bg-amber-100 text-amber-950 border border-amber-200',
+      };
+    case 'auto_bump':
+      return {
+        dot: 'bg-emerald-600',
+        badge: 'bg-emerald-100 text-emerald-900 border border-emerald-200',
+      };
+    case 'cleared':
+      return {
+        dot: 'bg-stone-500',
+        badge: 'bg-stone-200 text-stone-900 border border-stone-300',
+      };
+    default:
+      return {
+        dot: 'bg-stone-400',
+        badge: 'bg-stone-100 text-stone-800 border border-stone-200',
+      };
   }
 }

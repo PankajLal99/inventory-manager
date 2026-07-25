@@ -24,6 +24,7 @@ urlpatterns = [
     path('credit/invoices/', views.credit_invoice_list, name='credit-invoice-list'),
     path('credit/invoices/summary/', views.credit_invoices_summary, name='credit-invoices-summary'),
     path('credit/invoices/<int:pk>/', views.credit_invoice_detail, name='credit-invoice-detail'),
+    path('credit/invoices/<int:pk>/update/', views.credit_invoice_update, name='credit-invoice-update'),
     path('credit/invoices/<int:pk>/void/', views.credit_invoice_void, name='credit-invoice-void'),
 
     # Ledger
@@ -31,6 +32,16 @@ urlpatterns = [
     path('credit/ledger/entries/', views.credit_ledger_entry_create, name='credit-ledger-entry-create'),
     path('credit/ledger/statement/', views.credit_ledger_statement, name='credit-ledger-statement'),
     path('credit/ledger/by-customer/', views.credit_ledger_by_customer, name='credit-ledger-by-customer'),
+    path(
+        'credit/ledger/customers/<int:pk>/collection/',
+        views.credit_ledger_collection_update,
+        name='credit-ledger-collection-update',
+    ),
+    path(
+        'credit/ledger/customers/<int:pk>/collection-history/',
+        views.credit_ledger_collection_history,
+        name='credit-ledger-collection-history',
+    ),
 
     # Returns
     path('credit/returns/sold-products/', views.credit_return_sold_products, name='credit-return-sold-products'),

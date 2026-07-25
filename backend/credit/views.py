@@ -25,9 +25,15 @@ from backend.catalog.models import Product
 from backend.locations.models import Store
 from backend.parties.models import Customer, CustomerGroup
 
+from .collection_crm import (
+    auto_bump_follow_up_after_payment,
+    follow_up_delta_days,
+    update_collection_fields,
+)
 from .models import (
     CreditCart,
     CreditCartItem,
+    CreditCollectionEvent,
     CreditCustomer,
     CreditInvoice,
     CreditInvoiceItem,
@@ -871,6 +877,271 @@ def credit_invoice_detail(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def credit_invoice_update(request, pk):
+    """
+    Edit an open credit invoice (lines / notes) and apply ledger delta.
+
+    Payload:
+      items: [
+        {
+          id?: int,                  # existing line id (omit for new lines)
+          catalog_product_id?: int,
+          credit_product_id?: int,
+          product_name?: str,
+          quantity: number,
+          unit_price: number,
+        },
+        ...
+      ]
+      notes?: str
+      created_at?: ISO datetime (optional — also moves sale debit timestamp)
+
+    Ledger: update the original sale debit amount in place and
+    customer.balance += (new_total - old_total).
+    """
+    try:
+        invoice = CreditInvoice.objects.select_related('customer').prefetch_related('items').get(pk=pk)
+    except CreditInvoice.DoesNotExist:
+        return Response({'detail': 'Invoice not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if invoice.status == 'void':
+        return Response({'detail': 'Cannot edit a voided invoice'}, status=status.HTTP_400_BAD_REQUEST)
+
+    raw_items = request.data.get('items')
+    if not isinstance(raw_items, list) or len(raw_items) == 0:
+        return Response({'detail': 'At least one item is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    notes = request.data.get('notes')
+    created_at_raw = request.data.get('created_at')
+    created_at_override = None
+    if created_at_raw not in (None, ''):
+        raw_str = str(created_at_raw).strip()
+        if raw_str.endswith('Z'):
+            raw_str = raw_str[:-1] + '+00:00'
+        parsed = parse_datetime(raw_str)
+        if parsed is None:
+            return Response({'detail': 'Invalid created_at datetime format'}, status=status.HTTP_400_BAD_REQUEST)
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        created_at_override = parsed
+
+    existing_by_id = {item.id: item for item in invoice.items.all()}
+    kept_ids = set()
+    prepared = []
+
+    for idx, row in enumerate(raw_items):
+        if not isinstance(row, dict):
+            return Response(
+                {'detail': f'Item {idx + 1}: invalid payload'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        item_id = row.get('id')
+        existing = None
+        if item_id not in (None, ''):
+            try:
+                item_id = int(item_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': f'Item {idx + 1}: invalid id'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            existing = existing_by_id.get(item_id)
+            if existing is None:
+                return Response(
+                    {'detail': f'Item {idx + 1}: line {item_id} not found on this invoice'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            kept_ids.add(item_id)
+
+        quantity = _to_decimal(row.get('quantity'), '0')
+        qty_err = _require_whole_quantity(quantity)
+        if qty_err:
+            return Response(
+                {'detail': f'Item {idx + 1}: {qty_err}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        quantity = quantity.to_integral_value()
+
+        unit_price = _to_decimal(row.get('unit_price'), '0')
+        if unit_price <= 0:
+            return Response(
+                {'detail': f'Item {idx + 1}: Selling price must be greater than 0'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        returned_qty = Decimal('0')
+        if existing is not None:
+            returned_qty = existing.returned_quantity or Decimal('0')
+            if quantity < returned_qty:
+                return Response(
+                    {
+                        'detail': (
+                            f'Item {idx + 1} ({existing.product_name}): '
+                            f'quantity cannot be below returned qty ({returned_qty})'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        product = existing.product if existing else None
+        credit_product = existing.credit_product if existing else None
+        product_name = (row.get('product_name') or '').strip()
+        if existing and not product_name:
+            product_name = existing.product_name
+
+        catalog_product_id = row.get('catalog_product_id') or row.get('product')
+        credit_product_id = row.get('credit_product_id') or row.get('credit_product')
+
+        if existing is None:
+            if catalog_product_id:
+                try:
+                    product = Product.objects.only('id', 'name').get(pk=catalog_product_id)
+                    product_name = product_name or product.name
+                except Product.DoesNotExist:
+                    return Response(
+                        {'detail': f'Item {idx + 1}: catalog product not found'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            elif credit_product_id:
+                try:
+                    credit_product = CreditProduct.objects.only('id', 'name').get(pk=credit_product_id)
+                    product_name = product_name or credit_product.name
+                except CreditProduct.DoesNotExist:
+                    return Response(
+                        {'detail': f'Item {idx + 1}: credit product not found'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            if not product_name:
+                return Response(
+                    {'detail': f'Item {idx + 1}: product_name is required'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        line_total = (quantity * unit_price).quantize(Decimal('0.01'))
+        prepared.append({
+            'existing': existing,
+            'product': product,
+            'credit_product': credit_product,
+            'product_name': product_name,
+            'quantity': quantity,
+            'unit_price': unit_price,
+            'line_total': line_total,
+            'returned_quantity': returned_qty,
+        })
+
+    # Cannot delete lines that have returns
+    for item_id, item in existing_by_id.items():
+        if item_id not in kept_ids:
+            returned = item.returned_quantity or Decimal('0')
+            if returned > 0:
+                return Response(
+                    {
+                        'detail': (
+                            f'Cannot remove "{item.product_name}" — '
+                            f'{returned} unit(s) already returned'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+    new_total = sum((p['line_total'] for p in prepared), Decimal('0.00')).quantize(Decimal('0.01'))
+    if new_total <= 0:
+        return Response({'detail': 'Invoice total must be greater than 0'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        invoice = CreditInvoice.objects.select_for_update().select_related('customer').get(pk=pk)
+        if invoice.status == 'void':
+            return Response({'detail': 'Cannot edit a voided invoice'}, status=status.HTTP_400_BAD_REQUEST)
+
+        customer = CreditCustomer.objects.select_for_update().get(pk=invoice.customer_id)
+        old_total = invoice.total or Decimal('0.00')
+        delta = (new_total - old_total).quantize(Decimal('0.01'))
+
+        # Remove dropped lines (no returns — already validated)
+        for item_id, item in existing_by_id.items():
+            if item_id not in kept_ids:
+                item.delete()
+
+        for p in prepared:
+            existing = p['existing']
+            if existing is not None:
+                existing.product = p['product']
+                existing.credit_product = p['credit_product']
+                existing.product_name = p['product_name']
+                existing.quantity = p['quantity']
+                existing.unit_price = p['unit_price']
+                existing.line_total = p['line_total']
+                existing.save()
+            else:
+                CreditInvoiceItem.objects.create(
+                    invoice=invoice,
+                    product=p['product'],
+                    credit_product=p['credit_product'],
+                    product_name=p['product_name'],
+                    quantity=p['quantity'],
+                    unit_price=p['unit_price'],
+                    line_total=p['line_total'],
+                    returned_quantity=Decimal('0'),
+                )
+
+        invoice.subtotal = new_total
+        invoice.total = new_total
+        update_fields = ['subtotal', 'total', 'updated_at']
+        if notes is not None:
+            invoice.notes = str(notes)
+            update_fields.append('notes')
+        if created_at_override is not None:
+            invoice.created_at = created_at_override
+            update_fields.append('created_at')
+        invoice.save(update_fields=update_fields)
+
+        # Update original sale debit in place (exclude void / return / payment credits)
+        sale_debit = (
+            CreditLedgerEntry.objects.filter(
+                invoice=invoice,
+                entry_type='debit',
+                payment__isnull=True,
+                credit_return__isnull=True,
+            )
+            .order_by('id')
+            .first()
+        )
+        if sale_debit:
+            sale_debit.amount = new_total
+            sale_debit.description = f'Credit invoice {invoice.invoice_number}'
+            debit_fields = ['amount', 'description']
+            if created_at_override is not None:
+                sale_debit.created_at = created_at_override
+                debit_fields.append('created_at')
+            sale_debit.save(update_fields=debit_fields)
+        else:
+            CreditLedgerEntry.objects.create(
+                customer=customer,
+                invoice=invoice,
+                entry_type='debit',
+                amount=new_total,
+                description=f'Credit invoice {invoice.invoice_number}',
+                created_by=request.user,
+                created_at=invoice.created_at,
+            )
+            # Missing debit was not in balance — apply full new total, not just delta
+            delta = new_total
+
+        if delta != 0:
+            customer.balance = F('balance') + delta
+            customer.save(update_fields=['balance', 'updated_at'])
+
+    invoice = CreditInvoice.objects.select_related(
+        'customer', 'store', 'created_by'
+    ).prefetch_related('items').get(pk=pk)
+    data = CreditInvoiceSerializer(invoice).data
+    data['ledger_delta'] = str(delta)
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def credit_invoice_void(request, pk):
     try:
         invoice = CreditInvoice.objects.select_related('customer').get(pk=pk)
@@ -1031,6 +1302,7 @@ def credit_ledger_entry_create(request):
                 created_at=created_at,
             )
             customer.balance = F('balance') - amount
+            did_payment = True
         else:
             ledger_description = description or 'Manual debit'
             entry = CreditLedgerEntry.objects.create(
@@ -1042,9 +1314,12 @@ def credit_ledger_entry_create(request):
                 created_at=created_at,
             )
             customer.balance = F('balance') + amount
+            did_payment = False
 
         customer.save(update_fields=['balance', 'updated_at'])
-        customer.refresh_from_db(fields=['balance'])
+        customer.refresh_from_db(fields=['balance', 'next_follow_up_date', 'collection_reason'])
+        if did_payment:
+            auto_bump_follow_up_after_payment(customer, user=request.user)
 
     entry = CreditLedgerEntry.objects.select_related(
         'customer', 'payment', 'created_by'
@@ -1233,6 +1508,28 @@ def _credit_collection_status(balance, days_since_last_payment):
     return 'good'
 
 
+def _parse_follow_up_date(raw):
+    """Parse yyyy-mm-dd or ISO datetime into a date, or None if blank."""
+    if raw in (None, ''):
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if 'T' in text:
+        parsed = parse_datetime(text.replace('Z', '+00:00') if text.endswith('Z') else text)
+        if parsed is None:
+            raise ValueError('Invalid next_follow_up_date')
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        return timezone.localtime(parsed).date()
+    try:
+        from datetime import date as date_cls
+        parts = text[:10].split('-')
+        return date_cls(int(parts[0]), int(parts[1]), int(parts[2]))
+    except (TypeError, ValueError, IndexError) as exc:
+        raise ValueError('Invalid next_follow_up_date') from exc
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def credit_ledger_by_customer(request):
@@ -1242,6 +1539,7 @@ def credit_ledger_by_customer(request):
     # Default: heart-marked only. Pass with_heart=0 / false / all to show everyone.
     with_heart_raw = (request.query_params.get('with_heart') or '1').strip().lower()
     only_with_heart = with_heart_raw not in ('0', 'false', 'all', 'no')
+    follow_up_filter = (request.query_params.get('follow_up') or '').strip().lower()
 
     latest_desc = (
         CreditLedgerEntry.objects.filter(customer_id=OuterRef('pk'))
@@ -1309,6 +1607,18 @@ def credit_ledger_by_customer(request):
     if only_with_balance in ('1', 'true'):
         qs = qs.exclude(balance=0)
 
+    today = timezone.localdate()
+    if follow_up_filter in ('overdue', 'past'):
+        qs = qs.filter(next_follow_up_date__lt=today)
+    elif follow_up_filter in ('today', 'due_today'):
+        qs = qs.filter(next_follow_up_date=today)
+    elif follow_up_filter in ('upcoming', 'future'):
+        qs = qs.filter(next_follow_up_date__gt=today)
+    elif follow_up_filter in ('none', 'blank', 'unset'):
+        qs = qs.filter(next_follow_up_date__isnull=True)
+    elif follow_up_filter in ('set', 'scheduled'):
+        qs = qs.filter(next_follow_up_date__isnull=False)
+
     # Oldest ledger activity first; newest at the bottom; no-entry accounts last
     qs = qs.order_by(F('last_activity_at').asc(nulls_last=True), 'name')[:200]
 
@@ -1319,6 +1629,7 @@ def credit_ledger_by_customer(request):
         collection_status = _credit_collection_status(balance, days_since)
         total_debit = row.total_debit or Decimal('0')
         total_credit = row.total_credit or Decimal('0')
+        fu_delta = follow_up_delta_days(row.next_follow_up_date)
         out.append({
             'id': row.id,
             'name': row.name,
@@ -1333,10 +1644,107 @@ def credit_ledger_by_customer(request):
             'latest_description': row.latest_description or '',
             'last_activity_at': row.last_activity_at.isoformat() if row.last_activity_at else None,
             'last_payment_at': row.last_payment_at.isoformat() if row.last_payment_at else None,
+            'last_sale_at': row.last_sale_at.isoformat() if row.last_sale_at else None,
             'days_since_last_payment': days_since,
             'collection_status': collection_status,
+            'collection_reason': row.collection_reason or '',
+            'next_follow_up_date': row.next_follow_up_date.isoformat() if row.next_follow_up_date else None,
+            'follow_up_delta_days': fu_delta,
         })
     return Response(out)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_collection_update(request, pk):
+    """Inline update of collection reason and/or next follow-up date."""
+    try:
+        customer = CreditCustomer.objects.get(pk=pk, is_active=True)
+    except CreditCustomer.DoesNotExist:
+        return Response({'detail': 'Customer not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    data = request.data or {}
+    reason = data.get('collection_reason') if 'collection_reason' in data else (
+        data.get('reason') if 'reason' in data else None
+    )
+
+    clear_follow_up = False
+    next_follow_up_date = None
+    if 'next_follow_up_date' in data:
+        raw = data.get('next_follow_up_date')
+        if raw in (None, ''):
+            clear_follow_up = True
+        else:
+            try:
+                next_follow_up_date = _parse_follow_up_date(raw)
+            except ValueError as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    if reason is None and 'next_follow_up_date' not in data:
+        return Response(
+            {'detail': 'Provide collection_reason and/or next_follow_up_date'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        customer = CreditCustomer.objects.select_for_update().get(pk=pk)
+        update_collection_fields(
+            customer,
+            reason=reason,
+            next_follow_up_date=None if clear_follow_up else next_follow_up_date,
+            clear_follow_up=clear_follow_up,
+            user=request.user,
+        )
+        customer.refresh_from_db()
+
+    fu_delta = follow_up_delta_days(customer.next_follow_up_date)
+    return Response({
+        'id': customer.id,
+        'collection_reason': customer.collection_reason or '',
+        'next_follow_up_date': (
+            customer.next_follow_up_date.isoformat() if customer.next_follow_up_date else None
+        ),
+        'follow_up_delta_days': fu_delta,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_collection_history(request, pk):
+    """Timeline of reason / follow-up changes for the clock history button."""
+    if not CreditCustomer.objects.filter(pk=pk).exists():
+        return Response({'detail': 'Customer not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        limit = min(max(int(request.query_params.get('limit', 50)), 1), 200)
+    except (TypeError, ValueError):
+        limit = 50
+
+    events = (
+        CreditCollectionEvent.objects.filter(customer_id=pk)
+        .select_related('created_by')
+        .order_by('-created_at', '-id')[:limit]
+    )
+    results = []
+    for ev in events:
+        results.append({
+            'id': ev.id,
+            'event_type': ev.event_type,
+            'event_type_label': dict(CreditCollectionEvent.EVENT_CHOICES).get(ev.event_type, ev.event_type),
+            'reason': ev.reason or '',
+            'follow_up_date': ev.follow_up_date.isoformat() if ev.follow_up_date else None,
+            'previous_follow_up_date': (
+                ev.previous_follow_up_date.isoformat() if ev.previous_follow_up_date else None
+            ),
+            'note': ev.note or '',
+            'created_by': ev.created_by_id,
+            'created_by_name': (
+                (ev.created_by.get_full_name() or ev.created_by.username)
+                if ev.created_by_id else ''
+            ),
+            'created_at': ev.created_at.isoformat() if ev.created_at else None,
+        })
+    return Response({'count': len(results), 'results': results})
 
 
 # ── Returns ─────────────────────────────────────────────────────────────────
@@ -1743,7 +2151,8 @@ def credit_payment_list_create(request):
         )
         customer.balance = F('balance') - amount
         customer.save(update_fields=['balance', 'updated_at'])
-        customer.refresh_from_db(fields=['balance'])
+        customer.refresh_from_db(fields=['balance', 'next_follow_up_date', 'collection_reason'])
+        auto_bump_follow_up_after_payment(customer, user=request.user)
 
     payment = CreditPayment.objects.select_related('customer', 'created_by').get(pk=payment.pk)
     data = CreditPaymentSerializer(payment).data

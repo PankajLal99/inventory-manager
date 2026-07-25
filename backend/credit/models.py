@@ -30,6 +30,16 @@ class CreditCustomer(models.Model):
         related_name='credit_customers',
     )
     balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    collection_reason = models.TextField(
+        blank=True,
+        default='',
+        help_text='Latest free-text reason / note for collection follow-up',
+    )
+    next_follow_up_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Next date to remind / collect payment',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -43,6 +53,51 @@ class CreditCustomer(models.Model):
         indexes = [
             models.Index(fields=['name'], name='idx_cred_cust_name'),
             models.Index(fields=['phone'], name='idx_cred_cust_phone'),
+            models.Index(fields=['next_follow_up_date'], name='idx_cred_cust_followup'),
+        ]
+
+
+class CreditCollectionEvent(models.Model):
+    """Audit trail for collection CRM: reasons, follow-up dates, auto-bumps."""
+
+    EVENT_REASON = 'reason'
+    EVENT_FOLLOW_UP = 'follow_up'
+    EVENT_AUTO_BUMP = 'auto_bump'
+    EVENT_CLEARED = 'cleared'
+    EVENT_CHOICES = [
+        (EVENT_REASON, 'Reason updated'),
+        (EVENT_FOLLOW_UP, 'Follow-up date set'),
+        (EVENT_AUTO_BUMP, 'Auto-bumped after payment'),
+        (EVENT_CLEARED, 'Follow-up cleared'),
+    ]
+
+    customer = models.ForeignKey(
+        CreditCustomer,
+        on_delete=models.CASCADE,
+        related_name='collection_events',
+    )
+    event_type = models.CharField(max_length=20, choices=EVENT_CHOICES)
+    reason = models.TextField(blank=True, default='')
+    follow_up_date = models.DateField(null=True, blank=True)
+    previous_follow_up_date = models.DateField(null=True, blank=True)
+    note = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='credit_collection_events',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.event_type} — {self.customer_id} @ {self.created_at}'
+
+    class Meta:
+        db_table = 'credit_collection_events'
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['customer', '-created_at'], name='idx_cred_coll_cust'),
         ]
 
 

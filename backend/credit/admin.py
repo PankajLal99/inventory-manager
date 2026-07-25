@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     CreditCart,
     CreditCartItem,
+    CreditCollectionEvent,
     CreditCustomer,
     CreditInvoice,
     CreditInvoiceItem,
@@ -16,10 +17,36 @@ from .models import (
 
 @admin.register(CreditCustomer)
 class CreditCustomerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'phone', 'customer_group', 'balance', 'linked_customer', 'is_active', 'created_at']
-    list_filter = ['is_active', 'customer_group', 'created_at']
-    search_fields = ['name', 'phone', 'email']
+    list_display = [
+        'name',
+        'phone',
+        'customer_group',
+        'balance',
+        'next_follow_up_date',
+        'linked_customer',
+        'is_active',
+        'created_at',
+    ]
+    list_filter = ['is_active', 'customer_group', 'next_follow_up_date', 'created_at']
+    search_fields = ['name', 'phone', 'email', 'collection_reason']
     ordering = ['name']
+
+
+@admin.register(CreditCollectionEvent)
+class CreditCollectionEventAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'customer',
+        'event_type',
+        'follow_up_date',
+        'previous_follow_up_date',
+        'created_by',
+        'created_at',
+    ]
+    list_filter = ['event_type', 'created_at']
+    search_fields = ['customer__name', 'reason', 'note']
+    ordering = ['-created_at']
+    date_hierarchy = 'created_at'
 
 
 @admin.register(CreditProduct)

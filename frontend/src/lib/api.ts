@@ -598,6 +598,7 @@ export const creditApi = {
     list: (params?: any) => api.get('/credit/invoices/', { params }),
     summary: (params?: any) => api.get('/credit/invoices/summary/', { params }),
     get: (id: number) => api.get(`/credit/invoices/${id}/`),
+    update: (id: number, data: any) => api.post(`/credit/invoices/${id}/update/`, data),
     void: (id: number) => api.post(`/credit/invoices/${id}/void/`),
   },
   returns: {
@@ -666,6 +667,12 @@ export const creditApi = {
       txn_type?: 'sale' | 'payment' | 'return' | '';
     }) => api.get('/credit/ledger/statement/', { params }),
     byCustomer: (params?: any) => api.get('/credit/ledger/by-customer/', { params }),
+    updateCollection: (
+      customerId: number,
+      data: { collection_reason?: string; reason?: string; next_follow_up_date?: string | null }
+    ) => api.patch(`/credit/ledger/customers/${customerId}/collection/`, data),
+    collectionHistory: (customerId: number, params?: { limit?: number }) =>
+      api.get(`/credit/ledger/customers/${customerId}/collection-history/`, { params }),
   },
 };
 

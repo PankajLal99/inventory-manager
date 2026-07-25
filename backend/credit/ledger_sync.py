@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from backend.parties.models import Customer
 
+from .collection_crm import auto_bump_follow_up_after_payment
 from .models import CreditCustomer, CreditLedgerEntry, CreditPayment
 from .views import CREDIT_ELIGIBLE_NAME_MARKER, ensure_credit_customer
 
@@ -154,3 +155,7 @@ def sync_main_ledger_payment(ledger_entry, user=None) -> None:
         )
         credit_customer.balance = F('balance') - amount
         credit_customer.save(update_fields=['balance', 'updated_at'])
+        credit_customer.refresh_from_db(
+            fields=['balance', 'next_follow_up_date', 'collection_reason']
+        )
+        auto_bump_follow_up_after_payment(credit_customer, user=user)

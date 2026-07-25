@@ -49,6 +49,65 @@ function escapeHtml(s: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
+/** POS Credit amber palette for statement PDF / copy image */
+const PDF_AMBER: [number, number, number] = [146, 64, 14]; // amber-800
+const PDF_HEAD: [number, number, number] = [245, 245, 244]; // stone-100
+const PDF_BORDER: [number, number, number] = [214, 211, 209]; // stone-300
+const PDF_MUTED: [number, number, number] = [120, 113, 108]; // stone-500
+const PDF_INK: [number, number, number] = [28, 25, 23]; // stone-900
+const PDF_DEBIT_BG: [number, number, number] = [254, 242, 242]; // red-50
+const PDF_CREDIT_BG: [number, number, number] = [236, 253, 245]; // emerald-50
+const PDF_GREEN: [number, number, number] = [4, 120, 87]; // emerald-700
+const PDF_RED: [number, number, number] = [185, 28, 28]; // red-700
+
+function formatPdfDate(value?: string | null) {
+  if (!value) return '—';
+  try {
+    const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value);
+    if (Number.isNaN(d.getTime())) return '—';
+    return format(d, 'dd-MM-yyyy');
+  } catch {
+    return '—';
+  }
+}
+
+/** jsPDF Helvetica can't render ₹ / emoji — keep printable Latin text only */
+function sanitizePdfText(value?: string | null) {
+  return String(value ?? '')
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\u2600-\u27BF]/g, '')
+    .replace(/[\uFE0E\uFE0F]/g, '')
+    .replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatPdfAmount(value: string | number | null | undefined) {
+  const n = parseFloat(String(value ?? 0));
+  if (!Number.isFinite(n)) return '0.00';
+  return n.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatPdfMoney(value: string | number | null | undefined) {
+  const n = parseFloat(String(value ?? 0));
+  if (!Number.isFinite(n) || n === 0) return '';
+  return formatPdfAmount(n);
+}
+
+function formatPdfRs(value: string | number | null | undefined) {
+  return `Rs. ${formatPdfAmount(value)}`;
+}
+
+function formatPdfBalance(amount: string | number | null | undefined, side?: string) {
+  const n = parseFloat(String(amount ?? 0));
+  if (!Number.isFinite(n)) return '0.00 Dr';
+  const s = (side || 'Dr').toLowerCase() === 'cr' ? 'Cr' : 'Dr';
+  return `${formatPdfAmount(n)} ${s}`;
+}
+
 async function copyPdfBlobToClipboard(blob: Blob): Promise<boolean> {
   try {
     if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
@@ -249,186 +308,349 @@ export default function CreditLedgerDetail() {
     (parseFloat(cashAmount || '0') || 0) + (parseFloat(upiAmount || '0') || 0);
 
   const periodLabel = useMemo(() => {
-    if (dateFrom && dateTo) return `From ${formatLedgerDate(dateFrom)} to ${formatLedgerDate(dateTo)}`;
-    if (dateFrom) return `From ${formatLedgerDate(dateFrom)}`;
-    if (dateTo) return `To ${formatLedgerDate(dateTo)}`;
+    if (dateFrom && dateTo) return `${formatPdfDate(dateFrom)} - ${formatPdfDate(dateTo)}`;
+    if (dateFrom) return `From ${formatPdfDate(dateFrom)}`;
+    if (dateTo) return `To ${formatPdfDate(dateTo)}`;
     return 'All dates';
   }, [dateFrom, dateTo]);
 
   const closingBalance = statement?.closing_balance ?? selectedCustomer?.balance ?? '0';
   const closingSide = statement?.closing_side ?? 'Dr';
 
+  const buildStatementRows = () => {
+    if (!statement) return [];
+    const out: Array<{
+      date: string;
+      debit: string;
+      credit: string;
+      balance: string;
+      isOpening?: boolean;
+      isTotal?: boolean;
+    }> = [];
+
+    const openingDate = dateFrom
+      ? formatPdfDate(dateFrom)
+      : rows[0]?.created_at
+        ? formatPdfDate(rows[0].created_at)
+        : formatPdfDate(new Date().toISOString());
+
+    out.push({
+      date: openingDate,
+      debit: '',
+      credit: '',
+      balance: `(Opening: ${formatPdfAmount(statement.opening_balance)})`,
+      isOpening: true,
+    });
+
+    for (const row of rows) {
+      out.push({
+        date: formatPdfDate(row.created_at),
+        debit: formatPdfMoney(row.debit),
+        credit: formatPdfMoney(row.credit),
+        balance: formatPdfBalance(row.running_balance, row.balance_side),
+      });
+    }
+
+    out.push({
+      date: 'Grand Total',
+      debit: formatPdfAmount(statement.total_debit),
+      credit: formatPdfAmount(statement.total_credit),
+      balance: formatPdfBalance(statement.closing_balance, statement.closing_side),
+      isTotal: true,
+    });
+
+    return out;
+  };
+
   const buildCreditLedgerPdf = () => {
     if (!selectedCustomer || !statement) return null;
 
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
-    let y = 12;
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 10;
+    const contentW = pageWidth - marginX * 2;
+    const customerName = sanitizePdfText(selectedCustomer.name || 'Customer') || 'Customer';
+    const firstName = customerName.split(/\s+/)[0] || customerName;
+    const netSide = String(statement.closing_side || 'Dr').toUpperCase();
+    const isCr = netSide === 'CR';
+    const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
+    const openOn = dateFrom
+      ? `on ${formatPdfDate(dateFrom)}`
+      : rows[0]?.created_at
+        ? `on ${formatPdfDate(rows[0].created_at)}`
+        : '';
 
+    // Top brand bar — compact
+    doc.setFillColor(...PDF_AMBER);
+    doc.rect(0, 0, pageWidth, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('Manish Traders', marginX, 5.4);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text('Credit Ledger', pageWidth - marginX, 5.4, { align: 'right' });
+
+    // Title — tight
+    let y = 14;
+    doc.setTextColor(...PDF_INK);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.text('POS CREDIT', pageWidth / 2, y, { align: 'center' });
-    y += 6;
-    doc.setFontSize(14);
-    doc.text('LEDGER', pageWidth / 2, y, { align: 'center' });
-    y += 6;
+    doc.text(`${customerName} Statement`, pageWidth / 2, y, { align: 'center' });
+    y += 4.5;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.text(`( ${periodLabel} )`, pageWidth / 2, y, { align: 'center' });
-    y += 6;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text(`Account : ${(selectedCustomer.name || '').toUpperCase()}`, pageWidth / 2, y, {
-      align: 'center',
-    });
+    doc.setFontSize(8);
+    doc.setTextColor(...PDF_MUTED);
+    doc.text(`(${periodLabel})`, pageWidth / 2, y, { align: 'center' });
+
+    // Summary strip — shorter
     y += 4;
+    const boxH = 16;
+    doc.setDrawColor(...PDF_BORDER);
+    doc.setFillColor(255, 255, 255);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(marginX, y, contentW, boxH, 0.8, 0.8, 'FD');
 
-    const body: any[][] = [];
-    body.push([
-      '',
-      '',
-      '',
-      'Opening Balance',
-      '',
-      '',
-      '',
-      balanceLabel(statement.opening_balance, statement.opening_side),
-    ]);
+    const colW = contentW / 4;
+    const cards = [
+      {
+        label: 'Opening Balance',
+        value: formatPdfRs(statement.opening_balance),
+        sub: openOn,
+        color: PDF_INK as [number, number, number],
+      },
+      {
+        label: 'Total Debit(-)',
+        value: formatPdfRs(statement.total_debit),
+        sub: '',
+        color: PDF_INK as [number, number, number],
+      },
+      {
+        label: 'Total Credit(+)',
+        value: formatPdfRs(statement.total_credit),
+        sub: '',
+        color: PDF_INK as [number, number, number],
+      },
+      {
+        label: 'Net Balance',
+        value: `${formatPdfRs(statement.closing_balance)} ${isCr ? 'Cr' : 'Dr'}`,
+        sub: netHint,
+        color: (isCr ? PDF_GREEN : PDF_RED) as [number, number, number],
+      },
+    ];
 
-    for (const row of rows) {
-      body.push([
-        formatLedgerDate(row.created_at),
-        row.txn_type || '',
-        row.vch_no || '',
-        row.particulars || '',
-        row.narration || '',
-        formatMoneyCell(row.debit),
-        formatMoneyCell(row.credit),
-        balanceLabel(row.running_balance, row.balance_side),
-      ]);
-    }
+    cards.forEach((card, i) => {
+      const x = marginX + i * colW;
+      if (i > 0) {
+        doc.setDrawColor(...PDF_BORDER);
+        doc.line(x, y + 2, x, y + boxH - 2);
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(...PDF_MUTED);
+      doc.text(card.label, x + 2.5, y + 4.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(...card.color);
+      doc.text(card.value, x + 2.5, y + 9.5, { maxWidth: colW - 5 });
+      if (card.sub) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6);
+        doc.setTextColor(...(i === 3 ? card.color : PDF_MUTED));
+        doc.text(card.sub, x + 2.5, y + 13.5, { maxWidth: colW - 5 });
+      }
+    });
 
-    body.push([
-      '',
-      '',
-      '',
-      'Totals',
-      '',
-      formatMoneyCell(statement.total_debit),
-      formatMoneyCell(statement.total_credit),
-      balanceLabel(statement.closing_balance, statement.closing_side),
-    ]);
+    y += boxH + 4;
+    doc.setTextColor(...PDF_INK);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
+    doc.text(`No. of Entries: ${rows.length} ${entriesSuffix}`, marginX, y);
+    y += 1.5;
+
+    const tableRows = buildStatementRows();
+    const body = tableRows.map((r) => [r.date, r.debit, r.credit, r.balance]);
 
     autoTable(doc, {
-      startY: y + 2,
-      head: [['Date', 'Type', 'Vch No.', 'Particulars', 'Narration', 'Debit', 'Credit', 'Balance']],
+      startY: y,
+      head: [['Date', 'Debit(-)', 'Credit(+)', 'Balance']],
       body,
       styles: {
-        fontSize: 8,
-        cellPadding: 1.5,
-        lineColor: [0, 0, 0],
+        fontSize: 7.5,
+        cellPadding: { top: 1.2, right: 2, bottom: 1.2, left: 2 },
+        lineColor: PDF_BORDER,
         lineWidth: 0.1,
-        textColor: [0, 0, 0],
+        textColor: PDF_INK,
+        valign: 'middle',
+        minCellHeight: 5,
       },
       headStyles: {
-        fillColor: [255, 255, 255],
-        textColor: [0, 0, 0],
+        fillColor: PDF_HEAD,
+        textColor: PDF_INK,
         fontStyle: 'bold',
-        lineWidth: 0.2,
+        fontSize: 7.5,
+        cellPadding: { top: 1.4, right: 2, bottom: 1.4, left: 2 },
       },
       columnStyles: {
-        0: { cellWidth: 22 },
-        1: { cellWidth: 20 },
-        2: { cellWidth: 32 },
-        3: { cellWidth: 45 },
-        4: { cellWidth: 40 },
-        5: { cellWidth: 28, halign: 'right' },
-        6: { cellWidth: 28, halign: 'right' },
-        7: { cellWidth: 32, halign: 'right' },
+        0: { cellWidth: 28 },
+        1: { cellWidth: 38, halign: 'right', fillColor: PDF_DEBIT_BG },
+        2: { cellWidth: 38, halign: 'right', fillColor: PDF_CREDIT_BG },
+        3: { cellWidth: contentW - 104, halign: 'right' },
       },
       didParseCell: (data: any) => {
-        if (data.section === 'body' && (data.row.index === 0 || data.row.index === body.length - 1)) {
+        if (data.section === 'head') {
+          if (data.column.index === 1) data.cell.styles.fillColor = PDF_DEBIT_BG;
+          if (data.column.index === 2) data.cell.styles.fillColor = PDF_CREDIT_BG;
+          return;
+        }
+        const rowMeta = tableRows[data.row.index];
+        if (!rowMeta) return;
+
+        if (data.column.index === 1) data.cell.styles.fillColor = PDF_DEBIT_BG;
+        if (data.column.index === 2) data.cell.styles.fillColor = PDF_CREDIT_BG;
+
+        if (rowMeta.isOpening) {
+          if (data.column.index === 0 || data.column.index === 3) {
+            data.cell.styles.fontStyle = 'bold';
+          }
+          if (data.column.index === 3) {
+            data.cell.styles.textColor = PDF_MUTED;
+          }
+        }
+        if (rowMeta.isTotal) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = PDF_HEAD;
+          if (data.column.index === 1) data.cell.styles.fillColor = PDF_DEBIT_BG;
+          if (data.column.index === 2) data.cell.styles.fillColor = PDF_CREDIT_BG;
+        }
+        if (data.column.index === 3 && rowMeta.balance && !rowMeta.isOpening) {
+          const balCr = /cr/i.test(rowMeta.balance);
+          data.cell.styles.textColor = balCr ? PDF_GREEN : PDF_RED;
           data.cell.styles.fontStyle = 'bold';
         }
       },
-      margin: { left: 10, right: 10 },
+      margin: { left: marginX, right: marginX, bottom: 16 },
       theme: 'grid',
     });
 
-    const fileName = `credit_ledger_${(selectedCustomer.name || 'customer').replace(/\s+/g, '_')}_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
+    const finalY = ((doc as any).lastAutoTable?.finalY || y) + 4;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(...PDF_MUTED);
+    doc.text(
+      `Report Generated : ${format(new Date(), "h:mm a | dd MMM''yy")}`,
+      marginX,
+      Math.min(finalY, pageHeight - 12)
+    );
+    const pageCount = (doc as any).internal.getNumberOfPages?.() || 1;
+    doc.text(`Page 1 of ${pageCount}`, pageWidth - marginX, Math.min(finalY, pageHeight - 12), {
+      align: 'right',
+    });
+
+    // Bottom brand bar — compact
+    doc.setFillColor(...PDF_AMBER);
+    doc.rect(0, pageHeight - 8, pageWidth, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.text('Manish Traders', marginX, pageHeight - 3);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Credit Ledger', pageWidth - marginX, pageHeight - 3, { align: 'right' });
+
+    const safeName = customerName.replace(/[^\w\-]+/g, '_').replace(/_+/g, '_');
+    const fileName = `credit_ledger_${safeName}_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
     return { doc, fileName };
   };
 
   const buildLedgerCaptureHtml = () => {
     if (!selectedCustomer || !statement) return '';
 
-    const head = ['Date', 'Type', 'Vch No.', 'Particulars', 'Narration', 'Debit', 'Credit', 'Balance'];
-    const bodyRows: string[][] = [];
-    bodyRows.push([
-      '',
-      '',
-      '',
-      'Opening Balance',
-      '',
-      '',
-      '',
-      balanceLabel(statement.opening_balance, statement.opening_side),
-    ]);
-    for (const row of rows) {
-      bodyRows.push([
-        formatLedgerDate(row.created_at),
-        row.txn_type || '',
-        row.vch_no || '',
-        row.particulars || '',
-        row.narration || '',
-        formatMoneyCell(row.debit),
-        formatMoneyCell(row.credit),
-        balanceLabel(row.running_balance, row.balance_side),
-      ]);
-    }
-    bodyRows.push([
-      '',
-      '',
-      '',
-      'Totals',
-      '',
-      formatMoneyCell(statement.total_debit),
-      formatMoneyCell(statement.total_credit),
-      balanceLabel(statement.closing_balance, statement.closing_side),
-    ]);
+    const customerName = sanitizePdfText(selectedCustomer.name || 'Customer') || 'Customer';
+    const firstName = customerName.split(/\s+/)[0] || customerName;
+    const netSide = String(statement.closing_side || 'Dr').toUpperCase();
+    const isCr = netSide === 'CR';
+    const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
+    const netColor = isCr ? '#047857' : '#b91c1c';
+    const openOn = dateFrom
+      ? `on ${formatPdfDate(dateFrom)}`
+      : rows[0]?.created_at
+        ? `on ${formatPdfDate(rows[0].created_at)}`
+        : '';
+    const tableRows = buildStatementRows();
+    const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
 
-    const th = head
-      .map(
-        (h) =>
-          `<th style="border:1px solid #000;padding:6px 5px;font-size:11px;font-weight:700;background:#fff;text-align:left;">${escapeHtml(h)}</th>`
-      )
-      .join('');
-
-    const trs = bodyRows
-      .map((cols, idx) => {
-        const bold = idx === 0 || idx === bodyRows.length - 1;
-        const tds = cols
-          .map((c, ci) => {
-            const align = ci >= 5 ? 'right' : 'left';
-            return `<td style="border:1px solid #000;padding:5px 5px;font-size:10px;text-align:${align};${bold ? 'font-weight:700;' : ''}">${escapeHtml(c)}</td>`;
-          })
-          .join('');
-        return `<tr>${tds}</tr>`;
+    const trs = tableRows
+      .map((r) => {
+        const balColor = r.isOpening ? '#78716c' : /cr/i.test(r.balance) ? '#047857' : '#b91c1c';
+        const weight = r.isOpening || r.isTotal ? '700' : '500';
+        const rowBg = r.isTotal ? '#f5f5f4' : '#ffffff';
+        return `<tr style="background:${rowBg};">
+          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;color:#1c1917;font-weight:${weight};">${escapeHtml(r.date)}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;text-align:right;background:#fef2f2;color:#1c1917;font-weight:${weight};">${escapeHtml(r.debit)}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;text-align:right;background:#ecfdf5;color:#1c1917;font-weight:${weight};">${escapeHtml(r.credit)}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;text-align:right;font-weight:700;color:${balColor};">${escapeHtml(r.balance)}</td>
+        </tr>`;
       })
       .join('');
 
     return `<!doctype html>
 <html><head><meta charset="UTF-8" /></head>
 <body style="margin:0;padding:0;background:#fff;">
-  <div id="credit-ledger-copy-root" style="width:1123px;padding:24px 28px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;">
-    <div style="text-align:center;font-size:14px;font-weight:700;letter-spacing:0.4px;">POS CREDIT</div>
-    <div style="text-align:center;font-size:18px;font-weight:800;margin-top:4px;">LEDGER</div>
-    <div style="text-align:center;font-size:12px;margin-top:4px;">( ${escapeHtml(periodLabel)} )</div>
-    <div style="text-align:center;font-size:13px;font-weight:700;margin:10px 0 14px;">Account : ${escapeHtml((selectedCustomer.name || '').toUpperCase())}</div>
-    <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-      <thead><tr>${th}</tr></thead>
-      <tbody>${trs}</tbody>
-    </table>
+  <div id="credit-ledger-copy-root" style="width:794px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#1c1917;background:#fff;">
+    <div style="background:#92400e;color:#fff;padding:7px 16px;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-weight:700;font-size:12px;">Manish Traders</div>
+      <div style="font-size:11px;">Credit Ledger</div>
+    </div>
+    <div style="padding:12px 16px 10px;">
+      <div style="text-align:center;font-size:16px;font-weight:800;color:#1c1917;">${escapeHtml(customerName)} Statement</div>
+      <div style="text-align:center;font-size:11px;color:#57534e;margin-top:2px;">(${escapeHtml(periodLabel)})</div>
+
+      <div style="display:flex;margin-top:10px;border:1px solid #d6d3d1;border-radius:4px;overflow:hidden;">
+        <div style="flex:1;padding:8px 10px;border-right:1px solid #e7e5e4;">
+          <div style="font-size:10px;color:#78716c;">Opening Balance</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;">Rs. ${escapeHtml(formatPdfAmount(statement.opening_balance))}</div>
+          ${openOn ? `<div style="font-size:9px;color:#78716c;margin-top:2px;">${escapeHtml(openOn)}</div>` : ''}
+        </div>
+        <div style="flex:1;padding:8px 10px;border-right:1px solid #e7e5e4;">
+          <div style="font-size:10px;color:#78716c;">Total Debit(-)</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;">Rs. ${escapeHtml(formatPdfAmount(statement.total_debit))}</div>
+        </div>
+        <div style="flex:1;padding:8px 10px;border-right:1px solid #e7e5e4;">
+          <div style="font-size:10px;color:#78716c;">Total Credit(+)</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;">Rs. ${escapeHtml(formatPdfAmount(statement.total_credit))}</div>
+        </div>
+        <div style="flex:1;padding:8px 10px;">
+          <div style="font-size:10px;color:#78716c;">Net Balance</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${netColor};">Rs. ${escapeHtml(formatPdfAmount(statement.closing_balance))} ${isCr ? 'Cr' : 'Dr'}</div>
+          <div style="font-size:9px;margin-top:2px;color:${netColor};">${escapeHtml(netHint)}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;font-size:11px;font-weight:700;color:#1c1917;">No. of Entries: ${rows.length} ${entriesSuffix}</div>
+
+      <table style="width:100%;border-collapse:collapse;margin-top:4px;border:1px solid #e7e5e4;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:5px 8px;font-size:10px;color:#44403c;background:#f5f5f4;border-bottom:1px solid #d6d3d1;">Date</th>
+            <th style="text-align:right;padding:5px 8px;font-size:10px;color:#44403c;background:#fef2f2;border-bottom:1px solid #d6d3d1;">Debit(-)</th>
+            <th style="text-align:right;padding:5px 8px;font-size:10px;color:#44403c;background:#ecfdf5;border-bottom:1px solid #d6d3d1;">Credit(+)</th>
+            <th style="text-align:right;padding:5px 8px;font-size:10px;color:#44403c;background:#f5f5f4;border-bottom:1px solid #d6d3d1;">Balance</th>
+          </tr>
+        </thead>
+        <tbody>${trs}</tbody>
+      </table>
+
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:#78716c;">
+        <div>Report Generated : ${escapeHtml(format(new Date(), "h:mm a | dd MMM''yy"))}</div>
+        <div>Page 1 of 1</div>
+      </div>
+    </div>
+    <div style="background:#92400e;color:#fff;padding:7px 16px;display:flex;justify-content:space-between;font-size:11px;">
+      <div style="font-weight:700;">Manish Traders</div>
+      <div>Credit Ledger</div>
+    </div>
   </div>
 </body></html>`;
   };
@@ -445,10 +667,12 @@ export default function CreditLedgerDetail() {
 
     setCopyingPdf(true);
     try {
+      // Avoid accidentally copying page title / selected UI text with the PDF
+      window.getSelection()?.removeAllRanges();
+
       const pdfBlob = built.doc.output('blob');
       const file = new File([pdfBlob], built.fileName, { type: 'application/pdf' });
 
-      // Mobile / supported browsers: share sheet includes WhatsApp with the real PDF
       const canShareFiles =
         typeof navigator !== 'undefined' &&
         typeof navigator.share === 'function' &&
@@ -457,16 +681,12 @@ export default function CreditLedgerDetail() {
 
       if (canShareFiles) {
         try {
-          await navigator.share({
-            files: [file],
-            title: built.fileName,
-            text: `Credit ledger — ${selectedCustomer?.name || 'customer'}`,
-          });
+          // files only — no title/text so WhatsApp doesn't paste "Name — Credit Ledger"
+          await navigator.share({ files: [file] });
           toast('Share opened — pick WhatsApp to send the PDF', 'success');
           return;
         } catch (err: any) {
           if (err?.name === 'AbortError') return;
-          // Fall through to clipboard paths
         }
       }
 
@@ -475,7 +695,6 @@ export default function CreditLedgerDetail() {
         return;
       }
 
-      // Most browsers block PDF clipboard writes — copy a matching image for WhatsApp paste
       const iframe = pdfCopyFrameRef.current;
       const doc = iframe?.contentDocument;
       if (!iframe || !doc) {
@@ -490,7 +709,7 @@ export default function CreditLedgerDetail() {
 
       const root =
         (doc.getElementById('credit-ledger-copy-root') as HTMLElement | null) || doc.body;
-      const w = Math.max(root.scrollWidth || 1123, 1123);
+      const w = Math.max(root.scrollWidth || 794, 794);
       const h = Math.max(root.scrollHeight || 1, 1);
       iframe.style.width = `${w}px`;
       iframe.style.height = `${h + 8}px`;
@@ -943,7 +1162,7 @@ export default function CreditLedgerDetail() {
           position: 'fixed',
           left: '-99999px',
           top: 0,
-          width: '1123px',
+          width: '794px',
           height: '1px',
           border: 0,
           opacity: 0,
