@@ -1785,7 +1785,8 @@ export default function InvoiceDetail() {
         ? `₹ ${escapeHtml(formatAmountINR(Math.abs(n)))} (Cr)`
         : `₹ ${escapeHtml(formatAmountINR(n))}`;
 
-    const showLedgerBalances = !!(inv.customer && customerHasCreditInvoice && inv.status !== 'paid');
+    // Temporarily hide Old Balance / Total Outstanding on A4 invoice
+    const showLedgerBalances = false;
     const totalLabel = `${tradeInCreditAmount > 0 ? 'Net Total' : 'Total'}${inv.replacement_summary ? ' (Adj.)' : ''}`;
 
     const summaryBlock = `
