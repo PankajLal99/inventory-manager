@@ -305,6 +305,9 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
 
     def get_particulars(self, obj):
         if obj.payment_id:
+            pay_notes = (obj.payment.notes or '').strip() if obj.payment else ''
+            if pay_notes:
+                return pay_notes
             method = (obj.payment.payment_method if obj.payment else '') or ''
             labels = {'cash': 'Cr Cash', 'upi': 'Cr UPI', 'mixed': 'Cr Cash+UPI'}
             return labels.get(method, 'Cr Payment')
@@ -313,6 +316,9 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
         if obj.entry_type == 'credit' and obj.invoice_id:
             return 'Cr Void Sale'
         if not obj.invoice_id and not obj.payment_id and not obj.credit_return_id:
+            desc = (obj.description or '').strip()
+            if desc:
+                return desc
             return 'Dr Adjustment' if obj.entry_type == 'debit' else 'Cr Adjustment'
         return 'Dr Sales'
 
