@@ -36,6 +36,7 @@ import CreditPOSModeToggle from './CreditPOSModeToggle';
 import {
   buildCreditDocumentSnapshotBlobs,
   copyCreditDocumentImageToClipboard,
+  copyDocumentThenQueueLedgerImage,
   copyPngBlobToClipboard,
   SNAPSHOT_ROWS_PER_PAGE,
 } from './creditDocumentClipboard';
@@ -998,10 +999,36 @@ export default function POSCredit() {
       }
       const res = await creditApi.carts.checkout(cartId, payload);
       const invoice = res.data;
+      const creditCustomerId =
+        invoice.customer || selectedCustomer.credit_customer_id || null;
 
       const iframe = draftSnapshotFrameRef.current;
       let clipboardCopied = false;
-      if (iframe) {
+      if (iframe && creditCustomerId) {
+        try {
+          const statementRes = await creditApi.ledger.statement({
+            customer: creditCustomerId,
+          });
+          clipboardCopied = await copyDocumentThenQueueLedgerImage(
+            iframe,
+            {
+              invoice_number: invoice.invoice_number,
+              customer_name: invoice.customer_name,
+              customer_phone: invoice.customer_phone,
+              created_at: invoice.created_at,
+              subtotal: invoice.subtotal,
+              total: invoice.total,
+              previous_balance: invoice.previous_balance,
+              customer_balance: invoice.customer_balance,
+              status: invoice.status,
+              items: invoice.items || [],
+            },
+            statementRes.data
+          );
+        } catch (copyErr) {
+          console.error('Invoice + ledger clipboard copy failed:', copyErr);
+        }
+      } else if (iframe) {
         try {
           clipboardCopied = await copyCreditDocumentImageToClipboard(iframe, {
             invoice_number: invoice.invoice_number,
@@ -1022,7 +1049,7 @@ export default function POSCredit() {
 
       if (clipboardCopied) {
         showToast(
-          `Invoice ${invoice.invoice_number} created — image copied to clipboard`,
+          `Invoice ${invoice.invoice_number} copied (1/2) — paste it, then copy ledger (2/2)`,
           'success'
         );
       } else {
@@ -1053,6 +1080,14 @@ export default function POSCredit() {
       queryClient.invalidateQueries({ queryKey: ['credit-invoices'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+
+      if (creditCustomerId) {
+        navigate(
+          clipboardCopied
+            ? `/credit-ledger/${creditCustomerId}?copy_ledger=1`
+            : `/credit-ledger/${creditCustomerId}`
+        );
+      }
     }).catch((err: any) => {
       showToast(err?.response?.data?.detail || 'Checkout failed', 'error');
     });

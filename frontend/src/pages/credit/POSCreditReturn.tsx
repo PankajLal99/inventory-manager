@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import {
   Search,
@@ -10,7 +11,7 @@ import {
   Package,
 } from 'lucide-react';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
-import { copyCreditDocumentImageToClipboard } from './creditDocumentClipboard';
+import { copyDocumentThenQueueLedgerImage } from './creditDocumentClipboard';
 import { catalogApi, creditApi } from '../../lib/api';
 import { amountForInput, formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
@@ -119,6 +120,7 @@ function productKey(p: MergedProduct) {
 }
 
 export default function POSCreditReturn() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const productInputRef = useRef<HTMLInputElement>(null);
   const posWorkflowRef = useRef<HTMLDivElement>(null);
@@ -393,33 +395,42 @@ export default function POSCreditReturn() {
         })),
       });
       const ret = res.data;
+      const creditCustomerId =
+        ret.customer || selectedCustomer.credit_customer_id || null;
 
       const iframe = documentSnapshotFrameRef.current;
       let clipboardCopied = false;
-      if (iframe) {
+      if (iframe && creditCustomerId) {
         try {
-          clipboardCopied = await copyCreditDocumentImageToClipboard(iframe, {
-            variant: 'return',
-            invoice_number: ret.return_number,
-            customer_name: ret.customer_name || selectedCustomer.name,
-            customer_phone: ret.customer_phone || selectedCustomer.phone,
-            created_at: ret.created_at,
-            total: ret.total,
-            items: (ret.items || []).map((item: any) => ({
-              product_name: item.product_name,
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              line_total: item.line_total,
-            })),
+          const statementRes = await creditApi.ledger.statement({
+            customer: creditCustomerId,
           });
+          clipboardCopied = await copyDocumentThenQueueLedgerImage(
+            iframe,
+            {
+              variant: 'return',
+              invoice_number: ret.return_number,
+              customer_name: ret.customer_name || selectedCustomer.name,
+              customer_phone: ret.customer_phone || selectedCustomer.phone,
+              created_at: ret.created_at,
+              total: ret.total,
+              items: (ret.items || []).map((item: any) => ({
+                product_name: item.product_name,
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                line_total: item.line_total,
+              })),
+            },
+            statementRes.data
+          );
         } catch (copyErr) {
-          console.error('Return clipboard copy failed:', copyErr);
+          console.error('Return + ledger clipboard copy failed:', copyErr);
         }
       }
 
       if (clipboardCopied) {
         showToast(
-          `Return ${ret.return_number} created — image copied to clipboard`,
+          `Return ${ret.return_number} copied (1/2) — paste it, then copy ledger (2/2)`,
           'success'
         );
       } else {
@@ -435,6 +446,14 @@ export default function POSCreditReturn() {
       queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+
+      if (creditCustomerId) {
+        navigate(
+          clipboardCopied
+            ? `/credit-ledger/${creditCustomerId}?copy_ledger=1`
+            : `/credit-ledger/${creditCustomerId}`
+        );
+      }
     }).catch((err: any) => {
       showToast(err?.response?.data?.detail || 'Return failed', 'error');
     });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -40,6 +40,12 @@ import {
   formatCreditStatementDate,
 } from './creditLedgerUtils';
 import { CREDIT_THEME } from './creditInvoiceHtml';
+import { copyPngBlobToClipboard } from './creditDocumentClipboard';
+import {
+  peekPendingLedgerClipboardImage,
+  setPendingLedgerClipboardImage,
+  takePendingLedgerClipboardImage,
+} from './pendingLedgerClipboard';
 
 type PaymentMethod = 'cash' | 'upi' | 'mixed';
 type TxnType = '' | 'sale' | 'payment' | 'return';
@@ -229,7 +235,15 @@ export default function CreditLedgerDetail() {
   const [editDescription, setEditDescription] = useState('');
   const [deleteEntryId, setDeleteEntryId] = useState<number | null>(null);
   const [copyingPdf, setCopyingPdf] = useState(false);
+  const [showLedgerImageBanner, setShowLedgerImageBanner] = useState(false);
+  const [copyingLedgerImage, setCopyingLedgerImage] = useState(false);
   const canManage = canManageCreditRecords();
+
+  useEffect(() => {
+    if (searchParams.get('copy_ledger') === '1' && peekPendingLedgerClipboardImage()) {
+      setShowLedgerImageBanner(true);
+    }
+  }, [searchParams, customerId]);
 
   const { data: customers = [] } = useQuery({
     queryKey: ['credit-ledger-customers', ''],
@@ -847,6 +861,39 @@ export default function CreditLedgerDetail() {
     built.doc.save(built.fileName);
   };
 
+  const clearCopyLedgerParam = () => {
+    const params = new URLSearchParams(searchParams);
+    if (!params.has('copy_ledger')) return;
+    params.delete('copy_ledger');
+    const query = params.toString();
+    navigate(query ? `/credit-ledger/${customerId}?${query}` : `/credit-ledger/${customerId}`, {
+      replace: true,
+    });
+  };
+
+  const copyQueuedLedgerImage = async () => {
+    setCopyingLedgerImage(true);
+    try {
+      const blob = takePendingLedgerClipboardImage();
+      if (!blob) {
+        toast('Ledger image expired — use Copy PDF instead', 'error');
+        setShowLedgerImageBanner(false);
+        clearCopyLedgerParam();
+        return;
+      }
+      if (!(await copyPngBlobToClipboard(blob))) {
+        setPendingLedgerClipboardImage(blob);
+        toast('Could not copy ledger image', 'error');
+        return;
+      }
+      setShowLedgerImageBanner(false);
+      clearCopyLedgerParam();
+      toast('Ledger image copied (2/2) — paste as second image in WhatsApp', 'success');
+    } finally {
+      setCopyingLedgerImage(false);
+    }
+  };
+
   const copyPDF = async () => {
     const built = buildCreditLedgerPdf();
     if (!built) return;
@@ -889,6 +936,36 @@ export default function CreditLedgerDetail() {
 
   return (
     <div className="space-y-4">
+      {showLedgerImageBanner ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="text-sm text-amber-950">
+            <span className="font-semibold">Image 1 (invoice/return)</span> is on your clipboard.
+            Paste it in WhatsApp, then copy the ledger as a <span className="font-semibold">separate</span> image 2.
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                takePendingLedgerClipboardImage();
+                setShowLedgerImageBanner(false);
+                clearCopyLedgerParam();
+              }}
+            >
+              Dismiss
+            </Button>
+            <Button
+              size="sm"
+              className="bg-amber-600 hover:bg-amber-700"
+              disabled={copyingLedgerImage}
+              onClick={() => void copyQueuedLedgerImage()}
+            >
+              {copyingLedgerImage ? 'Copying…' : 'Copy ledger (2/2)'}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 flex-1 min-w-0">
           <Button

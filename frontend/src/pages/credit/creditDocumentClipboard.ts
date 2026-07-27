@@ -4,6 +4,11 @@ import {
   CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
+import {
+  buildCreditLedgerSnapshotHtml,
+  type CreditLedgerStatementSnapshot,
+} from './creditLedgerSnapshot';
+import { setPendingLedgerClipboardImage } from './pendingLedgerClipboard';
 
 export const SNAPSHOT_ROWS_PER_PAGE = 25;
 
@@ -36,12 +41,15 @@ export async function renderSnapshotHtmlToBlob(
   await new Promise((r) => window.setTimeout(r, 150));
 
   const root =
-    (doc.getElementById('credit-invoice-root') as HTMLElement | null) || doc.body;
+    (doc.getElementById('credit-invoice-root') as HTMLElement | null) ||
+    (doc.getElementById('credit-ledger-copy-root') as HTMLElement | null) ||
+    doc.body;
   const w = CREDIT_INVOICE_CAPTURE_WIDTH;
   const h = Math.max(
     CREDIT_INVOICE_CAPTURE_HEIGHT,
     Math.ceil(root.scrollHeight || root.offsetHeight || 1)
   );
+  iframe.style.width = `${w}px`;
   iframe.style.height = `${h + 8}px`;
 
   const canvas = await html2canvas(root, {
@@ -152,7 +160,7 @@ export async function buildCreditDocumentSnapshotBlobs(
   return blobs;
 }
 
-async function mergePngBlobsVertically(blobs: Blob[]): Promise<Blob | null> {
+export async function mergePngBlobsVertically(blobs: Blob[]): Promise<Blob | null> {
   if (blobs.length === 0) return null;
   if (blobs.length === 1) return blobs[0];
 
@@ -188,4 +196,40 @@ export async function copyCreditDocumentImageToClipboard(
   const merged = await mergePngBlobsVertically(blobs);
   if (!merged) return false;
   return copyPngBlobToClipboard(merged);
+}
+
+/**
+ * Copy invoice/return as image 1, queue ledger as image 2.
+ * Browsers only keep one clipboard image — paste image 1, then copy image 2 from the ledger page.
+ */
+export async function copyDocumentThenQueueLedgerImage(
+  iframe: HTMLIFrameElement,
+  documentInput: CreditDocumentClipboardInput,
+  statement: CreditLedgerStatementSnapshot
+): Promise<boolean> {
+  const docBlobs = await buildCreditDocumentSnapshotBlobs(iframe, documentInput);
+  const documentBlob = await mergePngBlobsVertically(docBlobs);
+  if (!documentBlob) return false;
+
+  const ledgerHtml = buildCreditLedgerSnapshotHtml(statement);
+  const ledgerBlob = await renderSnapshotHtmlToBlob(iframe, ledgerHtml);
+  if (!ledgerBlob) {
+    throw new Error('Failed to create ledger image');
+  }
+
+  if (!(await copyPngBlobToClipboard(documentBlob))) {
+    return false;
+  }
+
+  setPendingLedgerClipboardImage(ledgerBlob);
+  return true;
+}
+
+/** @deprecated Prefer copyDocumentThenQueueLedgerImage for two separate images */
+export async function copyDocumentAndLedgerImageToClipboard(
+  iframe: HTMLIFrameElement,
+  documentInput: CreditDocumentClipboardInput,
+  statement: CreditLedgerStatementSnapshot
+): Promise<boolean> {
+  return copyDocumentThenQueueLedgerImage(iframe, documentInput, statement);
 }
