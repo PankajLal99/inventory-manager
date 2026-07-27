@@ -549,18 +549,21 @@ export default function CreditLedgerDetail() {
         ? formatPdfDateShort(rows[0].created_at)
         : formatPdfDateShort(new Date().toISOString());
 
-    out.push({
-      sr: '',
-      date: openingDate,
-      type: '',
-      vch: '',
-      particulars: 'Opening Balance',
-      narration: '',
-      debit: '',
-      credit: '',
-      balance: formatPdfBalance(statement.opening_balance, statement.opening_side),
-      isOpening: true,
-    });
+    // Brought-forward row only when filtering from a start date (avoids duplicating opening-balance entries on "All")
+    if (dateFrom) {
+      out.push({
+        sr: '',
+        date: openingDate,
+        type: '',
+        vch: '',
+        particulars: 'Opening Balance',
+        narration: '',
+        debit: '',
+        credit: '',
+        balance: formatPdfBalance(statement.opening_balance, statement.opening_side),
+        isOpening: true,
+      });
+    }
 
     rows.forEach((row: any, idx: number) => {
       const debit = formatPdfMoney(row.debit);
