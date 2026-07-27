@@ -6,6 +6,7 @@ import {
 } from './creditInvoiceHtml';
 import {
   buildCreditLedgerSnapshotHtml,
+  buildCreditLedgerSnapshotPageHtmlList,
   type CreditLedgerStatementSnapshot,
 } from './creditLedgerSnapshot';
 import { setPendingLedgerClipboardImage } from './pendingLedgerClipboard';
@@ -199,6 +200,33 @@ export async function copyCreditDocumentImageToClipboard(
 }
 
 /**
+ * Render ledger statement as one PNG per page (40 rows/page), then merge vertically.
+ */
+export async function buildCreditLedgerSnapshotBlobs(
+  iframe: HTMLIFrameElement,
+  statement: CreditLedgerStatementSnapshot
+): Promise<Blob[]> {
+  const pages = buildCreditLedgerSnapshotPageHtmlList(statement);
+  const blobs: Blob[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const blob = await renderSnapshotHtmlToBlob(iframe, pages[i]);
+    if (!blob) {
+      throw new Error(`Failed to create ledger image (page ${i + 1}).`);
+    }
+    blobs.push(blob);
+  }
+  return blobs;
+}
+
+export async function buildMergedCreditLedgerSnapshotBlob(
+  iframe: HTMLIFrameElement,
+  statement: CreditLedgerStatementSnapshot
+): Promise<Blob | null> {
+  const blobs = await buildCreditLedgerSnapshotBlobs(iframe, statement);
+  return mergePngBlobsVertically(blobs);
+}
+
+/**
  * Copy invoice/return as image 1, queue ledger as image 2.
  * Browsers only keep one clipboard image — paste image 1, then copy image 2 from the ledger page.
  */
@@ -211,8 +239,7 @@ export async function copyDocumentThenQueueLedgerImage(
   const documentBlob = await mergePngBlobsVertically(docBlobs);
   if (!documentBlob) return false;
 
-  const ledgerHtml = buildCreditLedgerSnapshotHtml(statement);
-  const ledgerBlob = await renderSnapshotHtmlToBlob(iframe, ledgerHtml);
+  const ledgerBlob = await buildMergedCreditLedgerSnapshotBlob(iframe, statement);
   if (!ledgerBlob) {
     throw new Error('Failed to create ledger image');
   }
@@ -233,3 +260,6 @@ export async function copyDocumentAndLedgerImageToClipboard(
 ): Promise<boolean> {
   return copyDocumentThenQueueLedgerImage(iframe, documentInput, statement);
 }
+
+// Keep single-page helper available for callers that only need HTML
+export { buildCreditLedgerSnapshotHtml };

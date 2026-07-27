@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   BookOpen,
   Calendar,
+  Camera,
   ClipboardCopy,
   Columns3,
   FileText,
@@ -40,7 +41,11 @@ import {
   formatCreditStatementDate,
 } from './creditLedgerUtils';
 import { CREDIT_THEME } from './creditInvoiceHtml';
-import { copyPngBlobToClipboard } from './creditDocumentClipboard';
+import {
+  copyPngBlobToClipboard,
+  buildCreditLedgerSnapshotBlobs,
+} from './creditDocumentClipboard';
+import { LEDGER_SNAPSHOT_ROWS_PER_PAGE } from './creditLedgerSnapshot';
 import {
   peekPendingLedgerClipboardImage,
   setPendingLedgerClipboardImage,
@@ -237,7 +242,14 @@ export default function CreditLedgerDetail() {
   const [copyingPdf, setCopyingPdf] = useState(false);
   const [showLedgerImageBanner, setShowLedgerImageBanner] = useState(false);
   const [copyingLedgerImage, setCopyingLedgerImage] = useState(false);
+  const [picturePageProgress, setPicturePageProgress] = useState<{
+    total: number;
+    nextPart: number;
+  } | null>(null);
   const canManage = canManageCreditRecords();
+  const pictureCopyFrameRef = useRef<HTMLIFrameElement>(null);
+  const picturePartsQueueRef = useRef<Blob[]>([]);
+  const picturePartsTotalRef = useRef(0);
 
   useEffect(() => {
     if (searchParams.get('copy_ledger') === '1' && peekPendingLedgerClipboardImage()) {
@@ -302,6 +314,20 @@ export default function CreditLedgerDetail() {
       return hay.includes(q);
     });
   }, [statement?.rows, search]);
+
+  // Reset multi-page picture queue when statement / filters change
+  useEffect(() => {
+    picturePartsQueueRef.current = [];
+    picturePartsTotalRef.current = 0;
+    const entryCount = rows.length;
+    const pages =
+      entryCount === 0 ? 1 : Math.ceil(entryCount / LEDGER_SNAPSHOT_ROWS_PER_PAGE);
+    if (pages > 1) {
+      setPicturePageProgress({ total: pages, nextPart: 1 });
+    } else {
+      setPicturePageProgress(null);
+    }
+  }, [rows.length, customerId, dateFrom, dateTo, txnType]);
 
   const visibleColumns = useMemo(
     () => LEDGER_COLUMN_DEFS.filter((c) => columnVisibility[c.id]),
@@ -876,7 +902,7 @@ export default function CreditLedgerDetail() {
     try {
       const blob = takePendingLedgerClipboardImage();
       if (!blob) {
-        toast('Ledger image expired — use Copy PDF instead', 'error');
+        toast('Ledger image expired — use Copy Picture instead', 'error');
         setShowLedgerImageBanner(false);
         clearCopyLedgerParam();
         return;
@@ -893,6 +919,86 @@ export default function CreditLedgerDetail() {
       setCopyingLedgerImage(false);
     }
   };
+
+  const copyLedgerPicture = async () => {
+    if (!statement) {
+      toast('Ledger not ready yet', 'error');
+      return;
+    }
+    const iframe = pictureCopyFrameRef.current;
+    if (!iframe) {
+      toast('Picture preview not ready. Try again.', 'error');
+      return;
+    }
+
+    setCopyingLedgerImage(true);
+    try {
+      window.getSelection()?.removeAllRanges();
+
+      const pending = picturePartsQueueRef.current;
+      if (pending.length > 0) {
+        const blob = pending.shift()!;
+        const totalParts = picturePartsTotalRef.current;
+        const partNum = totalParts - pending.length;
+        if (!(await copyPngBlobToClipboard(blob))) {
+          pending.unshift(blob);
+          toast('Could not copy picture. Check clipboard permissions.', 'error');
+          return;
+        }
+        if (pending.length > 0) {
+          setPicturePageProgress({ total: totalParts, nextPart: partNum + 1 });
+          toast(
+            `Ledger page ${partNum} of ${totalParts} copied. Tap Copy Picture again for page ${partNum + 1}.`,
+            'success'
+          );
+        } else {
+          picturePartsTotalRef.current = 0;
+          setPicturePageProgress(null);
+          toast(`Ledger page ${partNum} of ${totalParts} copied.`, 'success');
+        }
+        return;
+      }
+
+      const blobs = await buildCreditLedgerSnapshotBlobs(iframe, {
+        ...statement,
+        rows,
+      });
+      if (!blobs.length) {
+        toast('Could not create ledger picture', 'error');
+        return;
+      }
+
+      if (!(await copyPngBlobToClipboard(blobs[0]))) {
+        toast('Could not copy picture. Check clipboard permissions.', 'error');
+        return;
+      }
+
+      if (blobs.length > 1) {
+        picturePartsQueueRef.current = blobs.slice(1);
+        picturePartsTotalRef.current = blobs.length;
+        setPicturePageProgress({ total: blobs.length, nextPart: 2 });
+        toast(
+          `Ledger page 1 of ${blobs.length} copied. Tap Copy Picture again for page 2.`,
+          'success'
+        );
+      } else {
+        setPicturePageProgress(null);
+        toast('Ledger picture copied — paste in WhatsApp', 'success');
+      }
+    } catch (e: any) {
+      picturePartsQueueRef.current = [];
+      picturePartsTotalRef.current = 0;
+      toast(e?.message || 'Failed to copy picture', 'error');
+    } finally {
+      setCopyingLedgerImage(false);
+    }
+  };
+
+  const pictureButtonLabel = copyingLedgerImage
+    ? 'Copying…'
+    : picturePageProgress && picturePageProgress.total > 1
+      ? `Copy Picture (${picturePageProgress.nextPart}/${picturePageProgress.total})`
+      : 'Copy Picture';
 
   const copyPDF = async () => {
     const built = buildCreditLedgerPdf();
@@ -1014,9 +1120,19 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => void copyLedgerPicture()}
+                disabled={copyingLedgerImage}
+                title="Copy ledger picture to clipboard for WhatsApp"
+              >
+                <Camera className="h-4 w-4 mr-1.5" />
+                {pictureButtonLabel}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={copyPDF}
                 disabled={copyingPdf}
-                title="Copy ledger to clipboard for WhatsApp"
+                title="Copy ledger PDF to clipboard"
               >
                 <ClipboardCopy className="h-4 w-4 mr-1.5" />
                 {copyingPdf ? 'Copying…' : 'Copy PDF'}
@@ -1430,9 +1546,19 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => void copyLedgerPicture()}
+                disabled={copyingLedgerImage}
+                title="Copy ledger picture to clipboard for WhatsApp"
+              >
+                <Camera className="h-4 w-4 mr-1" />
+                {pictureButtonLabel}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={copyPDF}
                 disabled={copyingPdf}
-                title="Copy ledger to clipboard for WhatsApp"
+                title="Copy ledger PDF to clipboard"
               >
                 <ClipboardCopy className="h-4 w-4 mr-1" />
                 {copyingPdf ? 'Copying…' : 'Copy PDF'}
@@ -1654,6 +1780,21 @@ export default function CreditLedgerDetail() {
           </Button>
         </div>
       </Modal>
+
+      <iframe
+        ref={pictureCopyFrameRef}
+        title="credit-ledger-picture-copy"
+        style={{
+          position: 'fixed',
+          left: '-99999px',
+          top: 0,
+          width: '794px',
+          height: '1px',
+          border: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   );
 }

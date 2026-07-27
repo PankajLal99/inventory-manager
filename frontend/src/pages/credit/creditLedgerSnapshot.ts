@@ -5,6 +5,9 @@ import {
   formatCreditStatementDate,
 } from './creditLedgerUtils';
 
+/** Entry rows per ledger snapshot page (e.g. 80 rows → 2 pages). */
+export const LEDGER_SNAPSHOT_ROWS_PER_PAGE = 40;
+
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -45,6 +48,16 @@ function sanitizeText(value?: string | null) {
     .trim();
 }
 
+function chunkRows<T>(rows: T[], size: number): T[][] {
+  if (size <= 0) return [rows];
+  if (rows.length === 0) return [[]];
+  const chunks: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    chunks.push(rows.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export type CreditLedgerStatementSnapshot = {
   customer?: { name?: string | null; phone?: string | null } | null;
   opening_balance?: string | number | null;
@@ -67,39 +80,31 @@ export type CreditLedgerStatementSnapshot = {
   }>;
 };
 
-/** Compact A4-style ledger HTML for clipboard screenshot (invoice + ledger merge). */
-export function buildCreditLedgerSnapshotHtml(
-  statement: CreditLedgerStatementSnapshot
-): string {
-  const customerName = sanitizeText(statement.customer?.name || 'Customer') || 'Customer';
-  const firstName = customerName.split(/\s+/)[0] || customerName;
-  const netSide = String(statement.closing_side || 'Dr').toUpperCase();
-  const isCr = netSide === 'CR';
-  const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
-  const netColor = isCr ? CREDIT_THEME.creditText : CREDIT_THEME.debitText;
+type SnapRow = {
+  date: string;
+  particulars: string;
+  debit: string;
+  credit: string;
+  balance: string;
+  isOpening?: boolean;
+  isTotal?: boolean;
+  hasDebit?: boolean;
+  hasCredit?: boolean;
+};
 
-  const rows = [...(statement.rows || [])].sort((a, b) => {
+function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
+  return [...(statement.rows || [])].sort((a, b) => {
     const ta = new Date(a.created_at || 0).getTime();
     const tb = new Date(b.created_at || 0).getTime();
     if (ta !== tb) return ta - tb;
     return (Number(a.id) || 0) - (Number(b.id) || 0);
   });
+}
 
-  const openOn = rows[0]?.created_at ? `on ${formatCreditDate(rows[0].created_at)}` : '';
-
-  type SnapRow = {
-    date: string;
-    particulars: string;
-    debit: string;
-    credit: string;
-    balance: string;
-    isOpening?: boolean;
-    isTotal?: boolean;
-    hasDebit?: boolean;
-    hasCredit?: boolean;
-  };
-
-  const tableRows: SnapRow[] = rows.map((row) => {
+function toSnapRows(
+  rows: NonNullable<CreditLedgerStatementSnapshot['rows']>
+): SnapRow[] {
+  return rows.map((row) => {
     const debit = formatMoney(row.debit);
     const credit = formatMoney(row.credit);
     return {
@@ -112,19 +117,56 @@ export function buildCreditLedgerSnapshotHtml(
       hasCredit: !!credit,
     };
   });
+}
 
-  tableRows.push({
-    date: '',
-    particulars: 'Grand Total',
-    debit: formatAmount(statement.total_debit),
-    credit: formatAmount(statement.total_credit),
-    balance: formatBalance(statement.closing_balance, statement.closing_side || undefined),
-    isTotal: true,
-    hasDebit: true,
-    hasCredit: true,
-  });
+export type CreditLedgerSnapshotPageOptions = {
+  pageRows: SnapRow[];
+  partIndex: number;
+  partCount: number;
+  totalEntries: number;
+  showSummary: boolean;
+  showTotals: boolean;
+  lineStart: number;
+};
 
-  const cols: Array<{ id: keyof SnapRow | 'balance'; label: string; align: string }> = [
+/** One A4-style ledger page HTML (use with partIndex/partCount for multi-page). */
+export function buildCreditLedgerSnapshotHtml(
+  statement: CreditLedgerStatementSnapshot,
+  page?: Partial<CreditLedgerSnapshotPageOptions>
+): string {
+  const allRows = sortStatementRows(statement);
+  const snapAll = toSnapRows(allRows);
+  const partIndex = page?.partIndex ?? 1;
+  const partCount = page?.partCount ?? 1;
+  const pageRows = page?.pageRows ?? snapAll;
+  const totalEntries = page?.totalEntries ?? snapAll.length;
+  const showSummary = page?.showSummary ?? true;
+  const showTotals = page?.showTotals ?? true;
+  const lineStart = page?.lineStart ?? 1;
+
+  const customerName = sanitizeText(statement.customer?.name || 'Customer') || 'Customer';
+  const firstName = customerName.split(/\s+/)[0] || customerName;
+  const netSide = String(statement.closing_side || 'Dr').toUpperCase();
+  const isCr = netSide === 'CR';
+  const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
+  const netColor = isCr ? CREDIT_THEME.creditText : CREDIT_THEME.debitText;
+  const openOn = allRows[0]?.created_at ? `on ${formatCreditDate(allRows[0].created_at)}` : '';
+
+  const tableRows: SnapRow[] = [...pageRows];
+  if (showTotals) {
+    tableRows.push({
+      date: '',
+      particulars: 'Grand Total',
+      debit: formatAmount(statement.total_debit),
+      credit: formatAmount(statement.total_credit),
+      balance: formatBalance(statement.closing_balance, statement.closing_side || undefined),
+      isTotal: true,
+      hasDebit: true,
+      hasCredit: true,
+    });
+  }
+
+  const cols: Array<{ id: keyof SnapRow; label: string; align: string }> = [
     { id: 'date', label: 'Date', align: 'left' },
     { id: 'particulars', label: 'Particulars', align: 'left' },
     { id: 'debit', label: 'Debit(-)', align: 'right' },
@@ -142,8 +184,7 @@ export function buildCreditLedgerSnapshotHtml(
       let bg = CREDIT_THEME.tableHead;
       if (c.id === 'debit') bg = CREDIT_THEME.debitBg;
       if (c.id === 'credit') bg = CREDIT_THEME.creditBg;
-      const right =
-        i === cols.length - 1 ? 'border-right:none;' : '';
+      const right = i === cols.length - 1 ? 'border-right:none;' : '';
       return `<th style="${cellBase}${right}text-align:${c.align};font-size:11px;font-weight:700;color:${CREDIT_THEME.secondary};background:${bg};">${escapeHtml(c.label)}</th>`;
     })
     .join('');
@@ -164,7 +205,7 @@ export function buildCreditLedgerSnapshotHtml(
 
       const tds = cols
         .map((c, i) => {
-          let val = String(r[c.id as keyof SnapRow] ?? '').trim();
+          let val = String(r[c.id] ?? '').trim();
           if (!val) val = '\u00A0';
           let bg = rowBg;
           let color = CREDIT_THEME.text;
@@ -194,24 +235,16 @@ export function buildCreditLedgerSnapshotHtml(
     <col style="width:16%;" />
   `;
 
-  return `<!doctype html>
-<html><head><meta charset="UTF-8" />
-<style>
-  * { box-sizing: border-box; }
-  table, th, td { border-collapse: separate; }
-</style>
-</head>
-<body style="margin:0;padding:0;background:#fff;">
-  <div id="credit-ledger-copy-root" style="width:794px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${CREDIT_THEME.text};background:${CREDIT_THEME.white};border:3px solid ${CREDIT_THEME.primary};">
-    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
-      <div style="font-weight:700;font-size:13px;line-height:1.3;">Manish Traders</div>
-      <div style="font-size:12px;line-height:1.3;">Credit Ledger</div>
-    </div>
-    <div style="padding:14px 16px 12px;background:${CREDIT_THEME.white};">
-      <div style="text-align:center;font-size:17px;font-weight:800;line-height:1.3;color:${CREDIT_THEME.secondary};">${escapeHtml(customerName)} Statement</div>
-      <div style="text-align:center;font-size:11px;line-height:1.3;color:${CREDIT_THEME.textMuted};margin-top:4px;">(All dates)</div>
+  const lineEnd = lineStart + Math.max(pageRows.length, 1) - 1;
+  const partNote =
+    partCount > 1
+      ? `<div style="text-align:center;font-size:11px;font-weight:700;line-height:1.3;color:${CREDIT_THEME.secondaryMuted};margin-top:6px;">Part ${partIndex} of ${partCount}${
+          pageRows.length ? ` · Lines ${lineStart}–${lineEnd}` : ''
+        }</div>`
+      : '';
 
-      <table style="width:100%;border-collapse:separate;border-spacing:0;margin-top:12px;table-layout:fixed;border:1px solid ${CREDIT_THEME.primaryBorder};">
+  const summaryBlock = showSummary
+    ? `<table style="width:100%;border-collapse:separate;border-spacing:0;margin-top:12px;table-layout:fixed;border:1px solid ${CREDIT_THEME.primaryBorder};">
         <tr>
           <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
             <div style="font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">Opening Balance</div>
@@ -233,8 +266,32 @@ export function buildCreditLedgerSnapshotHtml(
           </td>
         </tr>
       </table>
+      <div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${CREDIT_THEME.secondary};">No. of Entries: ${totalEntries} (All)</div>`
+    : `<div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${CREDIT_THEME.secondary};">Entries continued…</div>`;
 
-      <div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${CREDIT_THEME.secondary};">No. of Entries: ${rows.length} (All)</div>
+  const continuedFooter =
+    !showTotals && partCount > 1
+      ? `<div style="margin-top:10px;text-align:right;font-size:11px;font-weight:600;color:${CREDIT_THEME.secondaryMuted};">Continued on next page…</div>`
+      : '';
+
+  return `<!doctype html>
+<html><head><meta charset="UTF-8" />
+<style>
+  * { box-sizing: border-box; }
+  table, th, td { border-collapse: separate; }
+</style>
+</head>
+<body style="margin:0;padding:0;background:#fff;">
+  <div id="credit-ledger-copy-root" style="width:794px;min-height:1123px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${CREDIT_THEME.text};background:${CREDIT_THEME.white};border:3px solid ${CREDIT_THEME.primary};display:flex;flex-direction:column;">
+    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-weight:700;font-size:13px;line-height:1.3;">Manish Traders</div>
+      <div style="font-size:12px;line-height:1.3;">Credit Ledger</div>
+    </div>
+    <div style="padding:14px 16px 12px;background:${CREDIT_THEME.white};flex:1;">
+      <div style="text-align:center;font-size:17px;font-weight:800;line-height:1.3;color:${CREDIT_THEME.secondary};">${escapeHtml(customerName)} Statement</div>
+      <div style="text-align:center;font-size:11px;line-height:1.3;color:${CREDIT_THEME.textMuted};margin-top:4px;">(All dates)</div>
+      ${partNote}
+      ${summaryBlock}
 
       <table style="width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;border:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
         ${colgroup}
@@ -242,9 +299,11 @@ export function buildCreditLedgerSnapshotHtml(
         <tbody>${trs}</tbody>
       </table>
 
+      ${continuedFooter}
+
       <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">
         <div>Report Generated : ${escapeHtml(formatCreditDateTime(new Date()))}</div>
-        <div>Page 1 of 1</div>
+        <div>Page ${partIndex} of ${partCount}</div>
       </div>
     </div>
     <div style="background:${CREDIT_THEME.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;font-size:12px;line-height:1.3;">
@@ -253,4 +312,27 @@ export function buildCreditLedgerSnapshotHtml(
     </div>
   </div>
 </body></html>`;
+}
+
+/** Build one HTML string per ledger page (40 rows each). */
+export function buildCreditLedgerSnapshotPageHtmlList(
+  statement: CreditLedgerStatementSnapshot,
+  rowsPerPage = LEDGER_SNAPSHOT_ROWS_PER_PAGE
+): string[] {
+  const allRows = sortStatementRows(statement);
+  const snapAll = toSnapRows(allRows);
+  const chunks = chunkRows(snapAll, rowsPerPage);
+  const partCount = chunks.length;
+
+  return chunks.map((pageRows, i) =>
+    buildCreditLedgerSnapshotHtml(statement, {
+      pageRows,
+      partIndex: i + 1,
+      partCount,
+      totalEntries: snapAll.length,
+      showSummary: i === 0,
+      showTotals: i === partCount - 1,
+      lineStart: i * rowsPerPage + 1,
+    })
+  );
 }
