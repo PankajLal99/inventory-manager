@@ -66,25 +66,27 @@ export type CreditCollectionHistoryEvent = {
   created_at: string | null;
 };
 
+type CreditDateInput = Date | string | null | undefined;
+
 /** Credit UI date column — DD/MM/YYYY only (no time). */
-export function formatCreditDate(value?: string | null) {
+export function formatCreditDate(value?: CreditDateInput) {
   return formatAppDate(value, { includeTime: false, empty: '—' });
 }
 
 /** Credit UI datetime — DD/MM/YYYY HH:mm. */
-export function formatCreditDateTime(value?: string | null) {
+export function formatCreditDateTime(value?: CreditDateInput) {
   return formatAppDate(value, { includeTime: true, empty: '—' });
 }
 
 /**
  * Statement / list columns — DD/MM/YYYY, or DD/MM/YYYY HH:mm when source has time.
  */
-export function formatCreditStatementDate(value?: string | null) {
+export function formatCreditStatementDate(value?: CreditDateInput) {
   return formatAppDate(value, { includeTime: 'auto', empty: '—' });
 }
 
 /** Invoice / return document "Dated" field. */
-export function formatCreditInvoiceDate(value?: string | null) {
+export function formatCreditInvoiceDate(value?: CreditDateInput) {
   return formatCreditDateTime(value);
 }
 
