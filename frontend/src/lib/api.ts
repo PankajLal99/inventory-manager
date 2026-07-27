@@ -610,6 +610,8 @@ export const creditApi = {
     }) => api.get('/credit/returns/sold-products/', { params }),
     list: (params?: any) => api.get('/credit/returns/', { params }),
     get: (id: number) => api.get(`/credit/returns/${id}/`),
+    update: (id: number, data: any) => api.post(`/credit/returns/${id}/update/`, data),
+    void: (id: number) => api.post(`/credit/returns/${id}/void/`),
     create: (data: {
       store: number;
       credit_customer_id?: number;

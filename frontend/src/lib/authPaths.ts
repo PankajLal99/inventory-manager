@@ -3,6 +3,7 @@ export const CREDIT_APP_PATH_PREFIXES = [
   '/pos-credit',
   '/pos-credit-return',
   '/credit-invoices',
+  '/credit-returns',
   '/credit-ledger',
 ] as const;
 

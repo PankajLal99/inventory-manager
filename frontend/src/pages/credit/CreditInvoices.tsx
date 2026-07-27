@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Coins,
   Eye,
@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   TrendingUp,
+  Undo2,
 } from 'lucide-react';
 import { creditApi } from '../../lib/api';
 import { DateRangePreset, formatNumber } from '../../lib/utils';
@@ -24,9 +25,16 @@ import Pagination from '../../components/ui/Pagination';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
+import CreditPOSModeToggle from './CreditPOSModeToggle';
+
+type ListMode = 'sale' | 'return';
 
 export default function CreditInvoices() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mode: ListMode = searchParams.get('mode') === 'return' ? 'return' : 'sale';
+  const isReturn = mode === 'return';
+
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [customerGroup, setCustomerGroup] = useState('');
@@ -35,6 +43,15 @@ export default function CreditInvoices() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showFilters, setShowFilters] = useState(true);
+
+  const setMode = (next: ListMode) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'return') params.set('mode', 'return');
+    else params.delete('mode');
+    setSearchParams(params, { replace: true });
+    setStatus('');
+    setPage(1);
+  };
 
   const { data: customerGroups = [] } = useQuery({
     queryKey: ['credit-customer-groups'],
@@ -57,12 +74,11 @@ export default function CreditInvoices() {
   const summaryParams = useMemo(() => {
     const params: Record<string, string> = {};
     if (search.trim()) params.search = search.trim();
-    if (status) params.status = status;
     if (customerGroup) params.customer_group = customerGroup;
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     return params;
-  }, [search, status, customerGroup, dateFrom, dateTo]);
+  }, [search, customerGroup, dateFrom, dateTo]);
 
   const { data: summary } = useQuery({
     queryKey: ['credit-invoices-summary', summaryParams],
@@ -72,13 +88,26 @@ export default function CreditInvoices() {
     },
   });
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const invoicesQuery = useQuery({
     queryKey: ['credit-invoices', filterParams],
     queryFn: async () => {
       const res = await creditApi.invoices.list(filterParams);
       return res.data;
     },
+    enabled: !isReturn,
   });
+
+  const returnsQuery = useQuery({
+    queryKey: ['credit-returns', filterParams],
+    queryFn: async () => {
+      const res = await creditApi.returns.list(filterParams);
+      return res.data;
+    },
+    enabled: isReturn,
+  });
+
+  const listQuery = isReturn ? returnsQuery : invoicesQuery;
+  const { data, isLoading, error, refetch } = listQuery;
 
   const results = data?.results || [];
   const count = data?.count || 0;
@@ -104,13 +133,31 @@ export default function CreditInvoices() {
 
   return (
     <div className="space-y-6 w-full">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <PageHeader
-          title="Credit Invoices"
-          subtitle="Invoices and returns from POS Credit"
-          icon={FileText}
-        />
-        <Button onClick={() => navigate('/pos-credit')}>Open POS Credit</Button>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <PageHeader
+            title={isReturn ? 'Return Invoices' : 'Invoices'}
+            subtitle={
+              isReturn
+                ? 'Credit returns from POS Credit Return'
+                : 'Credit sales invoices from POS Credit'
+            }
+            icon={isReturn ? Undo2 : FileText}
+          />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+            <CreditPOSModeToggle
+              mode={mode}
+              onChange={setMode}
+              ariaLabel="Invoice list mode"
+            />
+            <Button
+              onClick={() => navigate(isReturn ? '/pos-credit-return' : '/pos-credit')}
+              className="w-full sm:w-auto"
+            >
+              {isReturn ? 'Open POS Return' : 'Open POS Credit'}
+            </Button>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -121,7 +168,9 @@ export default function CreditInvoices() {
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Sales</p>
                 <p className="text-2xl font-bold text-gray-900 mt-1">₹{formatNumber(totalSales)}</p>
-                <p className="text-xs text-gray-500 mt-1">{salesCount} open invoice{salesCount === 1 ? '' : 's'}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {salesCount} open invoice{salesCount === 1 ? '' : 's'}
+                </p>
               </div>
               <div className="p-3 bg-green-100 rounded-lg">
                 <TrendingUp className="h-6 w-6 text-green-600" />
@@ -133,7 +182,9 @@ export default function CreditInvoices() {
               <div>
                 <p className="text-sm font-medium text-gray-600">Total Returns</p>
                 <p className="text-2xl font-bold text-gray-900 mt-1">₹{formatNumber(totalReturns)}</p>
-                <p className="text-xs text-gray-500 mt-1">{returnsCount} return{returnsCount === 1 ? '' : 's'}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {returnsCount} return{returnsCount === 1 ? '' : 's'}
+                </p>
               </div>
               <div className="p-3 bg-amber-100 rounded-lg">
                 <RefreshCw className="h-6 w-6 text-amber-600" />
@@ -156,14 +207,22 @@ export default function CreditInvoices() {
           <Card>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Invoices in range</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{summary?.invoice_count ?? count}</p>
-                {summary?.void_count ? (
+                <p className="text-sm font-medium text-gray-600">
+                  {isReturn ? 'Returns in range' : 'Invoices in range'}
+                </p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">
+                  {isReturn ? returnsCount : (summary?.invoice_count ?? count)}
+                </p>
+                {!isReturn && summary?.void_count ? (
                   <p className="text-xs text-red-600 mt-1">{summary.void_count} voided</p>
                 ) : null}
               </div>
               <div className="p-3 bg-gray-100 rounded-lg">
-                <FileText className="h-6 w-6 text-gray-600" />
+                {isReturn ? (
+                  <Undo2 className="h-6 w-6 text-gray-600" />
+                ) : (
+                  <FileText className="h-6 w-6 text-gray-600" />
+                )}
               </div>
             </div>
           </Card>
@@ -172,7 +231,9 @@ export default function CreditInvoices() {
 
       <Card className="w-full">
         <div className="p-4 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 shrink-0">Filters</h2>
+          <h2 className="text-lg font-semibold text-gray-900 shrink-0">
+            {isReturn ? 'Return filters' : 'Filters'}
+          </h2>
           <Button
             variant="outline"
             size="sm"
@@ -191,7 +252,11 @@ export default function CreditInvoices() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
                 <Input
                   type="text"
-                  placeholder="Search invoice # or customer…"
+                  placeholder={
+                    isReturn
+                      ? 'Search return # or customer…'
+                      : 'Search invoice # or customer…'
+                  }
                   value={search}
                   onChange={(e) => {
                     setSearch(e.target.value);
@@ -211,8 +276,17 @@ export default function CreditInvoices() {
                   className="h-10 py-2 text-sm"
                 >
                   <option value="">All</option>
-                  <option value="open">Open</option>
-                  <option value="void">Void</option>
+                  {isReturn ? (
+                    <>
+                      <option value="completed">Completed</option>
+                      <option value="void">Void</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="open">Open</option>
+                      <option value="void">Void</option>
+                    </>
+                  )}
                 </Select>
               </div>
               <div className="xl:col-span-2">
@@ -264,13 +338,88 @@ export default function CreditInvoices() {
         {isLoading ? (
           <LoadingState />
         ) : error ? (
-          <ErrorState message="Failed to load credit invoices" onRetry={() => refetch()} />
+          <ErrorState
+            message={isReturn ? 'Failed to load credit returns' : 'Failed to load credit invoices'}
+            onRetry={() => refetch()}
+          />
         ) : results.length === 0 ? (
           <EmptyState
-            icon={FileText}
-            title="No credit invoices"
-            message={hasActiveFilters ? 'Try adjusting your filters.' : 'Checkout from POS Credit to create one.'}
+            icon={isReturn ? Undo2 : FileText}
+            title={isReturn ? 'No return invoices' : 'No invoices'}
+            message={
+              hasActiveFilters
+                ? 'Try adjusting your filters.'
+                : isReturn
+                  ? 'Create a return from POS Credit Return.'
+                  : 'Checkout from POS Credit to create one.'
+            }
           />
+        ) : isReturn ? (
+          <>
+            <Table headers={['Return', 'Customer', 'Group', 'Store', 'Status', 'Total', 'Date', '']}>
+              {results.map((ret: any) => (
+                <TableRow key={ret.id}>
+                  <TableCell className="font-medium">{ret.return_number}</TableCell>
+                  <TableCell>
+                    <div>{ret.customer_name}</div>
+                    {ret.customer_phone ? (
+                      <div className="text-xs text-gray-400">{ret.customer_phone}</div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-sm text-gray-600">
+                    {ret.customer_group_name || '—'}
+                  </TableCell>
+                  <TableCell>{ret.store_name}</TableCell>
+                  <TableCell>
+                    <span
+                      className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
+                        ret.status === 'void'
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-green-100 text-green-800'
+                      }`}
+                    >
+                      {ret.status}
+                    </span>
+                  </TableCell>
+                  <TableCell>₹{formatNumber(parseFloat(ret.total || 0))}</TableCell>
+                  <TableCell className="text-sm text-gray-500">
+                    {ret.created_at ? new Date(ret.created_at).toLocaleString() : '—'}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center justify-end gap-1">
+                      {ret.status === 'completed' ? (
+                        <button
+                          type="button"
+                          className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
+                          onClick={() => navigate(`/credit-returns/${ret.id}?edit=1`)}
+                          title="Edit"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+                        onClick={() => navigate(`/credit-returns/${ret.id}`)}
+                        title="View"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </Table>
+            <div className="p-4">
+              <Pagination
+                currentPage={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                totalItems={count}
+                pageSize={pageSize}
+              />
+            </div>
+          </>
         ) : (
           <>
             <Table headers={['Invoice', 'Customer', 'Group', 'Store', 'Status', 'Total', 'Date', '']}>

@@ -12,11 +12,18 @@ import {
 
 const NAV = [
   { path: '/pos-credit', label: 'POS Credit', icon: Coins },
-  { path: '/credit-invoices', label: 'Credit Invoices', icon: FileText },
+  { path: '/credit-invoices', label: 'Invoices', icon: FileText },
   { path: '/credit-ledger', label: 'Credit Ledger', icon: BookOpen },
 ] as const;
 
 function isActive(pathname: string, path: string) {
+  if (path === '/credit-invoices') {
+    return (
+      pathname === '/credit-invoices' ||
+      pathname.startsWith('/credit-invoices/') ||
+      pathname.startsWith('/credit-returns/')
+    );
+  }
   return pathname === path || pathname.startsWith(`${path}/`);
 }
 

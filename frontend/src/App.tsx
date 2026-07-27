@@ -58,6 +58,7 @@ import POSCredit from './pages/credit/POSCredit';
 import POSCreditReturn from './pages/credit/POSCreditReturn';
 import CreditInvoices from './pages/credit/CreditInvoices';
 import CreditInvoiceDetail from './pages/credit/CreditInvoiceDetail';
+import CreditReturnDetail from './pages/credit/CreditReturnDetail';
 import CreditLedger from './pages/credit/CreditLedger';
 import CreditLedgerDetail from './pages/credit/CreditLedgerDetail';
 
@@ -124,6 +125,7 @@ function App() {
                 <Route path="pos-credit-return" element={<POSCreditReturn />} />
                 <Route path="credit-invoices" element={<CreditInvoices />} />
                 <Route path="credit-invoices/:id" element={<CreditInvoiceDetail />} />
+                <Route path="credit-returns/:id" element={<CreditReturnDetail />} />
                 <Route path="credit-ledger" element={<CreditLedger />} />
                 <Route path="credit-ledger/:customerId" element={<CreditLedgerDetail />} />
 

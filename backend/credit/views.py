@@ -810,7 +810,11 @@ def _credit_returns_filtered_queryset(request):
     if date_to:
         qs = qs.filter(created_at__date__lte=date_to)
 
-    return qs.filter(status='completed').order_by('-created_at')
+    status_filter = request.query_params.get('status', '').strip()
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+
+    return qs.order_by('-created_at')
 
 
 @api_view(['GET'])
@@ -825,7 +829,8 @@ def credit_invoices_summary(request):
         count=Count('id'),
     )
     void_count = invoice_qs.filter(status='void').count()
-    returns_total = return_qs.aggregate(
+    # KPI return totals exclude voided returns
+    returns_total = return_qs.filter(status='completed').aggregate(
         total=Coalesce(Sum('total'), Decimal('0')),
         count=Count('id'),
     )
@@ -2060,6 +2065,362 @@ def credit_return_detail(request, pk):
         ).prefetch_related('items__invoice_item__invoice').get(pk=pk)
     except CreditReturn.DoesNotExist:
         return Response({'detail': 'Return not found'}, status=status.HTTP_404_NOT_FOUND)
+    return Response(CreditReturnSerializer(credit_return).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def credit_return_update(request, pk):
+    """
+    Edit a completed credit return (lines / notes / date) and apply ledger delta.
+
+    Payload mirrors credit invoice update:
+      items: [
+        {
+          id?: int,
+          invoice_item_id?: int,
+          catalog_product_id?: int,
+          credit_product_id?: int,
+          product_name?: str,
+          quantity: number,
+          unit_price: number,
+        },
+        ...
+      ]
+      notes?: str
+      created_at?: ISO datetime
+
+    Ledger: update the original return credit amount in place and
+    customer.balance -= (new_total - old_total).
+    Also adjusts CreditInvoiceItem.returned_quantity for linked lines.
+    """
+    try:
+        credit_return = CreditReturn.objects.select_related('customer').prefetch_related(
+            'items__invoice_item'
+        ).get(pk=pk)
+    except CreditReturn.DoesNotExist:
+        return Response({'detail': 'Return not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if credit_return.status == 'void':
+        return Response({'detail': 'Cannot edit a voided return'}, status=status.HTTP_400_BAD_REQUEST)
+
+    raw_items = request.data.get('items')
+    if not isinstance(raw_items, list) or len(raw_items) == 0:
+        return Response({'detail': 'At least one item is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    notes = request.data.get('notes')
+    created_at_raw = request.data.get('created_at')
+    created_at_override = None
+    if created_at_raw not in (None, ''):
+        raw_str = str(created_at_raw).strip()
+        if raw_str.endswith('Z'):
+            raw_str = raw_str[:-1] + '+00:00'
+        parsed = parse_datetime(raw_str)
+        if parsed is None:
+            return Response({'detail': 'Invalid created_at datetime format'}, status=status.HTTP_400_BAD_REQUEST)
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        created_at_override = parsed
+
+    existing_by_id = {item.id: item for item in credit_return.items.all()}
+    kept_ids = set()
+    prepared = []
+
+    for idx, row in enumerate(raw_items):
+        if not isinstance(row, dict):
+            return Response(
+                {'detail': f'Item {idx + 1}: invalid payload'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        item_id = row.get('id')
+        existing = None
+        if item_id not in (None, ''):
+            try:
+                item_id = int(item_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': f'Item {idx + 1}: invalid id'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            existing = existing_by_id.get(item_id)
+            if existing is None:
+                return Response(
+                    {'detail': f'Item {idx + 1}: line {item_id} not found on this return'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            kept_ids.add(item_id)
+
+        quantity = _to_decimal(row.get('quantity'), '0')
+        qty_err = _require_whole_quantity(quantity)
+        if qty_err:
+            return Response(
+                {'detail': f'Item {idx + 1}: {qty_err}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        quantity = quantity.to_integral_value()
+
+        unit_price = _to_decimal(row.get('unit_price'), '0')
+        if unit_price < 0:
+            return Response(
+                {'detail': f'Item {idx + 1}: Unit price cannot be negative'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if unit_price <= 0:
+            return Response(
+                {'detail': f'Item {idx + 1}: Unit price must be greater than 0'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invoice_item = existing.invoice_item if existing else None
+        invoice_item_id = row.get('invoice_item_id')
+        if invoice_item_id not in (None, '') and existing is None:
+            try:
+                invoice_item = CreditInvoiceItem.objects.select_related('invoice').get(
+                    pk=int(invoice_item_id)
+                )
+            except (TypeError, ValueError, CreditInvoiceItem.DoesNotExist):
+                return Response(
+                    {'detail': f'Item {idx + 1}: invoice item not found'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        product = existing.product if existing else None
+        credit_product = existing.credit_product if existing else None
+        product_name = (row.get('product_name') or '').strip()
+        if existing and not product_name:
+            product_name = existing.product_name
+
+        catalog_product_id = row.get('catalog_product_id') or row.get('product')
+        credit_product_id = row.get('credit_product_id') or row.get('credit_product')
+
+        if existing is None:
+            if catalog_product_id:
+                try:
+                    product = Product.objects.only('id', 'name').get(pk=catalog_product_id)
+                    product_name = product_name or product.name
+                except Product.DoesNotExist:
+                    return Response(
+                        {'detail': f'Item {idx + 1}: catalog product not found'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            elif credit_product_id:
+                try:
+                    credit_product = CreditProduct.objects.only('id', 'name').get(pk=credit_product_id)
+                    product_name = product_name or credit_product.name
+                except CreditProduct.DoesNotExist:
+                    return Response(
+                        {'detail': f'Item {idx + 1}: credit product not found'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            elif invoice_item is not None:
+                product = invoice_item.product
+                credit_product = invoice_item.credit_product
+                product_name = product_name or invoice_item.product_name
+
+            if not product_name:
+                return Response(
+                    {'detail': f'Item {idx + 1}: product_name is required'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if invoice_item is not None:
+            old_qty = existing.quantity if existing is not None else Decimal('0')
+            returned = invoice_item.returned_quantity or Decimal('0')
+            # Capacity excluding this return line's current contribution
+            available = (invoice_item.quantity or Decimal('0')) - (returned - old_qty)
+            if quantity > available:
+                return Response(
+                    {
+                        'detail': (
+                            f'Item {idx + 1} ({product_name or invoice_item.product_name}): '
+                            f'quantity {quantity} exceeds returnable ({available})'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        line_total = (quantity * unit_price).quantize(Decimal('0.01'))
+        prepared.append({
+            'existing': existing,
+            'invoice_item': invoice_item,
+            'product': product,
+            'credit_product': credit_product,
+            'product_name': product_name,
+            'quantity': quantity,
+            'unit_price': unit_price,
+            'line_total': line_total,
+        })
+
+    new_total = sum((p['line_total'] for p in prepared), Decimal('0.00')).quantize(Decimal('0.01'))
+    if new_total <= 0:
+        return Response({'detail': 'Return total must be greater than 0'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        credit_return = CreditReturn.objects.select_for_update().select_related('customer').get(pk=pk)
+        if credit_return.status == 'void':
+            return Response({'detail': 'Cannot edit a voided return'}, status=status.HTTP_400_BAD_REQUEST)
+
+        customer = CreditCustomer.objects.select_for_update().get(pk=credit_return.customer_id)
+        old_total = credit_return.total or Decimal('0.00')
+        total_delta = (new_total - old_total).quantize(Decimal('0.01'))
+        # Returns credit the customer (reduce balance)
+        balance_delta = -total_delta
+
+        # Undo returned_quantity for removed linked lines
+        for item_id, item in existing_by_id.items():
+            if item_id not in kept_ids and item.invoice_item_id:
+                inv_item = CreditInvoiceItem.objects.select_for_update().get(pk=item.invoice_item_id)
+                inv_item.returned_quantity = max(
+                    Decimal('0'),
+                    (inv_item.returned_quantity or Decimal('0')) - (item.quantity or Decimal('0')),
+                )
+                inv_item.save(update_fields=['returned_quantity'])
+                item.delete()
+            elif item_id not in kept_ids:
+                item.delete()
+
+        for p in prepared:
+            existing = p['existing']
+            invoice_item = p['invoice_item']
+            if existing is not None:
+                old_qty = existing.quantity or Decimal('0')
+                new_qty = p['quantity']
+                if invoice_item is not None and new_qty != old_qty:
+                    inv_item = CreditInvoiceItem.objects.select_for_update().get(pk=invoice_item.pk)
+                    inv_item.returned_quantity = (inv_item.returned_quantity or Decimal('0')) + (new_qty - old_qty)
+                    if inv_item.returned_quantity < 0:
+                        inv_item.returned_quantity = Decimal('0')
+                    inv_item.save(update_fields=['returned_quantity'])
+
+                existing.product = p['product']
+                existing.credit_product = p['credit_product']
+                existing.product_name = p['product_name']
+                existing.quantity = p['quantity']
+                existing.unit_price = p['unit_price']
+                existing.line_total = p['line_total']
+                existing.save()
+            else:
+                CreditReturnItem.objects.create(
+                    credit_return=credit_return,
+                    invoice_item=invoice_item,
+                    product=p['product'],
+                    credit_product=p['credit_product'],
+                    product_name=p['product_name'],
+                    quantity=p['quantity'],
+                    unit_price=p['unit_price'],
+                    line_total=p['line_total'],
+                )
+                if invoice_item is not None:
+                    inv_item = CreditInvoiceItem.objects.select_for_update().get(pk=invoice_item.pk)
+                    inv_item.returned_quantity = (inv_item.returned_quantity or Decimal('0')) + p['quantity']
+                    inv_item.save(update_fields=['returned_quantity'])
+
+        credit_return.total = new_total
+        update_fields = ['total', 'updated_at']
+        if notes is not None:
+            credit_return.notes = str(notes)
+            update_fields.append('notes')
+        if created_at_override is not None:
+            credit_return.created_at = created_at_override
+            update_fields.append('created_at')
+        credit_return.save(update_fields=update_fields)
+
+        return_credit = (
+            CreditLedgerEntry.objects.filter(
+                credit_return=credit_return,
+                entry_type='credit',
+                payment__isnull=True,
+                invoice__isnull=True,
+            )
+            .order_by('id')
+            .first()
+        )
+        if return_credit:
+            return_credit.amount = new_total
+            return_credit.description = f'Credit return {credit_return.return_number}'
+            credit_fields = ['amount', 'description']
+            if created_at_override is not None:
+                return_credit.created_at = created_at_override
+                credit_fields.append('created_at')
+            return_credit.save(update_fields=credit_fields)
+        else:
+            CreditLedgerEntry.objects.create(
+                customer=customer,
+                credit_return=credit_return,
+                entry_type='credit',
+                amount=new_total,
+                description=f'Credit return {credit_return.return_number}',
+                created_by=request.user,
+                created_at=credit_return.created_at,
+            )
+            # Missing credit was not in balance — apply full credit, not just delta
+            balance_delta = -new_total
+
+        if balance_delta != 0:
+            customer.balance = F('balance') + balance_delta
+            customer.save(update_fields=['balance', 'updated_at'])
+
+    credit_return = CreditReturn.objects.select_related(
+        'customer', 'store', 'created_by'
+    ).prefetch_related('items__invoice_item__invoice').get(pk=pk)
+    data = CreditReturnSerializer(credit_return).data
+    data['ledger_delta'] = str(balance_delta)
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def credit_return_void(request, pk):
+    """
+    Void a completed credit return: reverse ledger credit, restore customer balance,
+    and undo returned_quantity on linked invoice lines.
+    """
+    try:
+        credit_return = CreditReturn.objects.select_related('customer').prefetch_related(
+            'items'
+        ).get(pk=pk)
+    except CreditReturn.DoesNotExist:
+        return Response({'detail': 'Return not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if credit_return.status == 'void':
+        return Response({'detail': 'Return already voided'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        credit_return = CreditReturn.objects.select_for_update().select_related('customer').get(pk=pk)
+        if credit_return.status == 'void':
+            return Response({'detail': 'Return already voided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        customer = CreditCustomer.objects.select_for_update().get(pk=credit_return.customer_id)
+        amount = credit_return.total or Decimal('0.00')
+
+        for item in credit_return.items.all():
+            if item.invoice_item_id:
+                inv_item = CreditInvoiceItem.objects.select_for_update().get(pk=item.invoice_item_id)
+                inv_item.returned_quantity = max(
+                    Decimal('0'),
+                    (inv_item.returned_quantity or Decimal('0')) - (item.quantity or Decimal('0')),
+                )
+                inv_item.save(update_fields=['returned_quantity'])
+
+        # Reverse the original return credit with a debit
+        CreditLedgerEntry.objects.create(
+            customer=customer,
+            credit_return=credit_return,
+            entry_type='debit',
+            amount=amount,
+            description=f'Void credit return {credit_return.return_number}',
+            created_by=request.user,
+        )
+        customer.balance = F('balance') + amount
+        customer.save(update_fields=['balance', 'updated_at'])
+
+        credit_return.status = 'void'
+        credit_return.save(update_fields=['status', 'updated_at'])
+
+    credit_return = CreditReturn.objects.select_related(
+        'customer', 'store', 'created_by'
+    ).prefetch_related('items__invoice_item__invoice').get(pk=pk)
     return Response(CreditReturnSerializer(credit_return).data)
 
 

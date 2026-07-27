@@ -6,6 +6,7 @@ import {
   BookOpen,
   Calendar,
   ClipboardCopy,
+  Columns3,
   FileText,
   Filter,
   Minus,
@@ -19,7 +20,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { creditApi } from '../../lib/api';
-import { dateStringWithCurrentTimeISO, formatAmountINR, formatNumber, toLocalDateString } from '../../lib/utils';
+import { dateStringWithCurrentTimeISO, formatNumber, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -31,15 +32,62 @@ import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import type { DateRangePreset } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import {
-  balanceLabel,
   collectionStatusBadgeVariant,
   collectionStatusLabel,
-  formatLedgerDate,
-  formatMoneyCell,
 } from './creditLedgerUtils';
+import { CREDIT_THEME } from './creditInvoiceHtml';
 
 type PaymentMethod = 'cash' | 'upi' | 'mixed';
 type TxnType = '' | 'sale' | 'payment' | 'return';
+
+type LedgerColumnId =
+  | 'sr'
+  | 'date'
+  | 'type'
+  | 'vch'
+  | 'particulars'
+  | 'narration'
+  | 'debit'
+  | 'credit'
+  | 'balance';
+
+const LEDGER_COLUMN_DEFS: Array<{
+  id: LedgerColumnId;
+  label: string;
+  defaultOn: boolean;
+  align?: 'left' | 'right' | 'center';
+  pdfWidth?: number;
+}> = [
+  { id: 'sr', label: 'Sr', defaultOn: false, align: 'center', pdfWidth: 10 },
+  { id: 'date', label: 'Date', defaultOn: true, align: 'left', pdfWidth: 18 },
+  { id: 'type', label: 'Type', defaultOn: false, align: 'left', pdfWidth: 18 },
+  { id: 'vch', label: 'Vch No.', defaultOn: false, align: 'left', pdfWidth: 26 },
+  { id: 'particulars', label: 'Particulars', defaultOn: true, align: 'left' },
+  { id: 'narration', label: 'Narration', defaultOn: false, align: 'left' },
+  { id: 'debit', label: 'Debit(-)', defaultOn: true, align: 'right', pdfWidth: 28 },
+  { id: 'credit', label: 'Credit(+)', defaultOn: true, align: 'right', pdfWidth: 28 },
+  { id: 'balance', label: 'Balance', defaultOn: true, align: 'right', pdfWidth: 30 },
+];
+
+const LEDGER_COLUMNS_STORAGE_KEY = 'credit-ledger-detail-columns-v1';
+
+function defaultColumnVisibility(): Record<LedgerColumnId, boolean> {
+  return Object.fromEntries(
+    LEDGER_COLUMN_DEFS.map((c) => [c.id, c.defaultOn])
+  ) as Record<LedgerColumnId, boolean>;
+}
+
+function loadColumnVisibility(): Record<LedgerColumnId, boolean> {
+  const defaults = defaultColumnVisibility();
+  try {
+    const raw = localStorage.getItem(LEDGER_COLUMNS_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<Record<LedgerColumnId, boolean>>;
+    return { ...defaults, ...parsed };
+  } catch {
+    return defaults;
+  }
+}
 
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
@@ -49,16 +97,24 @@ function escapeHtml(s: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
-/** POS Credit amber palette for statement PDF / copy image */
-const PDF_AMBER: [number, number, number] = [146, 64, 14]; // amber-800
-const PDF_HEAD: [number, number, number] = [245, 245, 244]; // stone-100
-const PDF_BORDER: [number, number, number] = [214, 211, 209]; // stone-300
-const PDF_MUTED: [number, number, number] = [120, 113, 108]; // stone-500
-const PDF_INK: [number, number, number] = [28, 25, 23]; // stone-900
-const PDF_DEBIT_BG: [number, number, number] = [254, 242, 242]; // red-50
-const PDF_CREDIT_BG: [number, number, number] = [236, 253, 245]; // emerald-50
-const PDF_GREEN: [number, number, number] = [4, 120, 87]; // emerald-700
-const PDF_RED: [number, number, number] = [185, 28, 28]; // red-700
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+/** Same amber scheme as A4 credit invoice print; green/red for ledger debit/credit rows */
+const PDF_PRIMARY = hexToRgb(CREDIT_THEME.primary);
+const PDF_SECONDARY = hexToRgb(CREDIT_THEME.secondary);
+const PDF_HEAD = hexToRgb(CREDIT_THEME.tableHead);
+const PDF_BORDER = hexToRgb(CREDIT_THEME.primaryBorder);
+const PDF_MUTED = hexToRgb(CREDIT_THEME.textMuted);
+const PDF_INK = hexToRgb(CREDIT_THEME.text);
+const PDF_DEBIT_BG = hexToRgb(CREDIT_THEME.debitBg);
+const PDF_DEBIT_SOFT = hexToRgb(CREDIT_THEME.debitBgSoft);
+const PDF_CREDIT_BG = hexToRgb(CREDIT_THEME.creditBg);
+const PDF_CREDIT_SOFT = hexToRgb(CREDIT_THEME.creditBgSoft);
+const PDF_GREEN = hexToRgb(CREDIT_THEME.creditText);
+const PDF_RED = hexToRgb(CREDIT_THEME.debitText);
 
 function formatPdfDate(value?: string | null) {
   if (!value) return '—';
@@ -66,6 +122,18 @@ function formatPdfDate(value?: string | null) {
     const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value);
     if (Number.isNaN(d.getTime())) return '—';
     return format(d, 'dd-MM-yyyy');
+  } catch {
+    return '—';
+  }
+}
+
+/** Compact table dates like Khatabook (06 Jul) */
+function formatPdfDateShort(value?: string | null) {
+  if (!value) return '—';
+  try {
+    const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value);
+    if (Number.isNaN(d.getTime())) return '—';
+    return format(d, 'dd MMM');
   } catch {
     return '—';
   }
@@ -154,6 +222,9 @@ export default function CreditLedgerDetail() {
   const [dateTo, setDateTo] = useState('');
   const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
   const [showFilters, setShowFilters] = useState(false);
+  const [showColumnSettings, setShowColumnSettings] = useState(false);
+  const [columnVisibility, setColumnVisibility] =
+    useState<Record<LedgerColumnId, boolean>>(loadColumnVisibility);
   const [search, setSearch] = useState('');
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -227,6 +298,51 @@ export default function CreditLedgerDetail() {
       return hay.includes(q);
     });
   }, [statement?.rows, search]);
+
+  const visibleColumns = useMemo(
+    () => LEDGER_COLUMN_DEFS.filter((c) => columnVisibility[c.id]),
+    [columnVisibility]
+  );
+
+  const toggleColumn = (id: LedgerColumnId) => {
+    setColumnVisibility((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      const anyOn = LEDGER_COLUMN_DEFS.some((c) => next[c.id]);
+      if (!anyOn) {
+        toast('Keep at least one column visible', 'error');
+        return prev;
+      }
+      try {
+        localStorage.setItem(LEDGER_COLUMNS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  const resetColumns = () => {
+    const defaults = defaultColumnVisibility();
+    setColumnVisibility(defaults);
+    try {
+      localStorage.setItem(LEDGER_COLUMNS_STORAGE_KEY, JSON.stringify(defaults));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const showAllColumns = () => {
+    const all = Object.fromEntries(LEDGER_COLUMN_DEFS.map((c) => [c.id, true])) as Record<
+      LedgerColumnId,
+      boolean
+    >;
+    setColumnVisibility(all);
+    try {
+      localStorage.setItem(LEDGER_COLUMNS_STORAGE_KEY, JSON.stringify(all));
+    } catch {
+      /* ignore */
+    }
+  };
 
   const hasActiveFilters = !!(txnType || dateFrom || dateTo || search);
 
@@ -316,51 +432,119 @@ export default function CreditLedgerDetail() {
 
   const closingBalance = statement?.closing_balance ?? selectedCustomer?.balance ?? '0';
   const closingSide = statement?.closing_side ?? 'Dr';
+  const netIsCr = String(closingSide || 'Dr').toUpperCase() === 'CR';
+  const customerDisplayName =
+    sanitizePdfText(selectedCustomer?.name || 'Customer') || 'Customer';
+  const customerFirstName = customerDisplayName.split(/\s+/)[0] || customerDisplayName;
+  const netHint = netIsCr
+    ? `(${customerFirstName} will get)`
+    : `(${customerFirstName} will give)`;
+  const openingOnLabel = dateFrom
+    ? `on ${formatPdfDate(dateFrom)}`
+    : rows[0]?.created_at
+      ? `on ${formatPdfDate(rows[0].created_at)}`
+      : '';
+  const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
 
-  const buildStatementRows = () => {
+  const statementRows = useMemo(() => {
     if (!statement) return [];
     const out: Array<{
+      sr: string;
       date: string;
+      type: string;
+      vch: string;
+      particulars: string;
+      narration: string;
       debit: string;
       credit: string;
       balance: string;
       isOpening?: boolean;
       isTotal?: boolean;
+      hasDebit?: boolean;
+      hasCredit?: boolean;
     }> = [];
 
     const openingDate = dateFrom
-      ? formatPdfDate(dateFrom)
+      ? formatPdfDateShort(dateFrom)
       : rows[0]?.created_at
-        ? formatPdfDate(rows[0].created_at)
-        : formatPdfDate(new Date().toISOString());
+        ? formatPdfDateShort(rows[0].created_at)
+        : formatPdfDateShort(new Date().toISOString());
 
     out.push({
+      sr: '',
       date: openingDate,
+      type: '',
+      vch: '',
+      particulars: 'Opening Balance',
+      narration: '',
       debit: '',
       credit: '',
-      balance: `(Opening: ${formatPdfAmount(statement.opening_balance)})`,
+      balance: formatPdfBalance(statement.opening_balance, statement.opening_side),
       isOpening: true,
     });
 
-    for (const row of rows) {
+    rows.forEach((row: any, idx: number) => {
+      const debit = formatPdfMoney(row.debit);
+      const credit = formatPdfMoney(row.credit);
       out.push({
-        date: formatPdfDate(row.created_at),
-        debit: formatPdfMoney(row.debit),
-        credit: formatPdfMoney(row.credit),
+        sr: String(idx + 1),
+        date: formatPdfDateShort(row.created_at),
+        type: sanitizePdfText(row.txn_type || '') || '',
+        vch: sanitizePdfText(row.vch_no || '') || '',
+        particulars: sanitizePdfText(row.particulars || '') || '',
+        narration: sanitizePdfText(row.narration || '') || '',
+        debit,
+        credit,
         balance: formatPdfBalance(row.running_balance, row.balance_side),
+        hasDebit: !!debit,
+        hasCredit: !!credit,
       });
-    }
+    });
 
     out.push({
+      sr: '',
       date: 'Grand Total',
+      type: '',
+      vch: '',
+      particulars: '',
+      narration: '',
       debit: formatPdfAmount(statement.total_debit),
       credit: formatPdfAmount(statement.total_credit),
       balance: formatPdfBalance(statement.closing_balance, statement.closing_side),
       isTotal: true,
+      hasDebit: true,
+      hasCredit: true,
     });
 
     return out;
+  }, [statement, rows, dateFrom]);
+
+  const cellValue = (r: (typeof statementRows)[number], id: LedgerColumnId) => {
+    switch (id) {
+      case 'sr':
+        return r.sr;
+      case 'date':
+        return r.date;
+      case 'type':
+        return r.type;
+      case 'vch':
+        return r.vch;
+      case 'particulars':
+        return r.particulars;
+      case 'narration':
+        return r.narration;
+      case 'debit':
+        return r.debit;
+      case 'credit':
+        return r.credit;
+      case 'balance':
+        return r.balance;
+      default:
+        return '';
+    }
   };
+
+  const buildStatementRows = () => statementRows;
 
   const buildCreditLedgerPdf = () => {
     if (!selectedCustomer || !statement) return null;
@@ -381,8 +565,8 @@ export default function CreditLedgerDetail() {
         ? `on ${formatPdfDate(rows[0].created_at)}`
         : '';
 
-    // Top brand bar — compact
-    doc.setFillColor(...PDF_AMBER);
+    // Top brand bar — same amber as A4 credit invoice
+    doc.setFillColor(...PDF_PRIMARY);
     doc.rect(0, 0, pageWidth, 8, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
@@ -394,7 +578,7 @@ export default function CreditLedgerDetail() {
 
     // Title — tight
     let y = 14;
-    doc.setTextColor(...PDF_INK);
+    doc.setTextColor(...PDF_SECONDARY);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
     doc.text(`${customerName} Statement`, pageWidth / 2, y, { align: 'center' });
@@ -404,12 +588,12 @@ export default function CreditLedgerDetail() {
     doc.setTextColor(...PDF_MUTED);
     doc.text(`(${periodLabel})`, pageWidth / 2, y, { align: 'center' });
 
-    // Summary strip — shorter
+    // Summary strip — shorter (white card, amber border)
     y += 4;
     const boxH = 16;
     doc.setDrawColor(...PDF_BORDER);
     doc.setFillColor(255, 255, 255);
-    doc.setLineWidth(0.2);
+    doc.setLineWidth(0.3);
     doc.roundedRect(marginX, y, contentW, boxH, 0.8, 0.8, 'FD');
 
     const colW = contentW / 4;
@@ -471,11 +655,24 @@ export default function CreditLedgerDetail() {
     y += 1.5;
 
     const tableRows = buildStatementRows();
-    const body = tableRows.map((r) => [r.date, r.debit, r.credit, r.balance]);
+    const cols = visibleColumns.length ? visibleColumns : LEDGER_COLUMN_DEFS.filter((c) => c.defaultOn);
+    const body = tableRows.map((r) => cols.map((c) => cellValue(r, c.id)));
+    const flexIds = new Set<LedgerColumnId>(['particulars', 'narration']);
+    const fixedW = cols.reduce((sum, c) => sum + (flexIds.has(c.id) ? 0 : c.pdfWidth || 20), 0);
+    const flexCount = cols.filter((c) => flexIds.has(c.id)).length || 1;
+    const flexEach = Math.max(24, (contentW - fixedW) / flexCount);
+
+    const columnStyles: Record<number, any> = {};
+    cols.forEach((c, i) => {
+      columnStyles[i] = {
+        cellWidth: flexIds.has(c.id) ? flexEach : c.pdfWidth || 20,
+        halign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left',
+      };
+    });
 
     autoTable(doc, {
       startY: y,
-      head: [['Date', 'Debit(-)', 'Credit(+)', 'Balance']],
+      head: [cols.map((c) => c.label)],
       body,
       styles: {
         fontSize: 7.5,
@@ -493,42 +690,55 @@ export default function CreditLedgerDetail() {
         fontSize: 7.5,
         cellPadding: { top: 1.4, right: 2, bottom: 1.4, left: 2 },
       },
-      columnStyles: {
-        0: { cellWidth: 28 },
-        1: { cellWidth: 38, halign: 'right', fillColor: PDF_DEBIT_BG },
-        2: { cellWidth: 38, halign: 'right', fillColor: PDF_CREDIT_BG },
-        3: { cellWidth: contentW - 104, halign: 'right' },
-      },
+      columnStyles,
       didParseCell: (data: any) => {
+        const col = cols[data.column.index];
+        if (!col) return;
+
         if (data.section === 'head') {
-          if (data.column.index === 1) data.cell.styles.fillColor = PDF_DEBIT_BG;
-          if (data.column.index === 2) data.cell.styles.fillColor = PDF_CREDIT_BG;
+          data.cell.styles.fillColor = PDF_HEAD;
+          data.cell.styles.textColor = PDF_SECONDARY;
+          if (col.id === 'debit') data.cell.styles.fillColor = PDF_DEBIT_BG;
+          if (col.id === 'credit') data.cell.styles.fillColor = PDF_CREDIT_BG;
           return;
         }
         const rowMeta = tableRows[data.row.index];
         if (!rowMeta) return;
 
-        if (data.column.index === 1) data.cell.styles.fillColor = PDF_DEBIT_BG;
-        if (data.column.index === 2) data.cell.styles.fillColor = PDF_CREDIT_BG;
+        let rowBg: [number, number, number] = [255, 255, 255];
+        if (rowMeta.isTotal) rowBg = PDF_HEAD;
+        else if (rowMeta.hasCredit && !rowMeta.hasDebit) rowBg = PDF_CREDIT_SOFT;
+        else if (rowMeta.hasDebit && !rowMeta.hasCredit) rowBg = PDF_DEBIT_SOFT;
+        data.cell.styles.fillColor = rowBg;
+
+        if (col.id === 'debit' && (rowMeta.hasDebit || rowMeta.isTotal)) {
+          data.cell.styles.fillColor = PDF_DEBIT_BG;
+        }
+        if (col.id === 'credit' && (rowMeta.hasCredit || rowMeta.isTotal)) {
+          data.cell.styles.fillColor = PDF_CREDIT_BG;
+        }
+        if (col.id === 'balance' && rowMeta.hasCredit && !rowMeta.isOpening) {
+          data.cell.styles.fillColor = PDF_CREDIT_BG;
+        }
 
         if (rowMeta.isOpening) {
-          if (data.column.index === 0 || data.column.index === 3) {
+          if (col.id === 'date' || col.id === 'particulars' || col.id === 'balance') {
             data.cell.styles.fontStyle = 'bold';
           }
-          if (data.column.index === 3) {
-            data.cell.styles.textColor = PDF_MUTED;
-          }
+          if (col.id === 'balance') data.cell.styles.textColor = PDF_MUTED;
         }
         if (rowMeta.isTotal) {
           data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.fillColor = PDF_HEAD;
-          if (data.column.index === 1) data.cell.styles.fillColor = PDF_DEBIT_BG;
-          if (data.column.index === 2) data.cell.styles.fillColor = PDF_CREDIT_BG;
+          data.cell.styles.textColor = PDF_SECONDARY;
         }
-        if (data.column.index === 3 && rowMeta.balance && !rowMeta.isOpening) {
+        if (col.id === 'balance' && rowMeta.balance && !rowMeta.isOpening) {
           const balCr = /cr/i.test(rowMeta.balance);
           data.cell.styles.textColor = balCr ? PDF_GREEN : PDF_RED;
           data.cell.styles.fontStyle = 'bold';
+        }
+        if (col.id === 'type' && rowMeta.type) {
+          if (rowMeta.type === 'sale') data.cell.styles.textColor = PDF_RED;
+          else if (rowMeta.type === 'payment') data.cell.styles.textColor = PDF_GREEN;
         }
       },
       margin: { left: marginX, right: marginX, bottom: 16 },
@@ -549,8 +759,8 @@ export default function CreditLedgerDetail() {
       align: 'right',
     });
 
-    // Bottom brand bar — compact
-    doc.setFillColor(...PDF_AMBER);
+    // Bottom brand bar — same amber as A4 credit invoice
+    doc.setFillColor(...PDF_PRIMARY);
     doc.rect(0, pageHeight - 8, pageWidth, 8, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
@@ -572,7 +782,7 @@ export default function CreditLedgerDetail() {
     const netSide = String(statement.closing_side || 'Dr').toUpperCase();
     const isCr = netSide === 'CR';
     const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
-    const netColor = isCr ? '#047857' : '#b91c1c';
+    const netColor = isCr ? CREDIT_THEME.creditText : CREDIT_THEME.debitText;
     const openOn = dateFrom
       ? `on ${formatPdfDate(dateFrom)}`
       : rows[0]?.created_at
@@ -580,74 +790,109 @@ export default function CreditLedgerDetail() {
         : '';
     const tableRows = buildStatementRows();
     const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
+    const cols = visibleColumns.length ? visibleColumns : LEDGER_COLUMN_DEFS.filter((c) => c.defaultOn);
 
     const trs = tableRows
       .map((r) => {
-        const balColor = r.isOpening ? '#78716c' : /cr/i.test(r.balance) ? '#047857' : '#b91c1c';
+        const balCr = /cr/i.test(r.balance);
+        const balColor = r.isOpening
+          ? CREDIT_THEME.textMuted
+          : balCr
+            ? CREDIT_THEME.creditText
+            : CREDIT_THEME.debitText;
         const weight = r.isOpening || r.isTotal ? '700' : '500';
-        const rowBg = r.isTotal ? '#f5f5f4' : '#ffffff';
-        return `<tr style="background:${rowBg};">
-          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;color:#1c1917;font-weight:${weight};">${escapeHtml(r.date)}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;text-align:right;background:#fef2f2;color:#1c1917;font-weight:${weight};">${escapeHtml(r.debit)}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;text-align:right;background:#ecfdf5;color:#1c1917;font-weight:${weight};">${escapeHtml(r.credit)}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid #e7e5e4;font-size:11px;text-align:right;font-weight:700;color:${balColor};">${escapeHtml(r.balance)}</td>
-        </tr>`;
+        let rowBg = CREDIT_THEME.white;
+        if (r.isTotal) rowBg = CREDIT_THEME.tableHead;
+        else if (r.hasCredit && !r.hasDebit) rowBg = CREDIT_THEME.creditBgSoft;
+        else if (r.hasDebit && !r.hasCredit) rowBg = CREDIT_THEME.debitBgSoft;
+
+        const tds = cols
+          .map((c) => {
+            const val = cellValue(r, c.id);
+            let bg = rowBg;
+            let color = CREDIT_THEME.text;
+            let fw = weight;
+            let align = c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left';
+            if (c.id === 'debit' && (r.hasDebit || r.isTotal)) bg = CREDIT_THEME.debitBg;
+            if (c.id === 'credit' && (r.hasCredit || r.isTotal)) bg = CREDIT_THEME.creditBg;
+            if (c.id === 'balance') {
+              fw = '700';
+              color = balColor;
+              if (r.hasCredit && !r.isOpening && !r.isTotal) bg = CREDIT_THEME.creditBg;
+              else if (r.isTotal) bg = CREDIT_THEME.tableHead;
+            }
+            if (c.id === 'type') {
+              if (r.type === 'sale') color = CREDIT_THEME.debitText;
+              else if (r.type === 'payment') color = CREDIT_THEME.creditText;
+            }
+            return `<td style="padding:4px 8px;border:1px solid ${CREDIT_THEME.primaryBorder};font-size:11px;text-align:${align};background:${bg};color:${color};font-weight:${fw};">${escapeHtml(val)}</td>`;
+          })
+          .join('');
+
+        return `<tr style="background:${rowBg};">${tds}</tr>`;
+      })
+      .join('');
+
+    const ths = cols
+      .map((c) => {
+        let bg = CREDIT_THEME.tableHead;
+        if (c.id === 'debit') bg = CREDIT_THEME.debitBg;
+        if (c.id === 'credit') bg = CREDIT_THEME.creditBg;
+        const align = c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left';
+        return `<th style="text-align:${align};padding:5px 8px;font-size:10px;color:${CREDIT_THEME.secondary};background:${bg};border:1px solid ${CREDIT_THEME.primaryBorder};">${escapeHtml(c.label)}</th>`;
       })
       .join('');
 
     return `<!doctype html>
 <html><head><meta charset="UTF-8" /></head>
 <body style="margin:0;padding:0;background:#fff;">
-  <div id="credit-ledger-copy-root" style="width:794px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#1c1917;background:#fff;">
-    <div style="background:#92400e;color:#fff;padding:7px 16px;display:flex;justify-content:space-between;align-items:center;">
+  <div id="credit-ledger-copy-root" style="width:794px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${CREDIT_THEME.text};background:${CREDIT_THEME.white};border:3px solid ${CREDIT_THEME.primary};">
+    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:7px 16px;display:flex;justify-content:space-between;align-items:center;">
       <div style="font-weight:700;font-size:12px;">Manish Traders</div>
       <div style="font-size:11px;">Credit Ledger</div>
     </div>
-    <div style="padding:12px 16px 10px;">
-      <div style="text-align:center;font-size:16px;font-weight:800;color:#1c1917;">${escapeHtml(customerName)} Statement</div>
-      <div style="text-align:center;font-size:11px;color:#57534e;margin-top:2px;">(${escapeHtml(periodLabel)})</div>
+    <div style="padding:12px 16px 10px;background:${CREDIT_THEME.white};">
+      <div style="text-align:center;font-size:16px;font-weight:800;color:${CREDIT_THEME.secondary};">${escapeHtml(customerName)} Statement</div>
+      <div style="text-align:center;font-size:11px;color:${CREDIT_THEME.textMuted};margin-top:2px;">(${escapeHtml(periodLabel)})</div>
 
-      <div style="display:flex;margin-top:10px;border:1px solid #d6d3d1;border-radius:4px;overflow:hidden;">
-        <div style="flex:1;padding:8px 10px;border-right:1px solid #e7e5e4;">
-          <div style="font-size:10px;color:#78716c;">Opening Balance</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;">Rs. ${escapeHtml(formatPdfAmount(statement.opening_balance))}</div>
-          ${openOn ? `<div style="font-size:9px;color:#78716c;margin-top:2px;">${escapeHtml(openOn)}</div>` : ''}
+      <div style="display:flex;margin-top:10px;border:1px solid ${CREDIT_THEME.primaryBorder};border-radius:4px;overflow:hidden;background:${CREDIT_THEME.white};">
+        <div style="flex:1;padding:8px 10px;border-right:1px solid ${CREDIT_THEME.primaryBorder};">
+          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Opening Balance</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatPdfAmount(statement.opening_balance))}</div>
+          ${openOn ? `<div style="font-size:9px;color:${CREDIT_THEME.textMuted};margin-top:2px;">${escapeHtml(openOn)}</div>` : ''}
         </div>
-        <div style="flex:1;padding:8px 10px;border-right:1px solid #e7e5e4;">
-          <div style="font-size:10px;color:#78716c;">Total Debit(-)</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;">Rs. ${escapeHtml(formatPdfAmount(statement.total_debit))}</div>
+        <div style="flex:1;padding:8px 10px;border-right:1px solid ${CREDIT_THEME.primaryBorder};">
+          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Total Debit(-)</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatPdfAmount(statement.total_debit))}</div>
         </div>
-        <div style="flex:1;padding:8px 10px;border-right:1px solid #e7e5e4;">
-          <div style="font-size:10px;color:#78716c;">Total Credit(+)</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;">Rs. ${escapeHtml(formatPdfAmount(statement.total_credit))}</div>
+        <div style="flex:1;padding:8px 10px;border-right:1px solid ${CREDIT_THEME.primaryBorder};">
+          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Total Credit(+)</div>
+          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatPdfAmount(statement.total_credit))}</div>
         </div>
         <div style="flex:1;padding:8px 10px;">
-          <div style="font-size:10px;color:#78716c;">Net Balance</div>
+          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Net Balance</div>
           <div style="font-size:13px;font-weight:700;margin-top:2px;color:${netColor};">Rs. ${escapeHtml(formatPdfAmount(statement.closing_balance))} ${isCr ? 'Cr' : 'Dr'}</div>
           <div style="font-size:9px;margin-top:2px;color:${netColor};">${escapeHtml(netHint)}</div>
         </div>
       </div>
 
-      <div style="margin-top:10px;font-size:11px;font-weight:700;color:#1c1917;">No. of Entries: ${rows.length} ${entriesSuffix}</div>
+      <div style="margin-top:10px;font-size:11px;font-weight:700;color:${CREDIT_THEME.secondary};">No. of Entries: ${rows.length} ${entriesSuffix}</div>
 
-      <table style="width:100%;border-collapse:collapse;margin-top:4px;border:1px solid #e7e5e4;">
+      <table style="width:100%;border-collapse:collapse;margin-top:4px;border:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
         <thead>
           <tr>
-            <th style="text-align:left;padding:5px 8px;font-size:10px;color:#44403c;background:#f5f5f4;border-bottom:1px solid #d6d3d1;">Date</th>
-            <th style="text-align:right;padding:5px 8px;font-size:10px;color:#44403c;background:#fef2f2;border-bottom:1px solid #d6d3d1;">Debit(-)</th>
-            <th style="text-align:right;padding:5px 8px;font-size:10px;color:#44403c;background:#ecfdf5;border-bottom:1px solid #d6d3d1;">Credit(+)</th>
-            <th style="text-align:right;padding:5px 8px;font-size:10px;color:#44403c;background:#f5f5f4;border-bottom:1px solid #d6d3d1;">Balance</th>
+            ${ths}
           </tr>
         </thead>
         <tbody>${trs}</tbody>
       </table>
 
-      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:#78716c;">
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:${CREDIT_THEME.textMuted};">
         <div>Report Generated : ${escapeHtml(format(new Date(), "h:mm a | dd MMM''yy"))}</div>
         <div>Page 1 of 1</div>
       </div>
     </div>
-    <div style="background:#92400e;color:#fff;padding:7px 16px;display:flex;justify-content:space-between;font-size:11px;">
+    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:7px 16px;display:flex;justify-content:space-between;font-size:11px;">
       <div style="font-weight:700;">Manish Traders</div>
       <div>Credit Ledger</div>
     </div>
@@ -753,8 +998,8 @@ export default function CreditLedgerDetail() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 flex-1 min-w-0">
           <Button
             variant="outline"
@@ -771,28 +1016,42 @@ export default function CreditLedgerDetail() {
             Back
           </Button>
           <div className="min-w-0">
-            <h1 className="text-3xl font-bold text-gray-900 truncate">
-              {selectedCustomer?.name || 'Customer'} — Credit Ledger
+            <h1 className="text-xl sm:text-2xl font-bold text-stone-900 truncate">
+              {selectedCustomer?.name || 'Customer'}
             </h1>
             {selectedCustomer?.phone ? (
-              <p className="text-sm text-gray-600 mt-1">Phone: {selectedCustomer.phone}</p>
+              <p className="text-sm text-stone-500 mt-0.5">Phone: {selectedCustomer.phone}</p>
             ) : null}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button onClick={openPaymentModal} className="bg-green-600 hover:bg-green-700" size="sm">
+            <Plus className="h-4 w-4 mr-1.5" />
+            Credit (+)
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-red-300 text-red-600 hover:bg-red-50"
+            onClick={openDebitModal}
+          >
+            <Minus className="h-4 w-4 mr-1.5" />
+            Debit (-)
+          </Button>
           {statement ? (
             <>
-              <Button variant="outline" onClick={exportPDF}>
-                <FileText className="h-4 w-4 mr-2" />
+              <Button variant="outline" size="sm" onClick={exportPDF}>
+                <FileText className="h-4 w-4 mr-1.5" />
                 PDF
               </Button>
               <Button
                 variant="outline"
+                size="sm"
                 onClick={copyPDF}
                 disabled={copyingPdf}
                 title="Copy ledger to clipboard for WhatsApp"
               >
-                <ClipboardCopy className="h-4 w-4 mr-2" />
+                <ClipboardCopy className="h-4 w-4 mr-1.5" />
                 {copyingPdf ? 'Copying…' : 'Copy PDF'}
               </Button>
             </>
@@ -800,50 +1059,23 @@ export default function CreditLedgerDetail() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <p className="text-sm text-gray-600">Current Balance</p>
-            <p className="text-3xl font-bold mt-1 text-amber-700">
-              ₹{formatAmountINR(closingBalance)} {closingSide}
-            </p>
+      <div className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b border-stone-200 bg-stone-50/80">
+          <div className="flex items-center gap-2 text-sm font-semibold text-stone-800">
+            <BookOpen className="h-4 w-4 text-amber-800" />
+            Statement
             {customerMeta?.collection_status ? (
-              <div className="mt-2">
-                <Badge variant={collectionStatusBadgeVariant(customerMeta.collection_status)}>
-                  {collectionStatusLabel(customerMeta.collection_status)}
-                  {customerMeta.days_since_last_payment != null
-                    ? ` (${customerMeta.days_since_last_payment}d)`
-                    : ''}
-                </Badge>
-              </div>
+              <Badge variant={collectionStatusBadgeVariant(customerMeta.collection_status)}>
+                {collectionStatusLabel(customerMeta.collection_status)}
+                {customerMeta.days_since_last_payment != null
+                  ? ` (${customerMeta.days_since_last_payment}d)`
+                  : ''}
+              </Badge>
             ) : null}
           </div>
-          <div className="flex gap-2">
-            <Button onClick={openPaymentModal} className="bg-green-600 hover:bg-green-700">
-              <Plus className="h-4 w-4 mr-2" />
-              Credit (+)
-            </Button>
-            <Button
-              variant="outline"
-              className="border-red-300 text-red-600 hover:bg-red-50"
-              onClick={openDebitModal}
-            >
-              <Minus className="h-4 w-4 mr-2" />
-              Debit (-)
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-          <h2 className="text-xl font-semibold flex items-center gap-2">
-            <BookOpen className="h-5 w-5 text-gray-500" />
-            Statement
-          </h2>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[140px] max-w-[220px]">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400 pointer-events-none" />
               <Input
                 placeholder="Search entries…"
                 value={search}
@@ -851,15 +1083,68 @@ export default function CreditLedgerDetail() {
                 className="pl-9 py-1.5 h-9 text-sm"
               />
             </div>
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowColumnSettings((v) => !v)}
+                className="flex items-center gap-2"
+              >
+                <Columns3 className="h-4 w-4" />
+                Columns
+                <span className="bg-amber-800 text-white rounded-full min-w-[1.25rem] h-5 px-1 flex items-center justify-center text-xs">
+                  {visibleColumns.length}
+                </span>
+              </Button>
+              {showColumnSettings ? (
+                <div className="absolute right-0 z-30 mt-1 w-64 rounded-lg border border-stone-200 bg-white shadow-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-stone-800">Column settings</div>
+                    <button
+                      type="button"
+                      className="text-stone-400 hover:text-stone-600"
+                      onClick={() => setShowColumnSettings(false)}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-1.5 max-h-64 overflow-auto">
+                    {LEDGER_COLUMN_DEFS.map((col) => (
+                      <label
+                        key={col.id}
+                        className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-amber-50 cursor-pointer text-sm text-stone-700"
+                      >
+                        <input
+                          type="checkbox"
+                          className="rounded border-stone-300 text-amber-700 focus:ring-amber-600"
+                          checked={!!columnVisibility[col.id]}
+                          onChange={() => toggleColumn(col.id)}
+                        />
+                        {col.label}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 mt-3 pt-2 border-t border-stone-100">
+                    <Button variant="outline" size="sm" className="flex-1" onClick={showAllColumns}>
+                      All
+                    </Button>
+                    <Button variant="outline" size="sm" className="flex-1" onClick={resetColumns}>
+                      Reset
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <Button
               variant="outline"
+              size="sm"
               onClick={() => setShowFilters(!showFilters)}
               className="flex items-center gap-2"
             >
               <Filter className="h-4 w-4" />
               Filters
               {hasActiveFilters ? (
-                <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                <span className="bg-amber-800 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
                   {[txnType, dateFrom, dateTo, search].filter(Boolean).length}
                 </span>
               ) : null}
@@ -868,10 +1153,10 @@ export default function CreditLedgerDetail() {
         </div>
 
         {showFilters ? (
-          <div className="border-t pt-4 mb-4 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="px-4 py-3 border-b border-stone-200 space-y-3 bg-white">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="lg:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">
                   <Calendar className="h-4 w-4 inline mr-1" />
                   Date Range
                 </label>
@@ -899,7 +1184,7 @@ export default function CreditLedgerDetail() {
               </div>
             </div>
             <div className="flex justify-end">
-              <Button variant="outline" onClick={handleResetFilters} className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={handleResetFilters} className="flex items-center gap-2">
                 <X className="h-4 w-4" />
                 Reset Filters
               </Button>
@@ -908,108 +1193,244 @@ export default function CreditLedgerDetail() {
         ) : null}
 
         {isLoading ? (
-          <LoadingState />
+          <div className="p-8">
+            <LoadingState />
+          </div>
         ) : error ? (
-          <ErrorState message="Failed to load statement" onRetry={() => refetch()} />
+          <div className="p-8">
+            <ErrorState message="Failed to load statement" onRetry={() => refetch()} />
+          </div>
         ) : (
-          <div className="border border-gray-300 rounded-lg overflow-hidden shadow-sm">
-            <div className="border-b border-gray-800 px-4 py-4 text-center bg-white">
-              <div className="text-sm font-semibold tracking-wide text-gray-700">POS CREDIT</div>
-              <div className="text-xl font-bold tracking-wider text-gray-900 mt-1">LEDGER</div>
-              <div className="text-sm text-gray-600 mt-1">( {periodLabel} )</div>
-              <div className="text-base font-bold text-gray-900 mt-2 uppercase">
-                Account : {selectedCustomer?.name}
+          <div className="bg-white border-[3px] border-amber-600 overflow-hidden">
+            <div className="bg-amber-600 text-white px-4 py-2 flex items-center justify-between">
+              <div className="font-bold text-sm">Manish Traders</div>
+              <div className="text-xs sm:text-sm">Credit Ledger</div>
+            </div>
+
+            <div className="px-4 py-4 sm:px-5 bg-white">
+              <div className="text-center">
+                <div className="text-lg sm:text-xl font-extrabold text-amber-950">
+                  {customerDisplayName} Statement
+                </div>
+                <div className="text-xs sm:text-sm text-stone-600 mt-0.5">({periodLabel})</div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 border border-amber-400 rounded overflow-hidden bg-white">
+                <div className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r border-amber-300">
+                  <div className="text-[10px] sm:text-xs text-stone-500">Opening Balance</div>
+                  <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
+                    Rs. {formatPdfAmount(statement?.opening_balance)}
+                  </div>
+                  {openingOnLabel ? (
+                    <div className="text-[10px] text-stone-500 mt-0.5">{openingOnLabel}</div>
+                  ) : null}
+                </div>
+                <div className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r border-amber-300">
+                  <div className="text-[10px] sm:text-xs text-stone-500">Total Debit(-)</div>
+                  <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
+                    Rs. {formatPdfAmount(statement?.total_debit)}
+                  </div>
+                </div>
+                <div className="px-3 py-2.5 border-b sm:border-b-0 lg:border-r border-amber-300">
+                  <div className="text-[10px] sm:text-xs text-stone-500">Total Credit(+)</div>
+                  <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
+                    Rs. {formatPdfAmount(statement?.total_credit)}
+                  </div>
+                </div>
+                <div className="px-3 py-2.5">
+                  <div className="text-[10px] sm:text-xs text-stone-500">Net Balance</div>
+                  <div
+                    className={`text-sm font-bold mt-0.5 tabular-nums ${
+                      netIsCr ? 'text-green-700' : 'text-red-700'
+                    }`}
+                  >
+                    Rs. {formatPdfAmount(closingBalance)} {netIsCr ? 'Cr' : 'Dr'}
+                  </div>
+                  <div
+                    className={`text-[10px] mt-0.5 ${
+                      netIsCr ? 'text-green-700' : 'text-red-700'
+                    }`}
+                  >
+                    {netHint}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 text-xs sm:text-sm font-bold text-amber-900">
+                No. of Entries: {rows.length} {entriesSuffix}
+              </div>
+
+              <div className="mt-1.5 overflow-x-auto border border-amber-400 rounded bg-white">
+                <table className="min-w-full text-xs sm:text-sm border-collapse">
+                  <thead>
+                    <tr>
+                      {visibleColumns.map((col) => {
+                        const align =
+                          col.align === 'right'
+                            ? 'text-right'
+                            : col.align === 'center'
+                              ? 'text-center'
+                              : 'text-left';
+                        const bg =
+                          col.id === 'debit'
+                            ? 'bg-red-100'
+                            : col.id === 'credit'
+                              ? 'bg-green-100'
+                              : 'bg-amber-100';
+                        return (
+                          <th
+                            key={col.id}
+                            className={`${align} px-2.5 py-1.5 font-bold text-amber-900 ${bg} border border-amber-400 whitespace-nowrap`}
+                          >
+                            {col.label}
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.length === 0 ? (
+                      <>
+                        {statementRows
+                          .filter((r) => r.isOpening)
+                          .map((r, i) => (
+                            <tr key={`open-${i}`} className="bg-white">
+                              {visibleColumns.map((col) => {
+                                const align =
+                                  col.align === 'right'
+                                    ? 'text-right'
+                                    : col.align === 'center'
+                                      ? 'text-center'
+                                      : 'text-left';
+                                return (
+                                  <td
+                                    key={col.id}
+                                    className={`px-2.5 py-1.5 font-bold border border-amber-300 ${align} ${
+                                      col.id === 'balance' ? 'text-stone-500' : 'text-stone-900'
+                                    }`}
+                                  >
+                                    {cellValue(r, col.id)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        <tr>
+                          <td
+                            colSpan={Math.max(visibleColumns.length, 1)}
+                            className="px-2.5 py-6 text-center text-stone-400 border border-amber-300"
+                          >
+                            No entries in this period.
+                          </td>
+                        </tr>
+                        {statementRows
+                          .filter((r) => r.isTotal)
+                          .map((r, i) => (
+                            <tr key={`total-${i}`} className="bg-amber-100 font-bold">
+                              {visibleColumns.map((col) => {
+                                const align =
+                                  col.align === 'right'
+                                    ? 'text-right'
+                                    : col.align === 'center'
+                                      ? 'text-center'
+                                      : 'text-left';
+                                const bg =
+                                  col.id === 'debit'
+                                    ? 'bg-red-100'
+                                    : col.id === 'credit'
+                                      ? 'bg-green-100'
+                                      : '';
+                                const balColor = /cr/i.test(r.balance)
+                                  ? 'text-green-700'
+                                  : 'text-red-700';
+                                return (
+                                  <td
+                                    key={col.id}
+                                    className={`px-2.5 py-1.5 border border-amber-400 tabular-nums ${align} ${bg} ${
+                                      col.id === 'balance' ? balColor : 'text-amber-950'
+                                    }`}
+                                  >
+                                    {cellValue(r, col.id)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                      </>
+                    ) : (
+                      statementRows.map((r, idx) => {
+                        const balCr = /cr/i.test(r.balance);
+                        const balColor = r.isOpening
+                          ? 'text-stone-500'
+                          : balCr
+                            ? 'text-green-700'
+                            : 'text-red-700';
+                        let rowBg = 'bg-white';
+                        if (r.isTotal) rowBg = 'bg-amber-100';
+                        else if (r.hasCredit && !r.hasDebit) rowBg = 'bg-green-50';
+                        else if (r.hasDebit && !r.hasCredit) rowBg = 'bg-red-50';
+
+                        return (
+                          <tr key={idx} className={`${rowBg} ${r.isTotal ? 'font-bold' : ''}`}>
+                            {visibleColumns.map((col) => {
+                              const align =
+                                col.align === 'right'
+                                  ? 'text-right'
+                                  : col.align === 'center'
+                                    ? 'text-center'
+                                    : 'text-left';
+                              let extra = '';
+                              if (col.id === 'debit' && (r.hasDebit || r.isTotal)) extra = 'bg-red-100';
+                              if (col.id === 'credit' && (r.hasCredit || r.isTotal))
+                                extra = 'bg-green-100';
+                              if (col.id === 'balance') {
+                                extra = `${balColor} font-bold ${
+                                  r.hasCredit && !r.isOpening && !r.isTotal ? 'bg-green-100' : ''
+                                }`;
+                              }
+                              if (col.id === 'type') {
+                                if (r.type === 'sale') extra = 'text-red-700 capitalize';
+                                else if (r.type === 'payment') extra = 'text-green-700 capitalize';
+                                else if (r.type === 'return') extra = 'text-blue-700 capitalize';
+                                else if (r.type) extra = 'capitalize';
+                              }
+                              if (
+                                (col.id === 'date' || col.id === 'particulars') &&
+                                (r.isOpening || r.isTotal)
+                              ) {
+                                extra = `${extra} font-bold`.trim();
+                              }
+                              return (
+                                <td
+                                  key={col.id}
+                                  className={`px-2.5 py-1 border border-amber-300 text-stone-900 tabular-nums ${align} ${
+                                    col.id === 'date' || col.id === 'vch' ? 'whitespace-nowrap' : ''
+                                  } ${extra}`}
+                                >
+                                  {cellValue(r, col.id)}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-2.5 flex flex-wrap justify-between gap-2 text-[10px] sm:text-xs text-stone-500">
+                <div>Report Generated : {format(new Date(), "h:mm a | dd MMM''yy")}</div>
+                <div>Page 1 of 1</div>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b-2 border-gray-800 bg-gray-50">
-                    <th className="text-left px-3 py-2 font-semibold whitespace-nowrap">Date</th>
-                    <th className="text-left px-3 py-2 font-semibold whitespace-nowrap">Type</th>
-                    <th className="text-left px-3 py-2 font-semibold whitespace-nowrap">Vch No.</th>
-                    <th className="text-left px-3 py-2 font-semibold">Particulars</th>
-                    <th className="text-left px-3 py-2 font-semibold">Narration</th>
-                    <th className="text-right px-3 py-2 font-semibold whitespace-nowrap">Debit</th>
-                    <th className="text-right px-3 py-2 font-semibold whitespace-nowrap">Credit</th>
-                    <th className="text-right px-3 py-2 font-semibold whitespace-nowrap">Balance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b border-gray-200 font-medium bg-amber-50/40">
-                    <td className="px-3 py-2" colSpan={3} />
-                    <td className="px-3 py-2">Opening Balance</td>
-                    <td className="px-3 py-2" />
-                    <td className="px-3 py-2" />
-                    <td className="px-3 py-2" />
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {balanceLabel(statement?.opening_balance, statement?.opening_side)}
-                    </td>
-                  </tr>
-
-                  {rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-3 py-8 text-center text-gray-400">
-                        No entries in this period.
-                      </td>
-                    </tr>
-                  ) : (
-                    rows.map((row: any) => (
-                      <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
-                        <td className="px-3 py-1.5 whitespace-nowrap">
-                          {formatLedgerDate(row.created_at)}
-                        </td>
-                        <td className="px-3 py-1.5 whitespace-nowrap capitalize">
-                          <span
-                            className={
-                              row.txn_type === 'sale'
-                                ? 'text-red-700'
-                                : row.txn_type === 'payment'
-                                  ? 'text-green-700'
-                                  : 'text-blue-700'
-                            }
-                          >
-                            {row.txn_type}
-                          </span>
-                        </td>
-                        <td className="px-3 py-1.5 whitespace-nowrap font-mono text-xs">
-                          {row.vch_no}
-                        </td>
-                        <td className="px-3 py-1.5">{row.particulars}</td>
-                        <td className="px-3 py-1.5 text-gray-500">{row.narration}</td>
-                        <td className="px-3 py-1.5 text-right whitespace-nowrap tabular-nums">
-                          {formatMoneyCell(row.debit)}
-                        </td>
-                        <td className="px-3 py-1.5 text-right whitespace-nowrap tabular-nums">
-                          {formatMoneyCell(row.credit)}
-                        </td>
-                        <td className="px-3 py-1.5 text-right whitespace-nowrap tabular-nums font-medium">
-                          {balanceLabel(row.running_balance, row.balance_side)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-
-                  <tr className="border-t-2 border-gray-800 font-bold bg-gray-50">
-                    <td className="px-3 py-2" colSpan={3} />
-                    <td className="px-3 py-2">Totals</td>
-                    <td className="px-3 py-2" />
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {formatMoneyCell(statement?.total_debit)}
-                    </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {formatMoneyCell(statement?.total_credit)}
-                    </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {balanceLabel(statement?.closing_balance, statement?.closing_side)}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="bg-amber-600 text-white px-4 py-2 flex items-center justify-between text-xs sm:text-sm">
+              <div className="font-bold">Manish Traders</div>
+              <div>Credit Ledger</div>
             </div>
 
-            <div className="px-4 py-3 border-t border-gray-200 flex flex-wrap justify-end gap-2">
+            <div className="px-4 py-2.5 border-t border-amber-200 flex flex-wrap justify-end gap-2 bg-white">
               <Button
                 variant="outline"
                 size="sm"

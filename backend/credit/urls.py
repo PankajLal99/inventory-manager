@@ -47,6 +47,8 @@ urlpatterns = [
     path('credit/returns/sold-products/', views.credit_return_sold_products, name='credit-return-sold-products'),
     path('credit/returns/', views.credit_return_list_create, name='credit-return-list-create'),
     path('credit/returns/<int:pk>/', views.credit_return_detail, name='credit-return-detail'),
+    path('credit/returns/<int:pk>/update/', views.credit_return_update, name='credit-return-update'),
+    path('credit/returns/<int:pk>/void/', views.credit_return_void, name='credit-return-void'),
 
     # Payments
     path('credit/payments/', views.credit_payment_list_create, name='credit-payment-list-create'),

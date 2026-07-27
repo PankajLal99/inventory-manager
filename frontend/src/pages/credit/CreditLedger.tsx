@@ -768,12 +768,26 @@ export default function CreditLedger() {
                         <td className={`${tdClass} text-right whitespace-nowrap`}>
                           <span
                             className={`inline-flex items-center rounded-md px-2 py-0.5 tabular-nums font-semibold ${
-                              balance > 0
-                                ? 'bg-amber-50 text-amber-900 ring-1 ring-amber-200'
-                                : 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200'
+                              balance < 0
+                                ? 'bg-red-50 text-red-700 ring-1 ring-red-200'
+                                : balance > 0
+                                  ? 'bg-green-50 text-green-700 ring-1 ring-green-200'
+                                  : 'bg-stone-50 text-stone-500 ring-1 ring-stone-200'
                             }`}
+                            title={
+                              balance < 0
+                                ? 'We have to give (advance / credit)'
+                                : balance > 0
+                                  ? 'We have to take (receivable)'
+                                  : 'Settled'
+                            }
                           >
-                            ₹{formatAmountINR(balance)}
+                            ₹{formatAmountINR(Math.abs(balance))}
+                            {balance !== 0 ? (
+                              <span className="ml-1 text-[10px] font-bold opacity-80">
+                                {balance < 0 ? 'Cr' : 'Dr'}
+                              </span>
+                            ) : null}
                           </span>
                         </td>
                         <td className={tdClass}>
@@ -896,17 +910,31 @@ export default function CreditLedger() {
                     <div className="text-right flex-shrink-0">
                       <div
                         className={`inline-flex rounded-lg px-2.5 py-1.5 shadow-sm ${
-                          balance > 0
-                            ? 'bg-amber-600 text-white'
-                            : 'bg-emerald-600 text-white'
+                          balance < 0
+                            ? 'bg-red-600 text-white'
+                            : balance > 0
+                              ? 'bg-green-600 text-white'
+                              : 'bg-stone-500 text-white'
                         }`}
+                        title={
+                          balance < 0
+                            ? 'We have to give (advance / credit)'
+                            : balance > 0
+                              ? 'We have to take (receivable)'
+                              : 'Settled'
+                        }
                       >
                         <div>
                           <p className="text-[9px] font-semibold uppercase tracking-wide opacity-90">
-                            Ledger
+                            {balance < 0 ? 'To give' : balance > 0 ? 'To take' : 'Settled'}
                           </p>
                           <p className="text-sm font-bold tabular-nums leading-tight">
-                            ₹{formatAmountINR(balance)}
+                            ₹{formatAmountINR(Math.abs(balance))}
+                            {balance !== 0 ? (
+                              <span className="ml-1 text-[10px] font-bold opacity-90">
+                                {balance < 0 ? 'Cr' : 'Dr'}
+                              </span>
+                            ) : null}
                           </p>
                         </div>
                       </div>

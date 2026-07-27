@@ -203,6 +203,10 @@ class CreditReturnItemSerializer(serializers.ModelSerializer):
 class CreditReturnSerializer(serializers.ModelSerializer):
     items = CreditReturnItemSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True, allow_null=True)
+    customer_phone = serializers.CharField(source='customer.phone', read_only=True, allow_null=True)
+    customer_group_name = serializers.CharField(
+        source='customer.customer_group.name', read_only=True, allow_null=True
+    )
     store_name = serializers.CharField(source='store.name', read_only=True, allow_null=True)
     created_by_name = serializers.SerializerMethodField()
 
@@ -210,6 +214,7 @@ class CreditReturnSerializer(serializers.ModelSerializer):
         model = CreditReturn
         fields = [
             'id', 'return_number', 'store', 'store_name', 'customer', 'customer_name',
+            'customer_phone', 'customer_group_name',
             'status', 'total', 'notes', 'created_by', 'created_by_name',
             'created_at', 'updated_at', 'items',
         ]

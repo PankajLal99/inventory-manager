@@ -6,7 +6,7 @@ export const CREDIT_INVOICE_CAPTURE_WIDTH = 794;
 export const CREDIT_INVOICE_CAPTURE_HEIGHT = 1123;
 
 /** Orange / amber primary with deep brown secondary — matches credit POS theme */
-const THEME = {
+export const CREDIT_THEME = {
   primary: '#d97706',
   primaryLight: '#f59e0b',
   primaryPale: '#fffbeb',
@@ -18,7 +18,16 @@ const THEME = {
   white: '#ffffff',
   rowAlt: '#fff7ed',
   tableHead: '#fef3c7',
+  /** Ledger debit / credit row accents (Khatabook-style, on amber chrome) */
+  debitBg: '#fee2e2',
+  debitBgSoft: '#fef2f2',
+  creditBg: '#dcfce7',
+  creditBgSoft: '#f0fdf4',
+  debitText: '#b91c1c',
+  creditText: '#15803d',
 };
+
+const THEME = CREDIT_THEME;
 
 /** Consistent type scale — avoids footer / summary size jumps */
 const FONT = {
