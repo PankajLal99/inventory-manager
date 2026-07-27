@@ -1200,6 +1200,14 @@ def _ledger_signed_amount(entry):
     return amt if entry.entry_type == 'debit' else -amt
 
 
+def _active_ledger_entries(qs):
+    """Exclude ledger rows for voided invoices/returns — they cancel out and clutter the statement."""
+    return qs.exclude(
+        Q(invoice__isnull=False, invoice__status='void')
+        | Q(credit_return__isnull=False, credit_return__status='void')
+    )
+
+
 def _is_manual_ledger_entry(entry):
     """Opening balance / manual adjustments — not invoice, return, or main-ledger sync."""
     if entry.invoice_id or entry.credit_return_id:
@@ -1570,8 +1578,10 @@ def credit_ledger_statement(request):
     date_to = request.query_params.get('date_to')
     txn_type = request.query_params.get('txn_type', '').strip().lower()
 
-    base = CreditLedgerEntry.objects.filter(customer_id=customer.id).select_related(
-        'invoice', 'credit_return', 'payment', 'created_by'
+    base = _active_ledger_entries(
+        CreditLedgerEntry.objects.filter(customer_id=customer.id).select_related(
+            'invoice', 'credit_return', 'payment', 'created_by'
+        )
     )
 
     # Opening balance = signed sum of all entries before date_from
@@ -1725,6 +1735,7 @@ def credit_ledger_by_customer(request):
             payment__isnull=True,
             credit_return__isnull=True,
         )
+        .exclude(invoice__status='void')
         .order_by('-created_at')
         .values('created_at')[:1]
     )
@@ -1741,25 +1752,25 @@ def credit_ledger_by_customer(request):
     qs = CreditCustomer.objects.filter(is_active=True)
     if only_with_heart:
         qs = qs.filter(_credit_eligible_name_q())
+    void_ledger_exclude = (
+        (Q(ledger_entries__invoice__isnull=True) | ~Q(ledger_entries__invoice__status='void'))
+        & (Q(ledger_entries__credit_return__isnull=True) | ~Q(ledger_entries__credit_return__status='void'))
+    )
     qs = qs.select_related(
         'customer_group',
         'linked_customer',
     ).annotate(
         total_debit=Coalesce(
             Sum(
-                Case(
-                    When(ledger_entries__entry_type='debit', then=F('ledger_entries__amount')),
-                    default=Value(Decimal('0')),
-                )
+                'ledger_entries__amount',
+                filter=Q(ledger_entries__entry_type='debit') & void_ledger_exclude,
             ),
             Decimal('0'),
         ),
         total_credit=Coalesce(
             Sum(
-                Case(
-                    When(ledger_entries__entry_type='credit', then=F('ledger_entries__amount')),
-                    default=Value(Decimal('0')),
-                )
+                'ledger_entries__amount',
+                filter=Q(ledger_entries__entry_type='credit') & void_ledger_exclude,
             ),
             Decimal('0'),
         ),

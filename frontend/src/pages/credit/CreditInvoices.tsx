@@ -50,7 +50,6 @@ export default function CreditInvoices() {
   const isReturn = mode === 'return';
 
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
   const [customerGroup, setCustomerGroup] = useState('');
   const [page, setPage] = useState(1);
   const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
@@ -65,7 +64,6 @@ export default function CreditInvoices() {
     if (next === 'return') params.set('mode', 'return');
     else params.delete('mode');
     setSearchParams(params, { replace: true });
-    setStatus('');
     setPage(1);
   };
 
@@ -80,16 +78,12 @@ export default function CreditInvoices() {
   const filterParams = useMemo(() => {
     const params: Record<string, string | number> = { page, page_size: 25 };
     if (search.trim()) params.search = search.trim();
-    if (isReturn) {
-      if (status) params.status = status;
-    } else {
-      params.status = 'open';
-    }
+    params.status = isReturn ? 'completed' : 'open';
     if (customerGroup) params.customer_group = customerGroup;
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     return params;
-  }, [search, status, customerGroup, dateFrom, dateTo, page, isReturn]);
+  }, [search, customerGroup, dateFrom, dateTo, page, isReturn]);
 
   const summaryParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -165,17 +159,10 @@ export default function CreditInvoices() {
   });
   const returnsCount = summary?.returns_count || 0;
 
-  const hasActiveFilters = !!(
-    search.trim() ||
-    (isReturn && status) ||
-    customerGroup ||
-    dateFrom ||
-    dateTo
-  );
+  const hasActiveFilters = !!(search.trim() || customerGroup || dateFrom || dateTo);
 
   const handleResetFilters = () => {
     setSearch('');
-    setStatus('');
     setCustomerGroup('');
     setDateFrom('');
     setDateTo('');
@@ -235,7 +222,7 @@ export default function CreditInvoices() {
                 <p className="text-sm font-medium text-gray-600">Total Returns</p>
                 <p className="text-2xl font-bold text-gray-900 mt-1">₹{formatNumber(totalReturns)}</p>
                 <p className="text-xs text-gray-500 mt-1">
-                  {returnsCount} return{returnsCount === 1 ? '' : 's'}
+                  {returnsCount} completed return{returnsCount === 1 ? '' : 's'}
                 </p>
               </div>
               <div className="p-3 bg-amber-100 rounded-lg">
@@ -260,10 +247,10 @@ export default function CreditInvoices() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">
-                  {isReturn ? 'Returns in range' : 'Open invoices'}
+                  {isReturn ? 'Completed returns' : 'Open invoices'}
                 </p>
                 <p className="text-2xl font-bold text-gray-900 mt-1">
-                  {isReturn ? returnsCount : count}
+                  {count}
                 </p>
               </div>
               <div className="p-3 bg-gray-100 rounded-lg">
@@ -314,24 +301,7 @@ export default function CreditInvoices() {
                   className="pl-10 h-10"
                 />
               </div>
-              {isReturn ? (
-                <div className="xl:col-span-2">
-                  <Select
-                    label="Status"
-                    value={status}
-                    onChange={(e) => {
-                      setStatus(e.target.value);
-                      setPage(1);
-                    }}
-                    className="h-10 py-2 text-sm"
-                  >
-                    <option value="">All</option>
-                    <option value="completed">Completed</option>
-                    <option value="void">Void</option>
-                  </Select>
-                </div>
-              ) : null}
-              <div className={isReturn ? 'xl:col-span-2' : 'xl:col-span-3'}>
+              <div className="xl:col-span-3">
                 <Select
                   label="Customer Group"
                   value={customerGroup}
@@ -387,7 +357,7 @@ export default function CreditInvoices() {
         ) : results.length === 0 ? (
           <EmptyState
             icon={isReturn ? Undo2 : FileText}
-            title={isReturn ? 'No return invoices' : 'No open invoices'}
+            title={isReturn ? 'No completed returns' : 'No open invoices'}
             message={
               hasActiveFilters
                 ? 'Try adjusting your filters.'
@@ -398,7 +368,7 @@ export default function CreditInvoices() {
           />
         ) : isReturn ? (
           <>
-            <Table headers={['Return', 'Customer', 'Group', 'Store', 'Status', 'Total', 'Date', '']}>
+            <Table headers={['Return', 'Customer', 'Group', 'Store', 'Total', 'Date', '']}>
               {results.map((ret: any) => (
                 <TableRow key={ret.id}>
                   <TableCell className="font-medium">{ret.return_number}</TableCell>
@@ -412,17 +382,6 @@ export default function CreditInvoices() {
                     {ret.customer_group_name || '—'}
                   </TableCell>
                   <TableCell>{ret.store_name}</TableCell>
-                  <TableCell>
-                    <span
-                      className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
-                        ret.status === 'void'
-                          ? 'bg-red-100 text-red-700'
-                          : 'bg-green-100 text-green-800'
-                      }`}
-                    >
-                      {ret.status}
-                    </span>
-                  </TableCell>
                   <TableCell>₹{formatNumber(parseFloat(ret.total || 0))}</TableCell>
                   <TableCell className="text-sm text-gray-500">
                     {ret.created_at ? new Date(ret.created_at).toLocaleString() : '—'}
