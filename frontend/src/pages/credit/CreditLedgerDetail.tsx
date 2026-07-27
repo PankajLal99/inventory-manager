@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -17,7 +17,6 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { creditApi } from '../../lib/api';
@@ -94,14 +93,6 @@ function loadColumnVisibility(): Record<LedgerColumnId, boolean> {
   }
 }
 
-function escapeHtml(s: unknown): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
@@ -172,26 +163,27 @@ async function copyPdfBlobToClipboard(blob: Blob): Promise<boolean> {
     if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
       return false;
     }
-    await navigator.clipboard.write([
-      new (window as any).ClipboardItem({
-        'application/pdf': blob,
-      }),
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
-}
+    const pdfBlob =
+      blob.type === 'application/pdf'
+        ? blob
+        : new Blob([blob], { type: 'application/pdf' });
 
-async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
-  try {
-    if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
-      return false;
+    // Chromium often requires a Promise for non-text clipboard MIME types
+    try {
+      await navigator.clipboard.write([
+        new (window as any).ClipboardItem({
+          'application/pdf': Promise.resolve(pdfBlob),
+        }),
+      ]);
+      return true;
+    } catch {
+      await navigator.clipboard.write([
+        new (window as any).ClipboardItem({
+          'application/pdf': pdfBlob,
+        }),
+      ]);
+      return true;
     }
-    await navigator.clipboard.write([
-      new (window as any).ClipboardItem({ 'image/png': blob }),
-    ]);
-    return true;
   } catch {
     return false;
   }
@@ -238,7 +230,6 @@ export default function CreditLedgerDetail() {
   const [deleteEntryId, setDeleteEntryId] = useState<number | null>(null);
   const [copyingPdf, setCopyingPdf] = useState(false);
   const canManage = canManageCreditRecords();
-  const pdfCopyFrameRef = useRef<HTMLIFrameElement>(null);
 
   const { data: customers = [] } = useQuery({
     queryKey: ['credit-ledger-customers', ''],
@@ -850,132 +841,6 @@ export default function CreditLedgerDetail() {
     return { doc, fileName };
   };
 
-  const buildLedgerCaptureHtml = () => {
-    if (!selectedCustomer || !statement) return '';
-
-    const customerName = sanitizePdfText(selectedCustomer.name || 'Customer') || 'Customer';
-    const firstName = customerName.split(/\s+/)[0] || customerName;
-    const netSide = String(statement.closing_side || 'Dr').toUpperCase();
-    const isCr = netSide === 'CR';
-    const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
-    const netColor = isCr ? CREDIT_THEME.creditText : CREDIT_THEME.debitText;
-    const openOn = dateFrom
-      ? `on ${formatPdfDate(dateFrom)}`
-      : rows[0]?.created_at
-        ? `on ${formatPdfDate(rows[0].created_at)}`
-        : '';
-    const tableRows = buildStatementRows();
-    const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
-    const cols = visibleColumns.length ? visibleColumns : LEDGER_COLUMN_DEFS.filter((c) => c.defaultOn);
-
-    const trs = tableRows
-      .map((r) => {
-        const balCr = /cr/i.test(r.balance);
-        const balColor = r.isOpening
-          ? CREDIT_THEME.textMuted
-          : balCr
-            ? CREDIT_THEME.creditText
-            : CREDIT_THEME.debitText;
-        const weight = r.isOpening || r.isTotal ? '700' : '500';
-        let rowBg = CREDIT_THEME.white;
-        if (r.isTotal) rowBg = CREDIT_THEME.tableHead;
-        else if (r.hasCredit && !r.hasDebit) rowBg = CREDIT_THEME.creditBgSoft;
-        else if (r.hasDebit && !r.hasCredit) rowBg = CREDIT_THEME.debitBgSoft;
-
-        const tds = cols
-          .map((c) => {
-            const val = cellValue(r, c.id);
-            let bg = rowBg;
-            let color = CREDIT_THEME.text;
-            let fw = weight;
-            let align = c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left';
-            if (c.id === 'debit' && (r.hasDebit || r.isTotal)) bg = CREDIT_THEME.debitBg;
-            if (c.id === 'credit' && (r.hasCredit || r.isTotal)) bg = CREDIT_THEME.creditBg;
-            if (c.id === 'balance') {
-              fw = '700';
-              color = balColor;
-              if (r.hasCredit && !r.isOpening && !r.isTotal) bg = CREDIT_THEME.creditBg;
-              else if (r.isTotal) bg = CREDIT_THEME.tableHead;
-            }
-            if (c.id === 'type') {
-              if (r.type === 'sale') color = CREDIT_THEME.debitText;
-              else if (r.type === 'payment') color = CREDIT_THEME.creditText;
-            }
-            return `<td style="padding:4px 8px;border:1px solid ${CREDIT_THEME.primaryBorder};font-size:11px;text-align:${align};background:${bg};color:${color};font-weight:${fw};">${escapeHtml(val)}</td>`;
-          })
-          .join('');
-
-        return `<tr style="background:${rowBg};">${tds}</tr>`;
-      })
-      .join('');
-
-    const ths = cols
-      .map((c) => {
-        let bg = CREDIT_THEME.tableHead;
-        if (c.id === 'debit') bg = CREDIT_THEME.debitBg;
-        if (c.id === 'credit') bg = CREDIT_THEME.creditBg;
-        const align = c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left';
-        return `<th style="text-align:${align};padding:5px 8px;font-size:10px;color:${CREDIT_THEME.secondary};background:${bg};border:1px solid ${CREDIT_THEME.primaryBorder};">${escapeHtml(c.label)}</th>`;
-      })
-      .join('');
-
-    return `<!doctype html>
-<html><head><meta charset="UTF-8" /></head>
-<body style="margin:0;padding:0;background:#fff;">
-  <div id="credit-ledger-copy-root" style="width:794px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${CREDIT_THEME.text};background:${CREDIT_THEME.white};border:3px solid ${CREDIT_THEME.primary};">
-    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:7px 16px;display:flex;justify-content:space-between;align-items:center;">
-      <div style="font-weight:700;font-size:12px;">Manish Traders</div>
-      <div style="font-size:11px;">Credit Ledger</div>
-    </div>
-    <div style="padding:12px 16px 10px;background:${CREDIT_THEME.white};">
-      <div style="text-align:center;font-size:16px;font-weight:800;color:${CREDIT_THEME.secondary};">${escapeHtml(customerName)} Statement</div>
-      <div style="text-align:center;font-size:11px;color:${CREDIT_THEME.textMuted};margin-top:2px;">(${escapeHtml(periodLabel)})</div>
-
-      <div style="display:flex;margin-top:10px;border:1px solid ${CREDIT_THEME.primaryBorder};border-radius:4px;overflow:hidden;background:${CREDIT_THEME.white};">
-        <div style="flex:1;padding:8px 10px;border-right:1px solid ${CREDIT_THEME.primaryBorder};">
-          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Opening Balance</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatPdfAmount(statement.opening_balance))}</div>
-          ${openOn ? `<div style="font-size:9px;color:${CREDIT_THEME.textMuted};margin-top:2px;">${escapeHtml(openOn)}</div>` : ''}
-        </div>
-        <div style="flex:1;padding:8px 10px;border-right:1px solid ${CREDIT_THEME.primaryBorder};">
-          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Total Debit(-)</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatPdfAmount(statement.total_debit))}</div>
-        </div>
-        <div style="flex:1;padding:8px 10px;border-right:1px solid ${CREDIT_THEME.primaryBorder};">
-          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Total Credit(+)</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatPdfAmount(statement.total_credit))}</div>
-        </div>
-        <div style="flex:1;padding:8px 10px;">
-          <div style="font-size:10px;color:${CREDIT_THEME.textMuted};">Net Balance</div>
-          <div style="font-size:13px;font-weight:700;margin-top:2px;color:${netColor};">Rs. ${escapeHtml(formatPdfAmount(statement.closing_balance))} ${isCr ? 'Cr' : 'Dr'}</div>
-          <div style="font-size:9px;margin-top:2px;color:${netColor};">${escapeHtml(netHint)}</div>
-        </div>
-      </div>
-
-      <div style="margin-top:10px;font-size:11px;font-weight:700;color:${CREDIT_THEME.secondary};">No. of Entries: ${rows.length} ${entriesSuffix}</div>
-
-      <table style="width:100%;border-collapse:collapse;margin-top:4px;border:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
-        <thead>
-          <tr>
-            ${ths}
-          </tr>
-        </thead>
-        <tbody>${trs}</tbody>
-      </table>
-
-      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:${CREDIT_THEME.textMuted};">
-        <div>Report Generated : ${escapeHtml(formatCreditDateTime(new Date()))}</div>
-        <div>Page 1 of 1</div>
-      </div>
-    </div>
-    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:7px 16px;display:flex;justify-content:space-between;font-size:11px;">
-      <div style="font-weight:700;">Manish Traders</div>
-      <div>Credit Ledger</div>
-    </div>
-  </div>
-</body></html>`;
-  };
-
   const exportPDF = () => {
     const built = buildCreditLedgerPdf();
     if (!built) return;
@@ -988,74 +853,23 @@ export default function CreditLedgerDetail() {
 
     setCopyingPdf(true);
     try {
-      // Avoid accidentally copying page title / selected UI text with the PDF
       window.getSelection()?.removeAllRanges();
 
       const pdfBlob = built.doc.output('blob');
-      const file = new File([pdfBlob], built.fileName, { type: 'application/pdf' });
-
-      const canShareFiles =
-        typeof navigator !== 'undefined' &&
-        typeof navigator.share === 'function' &&
-        typeof navigator.canShare === 'function' &&
-        navigator.canShare({ files: [file] });
-
-      if (canShareFiles) {
-        try {
-          // files only — no title/text so WhatsApp doesn't paste "Name — Credit Ledger"
-          await navigator.share({ files: [file] });
-          toast('Share opened — pick WhatsApp to send the PDF', 'success');
-          return;
-        } catch (err: any) {
-          if (err?.name === 'AbortError') return;
-        }
-      }
-
+      // PDF only — no share sheet, no image fallback
       if (await copyPdfBlobToClipboard(pdfBlob)) {
         toast('PDF copied to clipboard', 'success');
         return;
       }
 
-      const iframe = pdfCopyFrameRef.current;
-      const doc = iframe?.contentDocument;
-      if (!iframe || !doc) {
-        toast('Copy preview not ready. Try Download PDF instead.', 'error');
-        return;
-      }
-
-      doc.open();
-      doc.write(buildLedgerCaptureHtml());
-      doc.close();
-      await new Promise((r) => window.setTimeout(r, 120));
-
-      const root =
-        (doc.getElementById('credit-ledger-copy-root') as HTMLElement | null) || doc.body;
-      const w = Math.max(root.scrollWidth || 794, 794);
-      const h = Math.max(root.scrollHeight || 1, 1);
-      iframe.style.width = `${w}px`;
-      iframe.style.height = `${h + 8}px`;
-
-      const canvas = await html2canvas(root, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: w,
-        windowHeight: h,
-        width: w,
-        height: h,
-      });
-
-      const pngBlob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob((b) => resolve(b), 'image/png', 1)
+      // Most browsers block PDF clipboard; download so you still get a PDF file
+      built.doc.save(built.fileName);
+      toast(
+        'This browser can’t copy PDF to clipboard — PDF downloaded instead',
+        'info'
       );
-      if (!pngBlob || !(await copyPngBlobToClipboard(pngBlob))) {
-        toast('Could not copy to clipboard. Use Download PDF instead.', 'error');
-        return;
-      }
-      toast('Ledger copied — paste in WhatsApp or anywhere', 'success');
     } catch (e: any) {
-      toast(e?.message || 'Failed to copy ledger', 'error');
+      toast(e?.message || 'Failed to copy PDF', 'error');
     } finally {
       setCopyingPdf(false);
     }
@@ -1763,21 +1577,6 @@ export default function CreditLedgerDetail() {
           </Button>
         </div>
       </Modal>
-
-      <iframe
-        ref={pdfCopyFrameRef}
-        title="credit-ledger-pdf-copy"
-        style={{
-          position: 'fixed',
-          left: '-99999px',
-          top: 0,
-          width: '794px',
-          height: '1px',
-          border: 0,
-          opacity: 0,
-          pointerEvents: 'none',
-        }}
-      />
     </div>
   );
 }
