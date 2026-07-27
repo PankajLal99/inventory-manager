@@ -51,6 +51,9 @@ const thClass =
   'px-3 py-3 text-[11px] font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap';
 const tdClass = 'px-3 py-2.5 align-middle';
 
+/** Set true to show per-customer ledger delete (trash) on the list. */
+const SHOW_LEDGER_DELETE = false;
+
 function customerInitial(name?: string | null) {
   const n = (name || '').trim();
   return n ? n.charAt(0).toUpperCase() : '?';
@@ -742,7 +745,7 @@ export default function CreditLedger() {
                     <th className={`${thClass} text-left`}>Last pay</th>
                     <th className={`${thClass} text-left`}>Last sale</th>
                     <th className={`${thClass} text-left min-w-[120px]`}>Status</th>
-                    <th className={`${thClass} text-center ${canManage ? 'w-20' : 'w-12'}`} />
+                    <th className={`${thClass} text-center w-12`} />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
@@ -901,7 +904,7 @@ export default function CreditLedger() {
                             >
                               <Eye className="h-4 w-4" />
                             </button>
-                            {canManage ? (
+                            {SHOW_LEDGER_DELETE && canManage ? (
                               <button
                                 type="button"
                                 onClick={() => setDeleteCustomer(row)}
@@ -1073,7 +1076,7 @@ export default function CreditLedger() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
-                      {canManage ? (
+                      {SHOW_LEDGER_DELETE && canManage ? (
                         <button
                           type="button"
                           onClick={() => setDeleteCustomer(row)}
@@ -1375,6 +1378,7 @@ export default function CreditLedger() {
         )}
       </Modal>
 
+      {SHOW_LEDGER_DELETE ? (
       <Modal
         isOpen={!!deleteCustomer}
         onClose={() => !deleteLedgerMutation.isPending && setDeleteCustomer(null)}
@@ -1423,6 +1427,7 @@ export default function CreditLedger() {
           </div>
         </div>
       </Modal>
+      ) : null}
     </div>
   );
 }
