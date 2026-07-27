@@ -258,6 +258,7 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
     particulars = serializers.SerializerMethodField()
     narration = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
+    is_manual = serializers.SerializerMethodField()
 
     class Meta:
         model = CreditLedgerEntry
@@ -267,6 +268,7 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
             'payment', 'payment_method',
             'entry_type', 'amount', 'description',
             'txn_type', 'vch_no', 'particulars', 'narration',
+            'is_manual',
             'created_by', 'created_by_name', 'created_at',
         ]
         read_only_fields = fields
@@ -275,6 +277,13 @@ class CreditLedgerEntrySerializer(serializers.ModelSerializer):
         if obj.created_by:
             return obj.created_by.get_full_name() or obj.created_by.username
         return None
+
+    def get_is_manual(self, obj):
+        if obj.invoice_id or obj.credit_return_id:
+            return False
+        if obj.payment_id and obj.payment and obj.payment.source_ledger_entry_id:
+            return False
+        return True
 
     def get_txn_type(self, obj):
         if obj.payment_id:

@@ -24,6 +24,8 @@ import ErrorState from '../../components/ui/ErrorState';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { formatCreditInvoiceDate } from './CreditInvoiceDocument';
+import { canManageCreditRecords } from './creditLedgerUtils';
+import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
   key: string;
@@ -62,6 +64,7 @@ export default function CreditReturnDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const returnId = parseInt(id || '', 10);
+  const canManage = canManageCreditRecords();
 
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -116,7 +119,7 @@ export default function CreditReturnDetail() {
   };
 
   useEffect(() => {
-    if (creditReturn?.status === 'completed' && searchParams.get('edit') === '1') {
+    if (creditReturn?.status === 'completed' && searchParams.get('edit') === '1' && canManage) {
       openEditModal();
       const next = new URLSearchParams(searchParams);
       next.delete('edit');
@@ -262,7 +265,7 @@ export default function CreditReturnDetail() {
     (sum: number, item: any) => sum + (parseFloat(String(item.quantity || 0)) || 0),
     0
   );
-  const canEdit = creditReturn.status === 'completed';
+  const canEdit = canManage && creditReturn.status === 'completed';
 
   return (
     <div className="space-y-6">
@@ -411,26 +414,32 @@ export default function CreditReturnDetail() {
       ) : null}
 
       <Modal isOpen={showVoidConfirm} onClose={() => setShowVoidConfirm(false)} title="Void credit return?">
-        <p className="text-sm text-gray-600 mb-4">
-          This reverses the ledger credit and increases the customer&apos;s outstanding balance.
-          Linked invoice return quantities are restored.
-        </p>
-        {voidMutation.isError ? (
-          <p className="text-sm text-red-600 mb-3">
-            {(voidMutation.error as any)?.response?.data?.detail || 'Void failed'}
-          </p>
-        ) : null}
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setShowVoidConfirm(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            disabled={voidMutation.isPending}
-            onClick={() => voidMutation.mutate()}
-          >
-            {voidMutation.isPending ? 'Voiding…' : 'Confirm void'}
-          </Button>
+        <div className="space-y-4">
+          {creditReturn ? (
+            <CreditVoidLedgerPreview
+              kind="return"
+              label={creditReturn.return_number || `Return #${creditReturn.id}`}
+              total={parseFloat(String(creditReturn.total ?? '0')) || 0}
+              customerName={creditReturn.customer_name}
+            />
+          ) : null}
+          {voidMutation.isError ? (
+            <p className="text-sm text-red-600">
+              {(voidMutation.error as any)?.response?.data?.detail || 'Void failed'}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <Button variant="secondary" onClick={() => setShowVoidConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={voidMutation.isPending}
+              onClick={() => voidMutation.mutate()}
+            >
+              {voidMutation.isPending ? 'Voiding…' : 'Confirm void'}
+            </Button>
+          </div>
         </div>
       </Modal>
 

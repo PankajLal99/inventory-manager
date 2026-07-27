@@ -12,6 +12,7 @@ import {
   Minus,
   Plus,
   Search,
+  Trash2,
   UserPlus,
   Users,
   X,
@@ -33,6 +34,7 @@ import {
   collectionStatusDotClass,
   collectionStatusLabel,
   collectionStatusRowClass,
+  canManageCreditRecords,
   daysSincePaymentLabel,
   followUpDeltaClass,
   followUpDeltaLabel,
@@ -41,7 +43,9 @@ import {
   collectionEventStyle,
   type CreditCollectionHistoryEvent,
   type CreditLedgerCustomerRow,
+  type CreditLedgerDeleteSummary,
 } from './creditLedgerUtils';
+import CreditLedgerDeletePreview from './CreditLedgerDeletePreview';
 
 const thClass =
   'px-3 py-3 text-[11px] font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap';
@@ -90,6 +94,8 @@ export default function CreditLedger() {
   const [entryNotes, setEntryNotes] = useState('Opening Balance');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [creatingNewCustomer, setCreatingNewCustomer] = useState(false);
+  const [deleteCustomer, setDeleteCustomer] = useState<CreditLedgerCustomerRow | null>(null);
+  const canManage = canManageCreditRecords();
 
   const buildDetailPath = (customerId: number) => {
     const params = new URLSearchParams();
@@ -169,6 +175,40 @@ export default function CreditLedger() {
       return (res.data?.results || []) as CreditCollectionHistoryEvent[];
     },
     enabled: !!historyCustomer?.id,
+  });
+
+  const {
+    data: deleteSummary,
+    isLoading: deleteSummaryLoading,
+    error: deleteSummaryError,
+  } = useQuery({
+    queryKey: ['credit-ledger-delete-summary', deleteCustomer?.id],
+    queryFn: async () => {
+      const res = await creditApi.ledger.deleteSummary(deleteCustomer!.id);
+      return res.data as CreditLedgerDeleteSummary;
+    },
+    enabled: !!deleteCustomer?.id,
+  });
+
+  const deleteLedgerMutation = useMutation({
+    mutationFn: async (customerId: number) => {
+      const res = await creditApi.ledger.deleteCustomer(customerId);
+      return res.data as CreditLedgerDeleteSummary;
+    },
+    onSuccess: (data) => {
+      const name = deleteCustomer?.name || data?.customer?.name || 'Customer';
+      setDeleteCustomer(null);
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-invoices-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'] });
+      toast(`Deleted credit ledger for ${name}`, 'success');
+    },
+    onError: (err: any) => {
+      toast(err?.response?.data?.detail || 'Failed to delete ledger', 'error');
+    },
   });
 
   const patchCollection = useMutation({
@@ -702,7 +742,7 @@ export default function CreditLedger() {
                     <th className={`${thClass} text-left`}>Last pay</th>
                     <th className={`${thClass} text-left`}>Last sale</th>
                     <th className={`${thClass} text-left min-w-[120px]`}>Status</th>
-                    <th className={`${thClass} text-center w-12`} />
+                    <th className={`${thClass} text-center ${canManage ? 'w-20' : 'w-12'}`} />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
@@ -852,14 +892,26 @@ export default function CreditLedger() {
                           </div>
                         </td>
                         <td className={`${tdClass} text-center`}>
-                          <button
-                            type="button"
-                            onClick={() => navigate(buildDetailPath(row.id))}
-                            className="inline-flex p-1.5 rounded-lg text-stone-400 hover:text-amber-800 hover:bg-amber-50"
-                            title="View ledger"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
+                          <div className="inline-flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => navigate(buildDetailPath(row.id))}
+                              className="inline-flex p-1.5 rounded-lg text-stone-400 hover:text-amber-800 hover:bg-amber-50"
+                              title="View ledger"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            {canManage ? (
+                              <button
+                                type="button"
+                                onClick={() => setDeleteCustomer(row)}
+                                className="inline-flex p-1.5 rounded-lg text-stone-400 hover:text-red-700 hover:bg-red-50"
+                                title="Delete entire ledger"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1021,6 +1073,16 @@ export default function CreditLedger() {
                       >
                         <Eye className="h-3.5 w-3.5" />
                       </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteCustomer(row)}
+                          className="p-1.5 rounded-lg text-stone-400 hover:text-red-700 hover:bg-red-50"
+                          title="Delete ledger"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
                     </div>
                     <DatePicker
                       value={row.next_follow_up_date || ''}
@@ -1311,6 +1373,55 @@ export default function CreditLedger() {
             })}
           </ol>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={!!deleteCustomer}
+        onClose={() => !deleteLedgerMutation.isPending && setDeleteCustomer(null)}
+        title="Delete entire credit ledger?"
+        size="md"
+      >
+        <div className="space-y-4">
+          <CreditLedgerDeletePreview
+            customerName={deleteCustomer?.name || 'Customer'}
+            summary={deleteSummary ?? null}
+            isLoading={deleteSummaryLoading}
+            error={
+              deleteSummaryError
+                ? (deleteSummaryError as any)?.response?.data?.detail ||
+                  (deleteSummaryError as Error)?.message ||
+                  'Failed to load summary'
+                : null
+            }
+          />
+          {deleteLedgerMutation.isError ? (
+            <p className="text-sm text-red-600">
+              {(deleteLedgerMutation.error as any)?.response?.data?.detail ||
+                'Failed to delete ledger'}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <Button
+              variant="secondary"
+              disabled={deleteLedgerMutation.isPending}
+              onClick={() => setDeleteCustomer(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={
+                deleteLedgerMutation.isPending ||
+                deleteSummaryLoading ||
+                !!deleteSummaryError ||
+                !deleteCustomer
+              }
+              onClick={() => deleteCustomer && deleteLedgerMutation.mutate(deleteCustomer.id)}
+            >
+              {deleteLedgerMutation.isPending ? 'Deleting…' : 'Delete permanently'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

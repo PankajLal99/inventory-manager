@@ -1,5 +1,12 @@
 import { format } from 'date-fns';
 import { formatAmountINR } from '../../lib/utils';
+import { auth } from '../../lib/auth';
+
+/** Admin and Super may edit/void credit invoices, returns, and manual ledger entries. */
+export function canManageCreditRecords(user = auth.getUser()): boolean {
+  const groups = user?.groups || [];
+  return groups.includes('Admin') || groups.includes('Super');
+}
 
 export type CollectionStatus = 'good' | 'warning' | 'danger';
 
@@ -26,6 +33,25 @@ export type CreditLedgerCustomerRow = {
   collection_reason?: string;
   next_follow_up_date?: string | null;
   follow_up_delta_days?: number | null;
+};
+
+export type CreditLedgerDeleteSummary = {
+  customer: {
+    id: number;
+    name: string;
+    balance?: string | number;
+    phone?: string;
+  };
+  invoice_count: number;
+  open_invoice_count: number;
+  void_invoice_count: number;
+  return_count: number;
+  completed_return_count: number;
+  void_return_count: number;
+  payment_count: number;
+  ledger_entry_count: number;
+  cart_count: number;
+  collection_event_count: number;
 };
 
 export type CreditCollectionHistoryEvent = {

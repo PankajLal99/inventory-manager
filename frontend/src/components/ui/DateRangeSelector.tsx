@@ -63,9 +63,11 @@ export default function DateRangeSelector({
 
     const handleClickOutside = (event: MouseEvent) => {
       if (!containerRef.current) return;
-      if (!containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      const target = event.target as Node;
+      if (containerRef.current.contains(target)) return;
+      // DatePicker renders its calendar in a portal on document.body
+      if ((target as Element).closest?.('[data-date-picker-popup]')) return;
+      setIsOpen(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);

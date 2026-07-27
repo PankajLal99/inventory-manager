@@ -38,6 +38,8 @@ import {
   CREDIT_INVOICE_CAPTURE_WIDTH,
   CREDIT_SHOP_NAME,
 } from './creditInvoiceHtml';
+import { canManageCreditRecords } from './creditLedgerUtils';
+import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
   key: string;
@@ -88,6 +90,7 @@ export default function CreditInvoiceDetail() {
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
 
   const invoiceId = parseInt(id || '', 10);
+  const canManage = canManageCreditRecords();
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const tid = Math.random().toString(36).slice(2);
@@ -129,7 +132,7 @@ export default function CreditInvoiceDetail() {
   };
 
   useEffect(() => {
-    if (invoice?.status === 'open' && searchParams.get('edit') === '1') {
+    if (canManage && invoice?.status === 'open' && searchParams.get('edit') === '1') {
       openEditModal();
       const next = new URLSearchParams(searchParams);
       next.delete('edit');
@@ -491,7 +494,7 @@ export default function CreditInvoiceDetail() {
 
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
                 <div className="flex gap-2">
-                  {invoice.status === 'open' ? (
+                  {canManage && invoice.status === 'open' ? (
                     <Button
                       variant="outline"
                       size="sm"
@@ -528,7 +531,7 @@ export default function CreditInvoiceDetail() {
                   </Button>
                 </div>
 
-                {invoice.status === 'open' ? (
+                {canManage && invoice.status === 'open' ? (
                   <Button variant="danger" size="sm" onClick={() => setShowVoidConfirm(true)}>
                     <Ban className="h-4 w-4 mr-2" />
                     Void
@@ -788,26 +791,32 @@ export default function CreditInvoiceDetail() {
       />
 
       <Modal isOpen={showVoidConfirm} onClose={() => setShowVoidConfirm(false)} title="Void credit invoice?">
-        <p className="text-sm text-gray-600 mb-4">
-          This reverses the ledger debit and reduces the customer&apos;s credit balance. No stock is
-          changed.
-        </p>
-        {voidMutation.isError ? (
-          <p className="text-sm text-red-600 mb-3">
-            {(voidMutation.error as any)?.response?.data?.detail || 'Void failed'}
-          </p>
-        ) : null}
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setShowVoidConfirm(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            disabled={voidMutation.isPending}
-            onClick={() => voidMutation.mutate()}
-          >
-            {voidMutation.isPending ? 'Voiding…' : 'Confirm void'}
-          </Button>
+        <div className="space-y-4">
+          {invoice ? (
+            <CreditVoidLedgerPreview
+              kind="sale"
+              label={invoice.invoice_number || `Invoice #${invoice.id}`}
+              total={originalTotal}
+              customerName={invoice.customer_name}
+            />
+          ) : null}
+          {voidMutation.isError ? (
+            <p className="text-sm text-red-600">
+              {(voidMutation.error as any)?.response?.data?.detail || 'Void failed'}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <Button variant="secondary" onClick={() => setShowVoidConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={voidMutation.isPending}
+              onClick={() => voidMutation.mutate()}
+            >
+              {voidMutation.isPending ? 'Voiding…' : 'Confirm void'}
+            </Button>
+          </div>
         </div>
       </Modal>
 

@@ -662,6 +662,17 @@ export const creditApi = {
       cash_amount?: number | string;
       upi_amount?: number | string;
     }) => api.post('/credit/ledger/entries/', data),
+    updateEntry: (
+      id: number,
+      data: {
+        amount?: number | string;
+        description?: string;
+        notes?: string;
+        created_at?: string;
+        paid_at?: string;
+      }
+    ) => api.patch(`/credit/ledger/entries/${id}/`, data),
+    deleteEntry: (id: number) => api.delete(`/credit/ledger/entries/${id}/`),
     statement: (params: {
       customer: number | string;
       date_from?: string;
@@ -675,6 +686,10 @@ export const creditApi = {
     ) => api.patch(`/credit/ledger/customers/${customerId}/collection/`, data),
     collectionHistory: (customerId: number, params?: { limit?: number }) =>
       api.get(`/credit/ledger/customers/${customerId}/collection-history/`, { params }),
+    deleteSummary: (customerId: number) =>
+      api.get(`/credit/ledger/customers/${customerId}/delete/`),
+    deleteCustomer: (customerId: number) =>
+      api.delete(`/credit/ledger/customers/${customerId}/delete/`),
   },
 };
 

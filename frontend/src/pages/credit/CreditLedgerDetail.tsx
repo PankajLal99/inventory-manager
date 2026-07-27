@@ -10,9 +10,11 @@ import {
   FileText,
   Filter,
   Minus,
+  Pencil,
   Plus,
   Printer,
   Search,
+  Trash2,
   X,
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -32,6 +34,7 @@ import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import type { DateRangePreset } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import {
+  canManageCreditRecords,
   collectionStatusBadgeVariant,
   collectionStatusLabel,
 } from './creditLedgerUtils';
@@ -238,7 +241,15 @@ export default function CreditLedgerDetail() {
   const [debitAmount, setDebitAmount] = useState('');
   const [debitDate, setDebitDate] = useState(() => toLocalDateString(new Date()));
   const [debitNotes, setDebitNotes] = useState('');
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editEntryId, setEditEntryId] = useState<number | null>(null);
+  const [editEntryType, setEditEntryType] = useState<'debit' | 'credit'>('debit');
+  const [editAmount, setEditAmount] = useState('');
+  const [editDate, setEditDate] = useState(() => toLocalDateString(new Date()));
+  const [editDescription, setEditDescription] = useState('');
+  const [deleteEntryId, setDeleteEntryId] = useState<number | null>(null);
   const [copyingPdf, setCopyingPdf] = useState(false);
+  const canManage = canManageCreditRecords();
   const pdfCopyFrameRef = useRef<HTMLIFrameElement>(null);
 
   const { data: customers = [] } = useQuery({
@@ -420,6 +431,68 @@ export default function CreditLedgerDetail() {
     setShowDebitModal(true);
   };
 
+  const openEditEntry = (row: {
+    entryId?: number;
+    entryType?: string;
+    rawAmount?: string | number;
+    rawDate?: string;
+    rawDescription?: string;
+  }) => {
+    setEditEntryId(Number(row.entryId));
+    setEditEntryType(row.entryType === 'credit' ? 'credit' : 'debit');
+    setEditAmount(String(row.rawAmount ?? ''));
+    setEditDate(
+      row.rawDate ? toLocalDateString(new Date(row.rawDate)) : toLocalDateString(new Date())
+    );
+    setEditDescription(String(row.rawDescription || 'Opening Balance'));
+    setShowEditModal(true);
+  };
+
+  const editEntryMutation = useMutation({
+    mutationFn: async () => {
+      if (!editEntryId) throw new Error('No entry selected');
+      const amount = parseFloat(editAmount);
+      if (!(amount > 0)) throw new Error('Amount must be greater than 0');
+      const res = await creditApi.ledger.updateEntry(editEntryId, {
+        amount,
+        description: editDescription.trim() || 'Opening Balance',
+        created_at: editDate ? dateStringWithCurrentTimeISO(editDate) : undefined,
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      setShowEditModal(false);
+      setEditEntryId(null);
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      refetch();
+      toast('Opening balance updated', 'success');
+    },
+    onError: (err: any) => {
+      toast(
+        err?.response?.data?.detail || err?.message || 'Failed to update entry',
+        'error'
+      );
+    },
+  });
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: async (entryId: number) => {
+      await creditApi.ledger.deleteEntry(entryId);
+    },
+    onSuccess: () => {
+      setDeleteEntryId(null);
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['manual-credit-entries'] });
+      refetch();
+      toast('Entry removed', 'success');
+    },
+    onError: (err: any) => {
+      toast(err?.response?.data?.detail || 'Failed to delete entry', 'error');
+    },
+  });
+
   const mixedPreview =
     (parseFloat(cashAmount || '0') || 0) + (parseFloat(upiAmount || '0') || 0);
 
@@ -462,6 +535,12 @@ export default function CreditLedgerDetail() {
       isTotal?: boolean;
       hasDebit?: boolean;
       hasCredit?: boolean;
+      entryId?: number;
+      isManual?: boolean;
+      entryType?: string;
+      rawAmount?: string | number;
+      rawDate?: string;
+      rawDescription?: string;
     }> = [];
 
     const openingDate = dateFrom
@@ -498,6 +577,12 @@ export default function CreditLedgerDetail() {
         balance: formatPdfBalance(row.running_balance, row.balance_side),
         hasDebit: !!debit,
         hasCredit: !!credit,
+        entryId: row.id,
+        isManual: !!row.is_manual,
+        entryType: row.entry_type,
+        rawAmount: row.amount,
+        rawDate: row.created_at,
+        rawDescription: row.description || row.narration || '',
       });
     });
 
@@ -1286,6 +1371,9 @@ export default function CreditLedgerDetail() {
                           </th>
                         );
                       })}
+                      {canManage ? (
+                        <th className="px-2 py-1.5 font-bold text-amber-900 bg-amber-100 border border-amber-400 w-16" />
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -1313,11 +1401,12 @@ export default function CreditLedgerDetail() {
                                   </td>
                                 );
                               })}
+                              {canManage ? <td className="border border-amber-300" /> : null}
                             </tr>
                           ))}
                         <tr>
                           <td
-                            colSpan={Math.max(visibleColumns.length, 1)}
+                            colSpan={Math.max(visibleColumns.length, 1) + (canManage ? 1 : 0)}
                             className="px-2.5 py-6 text-center text-stone-400 border border-amber-300"
                           >
                             No entries in this period.
@@ -1354,6 +1443,7 @@ export default function CreditLedgerDetail() {
                                   </td>
                                 );
                               })}
+                              {canManage ? <td className="border border-amber-400" /> : null}
                             </tr>
                           ))}
                       </>
@@ -1411,6 +1501,30 @@ export default function CreditLedgerDetail() {
                                 </td>
                               );
                             })}
+                            {canManage ? (
+                              <td className="px-1 py-1 border border-amber-300 text-center whitespace-nowrap">
+                                {r.isManual && r.entryId ? (
+                                  <div className="inline-flex items-center gap-0.5">
+                                    <button
+                                      type="button"
+                                      className="p-1 text-amber-800 hover:bg-amber-100 rounded"
+                                      title="Edit opening balance"
+                                      onClick={() => openEditEntry(r)}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="p-1 text-red-600 hover:bg-red-50 rounded"
+                                      title="Delete entry"
+                                      onClick={() => setDeleteEntryId(r.entryId!)}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </td>
+                            ) : null}
                           </tr>
                         );
                       })
@@ -1573,6 +1687,89 @@ export default function CreditLedgerDetail() {
               {debitMutation.isPending ? 'Saving…' : 'Create Debit'}
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showEditModal}
+        onClose={() => setShowEditModal(false)}
+        title={
+          editEntryType === 'credit'
+            ? `Edit Opening Credit${selectedCustomer ? ` — ${selectedCustomer.name}` : ''}`
+            : `Edit Opening Debit${selectedCustomer ? ` — ${selectedCustomer.name}` : ''}`
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-stone-600">
+            Changing amount or date recalculates the customer balance and statement totals.
+          </p>
+          <Input
+            label="Amount"
+            type="number"
+            min="0"
+            step="0.01"
+            value={editAmount}
+            onChange={(e) => setEditAmount(e.target.value)}
+          />
+          <Input
+            label="Date"
+            type="date"
+            value={editDate}
+            onChange={(e) => setEditDate(e.target.value)}
+          />
+          <Input
+            label="Description"
+            value={editDescription}
+            onChange={(e) => setEditDescription(e.target.value)}
+            placeholder="Opening Balance"
+          />
+          {editEntryMutation.isError ? (
+            <p className="text-sm text-red-600">
+              {(editEntryMutation.error as any)?.response?.data?.detail ||
+                (editEntryMutation.error as Error)?.message ||
+                'Update failed'}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowEditModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-amber-700 hover:bg-amber-800"
+              disabled={editEntryMutation.isPending || !(parseFloat(editAmount) > 0)}
+              onClick={() => editEntryMutation.mutate()}
+            >
+              {editEntryMutation.isPending ? 'Saving…' : 'Save changes'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={deleteEntryId != null}
+        onClose={() => setDeleteEntryId(null)}
+        title="Delete ledger entry?"
+      >
+        <p className="text-sm text-gray-600 mb-4">
+          This removes the entry and reverses its effect on the customer balance. This cannot be
+          undone.
+        </p>
+        {deleteEntryMutation.isError ? (
+          <p className="text-sm text-red-600 mb-3">
+            {(deleteEntryMutation.error as any)?.response?.data?.detail || 'Delete failed'}
+          </p>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setDeleteEntryId(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            disabled={deleteEntryMutation.isPending || deleteEntryId == null}
+            onClick={() => deleteEntryId != null && deleteEntryMutation.mutate(deleteEntryId)}
+          >
+            {deleteEntryMutation.isPending ? 'Deleting…' : 'Delete'}
+          </Button>
         </div>
       </Modal>
 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Coins,
@@ -9,11 +9,13 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Trash2,
   TrendingUp,
   Undo2,
 } from 'lucide-react';
 import { creditApi } from '../../lib/api';
 import { DateRangePreset, formatNumber } from '../../lib/utils';
+import { toast } from '../../lib/toast';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
@@ -25,12 +27,24 @@ import Pagination from '../../components/ui/Pagination';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
+import Modal from '../../components/ui/Modal';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
+import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
+import { canManageCreditRecords } from './creditLedgerUtils';
 
 type ListMode = 'sale' | 'return';
 
+type VoidTarget = {
+  id: number;
+  label: string;
+  kind: ListMode;
+  total: number;
+  customerName?: string;
+};
+
 export default function CreditInvoices() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const mode: ListMode = searchParams.get('mode') === 'return' ? 'return' : 'sale';
   const isReturn = mode === 'return';
@@ -43,6 +57,8 @@ export default function CreditInvoices() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showFilters, setShowFilters] = useState(true);
+  const [voidTarget, setVoidTarget] = useState<VoidTarget | null>(null);
+  const canManage = canManageCreditRecords();
 
   const setMode = (next: ListMode) => {
     const params = new URLSearchParams(searchParams);
@@ -117,6 +133,32 @@ export default function CreditInvoices() {
   const totalSales = parseFloat(String(summary?.total_sales || 0));
   const totalReturns = parseFloat(String(summary?.total_returns || 0));
   const salesCount = summary?.sales_count || 0;
+
+  const voidMutation = useMutation({
+    mutationFn: async (target: VoidTarget) => {
+      if (target.kind === 'return') {
+        const res = await creditApi.returns.void(target.id);
+        return res.data;
+      }
+      const res = await creditApi.invoices.void(target.id);
+      return res.data;
+    },
+    onSuccess: (_data, target) => {
+      setVoidTarget(null);
+      queryClient.invalidateQueries({ queryKey: ['credit-invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-invoices-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+      toast(
+        target.kind === 'return' ? 'Return voided' : 'Invoice voided',
+        'success'
+      );
+    },
+    onError: (err: any) => {
+      toast(err?.response?.data?.detail || 'Failed to void', 'error');
+    },
+  });
   const returnsCount = summary?.returns_count || 0;
 
   const hasActiveFilters = !!(search.trim() || status || customerGroup || dateFrom || dateTo);
@@ -387,15 +429,33 @@ export default function CreditInvoices() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
-                      {ret.status === 'completed' ? (
-                        <button
-                          type="button"
-                          className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
-                          onClick={() => navigate(`/credit-returns/${ret.id}?edit=1`)}
-                          title="Edit"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
+                      {canManage && ret.status === 'completed' ? (
+                        <>
+                          <button
+                            type="button"
+                            className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
+                            onClick={() => navigate(`/credit-returns/${ret.id}?edit=1`)}
+                            title="Edit"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                            onClick={() =>
+                              setVoidTarget({
+                                id: ret.id,
+                                label: ret.return_number,
+                                kind: 'return',
+                                total: parseFloat(ret.total || 0) || 0,
+                                customerName: ret.customer_name,
+                              })
+                            }
+                            title="Void"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </>
                       ) : null}
                       <button
                         type="button"
@@ -453,15 +513,33 @@ export default function CreditInvoices() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
-                      {inv.status === 'open' ? (
-                        <button
-                          type="button"
-                          className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
-                          onClick={() => navigate(`/credit-invoices/${inv.id}?edit=1`)}
-                          title="Edit"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
+                      {canManage && inv.status === 'open' ? (
+                        <>
+                          <button
+                            type="button"
+                            className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
+                            onClick={() => navigate(`/credit-invoices/${inv.id}?edit=1`)}
+                            title="Edit"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                            onClick={() =>
+                              setVoidTarget({
+                                id: inv.id,
+                                label: inv.invoice_number,
+                                kind: 'sale',
+                                total: parseFloat(inv.total || 0) || 0,
+                                customerName: inv.customer_name,
+                              })
+                            }
+                            title="Void"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </>
                       ) : null}
                       <button
                         type="button"
@@ -488,6 +566,40 @@ export default function CreditInvoices() {
           </>
         )}
       </Card>
+
+      <Modal
+        isOpen={!!voidTarget}
+        onClose={() => setVoidTarget(null)}
+        title={voidTarget?.kind === 'return' ? 'Void credit return?' : 'Void credit invoice?'}
+      >
+        <div className="space-y-4">
+          {voidTarget ? (
+            <CreditVoidLedgerPreview
+              kind={voidTarget.kind}
+              label={voidTarget.label}
+              total={voidTarget.total}
+              customerName={voidTarget.customerName}
+            />
+          ) : null}
+          {voidMutation.isError ? (
+            <p className="text-sm text-red-600">
+              {(voidMutation.error as any)?.response?.data?.detail || 'Void failed'}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+            <Button variant="secondary" onClick={() => setVoidTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={voidMutation.isPending || !voidTarget}
+              onClick={() => voidTarget && voidMutation.mutate(voidTarget)}
+            >
+              {voidMutation.isPending ? 'Voiding…' : 'Confirm void'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

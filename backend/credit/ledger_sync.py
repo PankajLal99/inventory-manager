@@ -74,6 +74,30 @@ def unsync_main_ledger_payment(ledger_entry) -> None:
         customer.save(update_fields=['balance', 'updated_at'])
 
 
+def revert_main_ledger_sent_for_payment(payment) -> None:
+    """Uncheck Sent on Payments page when a mirrored credit payment is removed."""
+    source_id = getattr(payment, 'source_ledger_entry_id', None)
+    if not source_id:
+        return
+    from backend.parties.models import LedgerEntry
+
+    LedgerEntry.objects.filter(pk=source_id, is_sent=True).update(is_sent=False)
+
+
+def revert_main_ledger_sent_for_payment_queryset(payments_qs) -> None:
+    """Batch-uncheck Sent for all main ledger entries linked to credit payments."""
+    source_ids = list(
+        payments_qs.exclude(source_ledger_entry_id__isnull=True).values_list(
+            'source_ledger_entry_id', flat=True
+        )
+    )
+    if not source_ids:
+        return
+    from backend.parties.models import LedgerEntry
+
+    LedgerEntry.objects.filter(pk__in=source_ids, is_sent=True).update(is_sent=False)
+
+
 def sync_main_ledger_payment(ledger_entry, user=None) -> None:
     """
     When a manual main-ledger payment is marked sent, post matching credit to the

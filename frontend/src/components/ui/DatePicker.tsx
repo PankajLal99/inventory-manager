@@ -203,6 +203,7 @@ const DatePicker = forwardRef<HTMLInputElement, DatePickerProps>(
         ? createPortal(
             <div
               ref={popupRef}
+              data-date-picker-popup
               className="fixed z-[9999] w-64 bg-white border border-gray-200 rounded-lg shadow-xl p-4"
               style={{
                 top: popupPos.openUp ? undefined : popupPos.top,

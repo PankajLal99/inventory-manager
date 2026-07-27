@@ -904,6 +904,9 @@ def credit_invoice_update(request, pk):
     Ledger: update the original sale debit amount in place and
     customer.balance += (new_total - old_total).
     """
+    if not _can_manage_credit_records(request.user):
+        return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
     try:
         invoice = CreditInvoice.objects.select_related('customer').prefetch_related('items').get(pk=pk)
     except CreditInvoice.DoesNotExist:
@@ -1148,6 +1151,9 @@ def credit_invoice_update(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def credit_invoice_void(request, pk):
+    if not _can_manage_credit_records(request.user):
+        return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
     try:
         invoice = CreditInvoice.objects.select_related('customer').get(pk=pk)
     except CreditInvoice.DoesNotExist:
@@ -1192,6 +1198,40 @@ def _ledger_signed_amount(entry):
     """Debit increases outstanding; credit decreases."""
     amt = entry.amount or Decimal('0')
     return amt if entry.entry_type == 'debit' else -amt
+
+
+def _is_manual_ledger_entry(entry):
+    """Opening balance / manual adjustments — not invoice, return, or main-ledger sync."""
+    if entry.invoice_id or entry.credit_return_id:
+        return False
+    if entry.payment_id:
+        payment = entry.payment
+        if payment is None:
+            payment = CreditPayment.objects.filter(pk=entry.payment_id).first()
+        if payment and payment.source_ledger_entry_id:
+            return False
+    return True
+
+
+def _parse_ledger_datetime(value):
+    if value in (None, ''):
+        return None
+    raw_str = str(value).strip()
+    if raw_str.endswith('Z'):
+        raw_str = raw_str[:-1] + '+00:00'
+    parsed = parse_datetime(raw_str)
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+def _can_manage_credit_records(user):
+    """Only Admin and Super may edit/void credit invoices, returns, and manual ledger entries."""
+    if getattr(user, 'is_superuser', False):
+        return True
+    return user.groups.filter(name__in=['Super', 'Admin']).exists()
 
 
 @api_view(['POST'])
@@ -1332,6 +1372,123 @@ def credit_ledger_entry_create(request):
     data = CreditLedgerEntrySerializer(entry).data
     data['customer_balance'] = customer.balance
     return Response(data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_entry_detail(request, pk):
+    """
+    Update or delete a manual ledger entry (opening balance debit/credit).
+    Reverses old balance effect and applies new values on PATCH.
+    """
+    if not _can_manage_credit_records(request.user):
+        return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        entry = CreditLedgerEntry.objects.select_related('customer', 'payment').get(pk=pk)
+    except CreditLedgerEntry.DoesNotExist:
+        return Response({'detail': 'Entry not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not _is_manual_ledger_entry(entry):
+        return Response(
+            {'detail': 'Only manual opening balance entries can be changed'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if request.method == 'DELETE':
+        with transaction.atomic():
+            entry = CreditLedgerEntry.objects.select_for_update(of=('self',)).get(pk=pk)
+            if not _is_manual_ledger_entry(entry):
+                return Response(
+                    {'detail': 'Only manual opening balance entries can be changed'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            customer = CreditCustomer.objects.select_for_update().get(pk=entry.customer_id)
+            signed = _ledger_signed_amount(entry)
+            customer.balance = F('balance') - signed
+            customer.save(update_fields=['balance', 'updated_at'])
+            payment_id = entry.payment_id
+            entry.delete()
+            if payment_id:
+                payment = CreditPayment.objects.filter(pk=payment_id).first()
+                if payment:
+                    from .ledger_sync import revert_main_ledger_sent_for_payment
+
+                    revert_main_ledger_sent_for_payment(payment)
+                    payment.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    old_signed = _ledger_signed_amount(entry)
+
+    if 'amount' in request.data:
+        amount = _to_decimal(request.data.get('amount'), '0')
+    else:
+        amount = entry.amount
+    if amount <= 0:
+        return Response({'detail': 'Amount must be greater than 0'}, status=status.HTTP_400_BAD_REQUEST)
+
+    description = entry.description
+    if 'description' in request.data or 'notes' in request.data:
+        description = (request.data.get('description') or request.data.get('notes') or '').strip()
+        if not description:
+            description = entry.description or 'Opening Balance'
+
+    created_at = _parse_ledger_datetime(
+        request.data.get('created_at') or request.data.get('paid_at')
+    )
+
+    with transaction.atomic():
+        entry = CreditLedgerEntry.objects.select_for_update(of=('self',)).get(pk=pk)
+        if not _is_manual_ledger_entry(entry):
+            return Response(
+                {'detail': 'Only manual opening balance entries can be changed'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        customer = CreditCustomer.objects.select_for_update().get(pk=entry.customer_id)
+        entry.amount = amount
+        entry.description = description
+        update_fields = ['amount', 'description']
+        if created_at is not None:
+            entry.created_at = created_at
+            update_fields.append('created_at')
+        entry.save(update_fields=update_fields)
+
+        if entry.payment_id:
+            payment = CreditPayment.objects.select_for_update().get(pk=entry.payment_id)
+            payment.amount = amount
+            method = payment.payment_method or 'cash'
+            if method == 'upi':
+                payment.upi_amount = amount
+                payment.cash_amount = Decimal('0.00')
+            elif method == 'mixed':
+                payment.cash_amount = amount
+                payment.upi_amount = Decimal('0.00')
+            else:
+                payment.cash_amount = amount
+                payment.upi_amount = Decimal('0.00')
+            payment.notes = description
+            pay_fields = ['amount', 'cash_amount', 'upi_amount', 'notes', 'updated_at']
+            if created_at is not None:
+                payment.paid_at = created_at
+                pay_fields.append('paid_at')
+            payment.save(update_fields=pay_fields)
+
+        new_signed = _ledger_signed_amount(entry)
+        delta = new_signed - old_signed
+        if delta != 0:
+            customer.balance = F('balance') + delta
+            customer.save(update_fields=['balance', 'updated_at'])
+
+    entry = CreditLedgerEntry.objects.select_related(
+        'customer', 'payment', 'created_by'
+    ).get(pk=pk)
+    customer = entry.customer
+    customer.refresh_from_db(fields=['balance'])
+    data = CreditLedgerEntrySerializer(entry).data
+    data['customer_balance'] = customer.balance
+    return Response(data)
 
 
 @api_view(['GET'])
@@ -1782,6 +1939,88 @@ def credit_ledger_collection_history(request, pk):
     return Response({'count': len(results), 'results': results})
 
 
+def _credit_customer_delete_summary(customer):
+    """Counts of related records that would be removed with the credit customer."""
+    cid = customer.id
+    invoices = CreditInvoice.objects.filter(customer_id=cid)
+    returns = CreditReturn.objects.filter(customer_id=cid)
+    return {
+        'customer': CreditCustomerSerializer(customer).data,
+        'invoice_count': invoices.count(),
+        'open_invoice_count': invoices.filter(status='open').count(),
+        'void_invoice_count': invoices.filter(status='void').count(),
+        'return_count': returns.count(),
+        'completed_return_count': returns.filter(status='completed').count(),
+        'void_return_count': returns.filter(status='void').count(),
+        'payment_count': CreditPayment.objects.filter(customer_id=cid).count(),
+        'ledger_entry_count': CreditLedgerEntry.objects.filter(customer_id=cid).count(),
+        'cart_count': CreditCart.objects.filter(customer_id=cid).count(),
+        'collection_event_count': CreditCollectionEvent.objects.filter(customer_id=cid).count(),
+    }
+
+
+def _delete_credit_customer_ledger(customer):
+    """Hard-delete a credit customer and all related ledger / invoice / return data."""
+    cid = customer.id
+    with transaction.atomic():
+        customer = CreditCustomer.objects.select_for_update().get(pk=cid)
+        summary = _credit_customer_delete_summary(customer)
+
+        payments_qs = CreditPayment.objects.filter(customer_id=cid)
+        from .ledger_sync import revert_main_ledger_sent_for_payment_queryset
+
+        revert_main_ledger_sent_for_payment_queryset(payments_qs)
+        CreditLedgerEntry.objects.filter(customer_id=cid).delete()
+        payments_qs.delete()
+
+        return_ids = list(
+            CreditReturn.objects.filter(customer_id=cid).values_list('id', flat=True)
+        )
+        if return_ids:
+            CreditReturnItem.objects.filter(credit_return_id__in=return_ids).delete()
+            CreditReturn.objects.filter(id__in=return_ids).delete()
+
+        invoice_ids = list(
+            CreditInvoice.objects.filter(customer_id=cid).values_list('id', flat=True)
+        )
+        if invoice_ids:
+            CreditInvoiceItem.objects.filter(invoice_id__in=invoice_ids).delete()
+            CreditInvoice.objects.filter(id__in=invoice_ids).delete()
+
+        cart_ids = list(
+            CreditCart.objects.filter(customer_id=cid).values_list('id', flat=True)
+        )
+        if cart_ids:
+            CreditCartItem.objects.filter(cart_id__in=cart_ids).delete()
+            CreditCart.objects.filter(id__in=cart_ids).delete()
+
+        customer.delete()
+        return summary
+
+
+@api_view(['GET', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_customer_delete(request, pk):
+    """
+    GET — preview counts before deleting an entire credit ledger account.
+    DELETE — remove customer and all invoices, returns, payments, ledger entries, carts.
+    Admin / Super only.
+    """
+    if not _can_manage_credit_records(request.user):
+        return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        customer = CreditCustomer.objects.get(pk=pk, is_active=True)
+    except CreditCustomer.DoesNotExist:
+        return Response({'detail': 'Customer not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response(_credit_customer_delete_summary(customer))
+
+    summary = _delete_credit_customer_ledger(customer)
+    return Response(summary)
+
+
 # ── Returns ─────────────────────────────────────────────────────────────────
 
 def _resolve_credit_customer_id(request):
@@ -2094,6 +2333,9 @@ def credit_return_update(request, pk):
     customer.balance -= (new_total - old_total).
     Also adjusts CreditInvoiceItem.returned_quantity for linked lines.
     """
+    if not _can_manage_credit_records(request.user):
+        return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
     try:
         credit_return = CreditReturn.objects.select_related('customer').prefetch_related(
             'items__invoice_item'
@@ -2376,6 +2618,9 @@ def credit_return_void(request, pk):
     Void a completed credit return: reverse ledger credit, restore customer balance,
     and undo returned_quantity on linked invoice lines.
     """
+    if not _can_manage_credit_records(request.user):
+        return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
     try:
         credit_return = CreditReturn.objects.select_related('customer').prefetch_related(
             'items'
