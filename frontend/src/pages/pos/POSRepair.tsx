@@ -26,7 +26,7 @@ import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
-import { formatNumber, getStockInfo, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatAppDate, getStockInfo, getProductNameColor } from '../../lib/utils';
 import {
   buildThermalPrintCss,
   buildThermalReceiptHeaderHtml,
@@ -1813,16 +1813,8 @@ export default function POS() {
       }).format(parseFloat(String(amount || '0')));
     };
 
-    const formatDate = (dateString: string) => {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-IN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    };
+    const formatDate = (dateString: string) =>
+      formatAppDate(dateString, { includeTime: true, empty: '' });
 
     return `
       <!DOCTYPE html>

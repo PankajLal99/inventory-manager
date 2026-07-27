@@ -16,11 +16,10 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import { format } from 'date-fns';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { creditApi } from '../../lib/api';
-import { amountForInput, formatAmountINR, formatNumber, toLocalDateString } from '../../lib/utils';
+import { amountForInput, formatAmountINR, formatNumber, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Input from '../../components/ui/Input';
@@ -31,14 +30,13 @@ import Badge from '../../components/ui/Badge';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { formatCreditInvoiceDate } from './CreditInvoiceDocument';
+import { formatCreditInvoiceDate, canManageCreditRecords } from './creditLedgerUtils';
 import {
   buildCreditInvoiceHtml,
   CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
   CREDIT_SHOP_NAME,
 } from './creditInvoiceHtml';
-import { canManageCreditRecords } from './creditLedgerUtils';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -379,7 +377,7 @@ export default function CreditInvoiceDetail() {
         heightLeft -= pageHeight - margin * 2;
       }
 
-      const name = `credit_invoice_${(invoice.invoice_number || id || 'doc').replace(/\s+/g, '_')}_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
+      const name = `credit_invoice_${(invoice.invoice_number || id || 'doc').replace(/\s+/g, '_')}_${getTodayDateString()}.pdf`;
       pdf.save(name);
       showToast('PDF downloaded', 'success');
     } catch (e: any) {

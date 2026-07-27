@@ -1,5 +1,5 @@
-import { format } from 'date-fns';
 import { formatAmountINR } from '../../lib/utils';
+import { formatCreditInvoiceDate } from './creditLedgerUtils';
 import { CREDIT_SHOP_NAME } from './creditInvoiceHtml';
 
 /** Indian-style amount in words for credit invoices. */
@@ -55,15 +55,7 @@ export function creditAmountInWords(num: number): string {
   return `${result} Only`;
 }
 
-export function formatCreditInvoiceDate(value?: string | null) {
-  if (!value) return '—';
-  try {
-    const d = new Date(value);
-    return `${format(d, 'dd-MM-yyyy')} ( ${format(d, 'hh:mm a')} )`;
-  } catch {
-    return '—';
-  }
-}
+export { formatCreditInvoiceDate } from './creditLedgerUtils';
 
 export type CreditInvoiceLike = {
   invoice_number?: string;

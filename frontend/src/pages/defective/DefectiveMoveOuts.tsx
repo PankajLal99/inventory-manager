@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useMemo } from 'react';
 import { catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
+import { formatAppDate } from '../../lib/utils';
 import { 
   FileText, 
   Search, 
@@ -196,14 +197,8 @@ export default function DefectiveMoveOuts() {
     };
   }, [filteredMoveOuts]);
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { empty: '' });
 
   const formatCurrency = (amount: string | number) => {
     return new Intl.NumberFormat('en-IN', {

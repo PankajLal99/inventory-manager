@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -548,7 +548,7 @@ export default function ReturnToStock() {
                       >
                         <div className="font-medium text-gray-900">{inv.invoice_number}</div>
                         <div className="text-sm text-gray-600 mt-1">
-                          {inv.customer_name || 'N/A'} • {inv.store_name || 'N/A'} • {new Date(inv.created_at).toLocaleDateString()}
+                          {inv.customer_name || 'N/A'} • {inv.store_name || 'N/A'} • {formatAppDate(inv.created_at, { empty: '' })}
                         </div>
                       </button>
                     ))}
@@ -623,7 +623,7 @@ export default function ReturnToStock() {
                   <div>
                     <span className="text-gray-600 block text-xs">Date</span>
                     <span className="font-medium">
-                      {new Date(invoice.created_at).toLocaleDateString()}
+                      {formatAppDate(invoice.created_at, { empty: '' })}
                     </span>
                   </div>
                 </div>

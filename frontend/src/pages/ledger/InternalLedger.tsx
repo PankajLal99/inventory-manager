@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { customersApi } from '../../lib/api';
@@ -387,7 +387,7 @@ export default function InternalLedger() {
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({
-      'Date': new Date(entry.created_at).toLocaleDateString(),
+      'Date': formatAppDate(entry.created_at, { empty: '' }),
       'Customer': entry.customer_name || 'Anonymous',
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
@@ -420,7 +420,7 @@ export default function InternalLedger() {
 
     // Prepare table data
     const tableData = filteredEntries.map((entry: any) => [
-      new Date(entry.created_at).toLocaleDateString(),
+      formatAppDate(entry.created_at, { empty: '' }),
       entry.customer_name || 'Anonymous',
       entry.entry_type.toUpperCase(),
       entry.description || '-',
@@ -485,7 +485,7 @@ export default function InternalLedger() {
             <tbody>
               ${filteredEntries.map((entry: any) => `
                 <tr>
-                  <td>${new Date(entry.created_at).toLocaleDateString()}</td>
+                  <td>${formatAppDate(entry.created_at, { empty: '' })}</td>
                   <td>${entry.customer_name || 'Anonymous'}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>

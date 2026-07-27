@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { creditApi } from '../../lib/api';
 import { DateRangePreset, formatNumber } from '../../lib/utils';
+import { formatCreditStatementDate } from './creditLedgerUtils';
 import { toast } from '../../lib/toast';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
@@ -384,7 +385,7 @@ export default function CreditInvoices() {
                   <TableCell>{ret.store_name}</TableCell>
                   <TableCell>₹{formatNumber(parseFloat(ret.total || 0))}</TableCell>
                   <TableCell className="text-sm text-gray-500">
-                    {ret.created_at ? new Date(ret.created_at).toLocaleString() : '—'}
+                    {formatCreditStatementDate(ret.created_at)}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
@@ -457,7 +458,7 @@ export default function CreditInvoices() {
                   <TableCell>{inv.store_name}</TableCell>
                   <TableCell>₹{formatNumber(parseFloat(inv.total || 0))}</TableCell>
                   <TableCell className="text-sm text-gray-500">
-                    {inv.created_at ? new Date(inv.created_at).toLocaleString() : '—'}
+                    {formatCreditStatementDate(inv.created_at)}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">

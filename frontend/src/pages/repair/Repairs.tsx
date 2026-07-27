@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
+  formatAppDate,
   formatNumber,
   isMtShopCustomer,
   MT_SHOP_BADGE_CLASS,
@@ -601,29 +602,12 @@ export default function Repairs() {
     return repairDate === selectedDate;
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: false, empty: '' });
 
   /** Repair row created_at (registration time), same source as POS Repair Registration. */
-  const formatRepairRegisteredAt = (dateString: string | undefined) => {
-    if (!dateString) return '—';
-    const date = new Date(dateString);
-    if (Number.isNaN(date.getTime())) return '—';
-    return date.toLocaleString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
-  };
+  const formatRepairRegisteredAt = (dateString: string | undefined) =>
+    formatAppDate(dateString, { includeTime: true, empty: '—' });
 
   const getStatusBadge = (status: string) => {
     const Icon = STATUS_ICONS[status] || Clock;

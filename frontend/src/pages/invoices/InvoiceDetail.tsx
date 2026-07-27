@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber, formatAmountINR, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatAmountINR, formatAppDate, getProductNameColor } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -1087,16 +1087,8 @@ export default function InvoiceDetail() {
     return val < 0 ? `${formatted} (Credit)` : `₹${formatted}`;
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: true, empty: '' });
 
   // Convert number to words (Indian numbering system)
   const numberToWords = (num: number): string => {
@@ -1171,14 +1163,8 @@ export default function InvoiceDetail() {
     return result + ' Only';
   };
 
-  const formatDateForInvoice = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-  };
+  const formatDateForInvoice = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: false, empty: '' });
 
   // Edit invoice (cart): show for non-void
   const isReplacementReturn = inv?.is_replacement_return === true;
@@ -2028,16 +2014,8 @@ export default function InvoiceDetail() {
       ? invoice.items.filter((item: any) => !item?.replacement_ref)
       : [];
 
-    const formatDate = (dateString: string) => {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-IN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    };
+    const formatDate = (dateString: string) =>
+      formatAppDate(dateString, { includeTime: true, empty: '' });
 
     return `
   <!DOCTYPE html>

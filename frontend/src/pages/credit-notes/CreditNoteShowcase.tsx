@@ -1,7 +1,7 @@
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { posApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -38,25 +38,11 @@ export default function CreditNoteShowcase() {
 
     const creditNote = response?.data;
 
-    const formatDate = (dateString: string) => {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        });
-    };
+    const formatDate = (dateString: string) =>
+        formatAppDate(dateString, { includeTime: true, empty: '' });
 
-    const formatDateForInvoice = (dateString: string) => {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-        });
-    };
+    const formatDateForInvoice = (dateString: string) =>
+        formatAppDate(dateString, { includeTime: false, empty: '' });
 
     if (isLoading) {
         return <LoadingState message="Loading credit note details..." />;
@@ -249,16 +235,8 @@ export default function CreditNoteShowcase() {
         if (!creditNote) return;
 
         // Helper to format date for thermal printer
-        const formatThermalDate = (dateString: string) => {
-            const date = new Date(dateString);
-            return date.toLocaleDateString('en-IN', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-            });
-        };
+        const formatThermalDate = (dateString: string) =>
+            formatAppDate(dateString, { includeTime: true, empty: '' });
 
         const thermalHTML = `
 <!DOCTYPE html>

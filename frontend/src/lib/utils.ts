@@ -146,8 +146,94 @@ function parseLocalDate(date: Date | string | null | undefined): Date | null {
         return null;
     }
 
+    // DD-MM-YYYY
+    const ddmmyyyyDash = value.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    if (ddmmyyyyDash) {
+        const d = Number(ddmmyyyyDash[1]);
+        const m = Number(ddmmyyyyDash[2]);
+        const y = Number(ddmmyyyyDash[3]);
+        const parsed = new Date(y, m - 1, d);
+        if (parsed.getFullYear() === y && parsed.getMonth() === m - 1 && parsed.getDate() === d) return parsed;
+        return null;
+    }
+
     const parsed = new Date(value);
     return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** True when the source value includes a clock time (not date-only). */
+function sourceHasTimeComponent(date: Date | string): boolean {
+    if (date instanceof Date) return true;
+    const value = String(date).trim();
+    if (!value) return false;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(value)) return false;
+    return /[T\s]\d{1,2}:\d{2}/.test(value);
+}
+
+function formatDDMMYYYYParts(d: Date): string {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+}
+
+function formatLocalTimeParts(d: Date, withSeconds = false): string {
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    if (!withSeconds) return `${hh}:${min}`;
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${min}:${ss}`;
+}
+
+/**
+ * App-wide date display: always DD/MM/YYYY, independent of system locale.
+ * Includes local time (HH:mm) when the value has a time component; otherwise date only.
+ */
+export function formatAppDate(
+    date: Date | string | null | undefined,
+    options?: {
+        /** 'auto' (default): time only if source has time. true/false forces. */
+        includeTime?: boolean | 'auto';
+        /** Include seconds when showing time (default false). */
+        withSeconds?: boolean;
+        /** Returned for null/empty/invalid (default ''). */
+        empty?: string;
+    },
+): string {
+    const empty = options?.empty ?? '';
+    if (date == null || date === '') return empty;
+
+    const includeTimeOpt = options?.includeTime ?? 'auto';
+    const withSeconds = options?.withSeconds ?? false;
+    const wantsTime =
+        includeTimeOpt === true ||
+        (includeTimeOpt === 'auto' && sourceHasTimeComponent(date));
+
+    let d: Date | null = null;
+    if (wantsTime && typeof date === 'string' && /[T\s]\d{1,2}:\d{2}/.test(String(date).trim())) {
+        const parsed = new Date(String(date).trim());
+        d = isNaN(parsed.getTime()) ? null : parsed;
+    } else if (date instanceof Date) {
+        d = isNaN(date.getTime()) ? null : date;
+    } else {
+        d = parseLocalDate(date);
+    }
+    if (!d) return empty;
+
+    const datePart = formatDDMMYYYYParts(d);
+    if (!wantsTime) return datePart;
+    return `${datePart} ${formatLocalTimeParts(d, withSeconds)}`;
+}
+
+/** Alias: date-only DD/MM/YYYY (never shows time). */
+export function formatAppDateOnly(date: Date | string | null | undefined, empty = ''): string {
+    return formatAppDate(date, { includeTime: false, empty });
+}
+
+/** Alias: always DD/MM/YYYY HH:mm when parseable. */
+export function formatAppDateTime(date: Date | string | null | undefined, empty = ''): string {
+    return formatAppDate(date, { includeTime: true, empty });
 }
 
 export function toIsoDateString(date: Date | string | null | undefined): string {
@@ -175,8 +261,7 @@ export function toLocalDateString(date: Date | string | null | undefined): strin
 }
 
 /**
- * Formats a date for display as MM/DD/YYYY (mm dd yyyy).
- * Accepts Date or YYYY-MM-DD string. Parses as local date.
+ * Formats a date for display as MM/DD/YYYY (legacy). Prefer formatAppDate / formatDateDDMMYYYY.
  */
 export function formatDateMMDDYYYY(date: Date | string | null | undefined): string {
   const d = parseLocalDate(date);
@@ -190,16 +275,10 @@ export function formatDateMMDDYYYY(date: Date | string | null | undefined): stri
 
 /**
  * Formats a date for display as DD/MM/YYYY (day month year).
- * Accepts Date or YYYY-MM-DD string. Parses as local date.
+ * Date-only — does not include time. For datetime columns use formatAppDate.
  */
 export function formatDateDDMMYYYY(date: Date | string | null | undefined): string {
-  const d = parseLocalDate(date);
-  if (!d) return '';
-  if (isNaN(d.getTime())) return '';
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  return formatAppDate(date, { includeTime: false, empty: '' });
 }
 
 /** True when customer belongs to MT SHOP (name or MTSHOP customer group). */
@@ -218,29 +297,16 @@ export const MT_SHOP_BADGE_CLASS =
   'inline-flex items-center rounded-full bg-blue-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white';
 
 /**
- * Formats a date-only string (YYYY-MM-DD) for display in the user's locale.
+ * Formats a date-only string (YYYY-MM-DD) for display as DD/MM/YYYY.
  * Parses as local date so the shown day doesn't shift (e.g. in timezones behind UTC).
  */
 export function formatDateOnlyDisplay(dateStr: string | null | undefined): string {
-    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '';
-    const [y, m, d] = dateStr.split('-').map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString();
+    return formatAppDate(dateStr, { includeTime: false, empty: '' });
 }
 
 /** POS cart / line item scan timestamp (ISO from API). */
 export function formatScannedTime(iso: string | null | undefined): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return '';
-    return d.toLocaleString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-    });
+    return formatAppDate(iso, { includeTime: true, withSeconds: true, empty: '' });
 }
 
 /**

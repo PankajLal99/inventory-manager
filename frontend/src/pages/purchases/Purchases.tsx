@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment, useMemo, type KeyboardEvent as R
 import { useQuery, useQueries, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -1227,26 +1227,8 @@ export default function Purchases() {
     }
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '-';
-    try {
-      let date: Date;
-      const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (match) {
-        const [, y, m, d] = match.map(Number);
-        date = new Date(y, m - 1, d);
-      } else {
-        date = new Date(dateString);
-      }
-      if (isNaN(date.getTime())) return dateString;
-      const day = String(date.getDate()).padStart(2, '0');
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const year = date.getFullYear();
-      return `${day}/${month}/${year}`;
-    } catch (e) {
-      return dateString;
-    }
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: false, empty: '-' });
 
 
   const handlePrintLabels = async (

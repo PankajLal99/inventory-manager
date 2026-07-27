@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { posApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card, { CardHeader } from '../../components/ui/Card';
@@ -33,16 +33,8 @@ export default function CreditNoteDetail() {
 
     const creditNote = response?.data;
 
-    const formatDate = (dateString: string) => {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('en-IN', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        });
-    };
+    const formatDate = (dateString: string) =>
+        formatAppDate(dateString, { includeTime: true, empty: '' });
 
     if (isLoading) {
         return <LoadingState message="Loading credit note details..." />;
@@ -62,16 +54,8 @@ export default function CreditNoteDetail() {
         Array.isArray(creditNote.items) ? creditNote.items : [];
 
     const generateThermalCreditNoteHTML = (cn: any) => {
-        const formatDate = (dateString: string) => {
-            const date = new Date(dateString);
-            return date.toLocaleDateString('en-IN', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-            });
-        };
+        const formatDate = (dateString: string) =>
+            formatAppDate(dateString, { includeTime: true, empty: '' });
 
         const items = returnedItems || [];
 

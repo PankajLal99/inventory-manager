@@ -289,7 +289,7 @@ export default function Pricing() {
                       {list.valid_from ? formatDateOnlyDisplay(list.valid_from) : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {list.valid_to ? new Date(list.valid_to).toLocaleDateString() : '-'}
+                      {formatDateOnlyDisplay(list.valid_to) || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center gap-2">
@@ -368,7 +368,7 @@ export default function Pricing() {
                         </div>
                         <div className="col-span-2">
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Valid To</div>
-                          <div className="text-sm text-gray-900">{list.valid_to ? new Date(list.valid_to).toLocaleDateString() : '-'}</div>
+                          <div className="text-sm text-gray-900">{formatDateOnlyDisplay(list.valid_to) || '-'}</div>
                         </div>
                       </div>
                     </div>
@@ -407,7 +407,7 @@ export default function Pricing() {
                       {promo.valid_from ? formatDateOnlyDisplay(promo.valid_from) : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {promo.valid_to ? new Date(promo.valid_to).toLocaleDateString() : '-'}
+                      {formatDateOnlyDisplay(promo.valid_to) || '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <Badge variant={promo.is_active !== false ? 'success' : 'default'}>
@@ -493,7 +493,7 @@ export default function Pricing() {
                         </div>
                         <div>
                           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Valid To</div>
-                          <div className="text-sm text-gray-900">{promo.valid_to ? new Date(promo.valid_to).toLocaleDateString() : '-'}</div>
+                          <div className="text-sm text-gray-900">{formatDateOnlyDisplay(promo.valid_to) || '-'}</div>
                         </div>
                       </div>
                     </div>

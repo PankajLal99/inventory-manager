@@ -2,7 +2,7 @@ import { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi, customersApi } from '../../lib/api';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
@@ -370,15 +370,9 @@ export default function ReplacementPOS() {
         <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
           <span
             className="text-sm text-gray-600 tabular-nums whitespace-nowrap"
-            title={now.toLocaleString()}
+            title={formatAppDate(now, { includeTime: true, withSeconds: true, empty: '' })}
           >
-            {now.toLocaleDateString(undefined, {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })}{' '}
-            {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            {formatAppDate(now, { includeTime: true, withSeconds: true, empty: '' })}
           </span>
         </div>
       </div>

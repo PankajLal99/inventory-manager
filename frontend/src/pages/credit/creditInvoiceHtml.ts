@@ -1,5 +1,6 @@
 import { formatAmountINR } from '../../lib/utils';
-import { creditAmountInWords, formatCreditInvoiceDate } from './CreditInvoiceDocument';
+import { creditAmountInWords } from './CreditInvoiceDocument';
+import { formatCreditInvoiceDate } from './creditLedgerUtils';
 
 export const CREDIT_SHOP_NAME = 'MANISH TRADERS';
 export const CREDIT_INVOICE_CAPTURE_WIDTH = 794;
@@ -46,6 +47,7 @@ export type CreditInvoiceHtmlItem = {
 };
 
 export type CreditInvoiceHtmlInput = {
+  variant?: 'invoice' | 'return';
   invoice_number?: string | null;
   customer_name?: string | null;
   customer_phone?: string | null;
@@ -110,6 +112,16 @@ function footerAbstractShapes(): string {
  */
 export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   const items = input.items || [];
+  const variant = input.variant ?? 'invoice';
+  const isReturn = variant === 'return';
+  const documentTitle = isReturn ? 'Credit Return' : 'Credit Sale Invoice';
+  const numberLabel = isReturn ? 'Return No.' : 'Invoice No.';
+  const summaryTitle = isReturn ? 'Return Summary' : 'Invoice Summary';
+  const paymentLabel = isReturn ? 'Credit to Ledger' : 'On Credit';
+  const termsText = isReturn
+    ? 'Return credit posted to customer ledger. Quantities and amounts are as recorded at return.'
+    : 'Credit sale — payable as per account ledger. Goods once sold will not be taken back without prior approval.';
+  const pageTitle = isReturn ? 'Credit Return' : 'Credit Invoice';
   const partIndex = input.partIndex ?? 1;
   const partCount = input.partCount ?? 1;
   const showTotals = input.showTotals !== false;
@@ -225,7 +237,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   const summaryBlock = showTotals
     ? `<table style="width:100%;border-collapse:collapse;margin-top:14px;border:2px solid ${THEME.primary};font-size:${FONT.sm};">
         <tr>
-          <td colspan="2" style="padding:9px 14px;background:${THEME.primary};color:${THEME.white};font-weight:700;font-size:${FONT.xs};letter-spacing:0.5px;text-transform:uppercase;">Invoice Summary</td>
+          <td colspan="2" style="padding:9px 14px;background:${THEME.primary};color:${THEME.white};font-weight:700;font-size:${FONT.xs};letter-spacing:0.5px;text-transform:uppercase;">${summaryTitle}</td>
         </tr>
         ${summaryRows}
       </table>
@@ -248,7 +260,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
           <tr>
             <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
               <div style="font-weight:700;color:${THEME.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:${FONT.xs};">Terms &amp; Conditions</div>
-              <div style="font-size:${FONT.sm};color:${THEME.textMuted};margin-top:5px;line-height:1.45;">Credit sale — payable as per account ledger. Goods once sold will not be taken back without prior approval.</div>
+              <div style="font-size:${FONT.sm};color:${THEME.textMuted};margin-top:5px;line-height:1.45;">${termsText}</div>
             </td>
             <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
               <div style="height:32px;"></div>
@@ -266,7 +278,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Credit Invoice — ${escapeHtml(shopName)}</title>
+  <title>${pageTitle} — ${escapeHtml(shopName)}</title>
 </head>
 <body style="margin:0;padding:0;background:#e7e5e4;font-size:${FONT.sm};">
   <div id="credit-invoice-root" style="width:${CREDIT_INVOICE_CAPTURE_WIDTH}px;min-height:${CREDIT_INVOICE_CAPTURE_HEIGHT}px;margin:0;background:${THEME.white};color:${THEME.text};font-family:Arial,Helvetica,sans-serif;font-size:${FONT.sm};line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${THEME.primary};">
@@ -278,10 +290,10 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
         <tr>
           <td style="vertical-align:middle;">
             <div style="font-size:${FONT.xl};font-weight:800;letter-spacing:1px;text-transform:uppercase;line-height:1.2;color:${THEME.white};">${escapeHtml(shopName)}</div>
-            <div style="font-size:${FONT.xs};font-weight:600;margin-top:5px;letter-spacing:0.5px;text-transform:uppercase;color:${THEME.white};">Credit Sale Invoice</div>
+            <div style="font-size:${FONT.xs};font-weight:600;margin-top:5px;letter-spacing:0.5px;text-transform:uppercase;color:${THEME.white};">${documentTitle}</div>
           </td>
           <td style="vertical-align:middle;text-align:right;width:240px;color:${THEME.white};">
-            <div style="font-size:${FONT.xs};font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:${THEME.white};">Invoice No.</div>
+            <div style="font-size:${FONT.xs};font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:${THEME.white};">${numberLabel}</div>
             <div style="font-size:${FONT.lg};font-weight:800;margin-top:4px;letter-spacing:0.3px;color:${THEME.white};">${escapeHtml(input.invoice_number || '—')}</div>
           </td>
         </tr>
@@ -301,7 +313,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
         <td style="width:42%;vertical-align:top;padding:14px 20px;">
           <table style="width:100%;border-collapse:collapse;font-size:${FONT.sm};">
             <tr>
-              <td style="padding:0 0 8px 0;font-weight:600;color:${THEME.secondaryMuted};white-space:nowrap;">Invoice No.</td>
+              <td style="padding:0 0 8px 0;font-weight:600;color:${THEME.secondaryMuted};white-space:nowrap;">${numberLabel}</td>
               <td style="padding:0 0 8px 0;font-weight:800;text-align:right;color:${THEME.secondary};">${escapeHtml(input.invoice_number || '—')}</td>
             </tr>
             <tr>
@@ -310,7 +322,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
             </tr>
             <tr>
               <td style="padding:0;font-weight:600;color:${THEME.secondaryMuted};white-space:nowrap;">Payment</td>
-              <td style="padding:0;text-align:right;font-weight:700;color:${THEME.primary};">On Credit</td>
+              <td style="padding:0;text-align:right;font-weight:700;color:${THEME.primary};">${paymentLabel}</td>
             </tr>
           </table>
         </td>

@@ -1,3 +1,5 @@
+import { formatAppDate } from '../lib/utils';
+
 export interface ThermalPrintSettings {
   /** Thermal roll width in mm (58, 80, 101.6 for 4") */
   paperWidthMm: number;
@@ -445,13 +447,7 @@ function formatThermalAmount(amount: number): string {
 export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): string {
   const now = new Date();
   const formatDate = (date: Date) =>
-    date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    formatAppDate(date, { includeTime: true, empty: '' });
 
   const subtotal = THERMAL_TEST_PRODUCTS.reduce((sum, item) => sum + item.lineTotal, 0);
   const itemRows = THERMAL_TEST_PRODUCTS.map(

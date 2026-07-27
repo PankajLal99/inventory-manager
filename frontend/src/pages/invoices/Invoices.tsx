@@ -16,7 +16,7 @@ import {
   BarChart3,
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { DateRangePreset, formatNumber, isMtShopCustomer, MT_SHOP_BADGE_CLASS, MT_SHOP_MOBILE_CARD_CLASS, MT_SHOP_TABLE_ROW_CLASS } from '../../lib/utils';
+import { DateRangePreset, formatAppDate, formatNumber, isMtShopCustomer, MT_SHOP_BADGE_CLASS, MT_SHOP_MOBILE_CARD_CLASS, MT_SHOP_TABLE_ROW_CLASS } from '../../lib/utils';
 import { readPersistedListDateRange, writePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
@@ -375,16 +375,8 @@ export default function Invoices() {
     return invoiceTypeFilter ? ta - tb : tb - ta;
   });
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: true, empty: '' });
 
 
   // KPI summary based on currently loaded/visible invoice results
@@ -675,12 +667,7 @@ export default function Invoices() {
         <p className="text-sm text-gray-600 font-medium">
           Invoices for{' '}
           <span className="text-gray-900">
-            {new Date(pageDate).toLocaleDateString('en-IN', {
-              weekday: 'short',
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-            })}
+            {formatAppDate(pageDate, { includeTime: false, empty: '' })}
           </span>
         </p>
       )}

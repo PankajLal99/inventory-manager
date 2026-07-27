@@ -138,7 +138,7 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                             Stock Distribution
                         </h2>
                         <p className="text-sm text-slate-500 mt-1">
-                            {purchase.purchase_number} • {purchase.supplier_name} • {formatDateOnlyDisplay(purchase.purchase_date) || (purchase.purchase_date ? new Date(purchase.purchase_date).toLocaleDateString() : '-')}
+                            {purchase.purchase_number} • {purchase.supplier_name} • {formatDateOnlyDisplay(purchase.purchase_date) || '-'}
                         </p>
                     </div>
                     <button

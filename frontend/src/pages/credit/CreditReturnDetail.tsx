@@ -23,7 +23,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { formatCreditInvoiceDate } from './CreditInvoiceDocument';
+import { formatCreditInvoiceDate } from './creditLedgerUtils';
 import { canManageCreditRecords } from './creditLedgerUtils';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 

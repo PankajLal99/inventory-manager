@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
+import { formatAppDate } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import LoadingState from '../../components/ui/LoadingState';
@@ -150,15 +151,8 @@ export default function VendorPurchaseDetail() {
     }).format(parseFloat(String(amount || '0')));
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '-';
-    const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    const date = match
-      ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-      : new Date(dateString);
-    if (isNaN(date.getTime())) return dateString;
-    return date.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: false, empty: '-' });
 
   const getStatusBadge = (status: string) => {
     switch (status) {

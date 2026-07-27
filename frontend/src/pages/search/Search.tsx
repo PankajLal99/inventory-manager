@@ -21,7 +21,7 @@ import {
   X,
   Image as ImageIcon,
 } from 'lucide-react';
-import { formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -861,7 +861,7 @@ export default function Search() {
                               <div className="flex items-center gap-2">
                                 <span className="text-gray-400 font-medium">Date:</span>
                                 <span className="text-gray-700 font-medium">
-                                  {new Date(item.invoice_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                  {formatAppDate(item.invoice_date, { includeTime: false, empty: '' })}
                                 </span>
                               </div>
                             )}
@@ -957,7 +957,7 @@ export default function Search() {
                 }}
                 getItemLabel={(item) => item.invoice_number}
                 getItemSubLabel={(item) => {
-                  const dateStr = item.created_at ? new Date(item.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+                  const dateStr = formatAppDate(item.created_at, { empty: '' });
                   return `Customer: ${item.customer_name || 'N/A'} | Total: ₹${item.total || '0.00'}${dateStr ? ` | ${dateStr}` : ''}`;
                 }}
                 getItemBadge={(item) => item.status}

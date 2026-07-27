@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { toLocalDateString } from '../../lib/utils';
+import { formatAppDate, toLocalDateString } from '../../lib/utils';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -394,15 +394,8 @@ export default function VendorPurchases() {
     }).format(amount);
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '-';
-    const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    const date = match
-      ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-      : new Date(dateString);
-    if (isNaN(date.getTime())) return dateString;
-    return date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: false, empty: '-' });
 
   const getStatusBadge = (status: string) => {
     switch (status) {

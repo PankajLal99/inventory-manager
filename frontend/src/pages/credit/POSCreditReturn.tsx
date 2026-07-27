@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import {
   Search,
@@ -11,6 +10,7 @@ import {
   Package,
 } from 'lucide-react';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
+import { copyCreditDocumentImageToClipboard } from './creditDocumentClipboard';
 import { catalogApi, creditApi } from '../../lib/api';
 import { amountForInput, formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
@@ -119,9 +119,10 @@ function productKey(p: MergedProduct) {
 }
 
 export default function POSCreditReturn() {
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const productInputRef = useRef<HTMLInputElement>(null);
   const posWorkflowRef = useRef<HTMLDivElement>(null);
+  const documentSnapshotFrameRef = useRef<HTMLIFrameElement>(null);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -392,9 +393,48 @@ export default function POSCreditReturn() {
         })),
       });
       const ret = res.data;
-      showToast(`Credit return ${ret.return_number} created`);
+
+      const iframe = documentSnapshotFrameRef.current;
+      let clipboardCopied = false;
+      if (iframe) {
+        try {
+          clipboardCopied = await copyCreditDocumentImageToClipboard(iframe, {
+            variant: 'return',
+            invoice_number: ret.return_number,
+            customer_name: ret.customer_name || selectedCustomer.name,
+            customer_phone: ret.customer_phone || selectedCustomer.phone,
+            created_at: ret.created_at,
+            total: ret.total,
+            items: (ret.items || []).map((item: any) => ({
+              product_name: item.product_name,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              line_total: item.line_total,
+            })),
+          });
+        } catch (copyErr) {
+          console.error('Return clipboard copy failed:', copyErr);
+        }
+      }
+
+      if (clipboardCopied) {
+        showToast(
+          `Return ${ret.return_number} created — image copied to clipboard`,
+          'success'
+        );
+      } else {
+        showToast(
+          iframe
+            ? `Return ${ret.return_number} created (clipboard copy unavailable)`
+            : `Credit return ${ret.return_number} created`,
+          'success'
+        );
+      }
+
       setBasket([]);
-      navigate(`/credit-ledger/${selectedCustomer.credit_customer_id}`);
+      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
     }).catch((err: any) => {
       showToast(err?.response?.data?.detail || 'Return failed', 'error');
     });
@@ -714,6 +754,13 @@ export default function POSCreditReturn() {
           </div>
         </div>
       </div>
+
+      <iframe
+        ref={documentSnapshotFrameRef}
+        title="credit-return-snapshot"
+        className="fixed left-[-10000px] top-0 w-[794px] h-auto min-h-[1px] opacity-0 pointer-events-none border-0"
+        aria-hidden="true"
+      />
     </div>
   );
 }

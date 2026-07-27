@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatNumber, toLocalDateString } from '../../lib/utils';
+import { formatAppDate, formatNumber, toLocalDateString } from '../../lib/utils';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -568,15 +568,8 @@ export default function PurchaseDetail() {
   };
 
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '-';
-    const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    const date = match
-      ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-      : new Date(dateString);
-    if (isNaN(date.getTime())) return dateString;
-    return date.toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: false, empty: '-' });
 
   const handleExportExcel = () => {
     if (!purchase || !purchase.items) return;

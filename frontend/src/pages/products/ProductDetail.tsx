@@ -4,9 +4,8 @@ import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { productsApi, catalogApi } from '../../lib/api';
 import Badge from '../../components/ui/Badge';
 import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
-import { format } from 'date-fns';
+import { formatAppDate, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import Button from '../../components/ui/Button';
-import { sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 
 const PRODUCT_INVOICES_PAGE_SIZE = 20;
 
@@ -147,13 +146,13 @@ export default function ProductDetail() {
             <div>
               <dt className="text-sm text-gray-500">Created</dt>
               <dd className="text-sm font-medium">
-                {p.created_at ? format(new Date(p.created_at), 'PPpp') : '-'}
+                {formatAppDate(p.created_at, { includeTime: true, empty: '-' })}
               </dd>
             </div>
             <div>
               <dt className="text-sm text-gray-500">Last Updated</dt>
               <dd className="text-sm font-medium">
-                {p.updated_at ? format(new Date(p.updated_at), 'PPpp') : '-'}
+                {formatAppDate(p.updated_at, { includeTime: true, empty: '-' })}
               </dd>
             </div>
           </dl>
@@ -378,7 +377,7 @@ export default function ProductDetail() {
                       >
                         <td className="px-4 py-3 text-sm font-medium text-blue-600">{inv.invoice_number}</td>
                         <td className="px-4 py-3 text-sm text-gray-600">
-                          {inv.created_at ? format(new Date(inv.created_at), 'dd MMM yyyy') : '—'}
+                          {formatAppDate(inv.created_at, { includeTime: false, empty: '—' })}
                         </td>
                         <td className="px-4 py-3 text-sm">{inv.customer_name}</td>
                         <td className="px-4 py-3 text-sm">

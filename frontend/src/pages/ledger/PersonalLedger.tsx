@@ -19,7 +19,7 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { format } from 'date-fns';
-import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 
 const PIN_LENGTH = 6;
 const PERSONAL_LEDGER_PIN = '980980';
@@ -490,7 +490,7 @@ export default function PersonalLedger() {
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({
-      'Date': new Date(entry.created_at).toLocaleDateString(),
+      'Date': formatAppDate(entry.created_at, { empty: '' }),
       'Customer': entry.customer_name || 'Anonymous',
       'Group': entry.customer_group_name || '-',
       'Type': entry.entry_type.toUpperCase(),
@@ -523,7 +523,7 @@ export default function PersonalLedger() {
     
     // Prepare table data
     const tableData = filteredEntries.map((entry: any) => [
-      new Date(entry.created_at).toLocaleDateString(),
+      formatAppDate(entry.created_at, { empty: '' }),
       entry.customer_name || 'Anonymous',
       entry.customer_group_name || '-',
       entry.entry_type.toUpperCase(),
@@ -588,7 +588,7 @@ export default function PersonalLedger() {
             <tbody>
               ${filteredEntries.map((entry: any) => `
                 <tr>
-                  <td>${new Date(entry.created_at).toLocaleDateString()}</td>
+                  <td>${formatAppDate(entry.created_at, { empty: '' })}</td>
                   <td>${entry.customer_name || 'Anonymous'}</td>
                   <td>${entry.customer_group_name || '-'}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>

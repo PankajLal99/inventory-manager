@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useEffect } from 'react';
 import { customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput } from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
@@ -155,7 +155,7 @@ export default function PersonalLedgerDetail() {
 
   const handleExportExcel = () => {
     const data = filteredEntries.map((entry: any) => ({
-      'Date': new Date(entry.created_at).toLocaleDateString(),
+      'Date': formatAppDate(entry.created_at, { empty: '' }),
       'Type': entry.entry_type.toUpperCase(),
       'Description': entry.description || '-',
       'Debit': entry.entry_type === 'debit' ? formatAmountINR(entry.amount || 0) : '-',
@@ -204,7 +204,7 @@ export default function PersonalLedgerDetail() {
 
     // Prepare table data
     const tableData = filteredEntries.map((entry: any) => [
-      new Date(entry.created_at).toLocaleDateString(),
+      formatAppDate(entry.created_at, { empty: '' }),
       entry.entry_type.toUpperCase(),
       entry.description || '-',
       entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-',
@@ -277,7 +277,7 @@ export default function PersonalLedgerDetail() {
             <tbody>
               ${filteredEntries.map((entry: any) => `
                 <tr>
-                  <td>${new Date(entry.created_at).toLocaleDateString()}</td>
+                  <td>${formatAppDate(entry.created_at, { empty: '' })}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>
                   <td>${entry.description || '-'}</td>
                   <td class="debit">${entry.entry_type === 'debit' ? `₹${formatAmountINR(entry.amount || 0)}` : '-'}</td>
@@ -486,11 +486,7 @@ export default function PersonalLedgerDetail() {
                 {filteredEntries.map((entry: any) => (
                   <tr key={entry.id} className="border-b hover:bg-gray-50 transition-colors">
                     <td className="py-3 px-4 text-gray-700">
-                      {new Date(entry.created_at).toLocaleDateString('en-IN', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric'
-                      })}
+                      {formatAppDate(entry.created_at, { empty: '' })}
                     </td>
                     <td className="py-3 px-4">
                       <span className={`px-3 py-1 rounded-full text-xs font-semibold ${entry.entry_type === 'credit'

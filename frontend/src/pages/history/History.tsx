@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { historyApi, productsApi } from '../../lib/api';
+import { formatAppDate } from '../../lib/utils';
 import Modal from '../../components/ui/Modal';
 import { 
   History as HistoryIcon, 
@@ -190,16 +191,8 @@ export default function History() {
     return false;
   });
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: true, empty: '' });
 
   const getActionLabel = (action: string) => {
     return action.split('_').map(word => 

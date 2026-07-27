@@ -17,12 +17,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { format } from 'date-fns';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { creditApi } from '../../lib/api';
-import { dateStringWithCurrentTimeISO, formatNumber, toLocalDateString } from '../../lib/utils';
+import { dateStringWithCurrentTimeISO, formatNumber, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -37,6 +36,9 @@ import {
   canManageCreditRecords,
   collectionStatusBadgeVariant,
   collectionStatusLabel,
+  formatCreditDate,
+  formatCreditDateTime,
+  formatCreditStatementDate,
 } from './creditLedgerUtils';
 import { CREDIT_THEME } from './creditInvoiceHtml';
 
@@ -120,26 +122,12 @@ const PDF_GREEN = hexToRgb(CREDIT_THEME.creditText);
 const PDF_RED = hexToRgb(CREDIT_THEME.debitText);
 
 function formatPdfDate(value?: string | null) {
-  if (!value) return '—';
-  try {
-    const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value);
-    if (Number.isNaN(d.getTime())) return '—';
-    return format(d, 'dd-MM-yyyy');
-  } catch {
-    return '—';
-  }
+  return formatCreditDate(value);
 }
 
-/** Compact table dates like Khatabook (06 Jul) */
+/** Statement / table date columns: DD/MM/YYYY (+ time when present). */
 function formatPdfDateShort(value?: string | null) {
-  if (!value) return '—';
-  try {
-    const d = new Date(value.length <= 10 ? `${value}T12:00:00` : value);
-    if (Number.isNaN(d.getTime())) return '—';
-    return format(d, 'dd MMM');
-  } catch {
-    return '—';
-  }
+  return formatCreditStatementDate(value);
 }
 
 /** jsPDF Helvetica can't render ₹ / emoji — keep printable Latin text only */
@@ -838,7 +826,7 @@ export default function CreditLedgerDetail() {
     doc.setFontSize(7);
     doc.setTextColor(...PDF_MUTED);
     doc.text(
-      `Report Generated : ${format(new Date(), "h:mm a | dd MMM''yy")}`,
+      `Report Generated : ${formatCreditDateTime(new Date())}`,
       marginX,
       Math.min(finalY, pageHeight - 12)
     );
@@ -858,7 +846,7 @@ export default function CreditLedgerDetail() {
     doc.text('Credit Ledger', pageWidth - marginX, pageHeight - 3, { align: 'right' });
 
     const safeName = customerName.replace(/[^\w\-]+/g, '_').replace(/_+/g, '_');
-    const fileName = `credit_ledger_${safeName}_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
+    const fileName = `credit_ledger_${safeName}_${getTodayDateString()}.pdf`;
     return { doc, fileName };
   };
 
@@ -976,7 +964,7 @@ export default function CreditLedgerDetail() {
       </table>
 
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:${CREDIT_THEME.textMuted};">
-        <div>Report Generated : ${escapeHtml(format(new Date(), "h:mm a | dd MMM''yy"))}</div>
+        <div>Report Generated : ${escapeHtml(formatCreditDateTime(new Date()))}</div>
         <div>Page 1 of 1</div>
       </div>
     </div>
@@ -1537,7 +1525,7 @@ export default function CreditLedgerDetail() {
               </div>
 
               <div className="mt-2.5 flex flex-wrap justify-between gap-2 text-[10px] sm:text-xs text-stone-500">
-                <div>Report Generated : {format(new Date(), "h:mm a | dd MMM''yy")}</div>
+                <div>Report Generated : {formatCreditDateTime(new Date())}</div>
                 <div>Page 1 of 1</div>
               </div>
             </div>

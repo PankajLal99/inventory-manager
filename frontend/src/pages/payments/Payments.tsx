@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, Coins, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
-import { customersApi } from '../../lib/api';
+import { customersApi, creditApi } from '../../lib/api';
 import { formatAmountINR, formatDateDDMMYYYY, toLocalDateString } from '../../lib/utils';
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { toast } from '../../lib/toast';
@@ -62,6 +62,7 @@ export default function Payments() {
   const [showAddPaymentModal, setShowAddPaymentModal] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ManualCreditEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<ManualCreditEntry | null>(null);
+  const [openingLedgerCustomerId, setOpeningLedgerCustomerId] = useState<number | null>(null);
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [form, setForm] = useState({
@@ -285,6 +286,23 @@ export default function Payments() {
       invalidateCreditLedgerQueries();
     },
   });
+
+  const openCreditLedger = async (partiesCustomerId: number) => {
+    setOpeningLedgerCustomerId(partiesCustomerId);
+    try {
+      const res = await creditApi.customers.ensure({ parties_customer_id: partiesCustomerId });
+      const creditCustomerId = res.data?.id;
+      if (!creditCustomerId) {
+        toast('Could not resolve credit customer', 'error');
+        return;
+      }
+      navigate(`/credit-ledger/${creditCustomerId}`);
+    } catch (err: any) {
+      toast(err?.response?.data?.detail || 'Failed to open credit ledger', 'error');
+    } finally {
+      setOpeningLedgerCustomerId(null);
+    }
+  };
 
   const handleCreatePayment = (e: React.FormEvent) => {
     e.preventDefault();
@@ -510,14 +528,14 @@ export default function Payments() {
                       variant="outline"
                       size="sm"
                       className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
-                      disabled={entry.customer == null}
-                      title={entry.customer == null ? 'No customer on this entry' : 'Open customer ledger'}
+                      disabled={entry.customer == null || openingLedgerCustomerId === entry.customer}
+                      title={entry.customer == null ? 'No customer on this entry' : 'Open credit ledger'}
                       onClick={() => {
-                        if (entry.customer != null) navigate(`/ledger/${entry.customer}`);
+                        if (entry.customer != null) void openCreditLedger(entry.customer);
                       }}
                     >
                       <BookOpen className="h-4 w-4" />
-                      Ledger
+                      {openingLedgerCustomerId === entry.customer ? 'Opening...' : 'Ledger'}
                     </Button>
                   )}
                   {canEditPayments && (

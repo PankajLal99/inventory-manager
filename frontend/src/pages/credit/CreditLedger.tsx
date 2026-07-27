@@ -38,8 +38,8 @@ import {
   daysSincePaymentLabel,
   followUpDeltaClass,
   followUpDeltaLabel,
-  formatLedgerDate,
-  formatLedgerDateTime,
+  formatCreditDate,
+  formatCreditDateTime,
   collectionEventStyle,
   type CreditCollectionHistoryEvent,
   type CreditLedgerCustomerRow,
@@ -876,10 +876,10 @@ export default function CreditLedger() {
                           </p>
                         </td>
                         <td className={`${tdClass} text-xs text-stone-600 whitespace-nowrap tabular-nums`}>
-                          {formatLedgerDate(row.last_payment_at)}
+                          {formatCreditDate(row.last_payment_at)}
                         </td>
                         <td className={`${tdClass} text-xs text-stone-600 whitespace-nowrap tabular-nums`}>
-                          {formatLedgerDate(row.last_sale_at)}
+                          {formatCreditDate(row.last_sale_at)}
                         </td>
                         <td className={tdClass}>
                           <div className="space-y-0.5">
@@ -1026,13 +1026,13 @@ export default function CreditLedger() {
                     <div className="rounded-lg bg-stone-50 border border-stone-100 px-2.5 py-1.5">
                       <p className="text-[10px] uppercase tracking-wide text-stone-400">Last pay</p>
                       <p className="font-medium tabular-nums text-stone-700">
-                        {formatLedgerDate(row.last_payment_at)}
+                        {formatCreditDate(row.last_payment_at)}
                       </p>
                     </div>
                     <div className="rounded-lg bg-stone-50 border border-stone-100 px-2.5 py-1.5">
                       <p className="text-[10px] uppercase tracking-wide text-stone-400">Last sale</p>
                       <p className="font-medium tabular-nums text-stone-700">
-                        {formatLedgerDate(row.last_sale_at)}
+                        {formatCreditDate(row.last_sale_at)}
                       </p>
                     </div>
                   </div>
@@ -1330,7 +1330,7 @@ export default function CreditLedger() {
                         {ev.event_type_label}
                       </span>
                       <time className="text-xs font-medium tabular-nums text-stone-700">
-                        {formatLedgerDateTime(ev.created_at)}
+                        {formatCreditDateTime(ev.created_at)}
                       </time>
                     </div>
 
@@ -1354,13 +1354,13 @@ export default function CreditLedger() {
                         {ev.previous_follow_up_date ? (
                           <>
                             <span className="text-stone-500 line-through decoration-stone-400">
-                              {formatLedgerDate(ev.previous_follow_up_date)}
+                              {formatCreditDate(ev.previous_follow_up_date)}
                             </span>
                             <span className="mx-1.5 text-amber-700 font-semibold">→</span>
                           </>
                         ) : null}
                         <span className="font-semibold text-amber-900">
-                          {formatLedgerDate(ev.follow_up_date)}
+                          {formatCreditDate(ev.follow_up_date)}
                         </span>
                       </p>
                     ) : null}

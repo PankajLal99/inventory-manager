@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { customersApi, catalogApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { DateRangePreset, formatAmountINR, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -606,7 +606,7 @@ export default function Ledger() {
           'Latest Description': group.latestDescription || '-',
         }))
       : filteredEntries.map((entry: any) => ({
-          'Date': new Date(entry.created_at).toLocaleDateString(),
+          'Date': formatAppDate(entry.created_at, { empty: '' }),
           'Customer': entry.customer_name || 'Anonymous',
           'Group': entry.customer_group_name || '-',
           'Type': entry.entry_type.toUpperCase(),
@@ -654,7 +654,7 @@ export default function Ledger() {
       });
     } else {
       const tableData = filteredEntries.map((entry: any) => [
-        new Date(entry.created_at).toLocaleDateString(),
+        formatAppDate(entry.created_at, { empty: '' }),
         entry.customer_name || 'Anonymous',
         entry.customer_group_name || '-',
         entry.entry_type.toUpperCase(),
@@ -773,7 +773,7 @@ export default function Ledger() {
             <tbody>
               ${filteredEntries.map((entry: any) => `
                 <tr>
-                  <td>${new Date(entry.created_at).toLocaleDateString()}</td>
+                  <td>${formatAppDate(entry.created_at, { empty: '' })}</td>
                   <td>${entry.customer_name || 'Anonymous'}</td>
                   <td>${entry.customer_group_name || '-'}</td>
                   <td>${entry.entry_type.toUpperCase()}</td>

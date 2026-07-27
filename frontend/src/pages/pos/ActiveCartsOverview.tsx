@@ -16,7 +16,7 @@ import {
   Search,
   Play,
 } from 'lucide-react';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
 import { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
@@ -58,12 +58,7 @@ interface CartOverview {
 }
 
 function formatDate(iso: string) {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-  } catch {
-    return iso;
-  }
+  return formatAppDate(iso, { includeTime: true, empty: '' });
 }
 
 export default function ActiveCartsOverview() {

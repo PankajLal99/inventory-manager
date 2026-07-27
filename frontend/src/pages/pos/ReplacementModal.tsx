@@ -5,7 +5,7 @@ import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import { Search, AlertTriangle, Package, Plus, Minus } from 'lucide-react';
-import { getProductNameColor } from '../../lib/utils';
+import { formatAppDate, getProductNameColor } from '../../lib/utils';
 import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
 
 interface ReplacementModalProps {
@@ -236,7 +236,7 @@ export default function ReplacementModal({ isOpen, onClose, onSuccess }: Replace
                 <div>
                   <span className="text-gray-600">Date:</span>
                   <span className="ml-2 font-medium">
-                    {new Date(invoice.created_at).toLocaleDateString()}
+                    {formatAppDate(invoice.created_at, { empty: '' })}
                   </span>
                 </div>
               </div>

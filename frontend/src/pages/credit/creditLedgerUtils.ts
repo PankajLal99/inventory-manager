@@ -1,5 +1,4 @@
-import { format } from 'date-fns';
-import { formatAmountINR } from '../../lib/utils';
+import { formatAmountINR, formatAppDate } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 
 /** Admin and Super may edit/void credit invoices, returns, and manual ledger entries. */
@@ -67,23 +66,33 @@ export type CreditCollectionHistoryEvent = {
   created_at: string | null;
 };
 
-export function formatLedgerDate(value?: string | null) {
-  if (!value) return '—';
-  try {
-    return format(new Date(value), 'dd-MM-yyyy');
-  } catch {
-    return '—';
-  }
+/** Credit UI date column — DD/MM/YYYY only (no time). */
+export function formatCreditDate(value?: string | null) {
+  return formatAppDate(value, { includeTime: false, empty: '—' });
 }
 
-export function formatLedgerDateTime(value?: string | null) {
-  if (!value) return '—';
-  try {
-    return format(new Date(value), 'dd-MM-yyyy HH:mm');
-  } catch {
-    return '—';
-  }
+/** Credit UI datetime — DD/MM/YYYY HH:mm. */
+export function formatCreditDateTime(value?: string | null) {
+  return formatAppDate(value, { includeTime: true, empty: '—' });
 }
+
+/**
+ * Statement / list columns — DD/MM/YYYY, or DD/MM/YYYY HH:mm when source has time.
+ */
+export function formatCreditStatementDate(value?: string | null) {
+  return formatAppDate(value, { includeTime: 'auto', empty: '—' });
+}
+
+/** Invoice / return document "Dated" field. */
+export function formatCreditInvoiceDate(value?: string | null) {
+  return formatCreditDateTime(value);
+}
+
+/** @deprecated Use formatCreditDate */
+export const formatLedgerDate = formatCreditDate;
+
+/** @deprecated Use formatCreditDateTime */
+export const formatLedgerDateTime = formatCreditDateTime;
 
 export function formatMoneyCell(value: string | number | null | undefined) {
   const n = parseFloat(String(value ?? 0));

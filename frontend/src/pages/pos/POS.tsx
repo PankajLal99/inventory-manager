@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
-import { formatNumber, formatAmountINR, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { formatNumber, formatAmountINR, formatAppDate, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { creditAmountInWords } from '../credit/CreditInvoiceDocument';
 import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import { auth } from '../../lib/auth';
@@ -2612,16 +2612,8 @@ export default function POS() {
   const generateThermalInvoiceHTML = (invoice: any) => {
     const thermalSettings = loadThermalPrintSettings();
 
-    const formatDate = (dateString: string) => {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-IN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    };
+    const formatDate = (dateString: string) =>
+      formatAppDate(dateString, { includeTime: true, empty: '' });
 
     return `
       <!DOCTYPE html>
@@ -3260,13 +3252,7 @@ export default function POS() {
         return;
       }
 
-      const headerDate = new Date().toLocaleString('en-IN', {
-        year: 'numeric',
-        month: 'short',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+      const headerDate = formatAppDate(new Date(), { includeTime: true, empty: '' });
 
       const draftItems: CartSnapshotRow[] = items.map((item: any, idx: number) => {
         const editingPrice = editingManualPrice?.[item.id];
@@ -3601,8 +3587,8 @@ export default function POS() {
         <div className="flex items-center gap-2 w-full sm:w-auto">
           {/* Live date/time then Delete Cart, New Sale */}
           <div className="flex items-center gap-2 flex-1 sm:flex-initial">
-            <span className="text-sm text-gray-600 tabular-nums whitespace-nowrap" title={now.toLocaleString()}>
-              {now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} {now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            <span className="text-sm text-gray-600 tabular-nums whitespace-nowrap" title={formatAppDate(now, { includeTime: true, withSeconds: true, empty: '' })}>
+              {formatAppDate(now, { includeTime: true, withSeconds: true, empty: '' })}
             </span>
             {cartId && (
               <Button

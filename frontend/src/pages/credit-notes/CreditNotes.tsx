@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { posApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import {
   FileText,
   Search,
@@ -69,16 +69,8 @@ export default function CreditNotes() {
   }, [search, searchParams, setSearchParams]);
 
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatDate = (dateString: string) =>
+    formatAppDate(dateString, { includeTime: true, empty: '' });
 
   const filteredCreditNotes = creditNotes.filter((cn) => {
     if (!search.trim()) return true;
