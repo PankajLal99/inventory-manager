@@ -277,7 +277,7 @@ export default function Layout() {
       title: 'Financial',
       items: [
         // { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
-        { path: '/credit-ledger', icon: BookOpen, label: 'Credit Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/credit-ledger', icon: BookOpen, label: 'Credit Ledger', showFor: ['Admin',] },
         { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
         { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
@@ -293,6 +293,8 @@ export default function Layout() {
         { path: '/vendors', icon: Users, label: 'Vendors', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/reports', icon: BarChart3, label: 'Reports', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/history', icon: History, label: 'History', showFor: 'admin' },
+        { path: '/pos-credit', icon: Coins, label: 'POS Credit', showFor: ['Admin'] },
+        { path: '/credit-invoices', icon: FileText, label: 'Credit Invoices', showFor: ['Admin'] },
       ],
     },
   ];
