@@ -7,10 +7,12 @@ import {
   BookOpen,
   LogOut,
   Menu,
+  ShoppingCart,
   X,
 } from 'lucide-react';
 
 const NAV = [
+  { path: '/pos', label: 'POS', icon: ShoppingCart },
   { path: '/pos-credit', label: 'POS Credit', icon: Coins },
   { path: '/credit-invoices', label: 'Invoices', icon: FileText },
   { path: '/credit-ledger', label: 'Credit Ledger', icon: BookOpen },
