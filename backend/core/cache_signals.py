@@ -112,13 +112,19 @@ def invalidate_purchases_cache_manual():
 def invalidate_stock_cache_manual():
     """Manually invalidate stock cache"""
     try:
-        if not _should_run_invalidation("stock_calc"):
+        if _should_run_invalidation("stock_calc"):
+            invalidate_cache_pattern("stock_calc")
+            logger.info("Invalidated stock cache (Manual/Signal)")
+        else:
             logger.debug("Skipped duplicate stock cache invalidation (debounced)")
-            return
-        invalidate_cache_pattern("stock_calc")
-        logger.info("Invalidated stock cache (Manual/Signal)")
     except Exception as e:
         logger.warning(f"Error invalidating stock cache: {e}")
+
+    try:
+        from backend.reports.stock_alerts import invalidate_stock_alerts_cache
+        invalidate_stock_alerts_cache()
+    except Exception as e:
+        logger.warning(f"Error invalidating stock alerts cache: {e}")
 
 def invalidate_dashboard_cache_manual():
     """Manually invalidate dashboard cache"""

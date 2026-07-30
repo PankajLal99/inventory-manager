@@ -64,6 +64,20 @@ class ReportsTests(TestCase):
         response = self.client.get('/api/v1/reports/stock-ordering/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsInstance(response.data, (list, dict))
+        self.assertIn('out_of_stock', response.data)
+        self.assertIn('low_stock', response.data)
+
+    def test_stock_ordering_report_counts_only(self):
+        """Lightweight counts payload for notification badge"""
+        response = self.client.get('/api/v1/reports/stock-ordering/?counts_only=1')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('out_of_stock_count', response.data)
+        self.assertIn('low_stock_count', response.data)
+        self.assertIn('total_count', response.data)
+        self.assertEqual(
+            response.data['total_count'],
+            response.data['out_of_stock_count'] + response.data['low_stock_count'],
+        )
 
     def test_dashboard_kpis_invoice_totals_cash_upi_expenses_inhand(self):
         """Dashboard sums Invoice.total for cash/upi types, expenses, and inhand = cash - expenses."""

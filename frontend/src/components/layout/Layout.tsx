@@ -1,7 +1,8 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { auth } from '../../lib/auth';
-import { productsApi } from '../../lib/api';
+import { productsApi, reportsApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -40,6 +41,7 @@ import {
   CalendarDays,
   Coins,
   Boxes,
+  Tags,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -64,6 +66,19 @@ export default function Layout() {
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  const { data: stockAlertsData } = useQuery({
+    queryKey: ['stock-alerts', 'counts'],
+    queryFn: async () => {
+      const response = await reportsApi.stockOrdering({ counts_only: true });
+      return response.data;
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const stockAlertCount = stockAlertsData?.total_count
+    ?? ((stockAlertsData?.out_of_stock_count || 0) + (stockAlertsData?.low_stock_count || 0));
 
   // Save collapsed state to localStorage
   useEffect(() => {
@@ -295,6 +310,7 @@ export default function Layout() {
         { path: '/history', icon: History, label: 'History', showFor: 'admin' },
         { path: '/pos-credit', icon: Coins, label: 'POS Credit', showFor: ['Admin'] },
         { path: '/credit-invoices', icon: FileText, label: 'Credit Invoices', showFor: ['Admin'] },
+        { path: '/categories-brands', icon: Tags, label: 'Categories & Brands', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
       ],
     },
   ];
@@ -306,6 +322,9 @@ export default function Layout() {
   })).filter(group => group.items.length > 0); // Only show groups that have visible items
 
   const getPageTitle = () => {
+    if (location.pathname === '/stock-alerts') {
+      return 'Stock Alerts';
+    }
     // Flatten all menu items from all groups
     const allMenuItems = filteredMenuGroups.flatMap(group => group.items);
     const currentItem = allMenuItems.find(
@@ -489,10 +508,28 @@ export default function Layout() {
                 <ScanLine className="h-5 w-5" />
               </button>
 
-              {/* Notifications */}
-              <button className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-all duration-200">
+              {/* Stock alerts */}
+              <button
+                type="button"
+                onClick={() => navigate('/stock-alerts')}
+                className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-all duration-200"
+                title={
+                  stockAlertCount > 0
+                    ? `${stockAlertCount} product${stockAlertCount === 1 ? '' : 's'} need restocking`
+                    : 'Stock alerts'
+                }
+                aria-label={
+                  stockAlertCount > 0
+                    ? `Stock alerts, ${stockAlertCount} products need restocking`
+                    : 'Stock alerts'
+                }
+              >
                 <Bell className="h-5 w-5" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
+                {stockAlertCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[1.125rem] h-[1.125rem] px-1 flex items-center justify-center rounded-full bg-red-500 text-[10px] font-semibold text-white border-2 border-white">
+                    {stockAlertCount > 99 ? '99+' : stockAlertCount}
+                  </span>
+                )}
               </button>
 
               {/* User Menu */}

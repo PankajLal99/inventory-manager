@@ -868,6 +868,12 @@ class PurchaseSerializer(serializers.ModelSerializer):
         # Only invalidate stock if we potentially touched it (e.g. status finalized)
         if purchase.status == 'finalized':
             invalidate_stock_cache_manual()
+        else:
+            try:
+                from backend.reports.stock_alerts import invalidate_stock_alerts_cache
+                invalidate_stock_alerts_cache()
+            except Exception:
+                pass
 
         if purchase.items.exists() and purchase.status != 'cancelled':
             self._ensure_barcodes_and_queue_labels(purchase)
@@ -1334,6 +1340,13 @@ class PurchaseSerializer(serializers.ModelSerializer):
         invalidate_products_cache_manual()
         if new_status == 'finalized' or old_status == 'finalized':
             invalidate_stock_cache_manual()
+        else:
+            # Draft edits can still change barcode availability for alerts
+            try:
+                from backend.reports.stock_alerts import invalidate_stock_alerts_cache
+                invalidate_stock_alerts_cache()
+            except Exception:
+                pass
 
         # Every Save: recheck barcodes vs qty (create/update/finalize), then queue labels
         if new_status != 'cancelled' and instance.items.exists():

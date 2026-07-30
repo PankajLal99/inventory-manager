@@ -430,11 +430,17 @@ export const customersApi = {
 export const catalogApi = {
   categories: {
     list: () => api.get('/categories/'),
+    get: (id: number) => api.get(`/categories/${id}/`),
     create: (data: any) => api.post('/categories/', data),
+    update: (id: number, data: any) => api.patch(`/categories/${id}/`, data),
+    delete: (id: number) => api.delete(`/categories/${id}/`),
   },
   brands: {
     list: () => api.get('/brands/'),
+    get: (id: number) => api.get(`/brands/${id}/`),
     create: (data: any) => api.post('/brands/', data),
+    update: (id: number, data: any) => api.patch(`/brands/${id}/`, data),
+    delete: (id: number) => api.delete(`/brands/${id}/`),
   },
   taxRates: {
     list: () => api.get('/tax-rates/'),

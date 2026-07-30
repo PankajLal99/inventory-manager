@@ -179,6 +179,7 @@ export default function VendorPurchases() {
     mutationFn: (data: any) => purchasingApi.vendorPurchases.create(supplierId!, data),
     onSuccess: async (response) => {
       queryClient.invalidateQueries({ queryKey: ['vendor-purchases', supplierId] });
+      queryClient.invalidateQueries({ queryKey: ['stock-alerts'] });
       setShowForm(false);
       
       // Get the created purchase to extract product IDs from response
@@ -207,6 +208,7 @@ export default function VendorPurchases() {
       purchasingApi.vendorPurchases.update(supplierId!, id, data),
     onSuccess: async (response) => {
       queryClient.invalidateQueries({ queryKey: ['vendor-purchases', supplierId] });
+      queryClient.invalidateQueries({ queryKey: ['stock-alerts'] });
       setShowForm(false);
       
       // Get the updated purchase to extract product IDs from response

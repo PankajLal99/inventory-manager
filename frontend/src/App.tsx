@@ -47,11 +47,13 @@ import CreditLayout from './components/layout/CreditLayout';
 import VendorPurchases from './pages/purchases/VendorPurchases';
 import VendorPurchaseDetail from './pages/purchases/VendorPurchaseDetail';
 import Vendors from './pages/vendors/Vendors';
+import CategoriesBrands from './pages/catalog/CategoriesBrands';
 import DefectiveMoveOuts from './pages/defective/DefectiveMoveOuts';
 import PaymentReminders from './pages/payment-reminders/PaymentReminders';
 import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
 import StockOverview from './pages/stock/StockOverview';
+import StockAlerts from './pages/stock/StockAlerts';
 import OverallProfitBillingDetails from './pages/dashboard/OverallProfitBillingDetails';
 import OverallPendingInvoiceDetails from './pages/dashboard/OverallPendingInvoiceDetails';
 import WholesalePendingClearedDetails from './pages/dashboard/WholesalePendingClearedDetails';
@@ -282,9 +284,11 @@ function App() {
                 <Route path="expenses" element={<FullAppOnly><Expenses /></FullAppOnly>} />
                 <Route path="payments" element={<FullAppOnly><Payments /></FullAppOnly>} />
                 <Route path="stock" element={<FullAppOnly><StockOverview /></FullAppOnly>} />
+                <Route path="stock-alerts" element={<FullAppOnly><StockAlerts /></FullAppOnly>} />
                 <Route path="stores" element={<FullAppOnly><Stores /></FullAppOnly>} />
                 <Route path="search" element={<FullAppOnly><Search /></FullAppOnly>} />
                 <Route path="vendors" element={<FullAppOnly><Vendors /></FullAppOnly>} />
+                <Route path="categories-brands" element={<FullAppOnly><CategoriesBrands /></FullAppOnly>} />
                 <Route path="defective-move-outs" element={<FullAppOnly><DefectiveMoveOuts /></FullAppOnly>} />
               </Route>
             </Routes>

@@ -642,6 +642,7 @@ export default function Purchases() {
     mutationFn: (data: any) => purchasingApi.purchases.create(data),
     onSuccess: async (response, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-alerts'] });
 
       const createdPurchase = response?.data || response;
       notifyBarcodeSyncResult(createdPurchase);
@@ -694,6 +695,7 @@ export default function Purchases() {
     mutationFn: ({ id, data }: { id: number; data: any }) => purchasingApi.purchases.update(id, data),
     onSuccess: async (response, variables) => {
       queryClient.invalidateQueries({ queryKey: ['purchases'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-alerts'] });
 
       const updatedPurchase = response?.data || response;
       notifyBarcodeSyncResult(updatedPurchase);

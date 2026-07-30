@@ -328,110 +328,25 @@ def customer_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def stock_ordering_report(request):
-    """Stock ordering report - low stock and out of stock products (barcode-based)"""
+    """
+    Stock ordering report (barcode-based) with Redis caching.
+
+    Query params:
+      - store: optional store id
+      - counts_only=1: ultra-light badge payload (cached ~90s)
+      - refresh=1: bypass cache
+    """
+    from backend.reports.stock_alerts import get_stock_alert_counts, get_stock_alert_list
+
     store_id = request.query_params.get('store', None)
-    
-    # Only include products that have been purchased (have barcodes)
-    products_with_barcodes = Product.objects.filter(
-        barcodes__isnull=False
-    ).distinct()
-    
-    # Filter by store if provided (through purchase relationship)
-    if store_id:
-        products_with_barcodes = products_with_barcodes.filter(
-            barcodes__purchase__store_id=store_id
-        ).distinct()
-    
-    # Get barcodes in active carts (reserved)
-    active_carts_barcodes = set()
-    cart_items = CartItem.objects.filter(
-        cart__status='active'
-    ).exclude(scanned_barcodes__isnull=True).exclude(scanned_barcodes=[])
-    
-    for cart_item in cart_items:
-        if cart_item.scanned_barcodes:
-            active_carts_barcodes.update(cart_item.scanned_barcodes)
-    
-    out_of_stock = []
-    low_stock = []
-    products_needing_order = []
-    
-    # Process each product that has been purchased
-    for product in products_with_barcodes.select_related('category', 'brand'):
-        # Get store name from first purchase if store_id is provided, otherwise use first store
-        store_name = None
-        if store_id:
-            from backend.locations.models import Store
-            try:
-                store = Store.objects.get(id=store_id)
-                store_name = store.name
-            except Store.DoesNotExist:
-                pass
-        
-        # Count available barcodes for this product (new + returned, not in carts, not sold, not from draft purchases)
-        product_barcodes = Barcode.objects.filter(
-            product=product,
-            tag__in=['new', 'returned']
-        ).exclude(
-            purchase__status='draft'
-        )
-        
-        # Filter by store if provided
-        if store_id:
-            product_barcodes = product_barcodes.filter(purchase__store_id=store_id)
-        
-        # Exclude barcodes in active carts
-        if active_carts_barcodes:
-            product_barcodes = product_barcodes.exclude(barcode__in=active_carts_barcodes)
-        
-        # Exclude sold barcodes (assigned to non-void invoices)
-        sold_barcode_ids = InvoiceItem.objects.filter(
-            barcode__in=product_barcodes.values_list('id', flat=True)
-        ).exclude(
-            invoice__status='void'
-        ).values_list('barcode_id', flat=True)
-        
-        available_count = product_barcodes.exclude(id__in=sold_barcode_ids).count()
-        low_stock_threshold = product.low_stock_threshold or 0
-        
-        # Get cost price from latest purchase
-        cost_price = Decimal('0.00')
-        latest_purchase = product.barcodes.filter(
-            purchase__isnull=False
-        ).exclude(
-            purchase__status='draft'
-        ).select_related('purchase').order_by('-purchase__created_at').first()
-        
-        if latest_purchase and latest_purchase.purchase:
-            # Get cost price from purchase items
-            from backend.purchasing.models import PurchaseItem
-            purchase_item = PurchaseItem.objects.filter(
-                purchase=latest_purchase.purchase,
-                product=product
-            ).first()
-            if purchase_item:
-                cost_price = purchase_item.unit_price or Decimal('0.00')
-        
-        product_data = {
-            'product__id': product.id,
-            'product__name': product.name,
-            'product__sku': product.sku or 'N/A',
-            'product__low_stock_threshold': low_stock_threshold,
-            'product__cost_price': float(cost_price),
-            'store__name': store_name or 'N/A',
-            'available_quantity': available_count
-        }
-        
-        # Categorize products
-        if available_count == 0:
-            out_of_stock.append(product_data)
-            products_needing_order.append(product_data)
-        elif low_stock_threshold > 0 and available_count > 0 and available_count <= low_stock_threshold:
-            low_stock.append(product_data)
-            products_needing_order.append(product_data)
-    
-    return Response({
-        'out_of_stock': out_of_stock,
-        'low_stock': low_stock,
-        'products_needing_order': products_needing_order
-    })
+    counts_only = str(request.query_params.get('counts_only', '')).lower() in (
+        '1', 'true', 'yes', 'y',
+    )
+    bypass_cache = str(request.query_params.get('refresh', '')).lower() in (
+        '1', 'true', 'yes', 'y',
+    )
+
+    if counts_only:
+        return Response(get_stock_alert_counts(store_id, bypass_cache=bypass_cache))
+
+    return Response(get_stock_alert_list(store_id, bypass_cache=bypass_cache))
