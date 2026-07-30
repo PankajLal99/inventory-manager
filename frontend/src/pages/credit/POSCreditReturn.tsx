@@ -216,6 +216,18 @@ export default function POSCreditReturn() {
     [basket]
   );
 
+  const basketLineCount = basket.length;
+
+  const basketTotalQty = useMemo(() => {
+    return basket.reduce((sum, row) => {
+      const qtyRaw =
+        editingQty[row.key] !== undefined ? editingQty[row.key] : String(row.quantity ?? '');
+      const qty = parseFloat(String(qtyRaw).trim());
+      if (!Number.isFinite(qty) || qty <= 0) return sum;
+      return sum + Math.round(qty);
+    }, 0);
+  }, [basket, editingQty]);
+
   const selectCustomer = async (c: MergedCustomer) => {
     try {
       const ensurePayload: any = {};
@@ -761,20 +773,24 @@ export default function POSCreditReturn() {
               </div>
             ) : (
               <div className="divide-y divide-gray-100">
-                <div className="hidden sm:grid grid-cols-[1fr_7rem_7rem_7rem_2.5rem] gap-2 px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50">
+                <div className="hidden sm:grid grid-cols-[2.5rem_1fr_7rem_7rem_7rem_2.5rem] gap-2 px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50">
+                  <div className="text-center">#</div>
                   <div>Product</div>
                   <div className="text-right">Qty</div>
                   <div className="text-right">Price</div>
                   <div className="text-right">Total</div>
                   <div />
                 </div>
-                {basket.map((row) => {
+                {basket.map((row, index) => {
                   const lineTotal = row.quantity * row.unit_price;
                   return (
                     <div
                       key={row.key}
-                      className="grid grid-cols-1 sm:grid-cols-[1fr_7rem_7rem_7rem_2.5rem] gap-2 px-4 py-3 items-center"
+                      className="grid grid-cols-1 sm:grid-cols-[2.5rem_1fr_7rem_7rem_7rem_2.5rem] gap-2 px-4 py-3 items-center"
                     >
+                      <div className="text-center text-sm font-semibold text-gray-500 tabular-nums">
+                        {index + 1}
+                      </div>
                       <div className="font-medium text-gray-900 text-sm">{row.product_name}</div>
                       <Input
                         type="text"
@@ -871,8 +887,12 @@ export default function POSCreditReturn() {
         <div className="space-y-4">
           <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
             <div className="flex justify-between text-sm">
-              <span className="text-gray-500">Lines</span>
-              <span className="font-medium text-gray-900">{basket.length}</span>
+              <span className="text-gray-500">Line items</span>
+              <span className="font-medium tabular-nums">{basketLineCount}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Total qty</span>
+              <span className="font-medium tabular-nums">{formatNumber(basketTotalQty)} Pcs.</span>
             </div>
             <div className="flex justify-between text-base font-semibold border-t border-gray-100 pt-3">
               <span>Return total</span>
