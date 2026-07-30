@@ -7,6 +7,7 @@ import { formatAmountINR, formatDateDDMMYYYY, toLocalDateString } from '../../li
 import { usePersistedListDateRange } from '../../lib/listDateRangePersistence';
 import { toast } from '../../lib/toast';
 import { auth } from '../../lib/auth';
+import { isAccountsUser } from '../credit/creditLedgerUtils';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
@@ -53,7 +54,10 @@ export default function Payments() {
   const canEditPayments = !isRetail;
   const canMarkSent = canEditPayments || isRetail;
   const userGroups = user?.groups ?? [];
-  const canAccessLedger = userGroups.includes('Admin');
+  const canAccessLedger =
+    userGroups.includes('Admin') ||
+    userGroups.includes('Super') ||
+    isAccountsUser(user);
   const canDeletePayments = userGroups.includes('Admin') || userGroups.includes('RetailAdmin');
   const [search, setSearch] = useState('');
   const [paymentMode, setPaymentMode] = useState('');

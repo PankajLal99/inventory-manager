@@ -38,6 +38,7 @@ import {
   copyCreditDocumentImageToClipboard,
   copyDocumentThenQueueLedgerImage,
   copyPngBlobToClipboard,
+  finishDocumentPartsAndQueueLedger,
   SNAPSHOT_ROWS_PER_PAGE,
 } from './creditDocumentClipboard';
 import Button from '../../components/ui/Button';
@@ -194,6 +195,16 @@ export default function POSCredit() {
     total: number;
     nextPart: number;
   } | null>(null);
+  /** After checkout: remaining multi-page invoice images before redirecting to ledger. */
+  const [postCheckoutCopy, setPostCheckoutCopy] = useState<{
+    customerId: number;
+    invoiceNumber: string;
+    remainingParts: Blob[];
+    totalParts: number;
+    nextPart: number;
+    ledgerBlob: Blob;
+  } | null>(null);
+  const [copyingPostCheckoutPart, setCopyingPostCheckoutPart] = useState(false);
 
   const [productSearch, setProductSearch] = useState('');
   const [debouncedProductSearch, setDebouncedProductSearch] = useState('');
@@ -576,6 +587,18 @@ export default function POSCredit() {
   const cartTotal = useMemo(() => {
     return cartItems.reduce((sum: number, item: any) => sum + parseFloat(item.line_total || 0), 0);
   }, [cartItems]);
+
+  const cartLineCount = cartItems.length;
+
+  const cartTotalQty = useMemo(() => {
+    return cartItems.reduce((sum: number, item: any) => {
+      const qtyRaw =
+        editingQty[item.id] !== undefined ? editingQty[item.id] : String(item.quantity ?? '');
+      const qty = parseFloat(String(qtyRaw).trim());
+      if (!Number.isFinite(qty) || qty <= 0) return sum;
+      return sum + Math.round(qty);
+    }, 0);
+  }, [cartItems, editingQty]);
 
   const cartLinesReady = useMemo(() => {
     if (!cartItems.length) return false;
@@ -1002,63 +1025,50 @@ export default function POSCredit() {
       const creditCustomerId =
         invoice.customer || selectedCustomer.credit_customer_id || null;
 
+      const documentInput = {
+        invoice_number: invoice.invoice_number,
+        customer_name: invoice.customer_name,
+        customer_phone: invoice.customer_phone,
+        created_at: invoice.created_at,
+        subtotal: invoice.subtotal,
+        total: invoice.total,
+        customer_balance: invoice.customer_balance,
+        status: invoice.status,
+        items: invoice.items || [],
+      };
+
       const iframe = draftSnapshotFrameRef.current;
       let clipboardCopied = false;
+      let remainingDocParts: Blob[] = [];
+      let documentPartCount = 1;
+      let ledgerBlob: Blob | null = null;
+
       if (iframe && creditCustomerId) {
         try {
           const statementRes = await creditApi.ledger.statement({
             customer: creditCustomerId,
           });
-          clipboardCopied = await copyDocumentThenQueueLedgerImage(
+          const copyResult = await copyDocumentThenQueueLedgerImage(
             iframe,
-            {
-              invoice_number: invoice.invoice_number,
-              customer_name: invoice.customer_name,
-              customer_phone: invoice.customer_phone,
-              created_at: invoice.created_at,
-              subtotal: invoice.subtotal,
-              total: invoice.total,
-              previous_balance: invoice.previous_balance,
-              customer_balance: invoice.customer_balance,
-              status: invoice.status,
-              items: invoice.items || [],
-            },
+            documentInput,
             statementRes.data
           );
+          clipboardCopied = copyResult.ok;
+          remainingDocParts = copyResult.remainingDocumentParts;
+          documentPartCount = copyResult.documentPartCount;
+          ledgerBlob = copyResult.ledgerBlob;
         } catch (copyErr) {
           console.error('Invoice + ledger clipboard copy failed:', copyErr);
         }
       } else if (iframe) {
         try {
-          clipboardCopied = await copyCreditDocumentImageToClipboard(iframe, {
-            invoice_number: invoice.invoice_number,
-            customer_name: invoice.customer_name,
-            customer_phone: invoice.customer_phone,
-            created_at: invoice.created_at,
-            subtotal: invoice.subtotal,
-            total: invoice.total,
-            previous_balance: invoice.previous_balance,
-            customer_balance: invoice.customer_balance,
-            status: invoice.status,
-            items: invoice.items || [],
-          });
+          const copyResult = await copyCreditDocumentImageToClipboard(iframe, documentInput);
+          clipboardCopied = copyResult.ok;
+          remainingDocParts = copyResult.remainingParts;
+          documentPartCount = copyResult.partCount;
         } catch (copyErr) {
           console.error('Invoice clipboard copy failed:', copyErr);
         }
-      }
-
-      if (clipboardCopied) {
-        showToast(
-          `Invoice ${invoice.invoice_number} copied (1/2) — paste it, then copy ledger (2/2)`,
-          'success'
-        );
-      } else {
-        showToast(
-          iframe
-            ? `Invoice ${invoice.invoice_number} created (clipboard copy unavailable — use Photo on invoice page)`
-            : `Credit invoice ${invoice.invoice_number} created`,
-          'success'
-        );
       }
 
       if (username && cartId) {
@@ -1081,6 +1091,44 @@ export default function POSCredit() {
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
 
+      // Multi-page invoice: copy remaining pages here, then redirect to ledger.
+      if (
+        clipboardCopied &&
+        remainingDocParts.length > 0 &&
+        creditCustomerId &&
+        ledgerBlob
+      ) {
+        setPostCheckoutCopy({
+          customerId: creditCustomerId,
+          invoiceNumber: invoice.invoice_number,
+          remainingParts: remainingDocParts,
+          totalParts: documentPartCount,
+          nextPart: 2,
+          ledgerBlob,
+        });
+        showToast(
+          `Invoice ${invoice.invoice_number} page 1 of ${documentPartCount} copied — paste it, then copy the next page`,
+          'success'
+        );
+        return;
+      }
+
+      if (clipboardCopied) {
+        showToast(
+          documentPartCount > 1
+            ? `Invoice ${invoice.invoice_number} page 1 of ${documentPartCount} copied`
+            : `Invoice ${invoice.invoice_number} copied (1/2) — paste it, then copy ledger (2/2)`,
+          'success'
+        );
+      } else {
+        showToast(
+          iframe
+            ? `Invoice ${invoice.invoice_number} created (clipboard copy unavailable — use Photo on invoice page)`
+            : `Credit invoice ${invoice.invoice_number} created`,
+          'success'
+        );
+      }
+
       if (creditCustomerId) {
         navigate(
           clipboardCopied
@@ -1092,6 +1140,47 @@ export default function POSCredit() {
       showToast(err?.response?.data?.detail || 'Checkout failed', 'error');
     });
   };
+
+  const copyNextPostCheckoutPart = useCallback(async () => {
+    if (!postCheckoutCopy || copyingPostCheckoutPart) return;
+    setCopyingPostCheckoutPart(true);
+    try {
+      const remaining = [...postCheckoutCopy.remainingParts];
+      const blob = remaining.shift();
+      if (!blob) {
+        setPostCheckoutCopy(null);
+        return;
+      }
+      if (!(await copyPngBlobToClipboard(blob))) {
+        showToast('Could not copy invoice image', 'error');
+        return;
+      }
+      const partNum = postCheckoutCopy.nextPart;
+      if (remaining.length > 0) {
+        setPostCheckoutCopy({
+          ...postCheckoutCopy,
+          remainingParts: remaining,
+          nextPart: partNum + 1,
+        });
+        showToast(
+          `Invoice page ${partNum} of ${postCheckoutCopy.totalParts} copied — paste it, then copy the next page`,
+          'success'
+        );
+        return;
+      }
+
+      finishDocumentPartsAndQueueLedger(postCheckoutCopy.ledgerBlob);
+      const { customerId, invoiceNumber, totalParts } = postCheckoutCopy;
+      setPostCheckoutCopy(null);
+      showToast(
+        `Invoice ${invoiceNumber} page ${partNum} of ${totalParts} copied — redirecting to copy ledger`,
+        'success'
+      );
+      navigate(`/credit-ledger/${customerId}?copy_ledger=1`);
+    } finally {
+      setCopyingPostCheckoutPart(false);
+    }
+  }, [postCheckoutCopy, copyingPostCheckoutPart, navigate, showToast]);
 
   const snapshotExpectedParts = useMemo(() => {
     const itemCount = cartItems.length;
@@ -1154,8 +1243,10 @@ export default function POSCredit() {
       const customerName = selectedCustomer?.name || cart?.customer_name || 'Walk-in Customer';
       const customerPhone = selectedCustomer?.phone || null;
       const createdAt = new Date().toISOString();
-      const previousBalance = parseFloat(String(selectedCustomer?.balance ?? 0)) || 0;
-      const closingBalance = previousBalance + cartTotal;
+      const closingBalance =
+        selectedCustomer?.balance != null
+          ? (parseFloat(String(selectedCustomer.balance)) || 0) + cartTotal
+          : null;
 
       const blobs = await buildCreditDocumentSnapshotBlobs(iframe, {
         invoice_number: invoiceNo,
@@ -1164,7 +1255,6 @@ export default function POSCredit() {
         created_at: createdAt,
         subtotal: cartTotal,
         total: cartTotal,
-        previous_balance: previousBalance,
         customer_balance: closingBalance,
         items: cartItems.map((item: any) => ({
           product_name: item.product_name || item.product_display_name || 'Item',
@@ -1206,6 +1296,7 @@ export default function POSCredit() {
     defaultStore?.name,
     selectedCustomer?.name,
     selectedCustomer?.phone,
+    selectedCustomer?.balance,
     showToast,
   ]);
 
@@ -1223,6 +1314,43 @@ export default function POSCredit() {
   return (
     <div className="space-y-4">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+      {postCheckoutCopy ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="text-sm text-amber-950">
+            <span className="font-semibold">
+              Invoice {postCheckoutCopy.invoiceNumber} page {postCheckoutCopy.nextPart - 1} of{' '}
+              {postCheckoutCopy.totalParts}
+            </span>{' '}
+            is on your clipboard. Paste it in WhatsApp, then copy page{' '}
+            {postCheckoutCopy.nextPart} of {postCheckoutCopy.totalParts} before going to the ledger.
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                finishDocumentPartsAndQueueLedger(postCheckoutCopy.ledgerBlob);
+                const { customerId } = postCheckoutCopy;
+                setPostCheckoutCopy(null);
+                navigate(`/credit-ledger/${customerId}?copy_ledger=1`);
+              }}
+            >
+              Skip to ledger
+            </Button>
+            <Button
+              size="sm"
+              className="bg-amber-600 hover:bg-amber-700"
+              disabled={copyingPostCheckoutPart}
+              onClick={() => void copyNextPostCheckoutPart()}
+            >
+              {copyingPostCheckoutPart
+                ? 'Copying…'
+                : `Copy page ${postCheckoutCopy.nextPart}/${postCheckoutCopy.totalParts}`}
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1676,14 +1804,18 @@ export default function POSCredit() {
             ) : (
               <div className="divide-y divide-gray-100">
                 <div className="px-3 py-2 text-xs text-gray-400 flex flex-wrap gap-3 bg-gray-50">
+                  <div className="w-8 text-center">#</div>
                   <div className="flex-1 min-w-[140px]">Product</div>
                   <div className="w-24">Qty</div>
                   <div className="w-28">Price</div>
                   <div className="w-24 text-right">Line total</div>
                   <div className="w-8" />
                 </div>
-                {cartItems.map((item: any) => (
+                {cartItems.map((item: any, index: number) => (
                   <div key={item.id} className="p-3 flex flex-wrap items-center gap-3">
+                    <div className="w-8 text-center text-sm font-semibold text-gray-500 tabular-nums">
+                      {index + 1}
+                    </div>
                     <div className="flex-1 min-w-[140px]">
                       <div className="font-medium text-gray-900 text-sm">
                         {item.product_name || item.product_display_name}
@@ -1833,6 +1965,14 @@ export default function POSCredit() {
                   ? 'Saved for next invoices too (including after refresh).'
                   : 'Time stays current; only the invoice date changes.'}
               </p>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Line items</span>
+              <span className="font-medium tabular-nums">{cartLineCount}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Total qty</span>
+              <span className="font-medium tabular-nums">{formatNumber(cartTotalQty)} Pcs.</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-500">Subtotal</span>

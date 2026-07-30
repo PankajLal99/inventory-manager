@@ -151,15 +151,10 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
     parseAmount(input.total) || rows.reduce((s, r) => s + r.amount, 0);
   const subtotalAmt = parseAmount(input.subtotal) || totalAmt;
 
-  const hasBalance =
-    input.customer_balance != null || input.previous_balance != null;
-  const previousBal = parseAmount(input.previous_balance);
+  // Previous/old balance is intentionally hidden on credit invoice images.
   const closingBal =
-    input.customer_balance != null
-      ? parseAmount(input.customer_balance)
-      : hasBalance
-        ? previousBal + totalAmt
-        : null;
+    input.customer_balance != null ? parseAmount(input.customer_balance) : null;
+  const hasClosingBalance = closingBal != null;
 
   const partNote =
     partCount > 1
@@ -220,12 +215,8 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
         <td style="padding:9px 14px;font-size:${FONT.sm};text-align:right;font-weight:800;color:${THEME.white};background:${THEME.primary};border-bottom:1px solid ${THEME.secondaryMuted};">${escapeHtml(fmtMoney(totalAmt))}</td>
       </tr>
       ${
-        hasBalance
+        hasClosingBalance
           ? `
-      <tr>
-        <td style="${summaryRowStyle}${summaryLabel}">Previous Balance</td>
-        <td style="${summaryRowStyle}${summaryValue}">${escapeHtml(fmtMoney(previousBal))}</td>
-      </tr>
       <tr>
         <td style="padding:9px 14px;font-size:${FONT.sm};color:${THEME.white};font-weight:700;background:${THEME.secondary};">Balance (Ledger)</td>
         <td style="padding:9px 14px;font-size:${FONT.sm};text-align:right;font-weight:800;color:${THEME.white};background:${THEME.secondary};">${escapeHtml(fmtMoney(closingBal ?? 0))}</td>

@@ -95,15 +95,10 @@ export default function CreditInvoiceDocument({ invoice, className = '' }: Props
   const totalAmt = parseAmount(invoice.total);
   const subtotalAmt = parseAmount(invoice.subtotal) || totalAmt;
   const shopName = invoice.shop_name?.trim() || CREDIT_SHOP_NAME;
-  const hasBalance =
-    invoice.customer_balance != null || invoice.previous_balance != null;
-  const previousBal = parseAmount(invoice.previous_balance);
+  // Previous/old balance is intentionally hidden on credit invoice documents.
   const closingBal =
-    invoice.customer_balance != null
-      ? parseAmount(invoice.customer_balance)
-      : hasBalance
-        ? previousBal + totalAmt
-        : null;
+    invoice.customer_balance != null ? parseAmount(invoice.customer_balance) : null;
+  const hasClosingBalance = closingBal != null;
 
   return (
     <div
@@ -269,17 +264,11 @@ export default function CreditInvoiceDocument({ invoice, className = '' }: Props
               <span className="font-bold">Total</span>
               <span className="font-extrabold">₹ {formatAmountINR(totalAmt)}</span>
             </div>
-            {hasBalance ? (
-              <>
-                <div className="flex justify-between px-3.5 py-2">
-                  <span className="font-semibold text-stone-500">Previous Balance</span>
-                  <span className="font-bold">₹ {formatAmountINR(previousBal)}</span>
-                </div>
-                <div className="flex justify-between px-3.5 py-2 bg-amber-900 text-white">
-                  <span className="font-bold">Balance (Ledger)</span>
-                  <span className="font-extrabold">₹ {formatAmountINR(closingBal ?? 0)}</span>
-                </div>
-              </>
+            {hasClosingBalance ? (
+              <div className="flex justify-between px-3.5 py-2 bg-amber-900 text-white">
+                <span className="font-bold">Balance (Ledger)</span>
+                <span className="font-extrabold">₹ {formatAmountINR(closingBal ?? 0)}</span>
+              </div>
             ) : null}
           </div>
         </div>

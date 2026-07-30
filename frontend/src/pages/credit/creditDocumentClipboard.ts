@@ -135,7 +135,8 @@ export async function buildCreditDocumentSnapshotBlobs(
       total: input.total ?? totalAmt,
       totalQty,
       totalItems: rows.length,
-      previous_balance: input.previous_balance,
+      // Previous/old balance is never shown on credit invoice images.
+      previous_balance: undefined,
       customer_balance: input.customer_balance,
       status: input.status,
       notes: input.notes,
@@ -188,15 +189,34 @@ export async function mergePngBlobsVertically(blobs: Blob[]): Promise<Blob | nul
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
 }
 
-/** Render credit invoice/return HTML to PNG and copy a single merged image to the clipboard. */
+export type CopyDocumentPartsResult = {
+  ok: boolean;
+  /** Total invoice/return image parts generated. */
+  partCount: number;
+  /** Remaining parts after the first was copied (caller copies these one-by-one). */
+  remainingParts: Blob[];
+};
+
+/**
+ * Render credit invoice/return HTML to PNG page(s) and copy the first page only.
+ * Multi-page documents stay separate — do not merge into one tall image.
+ */
 export async function copyCreditDocumentImageToClipboard(
   iframe: HTMLIFrameElement,
   input: CreditDocumentClipboardInput
-): Promise<boolean> {
+): Promise<CopyDocumentPartsResult> {
   const blobs = await buildCreditDocumentSnapshotBlobs(iframe, input);
-  const merged = await mergePngBlobsVertically(blobs);
-  if (!merged) return false;
-  return copyPngBlobToClipboard(merged);
+  if (!blobs.length) {
+    return { ok: false, partCount: 0, remainingParts: [] };
+  }
+  if (!(await copyPngBlobToClipboard(blobs[0]))) {
+    return { ok: false, partCount: blobs.length, remainingParts: [] };
+  }
+  return {
+    ok: true,
+    partCount: blobs.length,
+    remainingParts: blobs.slice(1),
+  };
 }
 
 /**
@@ -226,30 +246,70 @@ export async function buildMergedCreditLedgerSnapshotBlob(
   return mergePngBlobsVertically(blobs);
 }
 
+export type CopyDocumentThenLedgerResult = {
+  ok: boolean;
+  /** Total invoice/return image parts. */
+  documentPartCount: number;
+  /**
+   * Remaining invoice/return pages after page 1 was copied.
+   * When non-empty, ledger is NOT queued yet — finish copying these, then call
+   * `finishDocumentPartsAndQueueLedger`.
+   */
+  remainingDocumentParts: Blob[];
+  /** Ledger image (always built when ok). Queued automatically only when a single doc page. */
+  ledgerBlob: Blob | null;
+};
+
 /**
- * Copy invoice/return as image 1, queue ledger as image 2.
- * Browsers only keep one clipboard image — paste image 1, then copy image 2 from the ledger page.
+ * Copy invoice/return page 1, prepare ledger as a later separate image.
+ * Multi-page invoices are NOT merged — remaining pages are returned for sequential copy.
+ * Browsers only keep one clipboard image at a time.
  */
 export async function copyDocumentThenQueueLedgerImage(
   iframe: HTMLIFrameElement,
   documentInput: CreditDocumentClipboardInput,
   statement: CreditLedgerStatementSnapshot
-): Promise<boolean> {
+): Promise<CopyDocumentThenLedgerResult> {
   const docBlobs = await buildCreditDocumentSnapshotBlobs(iframe, documentInput);
-  const documentBlob = await mergePngBlobsVertically(docBlobs);
-  if (!documentBlob) return false;
+  if (!docBlobs.length) {
+    return {
+      ok: false,
+      documentPartCount: 0,
+      remainingDocumentParts: [],
+      ledgerBlob: null,
+    };
+  }
 
   const ledgerBlob = await buildMergedCreditLedgerSnapshotBlob(iframe, statement);
   if (!ledgerBlob) {
     throw new Error('Failed to create ledger image');
   }
 
-  if (!(await copyPngBlobToClipboard(documentBlob))) {
-    return false;
+  if (!(await copyPngBlobToClipboard(docBlobs[0]))) {
+    return {
+      ok: false,
+      documentPartCount: docBlobs.length,
+      remainingDocumentParts: [],
+      ledgerBlob: null,
+    };
   }
 
+  const remainingDocumentParts = docBlobs.slice(1);
+  if (remainingDocumentParts.length === 0) {
+    setPendingLedgerClipboardImage(ledgerBlob);
+  }
+
+  return {
+    ok: true,
+    documentPartCount: docBlobs.length,
+    remainingDocumentParts,
+    ledgerBlob,
+  };
+}
+
+/** After all multi-page invoice/return images are copied, queue ledger for the ledger page. */
+export function finishDocumentPartsAndQueueLedger(ledgerBlob: Blob) {
   setPendingLedgerClipboardImage(ledgerBlob);
-  return true;
 }
 
 /** @deprecated Prefer copyDocumentThenQueueLedgerImage for two separate images */
@@ -258,7 +318,8 @@ export async function copyDocumentAndLedgerImageToClipboard(
   documentInput: CreditDocumentClipboardInput,
   statement: CreditLedgerStatementSnapshot
 ): Promise<boolean> {
-  return copyDocumentThenQueueLedgerImage(iframe, documentInput, statement);
+  const result = await copyDocumentThenQueueLedgerImage(iframe, documentInput, statement);
+  return result.ok && result.remainingDocumentParts.length === 0;
 }
 
 // Keep single-page helper available for callers that only need HTML

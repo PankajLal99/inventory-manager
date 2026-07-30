@@ -11,7 +11,11 @@ import {
   Package,
 } from 'lucide-react';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
-import { copyDocumentThenQueueLedgerImage } from './creditDocumentClipboard';
+import {
+  copyDocumentThenQueueLedgerImage,
+  copyPngBlobToClipboard,
+  finishDocumentPartsAndQueueLedger,
+} from './creditDocumentClipboard';
 import { catalogApi, creditApi } from '../../lib/api';
 import { amountForInput, formatNumber } from '../../lib/utils';
 import Button from '../../components/ui/Button';
@@ -140,6 +144,15 @@ export default function POSCreditReturn() {
   const [editingQty, setEditingQty] = useState<Record<string, string>>({});
   const [editingPrice, setEditingPrice] = useState<Record<string, string>>({});
   const { runGuarded, isSubmitting: isSubmittingReturn } = useGuardedAsync();
+  const [postReturnCopy, setPostReturnCopy] = useState<{
+    customerId: number;
+    returnNumber: string;
+    remainingParts: Blob[];
+    totalParts: number;
+    nextPart: number;
+    ledgerBlob: Blob;
+  } | null>(null);
+  const [copyingPostReturnPart, setCopyingPostReturnPart] = useState(false);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Math.random().toString(36).substring(7);
@@ -400,12 +413,16 @@ export default function POSCreditReturn() {
 
       const iframe = documentSnapshotFrameRef.current;
       let clipboardCopied = false;
+      let remainingDocParts: Blob[] = [];
+      let documentPartCount = 1;
+      let ledgerBlob: Blob | null = null;
+
       if (iframe && creditCustomerId) {
         try {
           const statementRes = await creditApi.ledger.statement({
             customer: creditCustomerId,
           });
-          clipboardCopied = await copyDocumentThenQueueLedgerImage(
+          const copyResult = await copyDocumentThenQueueLedgerImage(
             iframe,
             {
               variant: 'return',
@@ -423,9 +440,39 @@ export default function POSCreditReturn() {
             },
             statementRes.data
           );
+          clipboardCopied = copyResult.ok;
+          remainingDocParts = copyResult.remainingDocumentParts;
+          documentPartCount = copyResult.documentPartCount;
+          ledgerBlob = copyResult.ledgerBlob;
         } catch (copyErr) {
           console.error('Return + ledger clipboard copy failed:', copyErr);
         }
+      }
+
+      setBasket([]);
+      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
+
+      if (
+        clipboardCopied &&
+        remainingDocParts.length > 0 &&
+        creditCustomerId &&
+        ledgerBlob
+      ) {
+        setPostReturnCopy({
+          customerId: creditCustomerId,
+          returnNumber: ret.return_number,
+          remainingParts: remainingDocParts,
+          totalParts: documentPartCount,
+          nextPart: 2,
+          ledgerBlob,
+        });
+        showToast(
+          `Return ${ret.return_number} page 1 of ${documentPartCount} copied — paste it, then copy the next page`,
+          'success'
+        );
+        return;
       }
 
       if (clipboardCopied) {
@@ -442,11 +489,6 @@ export default function POSCreditReturn() {
         );
       }
 
-      setBasket([]);
-      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
-
       if (creditCustomerId) {
         navigate(
           clipboardCopied
@@ -459,9 +501,87 @@ export default function POSCreditReturn() {
     });
   };
 
+  const copyNextPostReturnPart = useCallback(async () => {
+    if (!postReturnCopy || copyingPostReturnPart) return;
+    setCopyingPostReturnPart(true);
+    try {
+      const remaining = [...postReturnCopy.remainingParts];
+      const blob = remaining.shift();
+      if (!blob) {
+        setPostReturnCopy(null);
+        return;
+      }
+      if (!(await copyPngBlobToClipboard(blob))) {
+        showToast('Could not copy return image', 'error');
+        return;
+      }
+      const partNum = postReturnCopy.nextPart;
+      if (remaining.length > 0) {
+        setPostReturnCopy({
+          ...postReturnCopy,
+          remainingParts: remaining,
+          nextPart: partNum + 1,
+        });
+        showToast(
+          `Return page ${partNum} of ${postReturnCopy.totalParts} copied — paste it, then copy the next page`,
+          'success'
+        );
+        return;
+      }
+
+      finishDocumentPartsAndQueueLedger(postReturnCopy.ledgerBlob);
+      const { customerId, returnNumber, totalParts } = postReturnCopy;
+      setPostReturnCopy(null);
+      showToast(
+        `Return ${returnNumber} page ${partNum} of ${totalParts} copied — redirecting to copy ledger`,
+        'success'
+      );
+      navigate(`/credit-ledger/${customerId}?copy_ledger=1`);
+    } finally {
+      setCopyingPostReturnPart(false);
+    }
+  }, [postReturnCopy, copyingPostReturnPart, navigate, showToast]);
+
   return (
     <div className="space-y-4">
       <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+      {postReturnCopy ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="text-sm text-amber-950">
+            <span className="font-semibold">
+              Return {postReturnCopy.returnNumber} page {postReturnCopy.nextPart - 1} of{' '}
+              {postReturnCopy.totalParts}
+            </span>{' '}
+            is on your clipboard. Paste it, then copy page {postReturnCopy.nextPart} of{' '}
+            {postReturnCopy.totalParts} before going to the ledger.
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                finishDocumentPartsAndQueueLedger(postReturnCopy.ledgerBlob);
+                const { customerId } = postReturnCopy;
+                setPostReturnCopy(null);
+                navigate(`/credit-ledger/${customerId}?copy_ledger=1`);
+              }}
+            >
+              Skip to ledger
+            </Button>
+            <Button
+              size="sm"
+              className="bg-amber-600 hover:bg-amber-700"
+              disabled={copyingPostReturnPart}
+              onClick={() => void copyNextPostReturnPart()}
+            >
+              {copyingPostReturnPart
+                ? 'Copying…'
+                : `Copy page ${postReturnCopy.nextPart}/${postReturnCopy.totalParts}`}
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         <div>

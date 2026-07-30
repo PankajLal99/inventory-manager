@@ -285,7 +285,7 @@ export default function CreditInvoiceDetail() {
         notes: invoice.notes,
         status: invoice.status,
         customer_balance: invoice.customer_balance,
-        previous_balance: invoice.previous_balance,
+        previous_balance: undefined,
         totalItems: (invoice.items || []).length,
         items: invoice.items || [],
         showTotals: true,
@@ -320,7 +320,7 @@ export default function CreditInvoiceDetail() {
       notes: invoice.notes,
       status: invoice.status,
       customer_balance: invoice.customer_balance,
-      previous_balance: invoice.previous_balance,
+      previous_balance: undefined,
       totalItems: (invoice.items || []).length,
       items: invoice.items || [],
       showTotals: true,
@@ -607,14 +607,6 @@ export default function CreditInvoiceDetail() {
                 ₹{formatNumber(invoice.total ?? '0')}
               </span>
             </div>
-            {invoice.previous_balance != null ? (
-              <div className="flex justify-between items-center py-2">
-                <span className="text-sm text-gray-600">Previous balance</span>
-                <span className="text-sm font-medium text-gray-900">
-                  ₹{formatNumber(invoice.previous_balance)}
-                </span>
-              </div>
-            ) : null}
             {invoice.customer_balance != null ? (
               <div className="flex justify-between items-center py-2 bg-amber-900/5 rounded-lg px-3 border border-amber-200">
                 <span className="text-sm font-semibold text-amber-900">Balance (ledger)</span>
