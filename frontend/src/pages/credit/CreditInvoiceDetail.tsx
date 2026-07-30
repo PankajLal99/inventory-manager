@@ -30,7 +30,7 @@ import Badge from '../../components/ui/Badge';
 import Table, { TableCell, TableRow } from '../../components/ui/Table';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
-import { formatCreditInvoiceDate, canManageCreditRecords } from './creditLedgerUtils';
+import { formatCreditInvoiceDate, canEditCreditRecords, canManageCreditRecords } from './creditLedgerUtils';
 import {
   buildCreditInvoiceHtml,
   CREDIT_INVOICE_CAPTURE_HEIGHT,
@@ -89,6 +89,7 @@ export default function CreditInvoiceDetail() {
 
   const invoiceId = parseInt(id || '', 10);
   const canManage = canManageCreditRecords();
+  const canEdit = canEditCreditRecords();
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const tid = Math.random().toString(36).slice(2);
@@ -130,7 +131,7 @@ export default function CreditInvoiceDetail() {
   };
 
   useEffect(() => {
-    if (canManage && invoice?.status === 'open' && searchParams.get('edit') === '1') {
+    if (canEdit && invoice?.status === 'open' && searchParams.get('edit') === '1') {
       openEditModal();
       const next = new URLSearchParams(searchParams);
       next.delete('edit');
@@ -492,7 +493,7 @@ export default function CreditInvoiceDetail() {
 
               <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
                 <div className="flex gap-2">
-                  {canManage && invoice.status === 'open' ? (
+                  {canEdit && invoice.status === 'open' ? (
                     <Button
                       variant="outline"
                       size="sm"

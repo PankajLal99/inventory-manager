@@ -16,13 +16,22 @@ export function isAccountsUser(user = auth.getUser()): boolean {
 }
 
 /**
- * Admin and Super may edit/void credit invoices, returns, and manual ledger entries.
+ * Admin and Super may void credit invoices, returns, and delete manual ledger entries.
  * Account(s) users are always denied (even if also in Admin).
  */
 export function canManageCreditRecords(user = auth.getUser()): boolean {
   if (isAccountsUser(user)) return false;
   const groups = userGroupNames(user);
   return groups.includes('admin') || groups.includes('super');
+}
+
+/**
+ * Admin, Super, and Account(s) may edit credit invoices and returns.
+ * Void/delete stays gated by canManageCreditRecords.
+ */
+export function canEditCreditRecords(user = auth.getUser()): boolean {
+  if (isAccountsUser(user)) return true;
+  return canManageCreditRecords(user);
 }
 
 /** Total receivable KPI is hidden from Account(s). */

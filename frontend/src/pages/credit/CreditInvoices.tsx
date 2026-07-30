@@ -31,7 +31,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import Modal from '../../components/ui/Modal';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
-import { canManageCreditRecords, isAccountsUser } from './creditLedgerUtils';
+import { canEditCreditRecords, canManageCreditRecords, isAccountsUser } from './creditLedgerUtils';
 
 type ListMode = 'sale' | 'return';
 
@@ -59,6 +59,7 @@ export default function CreditInvoices() {
   const [showFilters, setShowFilters] = useState(true);
   const [voidTarget, setVoidTarget] = useState<VoidTarget | null>(null);
   const canManage = canManageCreditRecords();
+  const canEdit = canEditCreditRecords();
   const hideNetSummary = isAccountsUser();
 
   const setMode = (next: ListMode) => {
@@ -396,33 +397,33 @@ export default function CreditInvoices() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
+                      {canEdit && ret.status === 'completed' ? (
+                        <button
+                          type="button"
+                          className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
+                          onClick={() => navigate(`/credit-returns/${ret.id}?edit=1`)}
+                          title="Edit"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      ) : null}
                       {canManage && ret.status === 'completed' ? (
-                        <>
-                          <button
-                            type="button"
-                            className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
-                            onClick={() => navigate(`/credit-returns/${ret.id}?edit=1`)}
-                            title="Edit"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            className="p-1.5 text-red-600 hover:bg-red-50 rounded"
-                            onClick={() =>
-                              setVoidTarget({
-                                id: ret.id,
-                                label: ret.return_number,
-                                kind: 'return',
-                                total: parseFloat(ret.total || 0) || 0,
-                                customerName: ret.customer_name,
-                              })
-                            }
-                            title="Void"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                          onClick={() =>
+                            setVoidTarget({
+                              id: ret.id,
+                              label: ret.return_number,
+                              kind: 'return',
+                              total: parseFloat(ret.total || 0) || 0,
+                              customerName: ret.customer_name,
+                            })
+                          }
+                          title="Void"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       ) : null}
                       <button
                         type="button"
@@ -469,33 +470,33 @@ export default function CreditInvoices() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-1">
+                      {canEdit && inv.status === 'open' ? (
+                        <button
+                          type="button"
+                          className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
+                          onClick={() => navigate(`/credit-invoices/${inv.id}?edit=1`)}
+                          title="Edit"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      ) : null}
                       {canManage && inv.status === 'open' ? (
-                        <>
-                          <button
-                            type="button"
-                            className="p-1.5 text-amber-700 hover:bg-amber-50 rounded"
-                            onClick={() => navigate(`/credit-invoices/${inv.id}?edit=1`)}
-                            title="Edit"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            className="p-1.5 text-red-600 hover:bg-red-50 rounded"
-                            onClick={() =>
-                              setVoidTarget({
-                                id: inv.id,
-                                label: inv.invoice_number,
-                                kind: 'sale',
-                                total: parseFloat(inv.total || 0) || 0,
-                                customerName: inv.customer_name,
-                              })
-                            }
-                            title="Void"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
+                        <button
+                          type="button"
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+                          onClick={() =>
+                            setVoidTarget({
+                              id: inv.id,
+                              label: inv.invoice_number,
+                              kind: 'sale',
+                              total: parseFloat(inv.total || 0) || 0,
+                              customerName: inv.customer_name,
+                            })
+                          }
+                          title="Void"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       ) : null}
                       <button
                         type="button"

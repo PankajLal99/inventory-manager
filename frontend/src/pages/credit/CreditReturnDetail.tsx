@@ -24,7 +24,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { formatCreditInvoiceDate } from './creditLedgerUtils';
-import { canManageCreditRecords } from './creditLedgerUtils';
+import { canEditCreditRecords, canManageCreditRecords } from './creditLedgerUtils';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -65,6 +65,7 @@ export default function CreditReturnDetail() {
   const queryClient = useQueryClient();
   const returnId = parseInt(id || '', 10);
   const canManage = canManageCreditRecords();
+  const canEditRecords = canEditCreditRecords();
 
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -119,7 +120,7 @@ export default function CreditReturnDetail() {
   };
 
   useEffect(() => {
-    if (creditReturn?.status === 'completed' && searchParams.get('edit') === '1' && canManage) {
+    if (creditReturn?.status === 'completed' && searchParams.get('edit') === '1' && canEditRecords) {
       openEditModal();
       const next = new URLSearchParams(searchParams);
       next.delete('edit');
@@ -265,7 +266,8 @@ export default function CreditReturnDetail() {
     (sum: number, item: any) => sum + (parseFloat(String(item.quantity || 0)) || 0),
     0
   );
-  const canEdit = canManage && creditReturn.status === 'completed';
+  const canEdit = canEditRecords && creditReturn.status === 'completed';
+  const canVoid = canManage && creditReturn.status === 'completed';
 
   return (
     <div className="space-y-6">
@@ -331,7 +333,7 @@ export default function CreditReturnDetail() {
                     </Button>
                   ) : null}
                 </div>
-                {canEdit ? (
+                {canVoid ? (
                   <Button variant="danger" size="sm" onClick={() => setShowVoidConfirm(true)}>
                     <Ban className="h-4 w-4 mr-2" />
                     Void
