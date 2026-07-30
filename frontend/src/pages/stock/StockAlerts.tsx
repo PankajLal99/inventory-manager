@@ -571,9 +571,6 @@ export default function StockAlerts() {
                     Available
                   </th>
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Limit
-                  </th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Action
                   </th>
                 </tr>
@@ -581,7 +578,6 @@ export default function StockAlerts() {
               <tbody className="divide-y divide-gray-200">
                 {filteredAlerts.map((product) => {
                   const available = product.available_quantity || 0;
-                  const threshold = product.product__low_stock_threshold || 0;
                   const isSoldOut = product.status === 'sold_out';
 
                   return (
@@ -625,9 +621,6 @@ export default function StockAlerts() {
                         }`}
                       >
                         {formatNumber(available, 0)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right text-gray-600">
-                        {formatNumber(threshold, 0)}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
