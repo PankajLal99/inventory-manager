@@ -1,6 +1,7 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { auth } from '../../lib/auth';
+import { isAccountsUser } from '../../pages/credit/creditLedgerUtils';
 import {
   Coins,
   FileText,
@@ -11,12 +12,17 @@ import {
   X,
 } from 'lucide-react';
 
-const NAV = [
-  { path: '/pos', label: 'POS', icon: ShoppingCart },
+const NAV: Array<{
+  path: string;
+  label: string;
+  icon: typeof ShoppingCart;
+  mainOnly?: boolean;
+}> = [
+  { path: '/pos', label: 'POS', icon: ShoppingCart, mainOnly: true },
   { path: '/pos-credit', label: 'POS Credit', icon: Coins },
   { path: '/credit-invoices', label: 'Invoices', icon: FileText },
   { path: '/credit-ledger', label: 'Credit Ledger', icon: BookOpen },
-] as const;
+];
 
 function isActive(pathname: string, path: string) {
   if (path === '/credit-invoices') {
@@ -32,7 +38,7 @@ function isActive(pathname: string, path: string) {
 export default function CreditLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState(auth.getUser());
+  const [user, setUser] = useState(auth.getUser('credit'));
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
@@ -58,6 +64,11 @@ export default function CreditLayout() {
   };
 
   const { pathname } = location;
+  const accountsOnly = isAccountsUser(user);
+  const navItems = useMemo(
+    () => NAV.filter((item) => !(item.mainOnly && accountsOnly)),
+    [accountsOnly]
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-stone-100 to-stone-50 flex flex-col">
@@ -76,7 +87,7 @@ export default function CreditLayout() {
           </div>
 
           <nav className="hidden md:flex items-center gap-1">
-            {NAV.map(({ path, label, icon: Icon }) => {
+            {navItems.map(({ path, label, icon: Icon }) => {
               const active =
                 path === '/pos-credit'
                   ? pathname === '/pos-credit' || pathname === '/pos-credit-return'
@@ -121,7 +132,7 @@ export default function CreditLayout() {
         {mobileOpen && (
           <div className="md:hidden border-t border-amber-100 bg-white">
             <div className="max-w-[1800px] mx-auto w-full px-3 sm:px-5 lg:px-6 py-2 space-y-1">
-            {NAV.map(({ path, label, icon: Icon }) => {
+            {navItems.map(({ path, label, icon: Icon }) => {
               const active =
                 path === '/pos-credit'
                   ? pathname === '/pos-credit' || pathname === '/pos-credit-return'

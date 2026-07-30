@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { auth } from '../../lib/auth';
+import { isAccountsUser } from '../credit/creditLedgerUtils';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 
 export default function Login() {
@@ -12,10 +13,30 @@ export default function Login() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // /login is not a credit path — only skip if already signed into main POS
-    if (auth.isMainAuthenticated()) {
-      navigate('/', { replace: true });
-    }
+    let cancelled = false;
+    const redirectIfAlreadyIn = async () => {
+      if (!auth.isMainAuthenticated()) return;
+      try {
+        const user = auth.getUser('main') || (await auth.loadUser('main'));
+        if (cancelled) return;
+        if (isAccountsUser(user)) {
+          try {
+            await auth.promoteMainSessionToCredit();
+          } catch {
+            auth.logout('main');
+          }
+          navigate(auth.isCreditAuthenticated() ? '/pos-credit' : '/credit-login', { replace: true });
+          return;
+        }
+        navigate('/', { replace: true });
+      } catch {
+        // stay on login
+      }
+    };
+    void redirectIfAlreadyIn();
+    return () => {
+      cancelled = true;
+    };
   }, [navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -23,9 +44,21 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      // Main session only — credit login (if any) stays active
       await auth.login(username, password, { creditPortal: false });
-      navigate('/');
+      // Always re-load so group list is fresh after login
+      const user = await auth.loadUser('main');
+      if (isAccountsUser(user)) {
+        try {
+          await auth.promoteMainSessionToCredit();
+        } catch {
+          auth.logout('main');
+          setError('Account users can only use the credit app. Try Credit login.');
+          return;
+        }
+        navigate('/pos-credit', { replace: true });
+        return;
+      }
+      navigate('/', { replace: true });
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Login failed');
     } finally {
@@ -105,12 +138,12 @@ export default function Login() {
             </Link>
           </div>
           <div className="text-center text-sm text-gray-500">
-            Need credit sales in another tab?{' '}
+            Accounts / credit sales?{' '}
             <Link to="/credit-login" className="text-amber-700 hover:text-amber-900 font-medium">
               Credit login
             </Link>
             <span className="block mt-1 text-xs text-gray-400">
-              Both logins can stay active at once.
+              Accounts users must use Credit login only.
             </span>
           </div>
         </form>
@@ -118,4 +151,3 @@ export default function Login() {
     </div>
   );
 }
-

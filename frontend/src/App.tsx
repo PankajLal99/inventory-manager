@@ -1,9 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './lib/toast';
 import { auth } from './lib/auth';
 import { isCreditAppPath } from './lib/authPaths';
+import { isAccountsUser } from './pages/credit/creditLedgerUtils';
 import Login from './pages/auth/Login';
 import CreditLogin from './pages/auth/CreditLogin';
 import Register from './pages/auth/Register';
@@ -81,10 +83,98 @@ export const getCacheConfig = () => ({
 /**
  * Main + credit can be logged in at the same time (separate tokens).
  * Credit URLs are credit-session only (not shown in the main app).
+ * Accounts group may only use the credit portal — never the main POS/system.
  */
 function AppShell() {
   const location = useLocation();
   const onCredit = isCreditAppPath(location.pathname);
+  const [accountsRedirect, setAccountsRedirect] = useState<string | null>(null);
+  const [checkingAccounts, setCheckingAccounts] = useState(
+    !onCredit && (auth.isMainAuthenticated() || auth.isCreditAuthenticated())
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const enforceAccountsCreditOnly = async () => {
+      if (onCredit) {
+        if (!cancelled) {
+          setAccountsRedirect(null);
+          setCheckingAccounts(false);
+        }
+        return;
+      }
+
+      // Main URL with only a credit session (e.g. Accounts opened /pos)
+      if (!auth.isMainAuthenticated() && auth.isCreditAuthenticated()) {
+        if (!cancelled) setCheckingAccounts(true);
+        try {
+          const user = auth.getUser('credit') || (await auth.loadUser('credit'));
+          if (!cancelled && isAccountsUser(user)) {
+            setAccountsRedirect('/pos-credit');
+            setCheckingAccounts(false);
+            return;
+          }
+        } catch {
+          // fall through to normal main login redirect
+        }
+        if (!cancelled) {
+          setAccountsRedirect(null);
+          setCheckingAccounts(false);
+        }
+        return;
+      }
+
+      if (!auth.isMainAuthenticated()) {
+        if (!cancelled) {
+          setAccountsRedirect(null);
+          setCheckingAccounts(false);
+        }
+        return;
+      }
+
+      if (!cancelled) setCheckingAccounts(true);
+      try {
+        const user = auth.getUser('main') || (await auth.loadUser('main'));
+        if (cancelled) return;
+        if (isAccountsUser(user)) {
+          try {
+            await auth.promoteMainSessionToCredit();
+          } catch {
+            auth.logout('main');
+          }
+          if (!cancelled) {
+            setAccountsRedirect(auth.isCreditAuthenticated() ? '/pos-credit' : '/credit-login');
+            setCheckingAccounts(false);
+          }
+          return;
+        }
+      } catch {
+        // leave normal auth flow to handle invalid main session
+      }
+      if (!cancelled) {
+        setAccountsRedirect(null);
+        setCheckingAccounts(false);
+      }
+    };
+
+    void enforceAccountsCreditOnly();
+    return () => {
+      cancelled = true;
+    };
+  }, [onCredit, location.pathname]);
+
+  if (accountsRedirect) {
+    return <Navigate to={accountsRedirect} replace />;
+  }
+
+  if (checkingAccounts) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 text-sm text-gray-500">
+        Checking access…
+      </div>
+    );
+  }
 
   if (onCredit) {
     if (!auth.isCreditAuthenticated()) {
@@ -94,6 +184,13 @@ function AppShell() {
   }
 
   if (!auth.isMainAuthenticated()) {
+    // Accounts (credit-only) users who open /pos or other main URLs stay in credit app
+    if (auth.isCreditAuthenticated()) {
+      const creditUser = auth.getUser('credit');
+      if (creditUser && isAccountsUser(creditUser)) {
+        return <Navigate to="/pos-credit" replace />;
+      }
+    }
     return <Navigate to="/login" replace />;
   }
   return <Layout />;
@@ -102,6 +199,9 @@ function AppShell() {
 function FullAppOnly({ children }: { children: React.ReactNode }) {
   if (!auth.isMainAuthenticated()) {
     return <Navigate to="/login" replace />;
+  }
+  if (isAccountsUser(auth.getUser('main'))) {
+    return <Navigate to="/pos-credit" replace />;
   }
   return <>{children}</>;
 }

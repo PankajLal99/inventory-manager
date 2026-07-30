@@ -1,10 +1,33 @@
 import { formatAmountINR, formatAppDate } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 
-/** Admin and Super may edit/void credit invoices, returns, and manual ledger entries. */
+function userGroupNames(user = auth.getUser()): string[] {
+  return (user?.groups || []).map((g) => {
+    if (g == null) return '';
+    if (typeof g === 'string') return g.trim().toLowerCase();
+    if (typeof g === 'object' && 'name' in g) return String((g as { name?: string }).name || '').trim().toLowerCase();
+    return String(g).trim().toLowerCase();
+  }).filter(Boolean);
+}
+
+/** Django group "Account" / "Accounts" — credit portal only; no main POS. */
+export function isAccountsUser(user = auth.getUser()): boolean {
+  return userGroupNames(user).some((g) => g === 'account' || g === 'accounts');
+}
+
+/**
+ * Admin and Super may edit/void credit invoices, returns, and manual ledger entries.
+ * Account(s) users are always denied (even if also in Admin).
+ */
 export function canManageCreditRecords(user = auth.getUser()): boolean {
-  const groups = user?.groups || [];
-  return groups.includes('Admin') || groups.includes('Super');
+  if (isAccountsUser(user)) return false;
+  const groups = userGroupNames(user);
+  return groups.includes('admin') || groups.includes('super');
+}
+
+/** Total receivable KPI is hidden from Account(s). */
+export function canSeeCreditReceivableKpi(user = auth.getUser()): boolean {
+  return !isAccountsUser(user);
 }
 
 export type CollectionStatus = 'good' | 'warning' | 'danger';
@@ -73,13 +96,13 @@ export function formatCreditDate(value?: CreditDateInput) {
   return formatAppDate(value, { includeTime: false, empty: '—' });
 }
 
-/** Credit UI datetime — DD/MM/YYYY HH:mm. */
+/** Credit UI datetime — DD/MM/YYYY h:mm AM/PM. */
 export function formatCreditDateTime(value?: CreditDateInput) {
   return formatAppDate(value, { includeTime: true, empty: '—' });
 }
 
 /**
- * Statement / list columns — DD/MM/YYYY, or DD/MM/YYYY HH:mm when source has time.
+ * Statement / list columns — DD/MM/YYYY, or DD/MM/YYYY h:mm AM/PM when source has time.
  */
 export function formatCreditStatementDate(value?: CreditDateInput) {
   return formatAppDate(value, { includeTime: 'auto', empty: '—' });

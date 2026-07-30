@@ -124,15 +124,21 @@ function parseLocalDate(date: Date | string | null | undefined): Date | null {
     const value = String(date).trim();
     if (!value) return null;
 
-    // YYYY-MM-DD or ISO datetime beginning with YYYY-MM-DD
-    const isoLike = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
-    if (isoLike) {
-        const y = Number(isoLike[1]);
-        const m = Number(isoLike[2]);
-        const d = Number(isoLike[3]);
+    // Date-only YYYY-MM-DD — interpret as local calendar day (no UTC shift).
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnly) {
+        const y = Number(dateOnly[1]);
+        const m = Number(dateOnly[2]);
+        const d = Number(dateOnly[3]);
         const parsed = new Date(y, m - 1, d);
         if (parsed.getFullYear() === y && parsed.getMonth() === m - 1 && parsed.getDate() === d) return parsed;
         return null;
+    }
+
+    // ISO / datetime with clock time — use local calendar day (avoids UTC date prefix off-by-one).
+    if (/^\d{4}-\d{2}-\d{2}[T\s]\d{1,2}:\d{2}/.test(value)) {
+        const parsed = new Date(value);
+        return isNaN(parsed.getTime()) ? null : parsed;
     }
 
     // DD/MM/YYYY
@@ -178,17 +184,20 @@ function formatDDMMYYYYParts(d: Date): string {
     return `${dd}/${mm}/${yyyy}`;
 }
 
+/** Local clock time in 12-hour format with AM/PM (e.g. 2:05 PM, 2:05:09 PM). */
 function formatLocalTimeParts(d: Date, withSeconds = false): string {
-    const hh = String(d.getHours()).padStart(2, '0');
+    const hours24 = d.getHours();
+    const hour12 = hours24 % 12 || 12;
     const min = String(d.getMinutes()).padStart(2, '0');
-    if (!withSeconds) return `${hh}:${min}`;
+    const meridiem = hours24 >= 12 ? 'PM' : 'AM';
+    if (!withSeconds) return `${hour12}:${min} ${meridiem}`;
     const ss = String(d.getSeconds()).padStart(2, '0');
-    return `${hh}:${min}:${ss}`;
+    return `${hour12}:${min}:${ss} ${meridiem}`;
 }
 
 /**
  * App-wide date display: always DD/MM/YYYY, independent of system locale.
- * Includes local time (HH:mm) when the value has a time component; otherwise date only.
+ * Includes local time in 12-hour format (h:mm AM/PM) when the value has a time component.
  */
 export function formatAppDate(
     date: Date | string | null | undefined,
@@ -211,7 +220,9 @@ export function formatAppDate(
         (includeTimeOpt === 'auto' && sourceHasTimeComponent(date));
 
     let d: Date | null = null;
-    if (wantsTime && typeof date === 'string' && /[T\s]\d{1,2}:\d{2}/.test(String(date).trim())) {
+    // ISO datetimes must use local calendar day — stripping YYYY-MM-DD from a UTC
+    // string (e.g. 2024-07-29T18:30:00Z = midnight IST Jul 30) shifts the date back one day.
+    if (typeof date === 'string' && sourceHasTimeComponent(date)) {
         const parsed = new Date(String(date).trim());
         d = isNaN(parsed.getTime()) ? null : parsed;
     } else if (date instanceof Date) {
@@ -231,7 +242,7 @@ export function formatAppDateOnly(date: Date | string | null | undefined, empty 
     return formatAppDate(date, { includeTime: false, empty });
 }
 
-/** Alias: always DD/MM/YYYY HH:mm when parseable. */
+/** Alias: always DD/MM/YYYY h:mm AM/PM when parseable. */
 export function formatAppDateTime(date: Date | string | null | undefined, empty = ''): string {
     return formatAppDate(date, { includeTime: true, empty });
 }

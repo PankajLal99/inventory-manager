@@ -1236,7 +1236,14 @@ def _parse_ledger_datetime(value):
 
 
 def _can_manage_credit_records(user):
-    """Only Admin and Super may edit/void credit invoices, returns, and manual ledger entries."""
+    """Only Admin and Super may edit/void credit invoices, returns, and manual ledger entries.
+
+    Accounts group is always denied (view-only for destructive credit actions).
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.groups.filter(name__iexact='Account').exists() or user.groups.filter(name__iexact='Accounts').exists():
+        return False
     if getattr(user, 'is_superuser', False):
         return True
     return user.groups.filter(name__in=['Super', 'Admin']).exists()
@@ -1655,9 +1662,9 @@ def _credit_days_since_last_payment(last_payment_at, last_sale_at):
     """Days since last payment; if never paid, days since last sale debit."""
     today = timezone.localdate()
     if last_payment_at:
-        return (today - last_payment_at.date()).days
+        return (today - timezone.localtime(last_payment_at).date()).days
     if last_sale_at:
-        return (today - last_sale_at.date()).days
+        return (today - timezone.localtime(last_sale_at).date()).days
     return None
 
 
@@ -1845,9 +1852,9 @@ def credit_ledger_by_customer(request):
             'net_amount': str(total_debit - total_credit),
             'entry_count': row.entry_count or 0,
             'latest_description': row.latest_description or '',
-            'last_activity_at': row.last_activity_at.isoformat() if row.last_activity_at else None,
-            'last_payment_at': row.last_payment_at.isoformat() if row.last_payment_at else None,
-            'last_sale_at': row.last_sale_at.isoformat() if row.last_sale_at else None,
+            'last_activity_at': timezone.localtime(row.last_activity_at).isoformat() if row.last_activity_at else None,
+            'last_payment_at': timezone.localtime(row.last_payment_at).isoformat() if row.last_payment_at else None,
+            'last_sale_at': timezone.localtime(row.last_sale_at).isoformat() if row.last_sale_at else None,
             'days_since_last_payment': days_since,
             'collection_status': collection_status,
             'collection_reason': row.collection_reason or '',

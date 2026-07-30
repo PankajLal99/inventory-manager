@@ -106,7 +106,7 @@ export default function CreditLogin() {
               Main login
             </Link>
             <span className="block mt-1 text-xs text-gray-400">
-              Both logins can stay active at once.
+              Accounts group: use this Credit login only (no main POS access).
             </span>
           </div>
         </form>

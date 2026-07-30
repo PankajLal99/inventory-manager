@@ -31,7 +31,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import Modal from '../../components/ui/Modal';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
-import { canManageCreditRecords } from './creditLedgerUtils';
+import { canManageCreditRecords, isAccountsUser } from './creditLedgerUtils';
 
 type ListMode = 'sale' | 'return';
 
@@ -59,6 +59,7 @@ export default function CreditInvoices() {
   const [showFilters, setShowFilters] = useState(true);
   const [voidTarget, setVoidTarget] = useState<VoidTarget | null>(null);
   const canManage = canManageCreditRecords();
+  const hideNetSummary = isAccountsUser();
 
   const setMode = (next: ListMode) => {
     const params = new URLSearchParams(searchParams);
@@ -202,7 +203,11 @@ export default function CreditInvoices() {
 
       <div className="space-y-2">
         <p className="text-sm font-medium text-gray-500">Summary for selected date range</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-6">
+        <div
+          className={`grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 ${
+            hideNetSummary ? 'xl:grid-cols-3' : 'xl:grid-cols-4'
+          }`}
+        >
           <Card>
             <div className="flex items-center justify-between">
               <div>
@@ -231,19 +236,21 @@ export default function CreditInvoices() {
               </div>
             </div>
           </Card>
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Net (Sales − Returns)</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  ₹{formatNumber(totalSales - totalReturns)}
-                </p>
+          {!hideNetSummary ? (
+            <Card>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Net (Sales − Returns)</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">
+                    ₹{formatNumber(totalSales - totalReturns)}
+                  </p>
+                </div>
+                <div className="p-3 bg-blue-100 rounded-lg">
+                  <Coins className="h-6 w-6 text-blue-600" />
+                </div>
               </div>
-              <div className="p-3 bg-blue-100 rounded-lg">
-                <Coins className="h-6 w-6 text-blue-600" />
-              </div>
-            </div>
-          </Card>
+            </Card>
+          ) : null}
           <Card>
             <div className="flex items-center justify-between">
               <div>

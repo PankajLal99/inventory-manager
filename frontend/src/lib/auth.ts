@@ -143,4 +143,22 @@ export const auth = {
 
   isMainAuthenticated: () => !!localStorage.getItem(MAIN_ACCESS),
   isCreditAuthenticated: () => !!localStorage.getItem(CREDIT_ACCESS),
+
+  /**
+   * Move the main JWT into the credit portal session and clear main.
+   * Used when Accounts users land on the main login / main app.
+   */
+  promoteMainSessionToCredit: async () => {
+    const access = localStorage.getItem(MAIN_ACCESS);
+    const refresh = localStorage.getItem(MAIN_REFRESH);
+    if (!access) {
+      throw new Error('Not authenticated');
+    }
+    localStorage.setItem(CREDIT_ACCESS, access);
+    if (refresh) localStorage.setItem(CREDIT_REFRESH, refresh);
+    localStorage.removeItem(MAIN_ACCESS);
+    localStorage.removeItem(MAIN_REFRESH);
+    mainUser = null;
+    return auth.loadUser('credit');
+  },
 };
