@@ -6,6 +6,7 @@ import Badge from '../../components/ui/Badge';
 import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { formatAppDate, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import Button from '../../components/ui/Button';
+import Modal from '../../components/ui/Modal';
 
 const PRODUCT_INVOICES_PAGE_SIZE = 20;
 
@@ -23,6 +24,7 @@ export default function ProductDetail() {
   const navigate = useNavigate();
   const productId = parseInt(id || '0');
   const [expandedTags, setExpandedTags] = useState<Record<string, boolean>>({ new: true, returned: true, sold: false });
+  const [productImagePreview, setProductImagePreview] = useState<{ src: string; title: string } | null>(null);
 
   const { data: product, isLoading, error } = useQuery({
     queryKey: ['product', productId],
@@ -99,14 +101,22 @@ export default function ProductDetail() {
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-4">
           {p.image && (
-            <img
-              src={p.image}
-              alt={p.name}
-              className="w-16 h-16 object-cover rounded-lg"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
-            />
+            <button
+              type="button"
+              onClick={() => setProductImagePreview({ src: p.image, title: p.name })}
+              className="flex-shrink-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              title="View product picture"
+              aria-label="View product picture"
+            >
+              <img
+                src={p.image}
+                alt={p.name}
+                className="w-16 h-16 object-cover rounded-lg cursor-zoom-in hover:opacity-90 transition-opacity"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            </button>
           )}
           <h1 className="text-3xl font-bold text-gray-900">{p.name}</h1>
         </div>
@@ -114,6 +124,23 @@ export default function ProductDetail() {
           {p.is_active ? 'Active' : 'Inactive'}
         </Badge>
       </div>
+
+      {productImagePreview && (
+        <Modal
+          isOpen={Boolean(productImagePreview)}
+          onClose={() => setProductImagePreview(null)}
+          title={productImagePreview.title}
+          size="lg"
+        >
+          <div className="flex justify-center p-1">
+            <img
+              src={productImagePreview.src}
+              alt=""
+              className="max-h-[72vh] w-auto max-w-full rounded-md object-contain"
+            />
+          </div>
+        </Modal>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl shadow p-6">
