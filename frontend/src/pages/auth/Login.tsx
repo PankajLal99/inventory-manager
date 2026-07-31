@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { auth } from '../../lib/auth';
-import { isAccountsUser } from '../credit/creditLedgerUtils';
+import { isAccountsOnlyUser } from '../credit/creditLedgerUtils';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 
 export default function Login() {
@@ -19,7 +19,7 @@ export default function Login() {
       try {
         const user = auth.getUser('main') || (await auth.loadUser('main'));
         if (cancelled) return;
-        if (isAccountsUser(user)) {
+        if (isAccountsOnlyUser(user)) {
           try {
             await auth.promoteMainSessionToCredit();
           } catch {
@@ -47,7 +47,7 @@ export default function Login() {
       await auth.login(username, password, { creditPortal: false });
       // Always re-load so group list is fresh after login
       const user = await auth.loadUser('main');
-      if (isAccountsUser(user)) {
+      if (isAccountsOnlyUser(user)) {
         try {
           await auth.promoteMainSessionToCredit();
         } catch {
@@ -143,7 +143,7 @@ export default function Login() {
               Credit login
             </Link>
             <span className="block mt-1 text-xs text-gray-400">
-              Accounts users must use Credit login only.
+              Accounts-only users must use Credit login.
             </span>
           </div>
         </form>

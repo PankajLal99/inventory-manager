@@ -31,7 +31,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import Modal from '../../components/ui/Modal';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
-import { canEditCreditRecords, canManageCreditRecords, isAccountsUser } from './creditLedgerUtils';
+import { canEditCreditRecords, canManageCreditRecords, isAccountsOnlyUser } from './creditLedgerUtils';
 
 type ListMode = 'sale' | 'return';
 
@@ -60,7 +60,7 @@ export default function CreditInvoices() {
   const [voidTarget, setVoidTarget] = useState<VoidTarget | null>(null);
   const canManage = canManageCreditRecords();
   const canEdit = canEditCreditRecords();
-  const hideNetSummary = isAccountsUser();
+  const hideNetSummary = isAccountsOnlyUser();
 
   const setMode = (next: ListMode) => {
     const params = new URLSearchParams(searchParams);

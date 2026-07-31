@@ -1,7 +1,7 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect, useMemo, useState } from 'react';
 import { auth } from '../../lib/auth';
-import { isAccountsUser } from '../../pages/credit/creditLedgerUtils';
+import { isAccountsOnlyUser } from '../../pages/credit/creditLedgerUtils';
 import {
   Coins,
   FileText,
@@ -64,7 +64,7 @@ export default function CreditLayout() {
   };
 
   const { pathname } = location;
-  const accountsOnly = isAccountsUser(user);
+  const accountsOnly = isAccountsOnlyUser(user);
   const navItems = useMemo(
     () => NAV.filter((item) => !(item.mainOnly && accountsOnly)),
     [accountsOnly]

@@ -5,7 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './lib/toast';
 import { auth } from './lib/auth';
 import { isCreditAppPath } from './lib/authPaths';
-import { isAccountsUser } from './pages/credit/creditLedgerUtils';
+import { isAccountsOnlyUser } from './pages/credit/creditLedgerUtils';
 import Login from './pages/auth/Login';
 import CreditLogin from './pages/auth/CreditLogin';
 import Register from './pages/auth/Register';
@@ -85,7 +85,8 @@ export const getCacheConfig = () => ({
 /**
  * Main + credit can be logged in at the same time (separate tokens).
  * Credit URLs are credit-session only (not shown in the main app).
- * Accounts group may only use the credit portal — never the main POS/system.
+ * Accounts-only users may only use the credit portal — never the main POS/system.
+ * Users with Accounts plus any other group keep main-app access.
  */
 function AppShell() {
   const location = useLocation();
@@ -107,12 +108,12 @@ function AppShell() {
         return;
       }
 
-      // Main URL with only a credit session (e.g. Accounts opened /pos)
+      // Main URL with only a credit session (e.g. Accounts-only opened /pos)
       if (!auth.isMainAuthenticated() && auth.isCreditAuthenticated()) {
         if (!cancelled) setCheckingAccounts(true);
         try {
           const user = auth.getUser('credit') || (await auth.loadUser('credit'));
-          if (!cancelled && isAccountsUser(user)) {
+          if (!cancelled && isAccountsOnlyUser(user)) {
             setAccountsRedirect('/pos-credit');
             setCheckingAccounts(false);
             return;
@@ -139,7 +140,7 @@ function AppShell() {
       try {
         const user = auth.getUser('main') || (await auth.loadUser('main'));
         if (cancelled) return;
-        if (isAccountsUser(user)) {
+        if (isAccountsOnlyUser(user)) {
           try {
             await auth.promoteMainSessionToCredit();
           } catch {
@@ -186,10 +187,10 @@ function AppShell() {
   }
 
   if (!auth.isMainAuthenticated()) {
-    // Accounts (credit-only) users who open /pos or other main URLs stay in credit app
+    // Accounts-only users who open /pos or other main URLs stay in credit app
     if (auth.isCreditAuthenticated()) {
       const creditUser = auth.getUser('credit');
-      if (creditUser && isAccountsUser(creditUser)) {
+      if (creditUser && isAccountsOnlyUser(creditUser)) {
         return <Navigate to="/pos-credit" replace />;
       }
     }
@@ -202,7 +203,7 @@ function FullAppOnly({ children }: { children: React.ReactNode }) {
   if (!auth.isMainAuthenticated()) {
     return <Navigate to="/login" replace />;
   }
-  if (isAccountsUser(auth.getUser('main'))) {
+  if (isAccountsOnlyUser(auth.getUser('main'))) {
     return <Navigate to="/pos-credit" replace />;
   }
   return <>{children}</>;

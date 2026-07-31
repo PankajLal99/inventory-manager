@@ -10,9 +10,25 @@ function userGroupNames(user = auth.getUser()): string[] {
   }).filter(Boolean);
 }
 
-/** Django group "Account" / "Accounts" — credit portal only; no main POS. */
+function isAccountGroupName(name: string): boolean {
+  return name === 'account' || name === 'accounts';
+}
+
+/** Django group "Account" / "Accounts" — membership check (may also have other groups). */
 export function isAccountsUser(user = auth.getUser()): boolean {
-  return userGroupNames(user).some((g) => g === 'account' || g === 'accounts');
+  return userGroupNames(user).some(isAccountGroupName);
+}
+
+/**
+ * True only when the user has Account/Accounts and no other groups.
+ * These users are forced into the credit portal. Users with Accounts + Counter/Admin/etc.
+ * stay in the main app.
+ */
+export function isAccountsOnlyUser(user = auth.getUser()): boolean {
+  const groups = userGroupNames(user);
+  if (groups.length === 0) return false;
+  if (!groups.some(isAccountGroupName)) return false;
+  return groups.every(isAccountGroupName);
 }
 
 /**
@@ -34,9 +50,9 @@ export function canEditCreditRecords(user = auth.getUser()): boolean {
   return canManageCreditRecords(user);
 }
 
-/** Total receivable KPI is hidden from Account(s). */
+/** Total receivable KPI is hidden from Accounts-only users. */
 export function canSeeCreditReceivableKpi(user = auth.getUser()): boolean {
-  return !isAccountsUser(user);
+  return !isAccountsOnlyUser(user);
 }
 
 export type CollectionStatus = 'good' | 'warning' | 'danger';
