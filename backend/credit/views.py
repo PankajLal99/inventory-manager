@@ -904,7 +904,7 @@ def credit_invoice_update(request, pk):
     Ledger: update the original sale debit amount in place and
     customer.balance += (new_total - old_total).
     """
-    if not _can_manage_credit_records(request.user):
+    if not _can_edit_credit_records(request.user):
         return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     try:
@@ -1236,9 +1236,9 @@ def _parse_ledger_datetime(value):
 
 
 def _can_manage_credit_records(user):
-    """Only Admin and Super may edit/void credit invoices, returns, and manual ledger entries.
+    """Only Admin and Super may void credit invoices/returns and delete ledger entries.
 
-    Accounts group is always denied (view-only for destructive credit actions).
+    Accounts group is always denied for these destructive actions.
     """
     if not user or not getattr(user, 'is_authenticated', False):
         return False
@@ -1247,6 +1247,18 @@ def _can_manage_credit_records(user):
     if getattr(user, 'is_superuser', False):
         return True
     return user.groups.filter(name__in=['Super', 'Admin']).exists()
+
+
+def _can_edit_credit_records(user):
+    """Admin, Super, and Account(s) may edit credit invoices and returns.
+
+    Void/delete stays gated by _can_manage_credit_records.
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if user.groups.filter(name__iexact='Account').exists() or user.groups.filter(name__iexact='Accounts').exists():
+        return True
+    return _can_manage_credit_records(user)
 
 
 @api_view(['POST'])
@@ -2351,7 +2363,7 @@ def credit_return_update(request, pk):
     customer.balance -= (new_total - old_total).
     Also adjusts CreditInvoiceItem.returned_quantity for linked lines.
     """
-    if not _can_manage_credit_records(request.user):
+    if not _can_edit_credit_records(request.user):
         return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     try:
