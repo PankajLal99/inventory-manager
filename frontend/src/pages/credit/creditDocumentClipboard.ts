@@ -107,18 +107,27 @@ export async function buildCreditDocumentSnapshotBlobs(
   input: CreditDocumentClipboardInput
 ): Promise<Blob[]> {
   const items = input.items || [];
-  const rows: CartSnapshotRow[] = items.map((item, idx) => ({
-    idx: idx + 1,
-    name: item.product_name || 'Item',
-    qty: Math.round(parseFloat(String(item.quantity ?? '0')) || 0),
-    unitPrice: parseFloat(String(item.unit_price ?? '0')) || 0,
-    lineTotal: parseFloat(String(item.line_total ?? '0')) || 0,
-  }));
+  const rows: CartSnapshotRow[] = items.map((item, idx) => {
+    const rawQty = Math.round(parseFloat(String(item.quantity ?? '0')) || 0);
+    const qty = input.variant === 'return' ? Math.abs(rawQty) : rawQty;
+    const rawPrice = parseFloat(String(item.unit_price ?? '0')) || 0;
+    const unitPrice = input.variant === 'return' ? Math.abs(rawPrice) : rawPrice;
+    const rawLine = parseFloat(String(item.line_total ?? '0')) || qty * unitPrice;
+    const lineTotal = input.variant === 'return' ? Math.abs(rawLine) : rawLine;
+    return {
+      idx: idx + 1,
+      name: item.product_name || 'Item',
+      qty,
+      unitPrice,
+      lineTotal,
+    };
+  });
 
   const totalQty = rows.reduce((sum, row) => sum + row.qty, 0);
-  const totalAmt =
+  const totalAmtRaw =
     parseFloat(String(input.total ?? 0)) ||
     rows.reduce((sum, row) => sum + row.lineTotal, 0);
+  const totalAmt = input.variant === 'return' ? Math.abs(totalAmtRaw) : totalAmtRaw;
   const rowChunks = chunkSnapshotRows(rows, SNAPSHOT_ROWS_PER_PAGE);
   const blobs: Blob[] = [];
   let lineOffset = 0;

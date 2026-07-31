@@ -608,14 +608,6 @@ export default function CreditInvoiceDetail() {
                 ₹{formatNumber(invoice.total ?? '0')}
               </span>
             </div>
-            {invoice.customer_balance != null ? (
-              <div className="flex justify-between items-center py-2 bg-amber-900/5 rounded-lg px-3 border border-amber-200">
-                <span className="text-sm font-semibold text-amber-900">Balance (ledger)</span>
-                <span className="text-sm font-bold text-amber-900">
-                  ₹{formatNumber(invoice.customer_balance)}
-                </span>
-              </div>
-            ) : null}
             <div className="flex justify-between items-center py-2 bg-amber-50 rounded-lg px-3 border border-amber-100">
               <span className="text-sm font-medium text-amber-800">Posted to credit ledger</span>
               <span className="text-sm font-semibold text-amber-900">

@@ -82,6 +82,13 @@ function fmtQty(qty: number): string {
   return Number.isInteger(qty) ? String(qty) : formatAmountINR(qty);
 }
 
+/** Return docs: qty as "- (11)", unit as "- Pcs." */
+function fmtReturnQty(qty: number): string {
+  return `- (${fmtQty(Math.abs(qty))})`;
+}
+
+const RETURN_UNIT = '- Pcs.';
+
 function fmtMoney(amount: number): string {
   return `₹ ${formatAmountINR(amount)}`;
 }
@@ -129,10 +136,12 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   const shopName = input.shop_name?.trim() || CREDIT_SHOP_NAME;
 
   const rows = items.map((item, idx) => {
-    const qty = Math.round(parseFloat(String(item.quantity ?? 0)) || 0);
-    const price = parseFloat(String(item.unit_price ?? 0)) || 0;
-    const amount =
+    const rawQty = Math.round(parseFloat(String(item.quantity ?? 0)) || 0);
+    const qty = Math.abs(rawQty);
+    const price = Math.abs(parseFloat(String(item.unit_price ?? 0)) || 0);
+    const rawAmount =
       parseFloat(String(item.line_total ?? qty * price)) || qty * price;
+    const amount = isReturn ? Math.abs(rawAmount) : rawAmount;
     return {
       idx: lineOffset + idx + 1,
       name: item.product_name || '—',
@@ -143,18 +152,16 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   });
 
   const pageQty = rows.reduce((s, r) => s + r.qty, 0);
-  const totalQty =
+  const totalQtyRaw =
     typeof input.totalQty === 'number' ? input.totalQty : pageQty;
+  const totalQty = isReturn ? Math.abs(totalQtyRaw) : totalQtyRaw;
   const totalItems =
     typeof input.totalItems === 'number' ? input.totalItems : items.length;
-  const totalAmt =
+  const totalAmtRaw =
     parseAmount(input.total) || rows.reduce((s, r) => s + r.amount, 0);
-  const subtotalAmt = parseAmount(input.subtotal) || totalAmt;
-
-  // Previous/old balance is intentionally hidden on credit invoice images.
-  const closingBal =
-    input.customer_balance != null ? parseAmount(input.customer_balance) : null;
-  const hasClosingBalance = closingBal != null;
+  const totalAmt = isReturn ? Math.abs(totalAmtRaw) : totalAmtRaw;
+  const subtotalAmtRaw = parseAmount(input.subtotal) || totalAmt;
+  const subtotalAmt = isReturn ? Math.abs(subtotalAmtRaw) : subtotalAmtRaw;
 
   const partNote =
     partCount > 1
@@ -168,14 +175,26 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
       ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:${FONT.xs};font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b91c1c;background:#fee2e2;color:#b91c1c;">Void</div>`
       : '';
 
+  const returnBadge = isReturn
+    ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:${FONT.xs};font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b45309;background:#fef3c7;color:#92400e;">Return Invoice</div>`
+    : '';
+
+  const qtyDisplay = (qty: number) =>
+    isReturn ? fmtReturnQty(qty) : fmtQty(qty);
+  const unitDisplay = isReturn ? RETURN_UNIT : 'Pcs.';
+  const qtyWithUnit = (qty: number) =>
+    isReturn
+      ? `${fmtReturnQty(qty)} ${RETURN_UNIT}`
+      : `${fmtQty(qty)} Pcs.`;
+
   const cellPad = '7px 8px';
   const bodyRows = rows
     .map(
       (r, i) => `<tr style="background:${i % 2 === 1 ? THEME.rowAlt : THEME.white};">
       <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:center;width:42px;font-size:${FONT.sm};color:${THEME.secondaryMuted};font-weight:600;">${r.idx}</td>
       <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:left;font-size:${FONT.sm};font-weight:600;color:${THEME.text};">${escapeHtml(r.name)}</td>
-      <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:right;width:64px;font-size:${FONT.sm};font-weight:600;">${escapeHtml(fmtQty(r.qty))}</td>
-      <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:center;width:52px;font-size:${FONT.sm};color:${THEME.textMuted};">Pcs.</td>
+      <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:right;width:${isReturn ? '78' : '64'}px;font-size:${FONT.sm};font-weight:600;">${escapeHtml(qtyDisplay(r.qty))}</td>
+      <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:center;width:${isReturn ? '64' : '52'}px;font-size:${FONT.sm};color:${THEME.textMuted};">${escapeHtml(unitDisplay)}</td>
       <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:right;width:80px;font-size:${FONT.sm};">${escapeHtml(formatAmountINR(r.price))}</td>
       <td style="border:1px solid ${THEME.primaryBorder};padding:${cellPad};text-align:right;width:96px;font-size:${FONT.sm};font-weight:700;color:${THEME.secondary};">${escapeHtml(formatAmountINR(r.amount))}</td>
     </tr>`
@@ -190,7 +209,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
     ? `<tr>
       <td style="border:1px solid ${THEME.secondaryMuted};padding:${cellPad};background:${THEME.tableHead};"></td>
       <td style="border:1px solid ${THEME.secondaryMuted};padding:${cellPad};background:${THEME.tableHead};font-size:${FONT.sm};font-weight:700;color:${THEME.secondary};">Total Quantity</td>
-      <td colspan="2" style="border:1px solid ${THEME.secondaryMuted};padding:${cellPad};background:${THEME.tableHead};text-align:right;font-size:${FONT.sm};font-weight:700;color:${THEME.secondary};">${escapeHtml(fmtQty(totalQty))} Pcs.</td>
+      <td colspan="2" style="border:1px solid ${THEME.secondaryMuted};padding:${cellPad};background:${THEME.tableHead};text-align:right;font-size:${FONT.sm};font-weight:700;color:${THEME.secondary};">${escapeHtml(qtyWithUnit(totalQty))}</td>
       <td style="border:1px solid ${THEME.secondaryMuted};padding:${cellPad};background:${THEME.tableHead};"></td>
       <td style="border:1px solid ${THEME.secondaryMuted};padding:${cellPad};background:${THEME.tableHead};"></td>
     </tr>`
@@ -204,7 +223,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
     ? `
       <tr>
         <td style="${summaryRowStyle}${summaryLabel}">Total Items</td>
-        <td style="${summaryRowStyle}${summaryValue}">${escapeHtml(String(totalItems))} ${totalItems === 1 ? 'Line' : 'Lines'} · ${escapeHtml(fmtQty(totalQty))} Pcs.</td>
+        <td style="${summaryRowStyle}${summaryValue}">${escapeHtml(String(totalItems))} ${totalItems === 1 ? 'Line' : 'Lines'} · ${escapeHtml(qtyWithUnit(totalQty))}</td>
       </tr>
       <tr>
         <td style="${summaryRowStyle}${summaryLabel}">Sub Total</td>
@@ -213,16 +232,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
       <tr>
         <td style="padding:9px 14px;font-size:${FONT.sm};color:${THEME.white};font-weight:700;background:${THEME.primary};border-bottom:1px solid ${THEME.secondaryMuted};">Total</td>
         <td style="padding:9px 14px;font-size:${FONT.sm};text-align:right;font-weight:800;color:${THEME.white};background:${THEME.primary};border-bottom:1px solid ${THEME.secondaryMuted};">${escapeHtml(fmtMoney(totalAmt))}</td>
-      </tr>
-      ${
-        hasClosingBalance
-          ? `
-      <tr>
-        <td style="padding:9px 14px;font-size:${FONT.sm};color:${THEME.white};font-weight:700;background:${THEME.secondary};">Balance (Ledger)</td>
-        <td style="padding:9px 14px;font-size:${FONT.sm};text-align:right;font-weight:800;color:${THEME.white};background:${THEME.secondary};">${escapeHtml(fmtMoney(closingBal ?? 0))}</td>
       </tr>`
-          : ''
-      }`
     : '';
 
   const summaryBlock = showTotals
@@ -298,6 +308,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
           <div style="font-size:${FONT.xs};font-weight:700;color:${THEME.secondary};text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Bill To</div>
           <div style="font-size:${FONT.lg};font-weight:800;text-transform:uppercase;letter-spacing:0.2px;color:${THEME.text};line-height:1.25;">${escapeHtml(input.customer_name || '—')}</div>
           ${input.customer_phone ? `<div style="font-size:${FONT.sm};color:${THEME.textMuted};margin-top:4px;font-weight:600;">${escapeHtml(input.customer_phone)}</div>` : ''}
+          ${returnBadge}
           ${voidBadge}
           ${partNote}
         </td>

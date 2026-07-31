@@ -1,18 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Ban,
   BookOpen,
+  Camera,
+  Download,
   Pencil,
+  Printer,
   Search,
   Trash2,
   Undo2,
   User,
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import { creditApi } from '../../lib/api';
-import { amountForInput, formatAmountINR, formatNumber, toLocalDateString } from '../../lib/utils';
+import {
+  amountForInput,
+  formatAmountINR,
+  formatNumber,
+  getTodayDateString,
+  toLocalDateString,
+} from '../../lib/utils';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -25,6 +36,11 @@ import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { formatCreditInvoiceDate } from './creditLedgerUtils';
 import { canEditCreditRecords, canManageCreditRecords } from './creditLedgerUtils';
+import {
+  buildCreditInvoiceHtml,
+  CREDIT_INVOICE_CAPTURE_HEIGHT,
+  CREDIT_INVOICE_CAPTURE_WIDTH,
+} from './creditInvoiceHtml';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -74,7 +90,10 @@ export default function CreditReturnDetail() {
   const [editDate, setEditDate] = useState('');
   const [productSearch, setProductSearch] = useState('');
   const [debouncedProductSearch, setDebouncedProductSearch] = useState('');
+  const [exporting, setExporting] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const pdfFrameRef = useRef<HTMLIFrameElement>(null);
+  const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const tid = Math.random().toString(36).slice(2);
@@ -255,6 +274,143 @@ export default function CreditReturnDetail() {
     updateMutation.mutate(payload);
   };
 
+  const returnDocInput = creditReturn
+    ? {
+        variant: 'return' as const,
+        invoice_number: creditReturn.return_number,
+        customer_name: creditReturn.customer_name,
+        customer_phone: creditReturn.customer_phone,
+        store_name: creditReturn.store_name,
+        created_at: creditReturn.created_at,
+        subtotal: creditReturn.subtotal ?? creditReturn.total,
+        total: creditReturn.total,
+        notes: creditReturn.notes,
+        status: creditReturn.status,
+        totalItems: (creditReturn.items || []).length,
+        items: (creditReturn.items || []).map((item: any) => ({
+          product_name: item.product_name,
+          quantity: Math.abs(Math.round(parseFloat(String(item.quantity ?? 0)) || 0)),
+          unit_price: Math.abs(parseFloat(String(item.unit_price ?? 0)) || 0),
+          line_total: Math.abs(parseFloat(String(item.line_total ?? 0)) || 0),
+        })),
+        showTotals: true,
+      }
+    : null;
+
+  const previewHtml = returnDocInput ? buildCreditInvoiceHtml(returnDocInput) : '';
+
+  const handlePrint = () => {
+    const iframe = invoicePreviewRef.current;
+    const win = iframe?.contentWindow;
+    if (!win) {
+      window.print();
+      return;
+    }
+    win.focus();
+    win.print();
+  };
+
+  const captureFromIframe = async () => {
+    const iframe = pdfFrameRef.current;
+    const doc = iframe?.contentDocument;
+    if (!iframe || !doc || !returnDocInput) {
+      throw new Error('PDF preview not ready');
+    }
+
+    const html = buildCreditInvoiceHtml(returnDocInput);
+    doc.open();
+    doc.write(html);
+    doc.close();
+    await new Promise((r) => window.setTimeout(r, 150));
+
+    const root = doc.getElementById('credit-invoice-root') || doc.body;
+    const w = CREDIT_INVOICE_CAPTURE_WIDTH;
+    const h = Math.max(
+      CREDIT_INVOICE_CAPTURE_HEIGHT,
+      Math.ceil(
+        (root as HTMLElement).scrollHeight || (root as HTMLElement).offsetHeight || 1
+      )
+    );
+    iframe.style.height = `${h + 8}px`;
+
+    return html2canvas(root as HTMLElement, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      windowWidth: w,
+      windowHeight: h,
+      width: w,
+      height: h,
+    });
+  };
+
+  const handlePdf = async () => {
+    if (!creditReturn || !returnDocInput) return;
+    setExporting(true);
+    try {
+      const canvas = await captureFromIframe();
+      const img = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 8;
+      const usableWidth = pageWidth - margin * 2;
+      const imgHeight = (canvas.height * usableWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = margin;
+
+      pdf.addImage(img, 'PNG', margin, position, usableWidth, imgHeight);
+      heightLeft -= pageHeight - margin * 2;
+      while (heightLeft > 0) {
+        position = margin - (imgHeight - heightLeft);
+        pdf.addPage();
+        pdf.addImage(img, 'PNG', margin, position, usableWidth, imgHeight);
+        heightLeft -= pageHeight - margin * 2;
+      }
+
+      const name = `credit_return_${(creditReturn.return_number || id || 'doc').replace(/\s+/g, '_')}_${getTodayDateString()}.pdf`;
+      pdf.save(name);
+      showToast('PDF downloaded', 'success');
+    } catch (e: any) {
+      console.error(e);
+      showToast(e?.message || 'Failed to create PDF', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleCapturePhoto = async () => {
+    if (!creditReturn || !returnDocInput) return;
+    setExporting(true);
+    try {
+      const canvas = await captureFromIframe();
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png', 1)
+      );
+      if (!blob) {
+        showToast('Failed to create image', 'error');
+        return;
+      }
+      const canWriteImage =
+        typeof navigator !== 'undefined' &&
+        !!navigator.clipboard &&
+        typeof (window as any).ClipboardItem !== 'undefined';
+      if (!canWriteImage) {
+        showToast('Image clipboard not supported in this browser', 'error');
+        return;
+      }
+      await navigator.clipboard.write([
+        new (window as any).ClipboardItem({ 'image/png': blob }),
+      ]);
+      showToast('Return image copied to clipboard', 'success');
+    } catch (e: any) {
+      showToast(e?.message || 'Failed to copy image', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (isLoading) return <LoadingState />;
   if (error || !creditReturn) {
     return <ErrorState message="Failed to load credit return" onRetry={() => refetch()} />;
@@ -332,6 +488,30 @@ export default function CreditReturnDetail() {
                       <span className="hidden sm:inline">Edit</span>
                     </Button>
                   ) : null}
+                  <Button variant="outline" size="sm" onClick={handlePrint} className="flex-1 sm:flex-none">
+                    <Printer className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">Print</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCapturePhoto}
+                    disabled={exporting}
+                    className="flex-1 sm:flex-none"
+                  >
+                    <Camera className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">Photo</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handlePdf()}
+                    disabled={exporting}
+                    className="flex-1 sm:flex-none"
+                  >
+                    <Download className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">{exporting ? 'Saving…' : 'Download'}</span>
+                  </Button>
                 </div>
                 {canVoid ? (
                   <Button variant="danger" size="sm" onClick={() => setShowVoidConfirm(true)}>
@@ -380,7 +560,7 @@ export default function CreditReturnDetail() {
             ₹{formatNumber(parseFloat(String(creditReturn.total || 0)))}
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            {items.length} line{items.length === 1 ? '' : 's'} · {formatNumber(totalQty)} qty
+            {items.length} line{items.length === 1 ? '' : 's'} · - ({formatNumber(Math.abs(totalQty))}) - Pcs.
           </p>
         </Card>
       </div>
@@ -396,7 +576,9 @@ export default function CreditReturnDetail() {
             {items.map((item: any) => (
               <TableRow key={item.id}>
                 <TableCell className="font-medium">{item.product_name}</TableCell>
-                <TableCell>{formatNumber(parseFloat(String(item.quantity || 0)))}</TableCell>
+                <TableCell>
+                  - ({formatNumber(Math.abs(parseFloat(String(item.quantity || 0)) || 0))}) - Pcs.
+                </TableCell>
                 <TableCell>₹{formatNumber(parseFloat(String(item.unit_price || 0)))}</TableCell>
                 <TableCell>₹{formatNumber(parseFloat(String(item.line_total || 0)))}</TableCell>
                 <TableCell className="text-sm text-gray-600">
@@ -414,6 +596,98 @@ export default function CreditReturnDetail() {
           <p className="text-sm text-gray-800 mt-2 whitespace-pre-wrap">{creditReturn.notes}</p>
         </Card>
       ) : null}
+
+      <Card className="no-print">
+        <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Printer className="h-5 w-5 text-gray-400" />
+            A4 Print Preview
+          </h3>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <Button variant="outline" size="sm" onClick={handlePrint} className="flex-1 sm:flex-none">
+              <Printer className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Print</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCapturePhoto}
+              disabled={exporting}
+              className="flex-1 sm:flex-none"
+            >
+              <Camera className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Photo</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handlePdf()}
+              disabled={exporting}
+              className="flex-1 sm:flex-none"
+            >
+              <Download className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Download</span>
+            </Button>
+          </div>
+        </div>
+        <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-100 shadow-lg">
+          <div className="bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-700">A4 Credit Return Preview</span>
+            <span className="text-xs text-gray-500 hidden sm:inline">
+              This is how the return will appear when printed
+            </span>
+          </div>
+          <div
+            className="bg-gray-200 p-4 sm:p-8 flex justify-center overflow-auto"
+            style={{ maxHeight: '900px' }}
+          >
+            <div
+              className="bg-white shadow-2xl mx-auto"
+              style={{
+                width: '210mm',
+                minHeight: '297mm',
+                maxWidth: '100%',
+                boxShadow: '0 0 20px rgba(0,0,0,0.3)',
+              }}
+            >
+              <iframe
+                ref={invoicePreviewRef}
+                title="Credit Return A4 Preview"
+                srcDoc={previewHtml}
+                className="w-full border-0 block"
+                style={{
+                  width: '100%',
+                  minHeight: '297mm',
+                  border: 'none',
+                  display: 'block',
+                }}
+                onLoad={(e) => {
+                  const iframe = e.target as HTMLIFrameElement;
+                  if (iframe.contentWindow?.document?.body) {
+                    const body = iframe.contentWindow.document.body;
+                    const html = iframe.contentWindow.document.documentElement;
+                    const height = Math.max(
+                      body.scrollHeight,
+                      body.offsetHeight,
+                      html.clientHeight,
+                      html.scrollHeight,
+                      html.offsetHeight
+                    );
+                    iframe.style.height = `${height + 40}px`;
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <iframe
+        ref={pdfFrameRef}
+        title="credit-return-pdf"
+        className="fixed left-[-10000px] top-0 w-[794px] h-auto min-h-[1px] opacity-0 pointer-events-none border-0"
+        aria-hidden="true"
+      />
 
       <Modal isOpen={showVoidConfirm} onClose={() => setShowVoidConfirm(false)} title="Void credit return?">
         <div className="space-y-4">

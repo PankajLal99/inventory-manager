@@ -442,12 +442,12 @@ export default function POSCreditReturn() {
               customer_name: ret.customer_name || selectedCustomer.name,
               customer_phone: ret.customer_phone || selectedCustomer.phone,
               created_at: ret.created_at,
-              total: ret.total,
+              total: Math.abs(parseFloat(String(ret.total ?? 0)) || 0),
               items: (ret.items || []).map((item: any) => ({
                 product_name: item.product_name,
-                quantity: item.quantity,
-                unit_price: item.unit_price,
-                line_total: item.line_total,
+                quantity: Math.abs(Math.round(parseFloat(String(item.quantity ?? 0)) || 0)),
+                unit_price: Math.abs(parseFloat(String(item.unit_price ?? 0)) || 0),
+                line_total: Math.abs(parseFloat(String(item.line_total ?? 0)) || 0),
               })),
             },
             statementRes.data
