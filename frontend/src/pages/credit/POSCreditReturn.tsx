@@ -422,6 +422,17 @@ export default function POSCreditReturn() {
       const ret = res.data;
       const creditCustomerId =
         ret.customer || selectedCustomer.credit_customer_id || null;
+      const customerName = ret.customer_name || selectedCustomer.name;
+      const customerPhone = ret.customer_phone || selectedCustomer.phone;
+
+      // Clear basket immediately after save — don't wait on clipboard / image work.
+      setBasket([]);
+      setEditingQty({});
+      setEditingPrice({});
+      setProductSearch('');
+      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
 
       const iframe = documentSnapshotFrameRef.current;
       let clipboardCopied = false;
@@ -439,8 +450,8 @@ export default function POSCreditReturn() {
             {
               variant: 'return',
               invoice_number: ret.return_number,
-              customer_name: ret.customer_name || selectedCustomer.name,
-              customer_phone: ret.customer_phone || selectedCustomer.phone,
+              customer_name: customerName,
+              customer_phone: customerPhone,
               created_at: ret.created_at,
               total: Math.abs(parseFloat(String(ret.total ?? 0)) || 0),
               items: (ret.items || []).map((item: any) => ({
@@ -460,11 +471,6 @@ export default function POSCreditReturn() {
           console.error('Return + ledger clipboard copy failed:', copyErr);
         }
       }
-
-      setBasket([]);
-      queryClient.invalidateQueries({ queryKey: ['credit-returns'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
 
       if (
         clipboardCopied &&

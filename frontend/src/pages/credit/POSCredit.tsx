@@ -181,9 +181,25 @@ export default function POSCredit() {
   const draftSnapshotFrameRef = useRef<HTMLIFrameElement>(null);
   const cartTabsRef = useRef<CreditCartTab[]>([]);
   const lockChangeAtRef = useRef<Map<number, LocalLockChange>>(new Map());
+  /** Prevents in-flight sync from resurrecting a cart that just checked out. */
+  const recentlyCompletedCartIdsRef = useRef<Map<number, number>>(new Map());
   const snapshotPartsQueueRef = useRef<Blob[]>([]);
   const snapshotPartsTotalRef = useRef(0);
   const isCreatingCartRef = useRef(false);
+
+  const markCartRecentlyCompleted = useCallback((id: number) => {
+    recentlyCompletedCartIdsRef.current.set(id, Date.now());
+  }, []);
+
+  const isRecentlyCompletedCart = useCallback((id: number) => {
+    const at = recentlyCompletedCartIdsRef.current.get(id);
+    if (at == null) return false;
+    if (Date.now() - at > 60000) {
+      recentlyCompletedCartIdsRef.current.delete(id);
+      return false;
+    }
+    return true;
+  }, []);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [username, setUsername] = useState<string | null>(null);
@@ -305,7 +321,11 @@ export default function POSCredit() {
 
         for (const cartRow of backendCarts) {
           const cartStoreId = cartRow.store || currentStoreId;
-          if (cartRow.status === 'active' && cartStoreId === currentStoreId) {
+          if (
+            cartRow.status === 'active' &&
+            cartStoreId === currentStoreId &&
+            !isRecentlyCompletedCart(cartRow.id)
+          ) {
             const localTab = localTabs.find((t) => t.id === cartRow.id);
             const stateTab = cartTabsRef.current.find((t) => t.id === cartRow.id);
             mergedTabs.push({
@@ -329,7 +349,13 @@ export default function POSCredit() {
         }
 
         for (const localTab of localTabs) {
-          if (processedIds.has(localTab.id) || localTab.storeId !== currentStoreId) continue;
+          if (
+            processedIds.has(localTab.id) ||
+            localTab.storeId !== currentStoreId ||
+            isRecentlyCompletedCart(localTab.id)
+          ) {
+            continue;
+          }
           try {
             const cartResponse = await creditApi.carts.get(localTab.id);
             if (cartResponse.data?.status === 'active') {
@@ -391,7 +417,7 @@ export default function POSCredit() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [username, defaultStore?.id]
+    [username, defaultStore?.id, isRecentlyCompletedCart]
   );
 
   const createCartMutation = useMutation({
@@ -497,6 +523,8 @@ export default function POSCredit() {
   // Keep localStorage tab metadata in sync with active cart
   useEffect(() => {
     if (!cart || !username || !cartId) return;
+    if (isRecentlyCompletedCart(cartId)) return;
+    if (cart.status && cart.status !== 'active') return;
     const cartTab: CreditCartTab = {
       id: cart.id,
       cartNumber: cart.cart_number || `CCART-${cart.id}`,
@@ -549,7 +577,7 @@ export default function POSCredit() {
     } else if (!cart.customer) {
       setSelectedCustomer(null);
     }
-  }, [cart, username, cartId, defaultStore?.id, activeTabId]);
+  }, [cart, username, cartId, defaultStore?.id, activeTabId, isRecentlyCompletedCart]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedProductSearch(productSearch), 300);
@@ -978,6 +1006,41 @@ export default function POSCredit() {
     },
   });
 
+  const closeCartAfterCheckout = useCallback(
+    (completedCartId: number) => {
+      markCartRecentlyCompleted(completedCartId);
+      setIsDeletingCart(true);
+      queryClient.removeQueries({ queryKey: ['credit-cart', completedCartId] });
+      setEditingQty({});
+      setEditingPrice({});
+      setProductSearch('');
+      setSelectedCustomer(null);
+
+      if (username) {
+        const newActive = removeCreditCartTab(username, completedCartId);
+        const remaining = getUserCreditTabs(username);
+        setCartTabs(remaining);
+        if (newActive) {
+          setCartId(newActive);
+          setActiveTabId(newActive);
+          setActiveCreditTab(username, newActive);
+        } else {
+          setCartId(null);
+          setActiveTabId(null);
+          createCartMutation.mutate();
+        }
+      } else {
+        setCartId(null);
+        setActiveTabId(null);
+      }
+
+      // Allow cart queries again on the next tick after tab switch.
+      window.setTimeout(() => setIsDeletingCart(false), 0);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [username, queryClient, markCartRecentlyCompleted]
+  );
+
   const handleCheckout = () => {
     if (isCheckingOut) return;
     runGuarded(async () => {
@@ -1012,6 +1075,7 @@ export default function POSCredit() {
       return;
     }
 
+      const checkoutCartId = cartId;
       const payload: any = {
         created_at: dateStringWithCurrentTimeISO(invoiceDate),
       };
@@ -1020,10 +1084,17 @@ export default function POSCredit() {
       } else if (selectedCustomer.parties_customer_id) {
         payload.parties_customer_id = selectedCustomer.parties_customer_id;
       }
-      const res = await creditApi.carts.checkout(cartId, payload);
+      const res = await creditApi.carts.checkout(checkoutCartId, payload);
       const invoice = res.data;
       const creditCustomerId =
         invoice.customer || selectedCustomer.credit_customer_id || null;
+
+      // Close the cart immediately after save — don't wait on clipboard / image work.
+      closeCartAfterCheckout(checkoutCartId);
+      queryClient.invalidateQueries({ queryKey: ['credit-cart'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
 
       const documentInput = {
         invoice_number: invoice.invoice_number,
@@ -1070,26 +1141,6 @@ export default function POSCredit() {
           console.error('Invoice clipboard copy failed:', copyErr);
         }
       }
-
-      if (username && cartId) {
-        const newActive = removeCreditCartTab(username, cartId);
-        loadCartsFromStorage();
-        if (newActive) {
-          setCartId(newActive);
-          setActiveTabId(newActive);
-        } else {
-          setCartId(null);
-          setActiveTabId(null);
-          createCartMutation.mutate();
-        }
-      } else {
-        setCartId(null);
-      }
-      setSelectedCustomer(null);
-      queryClient.invalidateQueries({ queryKey: ['credit-cart'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-invoices'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
-      queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
 
       // Multi-page invoice: copy remaining pages here, then redirect to ledger.
       if (
