@@ -458,6 +458,12 @@ def credit_cart_detail(request, pk):
         return Response({'detail': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == 'GET':
+        # POS only works with active carts — completed/cancelled should not reload as a basket
+        if cart.status != 'active':
+            return Response(
+                {'detail': 'Cart is no longer active', 'status': cart.status},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         return Response(CreditCartSerializer(cart).data)
 
     if request.method == 'DELETE':

@@ -286,8 +286,18 @@ export default function POSCredit() {
     queryKey: ['credit-cart', cartId],
     queryFn: async () => {
       if (!cartId) return null;
-      const res = await creditApi.carts.get(cartId);
-      return res.data;
+      if (isRecentlyCompletedCart(cartId)) return null;
+      try {
+        const res = await creditApi.carts.get(cartId);
+        const data = res.data;
+        // Never show a checked-out / cancelled cart as the active POS basket
+        if (data?.status && data.status !== 'active') return null;
+        if (data?.id && isRecentlyCompletedCart(data.id)) return null;
+        return data;
+      } catch {
+        // 404 for completed carts, network errors, etc.
+        return null;
+      }
     },
     enabled: !!cartId && !isDeletingCart,
   });
@@ -454,7 +464,11 @@ export default function POSCredit() {
       setCartId(data.id);
       setActiveTabId(data.id);
       setSelectedCustomer(null);
-      syncCartsWithBackend(data.id).catch(() => undefined);
+      // Avoid immediate sync after checkout — it can race and briefly reattach
+      // the just-completed cart while its DB status is still flushing to clients.
+      window.setTimeout(() => {
+        syncCartsWithBackend(data.id).catch(() => undefined);
+      }, 500);
     },
     onError: (err: any) => {
       isCreatingCartRef.current = false;
@@ -611,7 +625,13 @@ export default function POSCredit() {
     enabled: debouncedCustomerSearch.trim().length >= 1,
   });
 
-  const cartItems = cart?.items || [];
+  const cartItems = useMemo(() => {
+    if (!cart || !cartId) return [];
+    if (cart.id != null && cart.id !== cartId) return [];
+    if (cart.status && cart.status !== 'active') return [];
+    if (isRecentlyCompletedCart(cartId)) return [];
+    return cart.items || [];
+  }, [cart, cartId, isRecentlyCompletedCart]);
   const cartTotal = useMemo(() => {
     return cartItems.reduce((sum: number, item: any) => sum + parseFloat(item.line_total || 0), 0);
   }, [cartItems]);
@@ -1010,35 +1030,64 @@ export default function POSCredit() {
     (completedCartId: number) => {
       markCartRecentlyCompleted(completedCartId);
       setIsDeletingCart(true);
+
+      // Wipe cached basket immediately so items can't flash / stay on screen
+      queryClient.setQueryData(['credit-cart', completedCartId], null);
       queryClient.removeQueries({ queryKey: ['credit-cart', completedCartId] });
+
       setEditingQty({});
       setEditingPrice({});
       setProductSearch('');
+      setCustomerSearch('');
       setSelectedCustomer(null);
+      snapshotPartsQueueRef.current = [];
+      snapshotPartsTotalRef.current = 0;
+      setSnapshotClipboardProgress(null);
 
       if (username) {
         const newActive = removeCreditCartTab(username, completedCartId);
-        const remaining = getUserCreditTabs(username);
+        const remaining = getUserCreditTabs(username).filter(
+          (t) => t.id !== completedCartId && !isRecentlyCompletedCart(t.id)
+        );
+        saveUserCreditCarts({
+          username,
+          tabs: remaining,
+          activeTabId:
+            newActive && newActive !== completedCartId && !isRecentlyCompletedCart(newActive)
+              ? newActive
+              : remaining.length
+                ? remaining[remaining.length - 1].id
+                : null,
+        });
         setCartTabs(remaining);
-        if (newActive) {
-          setCartId(newActive);
-          setActiveTabId(newActive);
-          setActiveCreditTab(username, newActive);
+
+        const nextId =
+          newActive && newActive !== completedCartId && !isRecentlyCompletedCart(newActive)
+            ? newActive
+            : remaining.length
+              ? remaining[remaining.length - 1].id
+              : null;
+
+        if (nextId) {
+          setCartId(nextId);
+          setActiveTabId(nextId);
+          setActiveCreditTab(username, nextId);
+          window.setTimeout(() => setIsDeletingCart(false), 0);
         } else {
           setCartId(null);
           setActiveTabId(null);
-          createCartMutation.mutate();
+          createCartMutation.mutate(undefined, {
+            onSettled: () => setIsDeletingCart(false),
+          });
         }
       } else {
         setCartId(null);
         setActiveTabId(null);
+        window.setTimeout(() => setIsDeletingCart(false), 0);
       }
-
-      // Allow cart queries again on the next tick after tab switch.
-      window.setTimeout(() => setIsDeletingCart(false), 0);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [username, queryClient, markCartRecentlyCompleted]
+    [username, queryClient, markCartRecentlyCompleted, isRecentlyCompletedCart]
   );
 
   const handleCheckout = () => {
@@ -1091,7 +1140,8 @@ export default function POSCredit() {
 
       // Close the cart immediately after save — don't wait on clipboard / image work.
       closeCartAfterCheckout(checkoutCartId);
-      queryClient.invalidateQueries({ queryKey: ['credit-cart'] });
+      // Do NOT invalidate ['credit-cart'] here — that refetches the just-closed cart
+      // while its observer is still mounted and can put items back on screen.
       queryClient.invalidateQueries({ queryKey: ['credit-invoices'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-customers'] });
       queryClient.invalidateQueries({ queryKey: ['credit-ledger-statement'] });
