@@ -160,9 +160,9 @@ export function collectionStatusLabel(status: CollectionStatus | string | undefi
     case 'good':
       return 'Paying on time';
     case 'warning':
-      return 'No payment 5+ days';
+      return 'No payment 7+ days';
     case 'danger':
-      return 'No payment 10+ days';
+      return 'No payment 12+ days';
     default:
       return '—';
   }

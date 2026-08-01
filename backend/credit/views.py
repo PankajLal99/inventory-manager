@@ -1683,18 +1683,18 @@ def _credit_days_since_last_payment(last_payment_at, last_sale_at):
 def _credit_collection_status(balance, days_since_last_payment):
     """
     Defaulter / collection status for credit ledger accounts:
-    - good (green): balance cleared or payment received within 4 days
-    - warning (yellow): no payment for 5–9 days while balance is due
-    - danger (red): no payment for 10+ days while balance is due
+    - good (green): balance cleared or payment within last 6 days
+    - warning (yellow): no payment for 7–11 days while balance is due
+    - danger (red): no payment for 12+ days while balance is due
     """
     bal = balance if isinstance(balance, Decimal) else Decimal(str(balance or 0))
     if bal <= 0:
         return 'good'
     if days_since_last_payment is None:
         return 'danger'
-    if days_since_last_payment >= 10:
+    if days_since_last_payment >= 12:
         return 'danger'
-    if days_since_last_payment >= 5:
+    if days_since_last_payment >= 7:
         return 'warning'
     return 'good'
 
@@ -1731,6 +1731,19 @@ def credit_ledger_by_customer(request):
     with_heart_raw = (request.query_params.get('with_heart') or '1').strip().lower()
     only_with_heart = with_heart_raw not in ('0', 'false', 'all', 'no')
     follow_up_filter = (request.query_params.get('follow_up') or '').strip().lower()
+    collection_status_filter = (
+        request.query_params.get('collection_status')
+        or request.query_params.get('status')
+        or ''
+    ).strip().lower()
+    # Map legacy follow_up values that meant “at risk” onto status filters if status not set
+    if not collection_status_filter and follow_up_filter in ('good', 'warning', 'danger', 'on_time', 'yellow', 'red'):
+        legacy_map = {
+            'on_time': 'good',
+            'yellow': 'warning',
+            'red': 'danger',
+        }
+        collection_status_filter = legacy_map.get(follow_up_filter, follow_up_filter)
 
     latest_desc = (
         CreditLedgerEntry.objects.filter(customer_id=OuterRef('pk'))
@@ -1826,6 +1839,7 @@ def credit_ledger_by_customer(request):
         qs = qs.exclude(balance=0)
 
     today = timezone.localdate()
+    # Keep follow-up date filters for any deep links; UI now uses collection_status
     if follow_up_filter in ('overdue', 'past'):
         qs = qs.filter(next_follow_up_date__lt=today)
     elif follow_up_filter in ('today', 'due_today'):
@@ -1845,6 +1859,9 @@ def credit_ledger_by_customer(request):
         balance = row.balance or Decimal('0')
         days_since = _credit_days_since_last_payment(row.last_payment_at, row.last_sale_at)
         collection_status = _credit_collection_status(balance, days_since)
+        if collection_status_filter in ('good', 'warning', 'danger'):
+            if collection_status != collection_status_filter:
+                continue
         total_debit = row.total_debit or Decimal('0')
         total_credit = row.total_credit or Decimal('0')
         total_received = row.total_received or Decimal('0')

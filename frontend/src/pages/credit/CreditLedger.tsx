@@ -81,7 +81,9 @@ export default function CreditLedger() {
     searchParams.get('with_balance') === '1'
   );
   const [customerGroup, setCustomerGroup] = useState(searchParams.get('customer_group') || '');
-  const [followUpFilter, setFollowUpFilter] = useState(searchParams.get('follow_up') || '');
+  const [collectionStatusFilter, setCollectionStatusFilter] = useState(
+    searchParams.get('collection_status') || searchParams.get('status') || ''
+  );
   const [withHeartOnly, setWithHeartOnly] = useState(searchParams.get('with_heart') !== '0');
 
   const [historyCustomer, setHistoryCustomer] = useState<CreditLedgerCustomerRow | null>(null);
@@ -107,7 +109,7 @@ export default function CreditLedger() {
     if (search.trim()) params.set('search', search.trim());
     if (withBalanceOnly) params.set('with_balance', '1');
     if (customerGroup) params.set('customer_group', customerGroup);
-    if (followUpFilter) params.set('follow_up', followUpFilter);
+    if (collectionStatusFilter) params.set('collection_status', collectionStatusFilter);
     if (!withHeartOnly) params.set('with_heart', '0');
     const query = params.toString();
     return query ? `/credit-ledger/${customerId}?${query}` : `/credit-ledger/${customerId}`;
@@ -156,7 +158,7 @@ export default function CreditLedger() {
     withBalanceOnly,
     customerGroup,
     withHeartOnly,
-    followUpFilter,
+    collectionStatusFilter,
   ] as const;
 
   const { data: customers = [], isLoading, error, refetch } = useQuery({
@@ -166,7 +168,7 @@ export default function CreditLedger() {
       if (search.trim()) params.search = search.trim();
       if (withBalanceOnly) params.with_balance = '1';
       if (customerGroup) params.customer_group = customerGroup;
-      if (followUpFilter) params.follow_up = followUpFilter;
+      if (collectionStatusFilter) params.collection_status = collectionStatusFilter;
       params.with_heart = withHeartOnly ? '1' : '0';
       const res = await creditApi.ledger.byCustomer(params);
       return (res.data || []) as CreditLedgerCustomerRow[];
@@ -373,7 +375,7 @@ export default function CreditLedger() {
     search.trim(),
     withBalanceOnly,
     customerGroup,
-    followUpFilter,
+    collectionStatusFilter,
     !withHeartOnly,
   ].filter(Boolean).length;
 
@@ -392,7 +394,7 @@ export default function CreditLedger() {
     setSearch('');
     setWithBalanceOnly(false);
     setCustomerGroup('');
-    setFollowUpFilter('');
+    setCollectionStatusFilter('');
     setWithHeartOnly(true);
     setSearchParams({});
   };
@@ -575,7 +577,7 @@ export default function CreditLedger() {
               >
                 {summary.atRisk}
               </p>
-              <p className="mt-1.5 text-xs text-stone-400">No pay 5+ days</p>
+              <p className="mt-1.5 text-xs text-stone-400">No pay 7+ days</p>
             </div>
             <div
               className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
@@ -603,11 +605,11 @@ export default function CreditLedger() {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className={`h-2 w-2 rounded-full ${collectionStatusDotClass('warning')}`} />
-              No pay 5+
+              No pay 7+
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className={`h-2 w-2 rounded-full ${collectionStatusDotClass('danger')}`} />
-              No pay 10+
+              No pay 12+
             </span>
           </div>
           {hasActiveFilters ? (
@@ -664,20 +666,18 @@ export default function CreditLedger() {
           </div>
 
           <Select
-            value={followUpFilter}
+            value={collectionStatusFilter}
             onChange={(e) => {
               const value = e.target.value;
-              setFollowUpFilter(value);
-              syncParams({ follow_up: value || null });
+              setCollectionStatusFilter(value);
+              syncParams({ collection_status: value || null, follow_up: null });
             }}
             className="!py-2 !pr-8 text-sm min-w-[150px] rounded-lg border-stone-300"
           >
-            <option value="">All follow-ups</option>
-            <option value="overdue">Overdue</option>
-            <option value="today">Due today</option>
-            <option value="upcoming">Upcoming</option>
-            <option value="none">No date set</option>
-            <option value="set">Has date</option>
+            <option value="">All statuses</option>
+            <option value="good">On time</option>
+            <option value="warning">No pay 7+</option>
+            <option value="danger">No pay 12+</option>
           </Select>
 
           <Select
