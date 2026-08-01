@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -37,6 +37,11 @@ import {
   CREDIT_INVOICE_CAPTURE_WIDTH,
   CREDIT_SHOP_NAME,
 } from './creditInvoiceHtml';
+import {
+  buildCreditDocumentSnapshotBlobs,
+  copyPngBlobToClipboard,
+  SNAPSHOT_ROWS_PER_PAGE,
+} from './creditDocumentClipboard';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -84,8 +89,14 @@ export default function CreditInvoiceDetail() {
   const [debouncedProductSearch, setDebouncedProductSearch] = useState('');
   const [exporting, setExporting] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [photoPageProgress, setPhotoPageProgress] = useState<{
+    total: number;
+    nextPart: number;
+  } | null>(null);
   const pdfFrameRef = useRef<HTMLIFrameElement>(null);
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
+  const photoPartsQueueRef = useRef<Blob[]>([]);
+  const photoPartsTotalRef = useRef(0);
 
   const invoiceId = parseInt(id || '', 10);
   const canManage = canManageCreditRecords();
@@ -393,36 +404,108 @@ export default function CreditInvoiceDetail() {
     void handlePdf();
   };
 
-  const handleCapturePhoto = async () => {
+  const photoExpectedParts = useMemo(() => {
+    const itemCount = (invoice?.items || []).length;
+    if (itemCount === 0) return 1;
+    return Math.ceil(itemCount / SNAPSHOT_ROWS_PER_PAGE);
+  }, [invoice?.items]);
+
+  // Reset multi-page photo queue when invoice / line items change
+  useEffect(() => {
+    photoPartsQueueRef.current = [];
+    photoPartsTotalRef.current = 0;
+    if (photoExpectedParts > 1) {
+      setPhotoPageProgress({ total: photoExpectedParts, nextPart: 1 });
+    } else {
+      setPhotoPageProgress(null);
+    }
+  }, [invoiceId, photoExpectedParts, invoice?.updated_at]);
+
+  const handleCapturePhoto = useCallback(async () => {
     if (!invoice) return;
+    const iframe = pdfFrameRef.current;
+    if (!iframe) {
+      showToast('Photo preview not ready. Try again.', 'error');
+      return;
+    }
+
     setExporting(true);
     try {
-      const canvas = await captureFromIframe();
-      const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob((b) => resolve(b), 'image/png', 1)
-      );
-      if (!blob) {
+      window.getSelection()?.removeAllRanges();
+
+      const pending = photoPartsQueueRef.current;
+      if (pending.length > 0) {
+        const blob = pending.shift()!;
+        const totalParts = photoPartsTotalRef.current;
+        const partNum = totalParts - pending.length;
+        if (!(await copyPngBlobToClipboard(blob))) {
+          pending.unshift(blob);
+          showToast('Could not copy image. Check clipboard permissions.', 'error');
+          return;
+        }
+        if (pending.length > 0) {
+          setPhotoPageProgress({ total: totalParts, nextPart: partNum + 1 });
+          showToast(
+            `Invoice page ${partNum} of ${totalParts} copied. Paste it, then tap Photo again for page ${partNum + 1}.`,
+            'success'
+          );
+        } else {
+          photoPartsTotalRef.current = 0;
+          setPhotoPageProgress(
+            photoExpectedParts > 1 ? { total: photoExpectedParts, nextPart: 1 } : null
+          );
+          showToast(`Invoice page ${partNum} of ${totalParts} copied.`, 'success');
+        }
+        return;
+      }
+
+      const blobs = await buildCreditDocumentSnapshotBlobs(iframe, {
+        invoice_number: invoice.invoice_number,
+        customer_name: invoice.customer_name,
+        customer_phone: invoice.customer_phone,
+        created_at: invoice.created_at,
+        subtotal: invoice.subtotal,
+        total: invoice.total,
+        notes: invoice.notes,
+        status: invoice.status,
+        customer_balance: invoice.customer_balance,
+        items: invoice.items || [],
+      });
+      if (!blobs.length) {
         showToast('Failed to create image', 'error');
         return;
       }
-      const canWriteImage =
-        typeof navigator !== 'undefined' &&
-        !!navigator.clipboard &&
-        typeof (window as any).ClipboardItem !== 'undefined';
-      if (!canWriteImage) {
+
+      if (!(await copyPngBlobToClipboard(blobs[0]))) {
         showToast('Image clipboard not supported in this browser', 'error');
         return;
       }
-      await navigator.clipboard.write([
-        new (window as any).ClipboardItem({ 'image/png': blob }),
-      ]);
-      showToast('Invoice image copied to clipboard', 'success');
+
+      if (blobs.length > 1) {
+        photoPartsQueueRef.current = blobs.slice(1);
+        photoPartsTotalRef.current = blobs.length;
+        setPhotoPageProgress({ total: blobs.length, nextPart: 2 });
+        showToast(
+          `Invoice page 1 of ${blobs.length} copied. Paste it, then tap Photo again for page 2.`,
+          'success'
+        );
+      } else {
+        photoPartsQueueRef.current = [];
+        photoPartsTotalRef.current = 0;
+        setPhotoPageProgress(null);
+        showToast('Invoice image copied to clipboard', 'success');
+      }
     } catch (e: any) {
       showToast(e?.message || 'Failed to copy image', 'error');
     } finally {
       setExporting(false);
     }
-  };
+  }, [invoice, photoExpectedParts]);
+
+  const photoButtonLabel = useMemo(() => {
+    if (!photoPageProgress || photoPageProgress.total <= 1) return 'Photo';
+    return `Photo ${photoPageProgress.nextPart}/${photoPageProgress.total}`;
+  }, [photoPageProgress]);
 
   if (isLoading) return <LoadingState />;
   if (error || !invoice) {
@@ -455,6 +538,26 @@ export default function CreditInvoiceDetail() {
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back
         </Button>
+
+        {photoPageProgress &&
+        photoPageProgress.total > 1 &&
+        photoPageProgress.nextPart > 1 ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <span className="font-semibold">
+              Image {photoPageProgress.nextPart - 1} of {photoPageProgress.total}
+            </span>{' '}
+            is on your clipboard. Paste it in WhatsApp, then tap{' '}
+            <span className="font-semibold">Photo</span> again for page{' '}
+            {photoPageProgress.nextPart} of {photoPageProgress.total} (
+            {SNAPSHOT_ROWS_PER_PAGE} lines each).
+          </div>
+        ) : photoPageProgress && photoPageProgress.total > 1 ? (
+          <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700">
+            This invoice has {photoPageProgress.total} photo pages (
+            {SNAPSHOT_ROWS_PER_PAGE} lines each). Tap Photo to copy page 1, paste, then tap
+            again for the next page.
+          </div>
+        ) : null}
 
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
           <div className="p-4 sm:p-6 border-b border-gray-100">
@@ -514,9 +617,21 @@ export default function CreditInvoiceDetail() {
                     onClick={handleCapturePhoto}
                     disabled={exporting}
                     className="flex-1 sm:flex-none"
+                    title={
+                      photoPageProgress && photoPageProgress.total > 1
+                        ? `Copy invoice image page ${photoPageProgress.nextPart} of ${photoPageProgress.total} (${SNAPSHOT_ROWS_PER_PAGE} lines each)`
+                        : 'Copy invoice image to clipboard'
+                    }
                   >
                     <Camera className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Photo</span>
+                    <span className="hidden sm:inline">
+                      {exporting ? 'Copying…' : photoButtonLabel}
+                    </span>
+                    {photoPageProgress && photoPageProgress.total > 1 ? (
+                      <span className="sm:hidden text-xs font-semibold">
+                        {photoPageProgress.nextPart}/{photoPageProgress.total}
+                      </span>
+                    ) : null}
                   </Button>
                   <Button
                     variant="outline"
@@ -698,9 +813,21 @@ export default function CreditInvoiceDetail() {
               onClick={handleCapturePhoto}
               disabled={exporting}
               className="flex-1 sm:flex-none"
+              title={
+                photoPageProgress && photoPageProgress.total > 1
+                  ? `Copy invoice image page ${photoPageProgress.nextPart} of ${photoPageProgress.total} (${SNAPSHOT_ROWS_PER_PAGE} lines each)`
+                  : 'Copy invoice image to clipboard'
+              }
             >
               <Camera className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">Photo</span>
+              <span className="hidden sm:inline">
+                {exporting ? 'Copying…' : photoButtonLabel}
+              </span>
+              {photoPageProgress && photoPageProgress.total > 1 ? (
+                <span className="sm:hidden text-xs font-semibold">
+                  {photoPageProgress.nextPart}/{photoPageProgress.total}
+                </span>
+              ) : null}
             </Button>
             <Button
               variant="outline"
