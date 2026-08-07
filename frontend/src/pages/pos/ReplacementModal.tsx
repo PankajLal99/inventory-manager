@@ -69,7 +69,7 @@ export default function ReplacementModal({ isOpen, onClose, onSuccess }: Replace
         }
         return null;
       } catch (error: any) {
-        const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to find invoice';
+        const errorMsg = error?.response?.data?.message || error?.response?.data?.error || 'Failed to find invoice';
         setSearchError(errorMsg);
         setInvoice(null);
         return null;

@@ -4,7 +4,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { getStockInfo, getProductNameColor } from '../../lib/utils';
-import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X, Image as ImageIcon } from 'lucide-react';
+import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X, Image as ImageIcon, Download } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
@@ -14,6 +14,7 @@ import Select from '../../components/ui/Select';
 import Card from '../../components/ui/Card';
 import Modal from '../../components/ui/Modal';
 import ProductForm from './ProductForm';
+import ProductExportModal from './ProductExportModal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 
 export default function Products() {
@@ -69,6 +70,7 @@ export default function Products() {
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [loadedProducts, setLoadedProducts] = useState<any[]>([]);
+  const [showExportModal, setShowExportModal] = useState(false);
   const queryClient = useQueryClient();
 
   // Fetch categories and brands for filters
@@ -1253,19 +1255,19 @@ export default function Products() {
   const getTableHeaders = (tag: string): string[] => {
     switch (tag) {
       case 'new':
-        return ['Name', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions', 'Low Stock Limit'];
+        return ['S.No', 'Name', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions', 'Low Stock Limit'];
       case 'sold':
-        return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
+        return ['S.No', 'Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'unknown':
-        return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
+        return ['S.No', 'Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'returned':
-        return ['Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
+        return ['S.No', 'Name', 'Short Code', 'Brand', 'Category', 'Status', 'Actions'];
       case 'defective':
-        return ['', 'Name', 'Short Code', 'Brand', 'Category', 'Actions'];
+        return ['', 'S.No', 'Name', 'Short Code', 'Brand', 'Category', 'Actions'];
       case 'in-cart':
-        return ['Name', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
+        return ['S.No', 'Name', 'Brand', 'Category', 'Quantity', 'Status', 'Actions'];
       default:
-        return ['Name', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions', 'Low Stock Limit'];
+        return ['S.No', 'Name', 'Brand', 'Category', 'Total Stock', 'Status', 'Actions', 'Low Stock Limit'];
     }
   };
 
@@ -1364,6 +1366,105 @@ export default function Products() {
     }
     return filtered;
   }, [productsList, activeStockTab, stockStatusFilter, tagFilter]);
+
+  const exportFilterLabels = useMemo(() => {
+    const labels: string[] = [];
+    const asList = (data: any) => {
+      const list = data?.results || data?.data || data || [];
+      return Array.isArray(list) ? list : [];
+    };
+    if (search) labels.push(`Search: ${search}`);
+    if (categoryFilter) {
+      const cat = asList(categoriesData).find((c: any) => String(c.id) === String(categoryFilter));
+      labels.push(`Category: ${cat?.name || categoryFilter}`);
+    }
+    if (brandFilter) {
+      const brand = asList(brandsData).find((b: any) => String(b.id) === String(brandFilter));
+      labels.push(`Brand: ${brand?.name || brandFilter}`);
+    }
+    if (supplierFilter) {
+      const supplier = asList(suppliersData).find((s: any) => String(s.id) === String(supplierFilter));
+      labels.push(`Supplier: ${supplier?.name || supplier?.code || supplierFilter}`);
+    }
+    if (tagFilter === 'new') {
+      if (stockStatusFilter === 'low_stock' || activeStockTab === 'low') labels.push('Stock: Low');
+      else if (stockStatusFilter === 'out_of_stock' || activeStockTab === 'out') labels.push('Stock: Out');
+      else if (stockStatusFilter === 'in_stock') labels.push('Stock: In stock');
+    }
+    return labels;
+  }, [
+    search,
+    categoryFilter,
+    brandFilter,
+    supplierFilter,
+    stockStatusFilter,
+    activeStockTab,
+    tagFilter,
+    categoriesData,
+    brandsData,
+    suppliersData,
+  ]);
+
+  const fetchAllProductsForExport = async (): Promise<any[]> => {
+    const allRows: any[] = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const params = { ...buildQueryParams(), page, limit: 100 };
+      const response = await productsApi.list(params);
+      const data = response.data;
+      const pageRows: any[] = Array.isArray(data?.results)
+        ? data.results
+        : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data)
+            ? data
+            : [];
+      allRows.push(...pageRows);
+
+      const totalPages = data?.total_pages;
+      if (totalPages != null && totalPages !== '' && !Number.isNaN(Number(totalPages))) {
+        hasMore = page < Number(totalPages);
+      } else if (data?.next != null && data.next !== '') {
+        hasMore = true;
+      } else {
+        const pageSize = Number(data?.page_size ?? data?.limit ?? 100);
+        const count = data?.count;
+        hasMore =
+          count != null &&
+          count !== '' &&
+          !Number.isNaN(Number(count)) &&
+          pageSize > 0 &&
+          page * pageSize < Number(count);
+      }
+
+      page += 1;
+      if (page > 500) break;
+    }
+
+    const withStock = allRows.map((product: any) => {
+      const stock = getStockInfo(product);
+      return {
+        ...product,
+        stock_quantity: stock.total,
+        available_quantity: stock.available,
+        isLowStock: stock.isLowStock,
+        isOutOfStock: stock.isOutOfStock,
+        barcodeCount: tagFilter && tagFilter !== 'new' ? stock.total : stock.available,
+      };
+    });
+
+    if (tagFilter === 'new') {
+      if (activeStockTab === 'low' || stockStatusFilter === 'low_stock') {
+        return withStock.filter((p: any) => p.isLowStock && !p.isOutOfStock);
+      }
+      if (activeStockTab === 'out' || stockStatusFilter === 'out_of_stock') {
+        return withStock.filter((p: any) => p.isOutOfStock);
+      }
+    }
+    return withStock;
+  };
 
   // Fetch move-outs for defective metrics
   const { data: moveOutsData } = useQuery({
@@ -1492,6 +1593,13 @@ export default function Products() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-gray-900">Products</h1>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setShowExportModal(true)}
+          >
+            <Download className="h-5 w-5 mr-2 inline" />
+            Export
+          </Button>
           <Button
             variant="outline"
             onClick={() => setShowBarcodeStatusTool(true)}
@@ -1935,10 +2043,14 @@ export default function Products() {
             {/* Main content area */}
             <div className="flex-1 min-w-0 overflow-x-auto">
               <Table headers={getTableHeaders(tagFilter)}>
-                {filteredProducts.length > 0 ? filteredProducts.flatMap((product: any) => {
+                {filteredProducts.length > 0 ? (() => {
+                  let serial = 0;
+                  return filteredProducts.flatMap((product: any) => {
                   const barcodes: any[] = getDefectiveBarcodesForProduct(product);
                   if (barcodes.length === 0) return [];
                   return barcodes.map((barcode: any) => {
+                    serial += 1;
+                    const rowSerial = serial;
                     const isSelected = selectedDefectiveProducts.has(barcode.id);
                     return (
                       <tr key={`${product.id}-barcode-${barcode.id}`} className={`hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}>
@@ -1962,6 +2074,10 @@ export default function Products() {
                             className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                             title="Select barcode for move-out"
                           />
+                        </td>
+                        {/* S.No */}
+                        <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-500 tabular-nums">
+                          {rowSerial}
                         </td>
                         {/* Name */}
                         <td className="px-6 py-3 whitespace-nowrap">
@@ -2011,7 +2127,8 @@ export default function Products() {
                       </tr>
                     );
                   });
-                }) : (
+                });
+                })() : (
                   <tr>
                     <td colSpan={getTableHeaders('defective').length} className="px-6 py-8 text-center text-gray-500">
                       {productsList.length === 0
@@ -2033,7 +2150,9 @@ export default function Products() {
         ) : (tagFilter === 'sold' || tagFilter === 'unknown' || tagFilter === 'returned') ? (
           <>
             <Table headers={getTableHeaders(tagFilter)}>
-              {filteredProducts.length > 0 ? filteredProducts.flatMap((product: any) => {
+              {filteredProducts.length > 0 ? (() => {
+                let serial = 0;
+                return filteredProducts.flatMap((product: any) => {
                 const barcodes: any[] = Array.isArray(product.barcodes) ? product.barcodes : [];
                 if (barcodes.length === 0) return [];
 
@@ -2041,6 +2160,8 @@ export default function Products() {
                 const statusLabel = tagFilter === 'sold' ? 'Sold' : tagFilter === 'unknown' ? 'Unknown' : 'Returned';
 
                 return barcodes.map((barcode: any, index: number) => {
+                  serial += 1;
+                  const rowSerial = serial;
                   const barcodeValue = typeof barcode === 'string' ? barcode : (barcode?.short_code || barcode?.barcode || '-');
                   const rowKey = typeof barcode === 'string'
                     ? `${product.id}-barcode-${barcode}-${index}`
@@ -2048,6 +2169,9 @@ export default function Products() {
 
                   return (
                     <tr key={rowKey} className="hover:bg-gray-50">
+                      <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-500 tabular-nums">
+                        {rowSerial}
+                      </td>
                       <td className="px-6 py-3 whitespace-nowrap">
                         <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
                           {product.name}
@@ -2093,7 +2217,8 @@ export default function Products() {
                     </tr>
                   );
                 });
-              }) : (
+              });
+              })() : (
                 <tr>
                   <td colSpan={getTableHeaders(tagFilter).length} className="px-6 py-8 text-center text-gray-500">
                     {productsList.length === 0
@@ -2118,7 +2243,7 @@ export default function Products() {
         ) : (
           <>
             <Table headers={getTableHeaders(tagFilter)}>
-              {filteredProducts.length > 0 ? filteredProducts.map((product: any) => {
+              {filteredProducts.length > 0 ? filteredProducts.map((product: any, productIndex: number) => {
                 // Use the same rendering logic as the defective section above
                 // This ensures Purchase/Edit buttons show correctly for all products
                 const currentTagFilter = tagFilter as 'new' | 'sold' | 'unknown' | 'returned' | 'defective' | 'in-cart';
@@ -2152,6 +2277,12 @@ export default function Products() {
                 // Render table cells
                 const renderTableCell = (column: string, cellKey: string) => {
                   switch (column) {
+                    case 'S.No':
+                      return (
+                        <td key={cellKey} className="px-3 py-4 whitespace-nowrap text-sm text-gray-500 tabular-nums">
+                          {productIndex + 1}
+                        </td>
+                      );
                     case 'Name':
                       return (
                         <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
@@ -2478,7 +2609,7 @@ export default function Products() {
             </div>
           </div>
         )}
-        {filteredProducts.length > 0 ? filteredProducts.map((product: any) => {
+        {filteredProducts.length > 0 ? filteredProducts.map((product: any, productIndex: number) => {
           // Determine status - only show stock status for fresh (new) products
           // Determine status - show stock/tag status as clickable badge to change barcode tags (mobile view)
           let statusBadge;
@@ -2533,6 +2664,9 @@ export default function Products() {
                 {/* Row 1: Product name, status, and stock */}
                 <div className="flex items-start justify-between mb-3 gap-2">
                   <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <span className="text-xs font-medium text-gray-500 tabular-nums mt-1 flex-shrink-0 w-5">
+                      {productIndex + 1}.
+                    </span>
                     <Package className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
@@ -2801,6 +2935,17 @@ export default function Products() {
           </div>
         )}
       </div>
+
+      {showExportModal && (
+        <ProductExportModal
+          isOpen={showExportModal}
+          onClose={() => setShowExportModal(false)}
+          fetchProducts={fetchAllProductsForExport}
+          tagFilter={tagFilter}
+          filterLabels={exportFilterLabels}
+          visibleCount={filteredProducts.length}
+        />
+      )}
 
       {showForm && (
         <ProductForm

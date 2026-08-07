@@ -147,7 +147,7 @@ export default function ReturnToStock() {
         return null;
       } catch (error: any) {
         const status = error?.response?.status;
-        const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
+        const serverMsg = error?.response?.data?.message || error?.response?.data?.error;
         const errorMsg = status === 404 || serverMsg?.toLowerCase().includes('no invoice')
           ? 'Barcode not sold or not in this invoice'
           : serverMsg || 'Failed to find invoice';
@@ -323,7 +323,7 @@ export default function ReturnToStock() {
       showToast(`Customer ${foundInvoice.customer_name || 'N/A'} loaded. Scan more items or process return.`, 'success');
     } catch (error: any) {
       const status = error?.response?.status;
-      const serverMsg = error?.response?.data?.error || error?.response?.data?.message;
+      const serverMsg = error?.response?.data?.message || error?.response?.data?.error;
       const message = status === 404 || serverMsg?.toLowerCase().includes('no invoice')
         ? 'Barcode not sold or not in this invoice'
         : serverMsg || 'Barcode not sold or not in this invoice';

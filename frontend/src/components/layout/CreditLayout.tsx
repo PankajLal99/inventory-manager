@@ -11,6 +11,7 @@ import {
   ShoppingCart,
   X,
 } from 'lucide-react';
+import CreditDocColorPicker from '../CreditDocColorPicker';
 
 const NAV: Array<{
   path: string;
@@ -171,6 +172,8 @@ export default function CreditLayout() {
           </div>
         </div>
       </main>
+
+      <CreditDocColorPicker />
     </div>
   );
 }

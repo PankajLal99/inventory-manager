@@ -3635,8 +3635,25 @@ def invoice_detail(request, pk):
                         item.barcode.tag = 'sold'
                         item.barcode.save(update_fields=['tag'])
 
-            # If invoice_type changed directly to credit via PATCH, finalize reserved units as sold.
+            # If invoice_type changed directly to credit via PATCH:
+            # Match checkout-credit: clear sale payments, status=credit, paid=0, due=total, ledger debit.
             if invoice_type_changed and invoice.invoice_type == 'credit':
+                if not invoice.customer_id:
+                    invoice.invoice_type = old_invoice_type_for_recalc
+                    invoice.status = old_status
+                    invoice.paid_amount = old_paid_amount
+                    invoice.due_amount = old_due_amount
+                    invoice.save(update_fields=['invoice_type', 'status', 'paid_amount', 'due_amount'])
+                    return Response(
+                        {'error': 'Invoice must have a customer assigned to mark as credit'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # Credit invoices are owed on ledger — remove cash/upi/mixed sale payment rows.
+                invoice.payments.exclude(payment_method='refund').delete()
+                invoice.status = 'credit'
+                invoice.paid_amount = Decimal('0.00')
+                invoice.due_amount = invoice.total
+                invoice.save(update_fields=['status', 'paid_amount', 'due_amount'])
                 for item in invoice.items.select_related('barcode').all():
                     if item.barcode and item.barcode.tag in ['new', 'returned', 'in-cart']:
                         item.barcode.tag = 'sold'
@@ -3645,6 +3662,15 @@ def invoice_detail(request, pk):
             if invoice_type_changed or not update_fields.issubset(allowed_fields_for_all):
                 update_invoice_totals(invoice)
                 invoice.refresh_from_db()
+
+            # After totals recalc for credit type-change, keep paid/due consistent with cleared payments.
+            if invoice_type_changed and invoice.invoice_type == 'credit':
+                invoice.paid_amount = (
+                    invoice.payments.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+                )
+                invoice.due_amount = invoice.total - invoice.paid_amount
+                invoice.status = 'credit'
+                invoice.save(update_fields=['paid_amount', 'due_amount', 'status'])
 
             # When invoice_type changed to 'pending', remove this invoice from the ledger until "Move to Ledger" (mark credit).
             # Pending is draft; ledger is only updated when user explicitly moves to ledger.
@@ -3700,6 +3726,47 @@ def invoice_detail(request, pk):
                 invoice.customer.credit_balance += invoice.total
                 invoice.customer.save(update_fields=['credit_balance'])
 
+            # When invoice_type changed to credit, replace ledger with a single debit for invoice.total
+            # (same shape as checkout-credit / mark-credit).
+            if invoice_type_changed and invoice.invoice_type == 'credit' and invoice.customer:
+                from backend.parties.models import LedgerEntry
+                existing_entries = LedgerEntry.objects.filter(invoice=invoice)
+                net_reversal = Decimal('0.00')
+                for e in existing_entries:
+                    if e.entry_type == 'debit':
+                        net_reversal += e.amount
+                    else:
+                        net_reversal -= e.amount
+                reverse_internal_ledger_entries_for_ledger_entries(
+                    existing_entries, request.user, 'Invoice type change (credit)'
+                )
+                existing_entries.delete()
+                invoice.customer.credit_balance += net_reversal
+                total_qty = invoice.items.aggregate(total=Sum('quantity'))['total'] or Decimal('0.000')
+                credit_entry = LedgerEntry.objects.create(
+                    customer=invoice.customer,
+                    invoice=invoice,
+                    entry_type='debit',
+                    amount=invoice.total,
+                    quantity=total_qty,
+                    description=f'Credit Invoice {invoice.invoice_number}',
+                    created_by=request.user,
+                    created_at=invoice.created_at or timezone.now(),
+                )
+                create_internal_ledger_entry_if_mtshop(
+                    invoice.customer, 'debit', invoice.total,
+                    f'Credit Invoice {invoice.invoice_number}',
+                    request.user, invoice.created_at or timezone.now(),
+                    source_ledger_entry_id=credit_entry.id,
+                )
+                invoice.customer.credit_balance -= invoice.total
+                invoice.customer.save(update_fields=['credit_balance'])
+                if old_invoice_type_for_recalc == 'pending' and old_status == 'draft':
+                    Invoice.objects.filter(pk=invoice.pk, pending_cleared_at__isnull=True).update(
+                        pending_cleared_at=timezone.now()
+                    )
+                    invoice.refresh_from_db(fields=['pending_cleared_at'])
+
             # When invoice_type is updated, set the latest payment's payment_method to match
             if invoice_type_changed and invoice.invoice_type in ('cash', 'upi', 'mixed'):
                 latest_payment = invoice.payments.order_by('-created_at').first()
@@ -3738,6 +3805,12 @@ def invoice_detail(request, pk):
                 changes['status'] = {'old': old_status, 'new': invoice.status}
                 changes['paid_amount'] = {'old': str(old_paid_amount), 'new': str(invoice.paid_amount)}
                 changes['due_amount'] = {'old': str(old_due_amount), 'new': str(invoice.due_amount)}
+            # Track status / amounts when invoice_type changed to credit
+            if invoice_type_changed and invoice.invoice_type == 'credit':
+                changes['status'] = {'old': old_status, 'new': invoice.status}
+                changes['paid_amount'] = {'old': str(old_paid_amount), 'new': str(invoice.paid_amount)}
+                changes['due_amount'] = {'old': str(old_due_amount), 'new': str(invoice.due_amount)}
+                changes['payments'] = 'sale payments cleared for credit'
             # Include total changes if totals were recalculated
             if invoice_type_changed or not update_fields.issubset(allowed_fields_for_all):
                 changes['total'] = {'old': str(old_total), 'new': str(invoice.total)}
@@ -7136,6 +7209,64 @@ def search_invoices_by_number(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _replacement_eligible_invoice_items():
+    """Sale lines eligible for replacement find-invoice / bulk barcode checks.
+
+    Excludes void and replacement-return invoices. Pending invoices use status='draft'
+    (invoice_type='pending') and remain eligible. Replacement POS copies barcode_id /
+    sold_barcode_value onto return invoices; those must not compete with the original
+    sale line. Soft-deleted barcode rows still join via FK in Django lookups —
+    callers matching on barcode__* should also require barcode__deleted_at__isnull=True
+    (sold_barcode_value covers historical snaps).
+    """
+    return (
+        InvoiceItem.objects.exclude(invoice__status='void')
+        .exclude(invoice__is_replacement_return=True)
+    )
+
+
+def _ambiguous_invoice_lines_response(search_value_clean, ordered_qs):
+    """Build 400 payload listing invoice numbers for duplicate printed-barcode matches."""
+    rows = list(
+        ordered_qs.select_related('invoice')[:15].values(
+            'id',
+            'invoice_id',
+            'invoice__invoice_number',
+            'invoice__status',
+        )
+    )
+    invoice_numbers = []
+    seen = set()
+    for row in rows:
+        num = row['invoice__invoice_number']
+        if num and num not in seen:
+            seen.add(num)
+            invoice_numbers.append(num)
+    nums_str = ', '.join(invoice_numbers) if invoice_numbers else '(unknown)'
+    return Response(
+        {
+            'error': 'Ambiguous invoice lines',
+            'message': (
+                f'Multiple invoice lines match printed barcode {search_value_clean} '
+                f'(invoices: {nums_str}). '
+                'Each physical barcode should appear on at most one open sale line — '
+                'check data or contact support.'
+            ),
+            'invoice_numbers': invoice_numbers,
+            'matches': [
+                {
+                    'invoice_item_id': row['id'],
+                    'invoice_id': row['invoice_id'],
+                    'invoice_number': row['invoice__invoice_number'],
+                    'invoice_status': row['invoice__status'],
+                }
+                for row in rows
+            ],
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def find_invoice_by_barcode(request):
@@ -7145,26 +7276,37 @@ def find_invoice_by_barcode(request):
     barcode_value = request.data.get('barcode')
     sku = request.data.get('sku')
     invoice_number = request.data.get('invoice_number')
-    
+
+    related = ('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+    base = _replacement_eligible_invoice_items().select_related(*related)
+
     # If invoice_number is provided, search by invoice number first
     if invoice_number:
         invoice_number_clean = str(invoice_number).strip()
         try:
-            # Try exact match first - only exclude void
-            invoice = Invoice.objects.filter(
-                invoice_number__iexact=invoice_number_clean
-            ).exclude(
-                status='void'
-            ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__barcode').order_by('-created_at').first()
-            
+            # Try exact match first — exclude void and replacement-return invoices
+            invoice = (
+                Invoice.objects.filter(invoice_number__iexact=invoice_number_clean)
+                .exclude(status='void')
+                .exclude(is_replacement_return=True)
+                .select_related('store', 'customer', 'created_by')
+                .prefetch_related('items', 'items__product', 'items__barcode')
+                .order_by('-created_at')
+                .first()
+            )
+
             # If not found, try contains match
             if not invoice:
-                invoice = Invoice.objects.filter(
-                    invoice_number__icontains=invoice_number_clean
-                ).exclude(
-                    status='void'
-                ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__barcode').order_by('-created_at').first()
-            
+                invoice = (
+                    Invoice.objects.filter(invoice_number__icontains=invoice_number_clean)
+                    .exclude(status='void')
+                    .exclude(is_replacement_return=True)
+                    .select_related('store', 'customer', 'created_by')
+                    .prefetch_related('items', 'items__product', 'items__barcode')
+                    .order_by('-created_at')
+                    .first()
+                )
+
             if invoice:
                 serializer = InvoiceSerializer(invoice)
                 return Response({
@@ -7178,7 +7320,7 @@ def find_invoice_by_barcode(request):
             logger = logging.getLogger(__name__)
             logger.error(f'Error finding invoice by invoice number: {str(e)}', exc_info=True)
             # Fall through to try as barcode/SKU instead of returning error
-    
+
     # If invoice_number was provided but not found, try using it as barcode/SKU
     if invoice_number and not barcode_value and not sku:
         search_value = invoice_number
@@ -7186,67 +7328,47 @@ def find_invoice_by_barcode(request):
         return Response({'error': 'Barcode, SKU, or invoice number is required'}, status=status.HTTP_400_BAD_REQUEST)
     else:
         search_value = barcode_value or sku
-    
+
     search_value_clean = str(search_value).strip().upper()
-    
+
     try:
-        # Exact match only: try barcode then short_code (standardized to .upper())
-        invoice_items = InvoiceItem.objects.filter(
-            barcode__barcode=search_value_clean,
-            barcode__tag='sold'
-        ).exclude(
-            invoice__status='void'
-        ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+        # Exact match only: try barcode then short_code (standardized to .upper()).
+        # Require non-soft-deleted barcode rows on FK path; sold_barcode_value covers snaps.
+        live_bc = Q(barcode__deleted_at__isnull=True)
+        invoice_items = base.filter(
+            live_bc, barcode__barcode=search_value_clean, barcode__tag='sold'
+        )
 
         if not invoice_items.exists():
-            invoice_items = InvoiceItem.objects.filter(
-                barcode__short_code=search_value_clean,
-                barcode__tag='sold'
-            ).exclude(
-                invoice__status='void'
-            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+            invoice_items = base.filter(
+                live_bc, barcode__short_code=search_value_clean, barcode__tag='sold'
+            )
 
         if not invoice_items.exists():
-            invoice_items = InvoiceItem.objects.filter(
-                barcode__barcode=search_value_clean
-            ).exclude(
-                invoice__status='void'
-            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+            invoice_items = base.filter(live_bc, barcode__barcode=search_value_clean)
 
         if not invoice_items.exists():
-            invoice_items = InvoiceItem.objects.filter(
-                barcode__short_code=search_value_clean
-            ).exclude(
-                invoice__status='void'
-            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
+            invoice_items = base.filter(live_bc, barcode__short_code=search_value_clean)
 
         if not invoice_items.exists():
-            invoice_items = InvoiceItem.objects.filter(
-                sold_barcode_value=search_value_clean
-            ).exclude(
-                invoice__status='void'
-            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
-        
+            invoice_items = base.filter(sold_barcode_value=search_value_clean)
+
         # If not found by barcode, try by product SKU (for non-tracked products)
         if not invoice_items.exists():
-            invoice_items = InvoiceItem.objects.filter(
-                product__sku__iexact=search_value_clean
-            ).exclude(
-                invoice__status='void'
+            invoice_items = base.filter(
+                product__sku__iexact=search_value_clean,
             ).exclude(
                 product__sku__isnull=True
             ).exclude(
                 product__sku=''
-            ).select_related('invoice', 'product', 'barcode', 'invoice__store', 'invoice__customer')
-        
+            )
+
         # If still not found, try by variant SKU
         if not invoice_items.exists():
-            invoice_items = InvoiceItem.objects.filter(
+            invoice_items = base.filter(
                 variant__sku__iexact=search_value_clean
-            ).exclude(
-                invoice__status='void'
-            ).select_related('invoice', 'product', 'variant', 'barcode', 'invoice__store', 'invoice__customer')
-        
+            ).select_related('variant')
+
         if not invoice_items.exists():
             return Response({
                 'error': 'No invoice found for this barcode/SKU',
@@ -7260,24 +7382,32 @@ def find_invoice_by_barcode(request):
         ).exists()
 
         ordered = invoice_items.order_by('-invoice__created_at', '-id')
-        lead_pks = list(ordered.values_list('pk', flat=True)[:2])
-        if matched_by_printed_barcode and len(lead_pks) > 1:
-            return Response(
-                {
-                    'error': 'Ambiguous invoice lines',
-                    'message': (
-                        f'Multiple invoice lines match printed barcode {search_value_clean}. '
-                        'Each physical barcode should appear on at most one open line — check data or contact support.'
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if matched_by_printed_barcode:
+            # Prefer the currently-sold catalog row when older returned/resold lines linger
+            sold_only = ordered.filter(live_bc, barcode__tag='sold')
+            sold_pks = list(sold_only.values_list('pk', flat=True)[:2])
+            if len(sold_pks) == 1:
+                lead_pks = sold_pks
+            elif len(sold_pks) > 1:
+                return _ambiguous_invoice_lines_response(search_value_clean, sold_only)
+            else:
+                lead_pks = list(ordered.values_list('pk', flat=True)[:2])
+                if len(lead_pks) > 1:
+                    return _ambiguous_invoice_lines_response(search_value_clean, ordered)
+        else:
+            lead_pks = list(ordered.values_list('pk', flat=True)[:1])
+
+        if not lead_pks:
+            return Response({
+                'error': 'No invoice found for this barcode/SKU',
+                'message': f'No sold items found with barcode/SKU: {search_value_clean}.'
+            }, status=status.HTTP_404_NOT_FOUND)
 
         invoice_item = InvoiceItem.objects.select_related(
             'invoice', 'product', 'variant', 'barcode', 'invoice__store', 'invoice__customer'
         ).get(pk=lead_pks[0])
         invoice = invoice_item.invoice
-        
+
         # Validate barcode tag for replacement eligibility
         resolved_bc = resolve_invoice_item_barcode(invoice_item, scanned_override=search_value_clean)
         if invoice_item.product and invoice_item.product.track_inventory and resolved_bc:
@@ -7297,7 +7427,7 @@ def find_invoice_by_barcode(request):
                         'error': 'Item not eligible for replacement',
                         'message': error_msg or 'This item cannot be replaced because the product barcode does not have "sold" tag.'
                     }, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Return invoice with only items matching the searched barcode/SKU (not all items on invoice)
         matching_items = invoice_items.filter(invoice=invoice).order_by('id')
         serializer = InvoiceSerializer(invoice)
@@ -7308,7 +7438,7 @@ def find_invoice_by_barcode(request):
             'found_by': 'barcode' if barcode_value else 'sku',
             'search_value': search_value_clean
         })
-        
+
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
@@ -7349,12 +7479,10 @@ def bulk_barcodes_check(request):
             'skipped': [],
         })
 
-    invoice_items_qs = InvoiceItem.objects.filter(
+    invoice_items_qs = _replacement_eligible_invoice_items().filter(
         Q(barcode__barcode__isnull=False)
         | Q(barcode__short_code__isnull=False)
         | ~Q(sold_barcode_value='')
-    ).exclude(
-        invoice__status='void'
     ).select_related('invoice', 'product', 'barcode', 'invoice__customer')
 
     results = []  # sold items with customer info
@@ -7362,6 +7490,7 @@ def bulk_barcodes_check(request):
     invalid_tag = []  # list of {'barcode': str, 'tag': str} for not-sold
     fresh_processable = []  # barcodes currently tagged as "new" (can be marked defective in bulk flow)
     customer_names = {}
+    live_bc = Q(barcode__deleted_at__isnull=True)
 
     for barcode_str in barcode_strings:
         # Exact match only: try barcode then short_code
@@ -7387,11 +7516,15 @@ def bulk_barcodes_check(request):
             })
             continue
 
-        items = invoice_items_qs.filter(barcode__barcode=barcode_str).order_by('-invoice__created_at', '-id')
+        items = invoice_items_qs.filter(live_bc, barcode__barcode=barcode_str).order_by('-invoice__created_at', '-id')
         if not items.exists():
-            items = invoice_items_qs.filter(barcode__short_code=barcode_str).order_by('-invoice__created_at', '-id')
+            items = invoice_items_qs.filter(live_bc, barcode__short_code=barcode_str).order_by('-invoice__created_at', '-id')
         if not items.exists():
             items = invoice_items_qs.filter(sold_barcode_value=barcode_str).order_by('-invoice__created_at', '-id')
+        # Prefer currently-sold lines when multiple historical snaps match
+        sold_items = items.filter(live_bc, barcode__tag='sold')
+        if sold_items.exists():
+            items = sold_items
         lead_item_pks = list(items.values_list('pk', flat=True)[:2])
         if len(lead_item_pks) > 1:
             not_found.append(barcode_str)

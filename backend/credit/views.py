@@ -1214,6 +1214,36 @@ def _active_ledger_entries(qs):
     )
 
 
+def _ledger_activity_rank(entry):
+    """
+    Within a calendar day, group by activity (particulars):
+    sales → returns → payments/cash → manual adjustments.
+    """
+    if entry.payment_id:
+        return 2
+    if entry.credit_return_id:
+        return 1
+    if entry.invoice_id:
+        return 0
+    return 3
+
+
+def _ledger_statement_sort_key(entry):
+    """Oldest day first; within day, activity order then time/id."""
+    created = entry.created_at
+    if created is not None and timezone.is_aware(created):
+        local_dt = timezone.localtime(created)
+    else:
+        local_dt = created
+    day = local_dt.date() if local_dt is not None else timezone.localdate()
+    return (
+        day,
+        _ledger_activity_rank(entry),
+        created or timezone.now(),
+        entry.id or 0,
+    )
+
+
 def _is_manual_ledger_entry(entry):
     """Opening balance / manual adjustments — not invoice, return, or main-ledger sync."""
     if entry.invoice_id or entry.credit_return_id:
@@ -1587,7 +1617,8 @@ def credit_ledger_list(request):
 def credit_ledger_statement(request):
     """
     Classic account statement for one credit customer:
-    opening balance, chronological rows (sale / payment / return),
+    opening balance, rows ordered by day then activity
+    (sale → return → payment/cash → adjustment),
     debit/credit columns, running balance, period totals.
     """
     customer_id = request.query_params.get('customer') or request.query_params.get('credit_customer_id')
@@ -1628,8 +1659,8 @@ def credit_ledger_statement(request):
     elif txn_type == 'sale':
         qs = qs.filter(payment__isnull=True, credit_return__isnull=True)
 
-    # Chronological statement: oldest first (ascending by date)
-    entries = list(qs.order_by('created_at', 'id'))
+    # Oldest day first; within a day: sales → returns → cash/payments → adjustments
+    entries = sorted(list(qs), key=_ledger_statement_sort_key)
     serializer = CreditLedgerEntrySerializer(entries, many=True)
 
     running = opening
@@ -1650,14 +1681,6 @@ def credit_ledger_statement(request):
             'running_balance': abs(running),
             'balance_side': bal_side,
         })
-
-    # Keep response rows strictly ascending by date (oldest on top)
-    rows.sort(
-        key=lambda r: (
-            str(r.get('created_at') or ''),
-            int(r.get('id') or 0),
-        )
-    )
 
     closing = running
     closing_side = 'Dr' if closing >= 0 else 'Cr'

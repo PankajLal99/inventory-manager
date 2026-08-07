@@ -173,6 +173,37 @@ function focusLastCartQty(root: HTMLElement | null) {
   }
 }
 
+/** Prefer in-progress edit draft over server value so line totals update as you type. */
+function effectiveCartQty(
+  item: { id: number; quantity?: string | number | null },
+  editingQty: Record<number, string>
+): number {
+  const raw =
+    editingQty[item.id] !== undefined ? editingQty[item.id] : String(item.quantity ?? '');
+  const qty = parseFloat(String(raw).trim());
+  if (!Number.isFinite(qty) || qty <= 0) return 0;
+  return Math.round(qty);
+}
+
+function effectiveCartPrice(
+  item: { id: number; unit_price?: string | number | null },
+  editingPrice: Record<number, string>
+): number {
+  const raw =
+    editingPrice[item.id] !== undefined ? editingPrice[item.id] : String(item.unit_price ?? '');
+  const price = parseFloat(String(raw).trim());
+  if (!Number.isFinite(price) || price < 0) return 0;
+  return price;
+}
+
+function effectiveLineTotal(
+  item: { id: number; quantity?: string | number | null; unit_price?: string | number | null },
+  editingQty: Record<number, string>,
+  editingPrice: Record<number, string>
+): number {
+  return effectiveCartQty(item, editingQty) * effectiveCartPrice(item, editingPrice);
+}
+
 export default function POSCredit() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -242,6 +273,9 @@ export default function POSCredit() {
   /** Local draft values while editing cart lines (cleared on focus for easy re-entry). */
   const [editingQty, setEditingQty] = useState<Record<number, string>>({});
   const [editingPrice, setEditingPrice] = useState<Record<number, string>>({});
+  /** Enter commits explicitly; skip the blur that follows focus move to avoid double PATCH. */
+  const skipQtyBlurRef = useRef<Set<number>>(new Set());
+  const skipPriceBlurRef = useRef<Set<number>>(new Set());
 
   const isCustomInvoiceDate = useMemo(
     () => invoiceDate !== toLocalDateString(new Date()),
@@ -633,31 +667,27 @@ export default function POSCredit() {
     return cart.items || [];
   }, [cart, cartId, isRecentlyCompletedCart]);
   const cartTotal = useMemo(() => {
-    return cartItems.reduce((sum: number, item: any) => sum + parseFloat(item.line_total || 0), 0);
-  }, [cartItems]);
+    return cartItems.reduce(
+      (sum: number, item: any) => sum + effectiveLineTotal(item, editingQty, editingPrice),
+      0
+    );
+  }, [cartItems, editingQty, editingPrice]);
 
   const cartLineCount = cartItems.length;
 
   const cartTotalQty = useMemo(() => {
-    return cartItems.reduce((sum: number, item: any) => {
-      const qtyRaw =
-        editingQty[item.id] !== undefined ? editingQty[item.id] : String(item.quantity ?? '');
-      const qty = parseFloat(String(qtyRaw).trim());
-      if (!Number.isFinite(qty) || qty <= 0) return sum;
-      return sum + Math.round(qty);
-    }, 0);
+    return cartItems.reduce(
+      (sum: number, item: any) => sum + effectiveCartQty(item, editingQty),
+      0
+    );
   }, [cartItems, editingQty]);
 
   const cartLinesReady = useMemo(() => {
     if (!cartItems.length) return false;
     return cartItems.every((i: any) => {
-      const qtyRaw =
-        editingQty[i.id] !== undefined ? editingQty[i.id] : String(i.quantity ?? '');
-      const priceRaw =
-        editingPrice[i.id] !== undefined ? editingPrice[i.id] : String(i.unit_price ?? '');
-      const qty = parseFloat(String(qtyRaw).trim());
-      const price = parseFloat(String(priceRaw).trim());
-      return Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
+      const qty = effectiveCartQty(i, editingQty);
+      const price = effectiveCartPrice(i, editingPrice);
+      return qty > 0 && price > 0;
     });
   }, [cartItems, editingQty, editingPrice]);
 
@@ -832,19 +862,33 @@ export default function POSCredit() {
     focusCreditPosTabField(posWorkflowRef.current, target, e.shiftKey);
   };
 
+  const patchCartItemCache = useCallback(
+    (itemId: number, updated: Record<string, unknown>) => {
+      if (!cartId) return;
+      queryClient.setQueryData(['credit-cart', cartId], (old: any) => {
+        if (!old?.items) return old;
+        return {
+          ...old,
+          items: old.items.map((i: any) => (i.id === itemId ? { ...i, ...updated } : i)),
+        };
+      });
+    },
+    [cartId, queryClient]
+  );
+
   const updateItemPrice = async (itemId: number, unitPrice: string) => {
     if (!cartId || isCartLocked) return;
     const trimmed = unitPrice.trim();
     if (trimmed === '') {
       // Empty = not entered → persist 0 so checkout can reject
       try {
-        await creditApi.carts.updateItem(cartId, itemId, { unit_price: 0 });
+        const res = await creditApi.carts.updateItem(cartId, itemId, { unit_price: 0 });
+        if (res.data) patchCartItemCache(itemId, res.data);
         setEditingPrice((prev) => {
           const next = { ...prev };
           delete next[itemId];
           return next;
         });
-        await refetchCart();
       } catch (err: any) {
         showToast(err?.response?.data?.detail || 'Failed to update price', 'error');
       }
@@ -861,13 +905,14 @@ export default function POSCredit() {
       return;
     }
     try {
-      await creditApi.carts.updateItem(cartId, itemId, { unit_price: price });
+      const res = await creditApi.carts.updateItem(cartId, itemId, { unit_price: price });
+      // Apply PATCH body before clearing draft — avoids a flash of stale ₹0 line total
+      if (res.data) patchCartItemCache(itemId, res.data);
       setEditingPrice((prev) => {
         const next = { ...prev };
         delete next[itemId];
         return next;
       });
-      await refetchCart();
     } catch (err: any) {
       showToast(err?.response?.data?.detail || 'Failed to update price', 'error');
     }
@@ -879,13 +924,13 @@ export default function POSCredit() {
     if (trimmed === '') {
       // Empty = not entered → persist 0 so checkout can reject
       try {
-        await creditApi.carts.updateItem(cartId, itemId, { quantity: 0 });
+        const res = await creditApi.carts.updateItem(cartId, itemId, { quantity: 0 });
+        if (res.data) patchCartItemCache(itemId, res.data);
         setEditingQty((prev) => {
           const next = { ...prev };
           delete next[itemId];
           return next;
         });
-        await refetchCart();
       } catch (err: any) {
         showToast(err?.response?.data?.detail || 'Failed to update quantity', 'error');
       }
@@ -912,13 +957,13 @@ export default function POSCredit() {
       return;
     }
     try {
-      await creditApi.carts.updateItem(cartId, itemId, { quantity: qty });
+      const res = await creditApi.carts.updateItem(cartId, itemId, { quantity: qty });
+      if (res.data) patchCartItemCache(itemId, res.data);
       setEditingQty((prev) => {
         const next = { ...prev };
         delete next[itemId];
         return next;
       });
-      await refetchCart();
     } catch (err: any) {
       showToast(err?.response?.data?.detail || 'Failed to update quantity', 'error');
     }
@@ -1912,7 +1957,9 @@ export default function POSCredit() {
                   <div className="w-24 text-right">Line total</div>
                   <div className="w-8" />
                 </div>
-                {cartItems.map((item: any, index: number) => (
+                {cartItems.map((item: any, index: number) => {
+                  const lineTotal = effectiveLineTotal(item, editingQty, editingPrice);
+                  return (
                   <div key={item.id} className="p-3 flex flex-wrap items-center gap-3">
                     <div className="w-8 text-center text-sm font-semibold text-gray-500 tabular-nums">
                       {index + 1}
@@ -1957,10 +2004,19 @@ export default function POSCredit() {
                           const digits = e.target.value.replace(/\D/g, '');
                           setEditingQty((prev) => ({ ...prev, [item.id]: digits }));
                         }}
-                        onBlur={(e) => updateItemQty(item.id, e.target.value)}
+                        onBlur={(e) => {
+                          if (skipQtyBlurRef.current.has(item.id)) {
+                            skipQtyBlurRef.current.delete(item.id);
+                            return;
+                          }
+                          void updateItemQty(item.id, e.target.value);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
+                            const value = e.currentTarget.value;
+                            skipQtyBlurRef.current.add(item.id);
+                            void updateItemQty(item.id, value);
                             focusCreditPosTabField(
                               posWorkflowRef.current,
                               e.currentTarget,
@@ -2001,10 +2057,19 @@ export default function POSCredit() {
                           if (isCartLocked) return;
                           setEditingPrice((prev) => ({ ...prev, [item.id]: e.target.value }));
                         }}
-                        onBlur={(e) => updateItemPrice(item.id, e.target.value)}
+                        onBlur={(e) => {
+                          if (skipPriceBlurRef.current.has(item.id)) {
+                            skipPriceBlurRef.current.delete(item.id);
+                            return;
+                          }
+                          void updateItemPrice(item.id, e.target.value);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
+                            const value = e.currentTarget.value;
+                            skipPriceBlurRef.current.add(item.id);
+                            void updateItemPrice(item.id, value);
                             focusCreditPosTabField(
                               posWorkflowRef.current,
                               e.currentTarget,
@@ -2017,8 +2082,8 @@ export default function POSCredit() {
                         aria-label="Unit price"
                       />
                     </div>
-                    <div className="w-24 text-right text-sm font-medium">
-                      ₹{formatNumber(parseFloat(item.line_total || 0))}
+                    <div className="w-24 text-right text-sm font-medium tabular-nums">
+                      ₹{formatNumber(lineTotal)}
                     </div>
                     <button
                       type="button"
@@ -2031,7 +2096,8 @@ export default function POSCredit() {
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

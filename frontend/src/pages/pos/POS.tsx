@@ -15,6 +15,9 @@ import {
   getUserTabs,
   getActiveTabId,
   getUsernameFromToken,
+  loadTradeInsByCart,
+  saveTradeInsByCart,
+  clearStoredTradeInsForCart,
   type CartTab,
   type UserCarts
 } from '../../lib/cartStorage';
@@ -428,6 +431,8 @@ export default function POS() {
   const [bulkCheckLoading, setBulkCheckLoading] = useState(false);
   const [bulkAddLoading, setBulkAddLoading] = useState(false);
   const [showTradeInModal, setShowTradeInModal] = useState(false);
+  /** Cart id the trade-in modal is editing (locked while open so tab switches don't corrupt lines). */
+  const [tradeInModalCartId, setTradeInModalCartId] = useState<number | null>(null);
   const [discardCartTarget, setDiscardCartTarget] = useState<{
     tabId: number;
     label: string;
@@ -435,20 +440,37 @@ export default function POS() {
   } | null>(null);
   const [verifyingDiscardTabId, setVerifyingDiscardTabId] = useState<number | null>(null);
   const [tradeInLinesByCart, setTradeInLinesByCart] = useState<Record<number, PosTradeInLine[]>>({});
+  const [tradeInsHydrated, setTradeInsHydrated] = useState(false);
   const tradeInLines = useMemo(
     () => (cartId != null ? tradeInLinesByCart[cartId] ?? [] : []),
     [cartId, tradeInLinesByCart]
   );
-  const setTradeInLines = useCallback(
-    (lines: PosTradeInLine[] | ((prev: PosTradeInLine[]) => PosTradeInLine[])) => {
-      if (cartId == null) return;
+  const tradeInModalLines = useMemo(
+    () => (tradeInModalCartId != null ? tradeInLinesByCart[tradeInModalCartId] ?? [] : []),
+    [tradeInModalCartId, tradeInLinesByCart]
+  );
+  const setTradeInLinesForCart = useCallback(
+    (targetCartId: number, lines: PosTradeInLine[] | ((prev: PosTradeInLine[]) => PosTradeInLine[])) => {
       setTradeInLinesByCart((prev) => {
-        const current = prev[cartId] ?? [];
+        const current = prev[targetCartId] ?? [];
         const next = typeof lines === 'function' ? lines(current) : lines;
-        return { ...prev, [cartId]: next };
+        if (next.length === 0) {
+          if (!(targetCartId in prev)) return prev;
+          const copy = { ...prev };
+          delete copy[targetCartId];
+          return copy;
+        }
+        return { ...prev, [targetCartId]: next };
       });
     },
-    [cartId]
+    []
+  );
+  const setTradeInModalLines = useCallback(
+    (lines: PosTradeInLine[] | ((prev: PosTradeInLine[]) => PosTradeInLine[])) => {
+      if (tradeInModalCartId == null) return;
+      setTradeInLinesForCart(tradeInModalCartId, lines);
+    },
+    [tradeInModalCartId, setTradeInLinesForCart]
   );
   const clearTradeInForCart = useCallback((id: number) => {
     setTradeInLinesByCart((prev) => {
@@ -457,6 +479,17 @@ export default function POS() {
       delete next[id];
       return next;
     });
+    const uname = getUsernameFromToken();
+    if (uname) clearStoredTradeInsForCart(uname, id);
+  }, []);
+  const openTradeInModal = useCallback(() => {
+    if (cartId == null) return;
+    setTradeInModalCartId(cartId);
+    setShowTradeInModal(true);
+  }, [cartId]);
+  const closeTradeInModal = useCallback(() => {
+    setShowTradeInModal(false);
+    setTradeInModalCartId(null);
   }, []);
   // Inline purchase price (cost) when item has no selling/purchase price - e.g. custom product
   const [editingPurchasePrice, setEditingPurchasePrice] = useState<Record<number, string>>({});
@@ -710,6 +743,21 @@ export default function POS() {
       }
     }
   }, [getCurrentUsername]);
+
+  // Restore trade-in lines per cart (same lifetime as cart tabs in localStorage)
+  useEffect(() => {
+    if (!username) {
+      setTradeInsHydrated(false);
+      return;
+    }
+    setTradeInLinesByCart(loadTradeInsByCart(username) as Record<number, PosTradeInLine[]>);
+    setTradeInsHydrated(true);
+  }, [username]);
+
+  useEffect(() => {
+    if (!username || !tradeInsHydrated) return;
+    saveTradeInsByCart(username, tradeInLinesByCart);
+  }, [username, tradeInLinesByCart, tradeInsHydrated]);
 
   // Fetch stores
   const { data: storesResponse } = useQuery({
@@ -2320,6 +2368,9 @@ export default function POS() {
 
   // Handle tab switching
   const handleTabSwitch = (tabId: number) => {
+    if (showTradeInModal) {
+      closeTradeInModal();
+    }
     setActiveTabId(tabId);
     setCartId(tabId);
     if (username) {
@@ -4445,14 +4496,23 @@ export default function POS() {
                     <ListOrdered className="h-4 w-4" />
                   </Button>
                   <Button
-                    onClick={() => setShowTradeInModal(true)}
+                    onClick={openTradeInModal}
                     variant="outline"
                     size="sm"
-                    className="whitespace-nowrap"
-                    title="Trade-in / exchange"
+                    className="whitespace-nowrap relative"
+                    title={
+                      tradeInLines.length > 0
+                        ? `Trade-in / exchange (${tradeInLines.length} line${tradeInLines.length === 1 ? '' : 's'} on this cart)`
+                        : 'Trade-in / exchange'
+                    }
                     disabled={!cartId || isCartLocked}
                   >
                     <RefreshCw className="h-4 w-4" />
+                    {tradeInLines.length > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[1.1rem] h-[1.1rem] px-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-[1.1rem] text-center">
+                        {tradeInLines.length}
+                      </span>
+                    )}
                   </Button>
                 </div>
                 {/* Queue Display */}
@@ -5599,9 +5659,9 @@ export default function POS() {
 
       <PosTradeInCartModal
         open={showTradeInModal}
-        onClose={() => setShowTradeInModal(false)}
-        lines={tradeInLines}
-        onLinesChange={setTradeInLines}
+        onClose={closeTradeInModal}
+        lines={tradeInModalLines}
+        onLinesChange={setTradeInModalLines}
         onError={(m) => showToast(m, 'error')}
       />
 

@@ -188,6 +188,86 @@ export function getUserTabs(username: string): CartTab[] {
 export function clearUserCarts(username: string): void {
   const storageKey = getStorageKey(username);
   localStorage.removeItem(storageKey);
+  localStorage.removeItem(getTradeInStorageKey(username));
+}
+
+const TRADE_IN_STORAGE_KEY_PREFIX = 'pos_trade_ins_';
+
+function getTradeInStorageKey(username: string): string {
+  return `${TRADE_IN_STORAGE_KEY_PREFIX}${username}`;
+}
+
+/** Per-cart trade-in / exchange lines (POS). Keys are cart ids as strings. */
+export type StoredTradeInsByCart = Record<string, unknown[]>;
+
+/**
+ * Load trade-in lines keyed by cart id for a user.
+ */
+export function loadTradeInsByCart(username: string): Record<number, unknown[]> {
+  try {
+    const raw = localStorage.getItem(getTradeInStorageKey(username));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as StoredTradeInsByCart;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Record<number, unknown[]> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const id = Number(key);
+      if (!Number.isFinite(id) || !Array.isArray(value)) continue;
+      out[id] = value;
+    }
+    return out;
+  } catch (error) {
+    console.error('Error loading POS trade-ins:', error);
+    return {};
+  }
+}
+
+/**
+ * Persist trade-in lines keyed by cart id. Empty carts are omitted.
+ */
+export function saveTradeInsByCart(username: string, byCart: Record<number, unknown[]>): void {
+  try {
+    const serializable: StoredTradeInsByCart = {};
+    for (const [key, lines] of Object.entries(byCart)) {
+      if (Array.isArray(lines) && lines.length > 0) {
+        serializable[String(key)] = lines;
+      }
+    }
+    const storageKey = getTradeInStorageKey(username);
+    if (Object.keys(serializable).length === 0) {
+      localStorage.removeItem(storageKey);
+    } else {
+      localStorage.setItem(storageKey, JSON.stringify(serializable));
+    }
+  } catch (error) {
+    console.error('Error saving POS trade-ins:', error);
+  }
+}
+
+/**
+ * Drop trade-in state for one cart (checkout / discard).
+ */
+export function clearStoredTradeInsForCart(username: string, cartId: number): void {
+  const current = loadTradeInsByCart(username);
+  if (!(cartId in current)) return;
+  delete current[cartId];
+  saveTradeInsByCart(username, current);
+}
+
+/**
+ * Keep only trade-ins for cart ids that still exist (after sync / prune).
+ */
+export function pruneStoredTradeIns(username: string, validCartIds: number[]): void {
+  const current = loadTradeInsByCart(username);
+  const valid = new Set(validCartIds);
+  let changed = false;
+  for (const id of Object.keys(current).map(Number)) {
+    if (!valid.has(id)) {
+      delete current[id];
+      changed = true;
+    }
+  }
+  if (changed) saveTradeInsByCart(username, current);
 }
 
 /**

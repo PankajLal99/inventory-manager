@@ -41,6 +41,7 @@ import {
   CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
+import { useCreditDocThemes } from './creditDocTheme';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -82,6 +83,8 @@ export default function CreditReturnDetail() {
   const returnId = parseInt(id || '', 10);
   const canManage = canManageCreditRecords();
   const canEditRecords = canEditCreditRecords();
+  // Re-render return HTML preview when document color changes
+  useCreditDocThemes();
 
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);

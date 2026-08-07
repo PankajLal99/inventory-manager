@@ -6,9 +6,9 @@ from decimal import Decimal
 import uuid
 from backend.catalog.models import Product, Barcode, Category
 from backend.locations.models import Store
-from backend.parties.models import Supplier, Customer
+from backend.parties.models import Supplier, Customer, LedgerEntry
 from backend.purchasing.models import Purchase, PurchaseItem
-from backend.pos.models import Cart, CartItem, Invoice, InvoiceItem, Expenses
+from backend.pos.models import Cart, CartItem, Invoice, InvoiceItem, Expenses, Payment
 from backend.core.models import AuditLog
 from backend.inventory.models import Stock
 from django.contrib.auth import get_user_model
@@ -2314,6 +2314,133 @@ class ReplacementPosAPITests(APITestCase):
         self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
 
 
+class FindInvoiceByBarcodeTests(APITestCase):
+    """find-invoice must ignore replacement-return lines and report invoice numbers when ambiguous."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username=f'fi_{uuid.uuid4().hex[:6]}', password='password')
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='FI Store', shop_type='retail')
+        self.customer = Customer.objects.create(
+            name=f'FICust{uuid.uuid4().hex[:6]}',
+            phone=f'9{uuid.uuid4().int % 900000000 + 100000000}',
+        )
+        self.category = Category.objects.create(name='FICat')
+        self.product = Product.objects.create(
+            name='FI Product',
+            category=self.category,
+            product_type='simple',
+            track_inventory=True,
+        )
+        self.barcode = Barcode.objects.create(
+            product=self.product,
+            barcode=f'FIBC{uuid.uuid4().hex[:8].upper()}',
+            short_code=f'FI{uuid.uuid4().hex[:6].upper()}',
+            tag='sold',
+        )
+        self.sale = Invoice.objects.create(
+            invoice_number=f'INV-FI-SALE-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        self.sale_line = InvoiceItem.objects.create(
+            invoice=self.sale,
+            product=self.product,
+            barcode=self.barcode,
+            sold_barcode_value=self.barcode.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('100.00'),
+        )
+
+    def test_excludes_replacement_return_invoice_lines(self):
+        """Replacement POS copies sold_barcode_value; those lines must not cause ambiguity."""
+        ret_inv = Invoice.objects.create(
+            invoice_number=f'INV-FI-RET-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            status='paid',
+            invoice_type='credit',
+            is_replacement_return=True,
+            subtotal=Decimal('50.00'),
+            total=Decimal('50.00'),
+            paid_amount=Decimal('0.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=ret_inv,
+            product=self.product,
+            barcode=self.barcode,
+            sold_barcode_value=self.barcode.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('50.00'),
+            original_invoice=self.sale,
+            original_invoice_item=self.sale_line,
+        )
+        url = reverse('find-invoice-by-barcode')
+        r = self.client.post(url, {'barcode': self.barcode.barcode}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
+        self.assertEqual(r.data['invoice']['invoice_number'], self.sale.invoice_number)
+
+    def test_ambiguous_response_includes_invoice_numbers(self):
+        other = Invoice.objects.create(
+            invoice_number=f'INV-FI-OTHER-{uuid.uuid4().hex[:8]}',
+            store=self.store,
+            customer=self.customer,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('100.00'),
+            total=Decimal('100.00'),
+            paid_amount=Decimal('100.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=other,
+            product=self.product,
+            barcode=self.barcode,
+            sold_barcode_value=self.barcode.barcode,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('100.00'),
+            discount_amount=Decimal('0.00'),
+            tax_amount=Decimal('0.00'),
+            line_total=Decimal('100.00'),
+        )
+        url = reverse('find-invoice-by-barcode')
+        r = self.client.post(url, {'barcode': self.barcode.barcode}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST, r.data)
+        self.assertEqual(r.data['error'], 'Ambiguous invoice lines')
+        self.assertIn(self.sale.invoice_number, r.data['invoice_numbers'])
+        self.assertIn(other.invoice_number, r.data['invoice_numbers'])
+        self.assertIn(self.sale.invoice_number, r.data['message'])
+        self.assertIn(other.invoice_number, r.data['message'])
+
+    def test_excludes_soft_deleted_barcode_fk_when_sold_snap_unique(self):
+        """Soft-deleted catalog rows still join via barcode__; prefer sold_barcode_value path."""
+        self.barcode.deleted_at = timezone.now()
+        self.barcode.save(update_fields=['deleted_at'])
+        # Clear FK so only sold_barcode_value matches (simulates soft-deleted row hidden from live FK)
+        self.sale_line.barcode = None
+        self.sale_line.save(update_fields=['barcode'])
+        url = reverse('find-invoice-by-barcode')
+        r = self.client.post(url, {'barcode': self.barcode.barcode}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_200_OK, r.data)
+        self.assertEqual(r.data['invoice']['invoice_number'], self.sale.invoice_number)
+
+
 class ExpenseAccessTests(APITestCase):
     def setUp(self):
         self.admin_group, _ = Group.objects.get_or_create(name='Admin')
@@ -2401,3 +2528,65 @@ class ExpenseAccessTests(APITestCase):
             format='json',
         )
         self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+
+
+class InvoiceTypePatchToCreditTests(APITestCase):
+    """PATCH invoice_type=credit must clear sale payments and move invoice onto ledger."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username=f'creditpatch_{uuid.uuid4().hex[:6]}', password='password'
+        )
+        self.client.force_authenticate(user=self.user)
+        self.store = Store.objects.create(name='Credit Patch Store', shop_type='retail')
+        self.category = Category.objects.create(name='Credit Patch Category')
+        self.product = Product.objects.create(
+            name='Credit Patch Product',
+            category=self.category,
+            product_type='simple',
+        )
+        self.customer = Customer.objects.create(name='Credit Patch Cust', phone='8888888888')
+        self.invoice = Invoice.objects.create(
+            invoice_number=f'INV-CR-PATCH-{uuid.uuid4().hex[:6]}',
+            store=self.store,
+            customer=self.customer,
+            status='paid',
+            invoice_type='cash',
+            subtotal=Decimal('250.00'),
+            total=Decimal('250.00'),
+            paid_amount=Decimal('250.00'),
+            due_amount=Decimal('0.00'),
+            created_by=self.user,
+        )
+        InvoiceItem.objects.create(
+            invoice=self.invoice,
+            product=self.product,
+            quantity=Decimal('1.000'),
+            unit_price=Decimal('250.00'),
+            line_total=Decimal('250.00'),
+        )
+        Payment.objects.create(
+            invoice=self.invoice,
+            payment_method='cash',
+            amount=Decimal('250.00'),
+            created_by=self.user,
+        )
+
+    def test_patch_invoice_type_to_credit_clears_payments_and_sets_ledger(self):
+        url = reverse('invoice-detail', kwargs={'pk': self.invoice.id})
+        response = self.client.patch(url, {'invoice_type': 'credit'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.invoice_type, 'credit')
+        self.assertEqual(self.invoice.status, 'credit')
+        self.assertEqual(self.invoice.paid_amount, Decimal('0.00'))
+        self.assertEqual(self.invoice.due_amount, Decimal('250.00'))
+        self.assertEqual(
+            self.invoice.payments.exclude(payment_method='refund').count(),
+            0,
+        )
+
+        debit = LedgerEntry.objects.filter(invoice=self.invoice, entry_type='debit').first()
+        self.assertIsNotNone(debit)
+        self.assertEqual(debit.amount, Decimal('250.00'))

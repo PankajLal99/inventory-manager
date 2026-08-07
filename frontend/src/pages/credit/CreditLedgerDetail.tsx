@@ -36,11 +36,12 @@ import {
   canManageCreditRecords,
   collectionStatusBadgeVariant,
   collectionStatusLabel,
+  compareLedgerStatementRows,
   formatCreditDate,
   formatCreditDateTime,
   formatCreditStatementDate,
 } from './creditLedgerUtils';
-import { CREDIT_THEME } from './creditInvoiceHtml';
+import { getLedgerTheme, hexToRgb, useCreditDocThemes } from './creditDocTheme';
 import {
   copyPngBlobToClipboard,
   buildCreditLedgerSnapshotBlobs,
@@ -51,7 +52,6 @@ import {
   setPendingLedgerClipboardImage,
   takePendingLedgerClipboardImage,
 } from './pendingLedgerClipboard';
-
 type PaymentMethod = 'cash' | 'upi' | 'mixed';
 type TxnType = '' | 'sale' | 'payment' | 'return';
 
@@ -103,25 +103,6 @@ function loadColumnVisibility(): Record<LedgerColumnId, boolean> {
     return defaults;
   }
 }
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace('#', '');
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-/** Same amber scheme as A4 credit invoice print; green/red for ledger debit/credit rows */
-const PDF_PRIMARY = hexToRgb(CREDIT_THEME.primary);
-const PDF_SECONDARY = hexToRgb(CREDIT_THEME.secondary);
-const PDF_HEAD = hexToRgb(CREDIT_THEME.tableHead);
-const PDF_BORDER = hexToRgb(CREDIT_THEME.primaryBorder);
-const PDF_MUTED = hexToRgb(CREDIT_THEME.textMuted);
-const PDF_INK = hexToRgb(CREDIT_THEME.text);
-const PDF_DEBIT_BG = hexToRgb(CREDIT_THEME.debitBg);
-const PDF_DEBIT_SOFT = hexToRgb(CREDIT_THEME.debitBgSoft);
-const PDF_CREDIT_BG = hexToRgb(CREDIT_THEME.creditBg);
-const PDF_CREDIT_SOFT = hexToRgb(CREDIT_THEME.creditBgSoft);
-const PDF_GREEN = hexToRgb(CREDIT_THEME.creditText);
-const PDF_RED = hexToRgb(CREDIT_THEME.debitText);
 
 function formatPdfDate(value?: string | null) {
   return formatCreditDate(value);
@@ -220,6 +201,7 @@ export default function CreditLedgerDetail() {
   const [columnVisibility, setColumnVisibility] =
     useState<Record<LedgerColumnId, boolean>>(loadColumnVisibility);
   const [search, setSearch] = useState('');
+  const { ledger: ledgerTheme } = useCreditDocThemes();
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showDebitModal, setShowDebitModal] = useState(false);
@@ -292,13 +274,8 @@ export default function CreditLedgerDetail() {
   const selectedCustomer = statement?.customer || customerMeta;
   const rows = useMemo(() => {
     const list = [...(statement?.rows || [])];
-    // Oldest date on top (ascending)
-    list.sort((a: any, b: any) => {
-      const ta = new Date(a.created_at || 0).getTime();
-      const tb = new Date(b.created_at || 0).getTime();
-      if (ta !== tb) return ta - tb;
-      return (Number(a.id) || 0) - (Number(b.id) || 0);
-    });
+    // Day → activity (sale → return → payment) → time (matches backend running balance)
+    list.sort(compareLedgerStatementRows);
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter((row: any) => {
@@ -656,6 +633,20 @@ export default function CreditLedgerDetail() {
   const buildCreditLedgerPdf = () => {
     if (!selectedCustomer || !statement) return null;
 
+    const theme = getLedgerTheme();
+    const PDF_PRIMARY = hexToRgb(theme.primary);
+    const PDF_SECONDARY = hexToRgb(theme.secondary);
+    const PDF_HEAD = hexToRgb(theme.tableHead);
+    const PDF_BORDER = hexToRgb(theme.primaryBorder);
+    const PDF_MUTED = hexToRgb(theme.textMuted);
+    const PDF_INK = hexToRgb(theme.text);
+    const PDF_DEBIT_BG = hexToRgb(theme.debitBg);
+    const PDF_DEBIT_SOFT = hexToRgb(theme.debitBgSoft);
+    const PDF_CREDIT_BG = hexToRgb(theme.creditBg);
+    const PDF_CREDIT_SOFT = hexToRgb(theme.creditBgSoft);
+    const PDF_GREEN = hexToRgb(theme.creditText);
+    const PDF_RED = hexToRgb(theme.debitText);
+
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
@@ -672,7 +663,7 @@ export default function CreditLedgerDetail() {
         ? `on ${formatPdfDate(rows[0].created_at)}`
         : '';
 
-    // Top brand bar — same amber as A4 credit invoice
+    // Top brand bar — ledger chrome color
     doc.setFillColor(...PDF_PRIMARY);
     doc.rect(0, 0, pageWidth, 8, 'F');
     doc.setTextColor(255, 255, 255);
@@ -695,7 +686,7 @@ export default function CreditLedgerDetail() {
     doc.setTextColor(...PDF_MUTED);
     doc.text(`(${periodLabel})`, pageWidth / 2, y, { align: 'center' });
 
-    // Summary strip — shorter (white card, amber border)
+    // Summary strip — shorter (white card, themed border)
     y += 4;
     const boxH = 16;
     doc.setDrawColor(...PDF_BORDER);
@@ -866,7 +857,7 @@ export default function CreditLedgerDetail() {
       align: 'right',
     });
 
-    // Bottom brand bar — same amber as A4 credit invoice
+    // Bottom brand bar — ledger chrome color
     doc.setFillColor(...PDF_PRIMARY);
     doc.rect(0, pageHeight - 8, pageWidth, 8, 'F');
     doc.setTextColor(255, 255, 255);
@@ -1284,22 +1275,37 @@ export default function CreditLedgerDetail() {
             <ErrorState message="Failed to load statement" onRetry={() => refetch()} />
           </div>
         ) : (
-          <div className="bg-white border-[3px] border-amber-600 overflow-hidden">
-            <div className="bg-amber-600 text-white px-4 py-2 flex items-center justify-between">
+          <div
+            className="bg-white border-[3px] overflow-hidden"
+            style={{ borderColor: ledgerTheme.primary }}
+          >
+            <div
+              className="text-white px-4 py-2 flex items-center justify-between"
+              style={{ background: ledgerTheme.primary }}
+            >
               <div className="font-bold text-sm">Manish Traders</div>
               <div className="text-xs sm:text-sm">Credit Ledger</div>
             </div>
 
             <div className="px-4 py-4 sm:px-5 bg-white">
               <div className="text-center">
-                <div className="text-lg sm:text-xl font-extrabold text-amber-950">
+                <div
+                  className="text-lg sm:text-xl font-extrabold"
+                  style={{ color: ledgerTheme.secondary }}
+                >
                   {customerDisplayName} Statement
                 </div>
                 <div className="text-xs sm:text-sm text-stone-600 mt-0.5">({periodLabel})</div>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 border border-amber-400 rounded overflow-hidden bg-white">
-                <div className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r border-amber-300">
+              <div
+                className="mt-3 grid grid-cols-2 lg:grid-cols-4 rounded overflow-hidden bg-white"
+                style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
+              >
+                <div
+                  className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r"
+                  style={{ borderColor: ledgerTheme.primaryBorder }}
+                >
                   <div className="text-[10px] sm:text-xs text-stone-500">Opening Balance</div>
                   <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
                     Rs. {formatPdfAmount(statement?.opening_balance)}
@@ -1308,13 +1314,19 @@ export default function CreditLedgerDetail() {
                     <div className="text-[10px] text-stone-500 mt-0.5">{openingOnLabel}</div>
                   ) : null}
                 </div>
-                <div className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r border-amber-300">
+                <div
+                  className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r"
+                  style={{ borderColor: ledgerTheme.primaryBorder }}
+                >
                   <div className="text-[10px] sm:text-xs text-stone-500">Total Debit(-)</div>
                   <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
                     Rs. {formatPdfAmount(statement?.total_debit)}
                   </div>
                 </div>
-                <div className="px-3 py-2.5 border-b sm:border-b-0 lg:border-r border-amber-300">
+                <div
+                  className="px-3 py-2.5 border-b sm:border-b-0 lg:border-r"
+                  style={{ borderColor: ledgerTheme.primaryBorder }}
+                >
                   <div className="text-[10px] sm:text-xs text-stone-500">Total Credit(+)</div>
                   <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
                     Rs. {formatPdfAmount(statement?.total_credit)}
@@ -1339,11 +1351,17 @@ export default function CreditLedgerDetail() {
                 </div>
               </div>
 
-              <div className="mt-3 text-xs sm:text-sm font-bold text-amber-900">
+              <div
+                className="mt-3 text-xs sm:text-sm font-bold"
+                style={{ color: ledgerTheme.secondary }}
+              >
                 No. of Entries: {rows.length} {entriesSuffix}
               </div>
 
-              <div className="mt-1.5 overflow-x-auto border border-amber-400 rounded bg-white">
+              <div
+                className="mt-1.5 overflow-x-auto rounded bg-white"
+                style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
+              >
                 <table className="min-w-full text-xs sm:text-sm border-collapse">
                   <thead>
                     <tr>
@@ -1356,21 +1374,33 @@ export default function CreditLedgerDetail() {
                               : 'text-left';
                         const bg =
                           col.id === 'debit'
-                            ? 'bg-red-100'
+                            ? ledgerTheme.debitBg
                             : col.id === 'credit'
-                              ? 'bg-green-100'
-                              : 'bg-amber-100';
+                              ? ledgerTheme.creditBg
+                              : ledgerTheme.tableHead;
                         return (
                           <th
                             key={col.id}
-                            className={`${align} px-2.5 py-1.5 font-bold text-amber-900 ${bg} border border-amber-400 whitespace-nowrap`}
+                            className={`${align} px-2.5 py-1.5 font-bold whitespace-nowrap`}
+                            style={{
+                              color: ledgerTheme.secondary,
+                              background: bg,
+                              border: `1px solid ${ledgerTheme.primaryBorder}`,
+                            }}
                           >
                             {col.label}
                           </th>
                         );
                       })}
                       {canManage ? (
-                        <th className="px-2 py-1.5 font-bold text-amber-900 bg-amber-100 border border-amber-400 w-16" />
+                        <th
+                          className="px-2 py-1.5 font-bold w-16"
+                          style={{
+                            color: ledgerTheme.secondary,
+                            background: ledgerTheme.tableHead,
+                            border: `1px solid ${ledgerTheme.primaryBorder}`,
+                          }}
+                        />
                       ) : null}
                     </tr>
                   </thead>
@@ -1391,21 +1421,25 @@ export default function CreditLedgerDetail() {
                                 return (
                                   <td
                                     key={col.id}
-                                    className={`px-2.5 py-1.5 font-bold border border-amber-300 ${align} ${
+                                    className={`px-2.5 py-1.5 font-bold ${align} ${
                                       col.id === 'balance' ? 'text-stone-500' : 'text-stone-900'
                                     }`}
+                                    style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
                                   >
                                     {cellValue(r, col.id)}
                                   </td>
                                 );
                               })}
-                              {canManage ? <td className="border border-amber-300" /> : null}
+                              {canManage ? (
+                                <td style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }} />
+                              ) : null}
                             </tr>
                           ))}
                         <tr>
                           <td
                             colSpan={Math.max(visibleColumns.length, 1) + (canManage ? 1 : 0)}
-                            className="px-2.5 py-6 text-center text-stone-400 border border-amber-300"
+                            className="px-2.5 py-6 text-center text-stone-400"
+                            style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
                           >
                             No entries in this period.
                           </td>
@@ -1413,7 +1447,11 @@ export default function CreditLedgerDetail() {
                         {statementRows
                           .filter((r) => r.isTotal)
                           .map((r, i) => (
-                            <tr key={`total-${i}`} className="bg-amber-100 font-bold">
+                            <tr
+                              key={`total-${i}`}
+                              className="font-bold"
+                              style={{ background: ledgerTheme.tableHead }}
+                            >
                               {visibleColumns.map((col) => {
                                 const align =
                                   col.align === 'right'
@@ -1433,15 +1471,21 @@ export default function CreditLedgerDetail() {
                                 return (
                                   <td
                                     key={col.id}
-                                    className={`px-2.5 py-1.5 border border-amber-400 tabular-nums ${align} ${bg} ${
-                                      col.id === 'balance' ? balColor : 'text-amber-950'
+                                    className={`px-2.5 py-1.5 tabular-nums ${align} ${bg} ${
+                                      col.id === 'balance' ? balColor : ''
                                     }`}
+                                    style={{
+                                      border: `1px solid ${ledgerTheme.primaryBorder}`,
+                                      color: col.id === 'balance' ? undefined : ledgerTheme.secondary,
+                                    }}
                                   >
                                     {cellValue(r, col.id)}
                                   </td>
                                 );
                               })}
-                              {canManage ? <td className="border border-amber-400" /> : null}
+                              {canManage ? (
+                                <td style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }} />
+                              ) : null}
                             </tr>
                           ))}
                       </>
@@ -1454,12 +1498,16 @@ export default function CreditLedgerDetail() {
                             ? 'text-green-700'
                             : 'text-red-700';
                         let rowBg = 'bg-white';
-                        if (r.isTotal) rowBg = 'bg-amber-100';
+                        if (r.isTotal) rowBg = '';
                         else if (r.hasCredit && !r.hasDebit) rowBg = 'bg-green-50';
                         else if (r.hasDebit && !r.hasCredit) rowBg = 'bg-red-50';
 
                         return (
-                          <tr key={idx} className={`${rowBg} ${r.isTotal ? 'font-bold' : ''}`}>
+                          <tr
+                            key={idx}
+                            className={`${rowBg} ${r.isTotal ? 'font-bold' : ''}`}
+                            style={r.isTotal ? { background: ledgerTheme.tableHead } : undefined}
+                          >
                             {visibleColumns.map((col) => {
                               const align =
                                 col.align === 'right'
@@ -1491,21 +1539,26 @@ export default function CreditLedgerDetail() {
                               return (
                                 <td
                                   key={col.id}
-                                  className={`px-2.5 py-1 border border-amber-300 text-stone-900 tabular-nums ${align} ${
+                                  className={`px-2.5 py-1 text-stone-900 tabular-nums ${align} ${
                                     col.id === 'date' || col.id === 'vch' ? 'whitespace-nowrap' : ''
                                   } ${extra}`}
+                                  style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
                                 >
                                   {cellValue(r, col.id)}
                                 </td>
                               );
                             })}
                             {canManage ? (
-                              <td className="px-1 py-1 border border-amber-300 text-center whitespace-nowrap">
+                              <td
+                                className="px-1 py-1 text-center whitespace-nowrap"
+                                style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
+                              >
                                 {r.isManual && r.entryId ? (
                                   <div className="inline-flex items-center gap-0.5">
                                     <button
                                       type="button"
-                                      className="p-1 text-amber-800 hover:bg-amber-100 rounded"
+                                      className="p-1 rounded hover:opacity-80"
+                                      style={{ color: ledgerTheme.secondary }}
                                       title="Edit opening balance"
                                       onClick={() => openEditEntry(r)}
                                     >
@@ -1537,12 +1590,18 @@ export default function CreditLedgerDetail() {
               </div>
             </div>
 
-            <div className="bg-amber-600 text-white px-4 py-2 flex items-center justify-between text-xs sm:text-sm">
+            <div
+              className="text-white px-4 py-2 flex items-center justify-between text-xs sm:text-sm"
+              style={{ background: ledgerTheme.primary }}
+            >
               <div className="font-bold">Manish Traders</div>
               <div>Credit Ledger</div>
             </div>
 
-            <div className="px-4 py-2.5 border-t border-amber-200 flex flex-wrap justify-end gap-2 bg-white">
+            <div
+              className="px-4 py-2.5 border-t flex flex-wrap justify-end gap-2 bg-white"
+              style={{ borderColor: ledgerTheme.primaryBorder }}
+            >
               <Button
                 variant="outline"
                 size="sm"

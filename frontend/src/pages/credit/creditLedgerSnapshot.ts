@@ -1,5 +1,6 @@
-import { CREDIT_THEME } from './creditInvoiceHtml';
+import { getLedgerTheme } from './creditDocTheme';
 import {
+  compareLedgerStatementRows,
   formatCreditDate,
   formatCreditDateTime,
   formatCreditStatementDate,
@@ -93,12 +94,7 @@ type SnapRow = {
 };
 
 function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
-  return [...(statement.rows || [])].sort((a, b) => {
-    const ta = new Date(a.created_at || 0).getTime();
-    const tb = new Date(b.created_at || 0).getTime();
-    if (ta !== tb) return ta - tb;
-    return (Number(a.id) || 0) - (Number(b.id) || 0);
-  });
+  return [...(statement.rows || [])].sort(compareLedgerStatementRows);
 }
 
 function toSnapRows(
@@ -143,13 +139,14 @@ export function buildCreditLedgerSnapshotHtml(
   const showSummary = page?.showSummary ?? true;
   const showTotals = page?.showTotals ?? true;
   const lineStart = page?.lineStart ?? 1;
+  const theme = getLedgerTheme();
 
   const customerName = sanitizeText(statement.customer?.name || 'Customer') || 'Customer';
   const firstName = customerName.split(/\s+/)[0] || customerName;
   const netSide = String(statement.closing_side || 'Dr').toUpperCase();
   const isCr = netSide === 'CR';
   const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
-  const netColor = isCr ? CREDIT_THEME.creditText : CREDIT_THEME.debitText;
+  const netColor = isCr ? theme.creditText : theme.debitText;
   const openOn = allRows[0]?.created_at ? `on ${formatCreditDate(allRows[0].created_at)}` : '';
 
   const tableRows: SnapRow[] = [...pageRows];
@@ -176,16 +173,16 @@ export function buildCreditLedgerSnapshotHtml(
 
   const cellBase =
     `padding:9px 10px;line-height:1.35;vertical-align:middle;box-sizing:border-box;` +
-    `border-right:1px solid ${CREDIT_THEME.primaryBorder};border-bottom:1px solid ${CREDIT_THEME.primaryBorder};` +
+    `border-right:1px solid ${theme.primaryBorder};border-bottom:1px solid ${theme.primaryBorder};` +
     `font-family:Arial,Helvetica,sans-serif;`;
 
   const ths = cols
     .map((c, i) => {
-      let bg = CREDIT_THEME.tableHead;
-      if (c.id === 'debit') bg = CREDIT_THEME.debitBg;
-      if (c.id === 'credit') bg = CREDIT_THEME.creditBg;
+      let bg = theme.tableHead;
+      if (c.id === 'debit') bg = theme.debitBg;
+      if (c.id === 'credit') bg = theme.creditBg;
       const right = i === cols.length - 1 ? 'border-right:none;' : '';
-      return `<th style="${cellBase}${right}text-align:${c.align};font-size:11px;font-weight:700;color:${CREDIT_THEME.secondary};background:${bg};">${escapeHtml(c.label)}</th>`;
+      return `<th style="${cellBase}${right}text-align:${c.align};font-size:11px;font-weight:700;color:${theme.secondary};background:${bg};">${escapeHtml(c.label)}</th>`;
     })
     .join('');
 
@@ -193,30 +190,30 @@ export function buildCreditLedgerSnapshotHtml(
     .map((r) => {
       const balCr = /cr/i.test(r.balance);
       const balColor = r.isOpening
-        ? CREDIT_THEME.textMuted
+        ? theme.textMuted
         : balCr
-          ? CREDIT_THEME.creditText
-          : CREDIT_THEME.debitText;
+          ? theme.creditText
+          : theme.debitText;
       const weight = r.isOpening || r.isTotal ? '700' : '500';
-      let rowBg = CREDIT_THEME.white;
-      if (r.isTotal) rowBg = CREDIT_THEME.tableHead;
-      else if (r.hasCredit && !r.hasDebit) rowBg = CREDIT_THEME.creditBgSoft;
-      else if (r.hasDebit && !r.hasCredit) rowBg = CREDIT_THEME.debitBgSoft;
+      let rowBg = theme.white;
+      if (r.isTotal) rowBg = theme.tableHead;
+      else if (r.hasCredit && !r.hasDebit) rowBg = theme.creditBgSoft;
+      else if (r.hasDebit && !r.hasCredit) rowBg = theme.debitBgSoft;
 
       const tds = cols
         .map((c, i) => {
           let val = String(r[c.id] ?? '').trim();
           if (!val) val = '\u00A0';
           let bg = rowBg;
-          let color = CREDIT_THEME.text;
+          let color = theme.text;
           let fw = weight;
-          if (c.id === 'debit' && (r.hasDebit || r.isTotal)) bg = CREDIT_THEME.debitBg;
-          if (c.id === 'credit' && (r.hasCredit || r.isTotal)) bg = CREDIT_THEME.creditBg;
+          if (c.id === 'debit' && (r.hasDebit || r.isTotal)) bg = theme.debitBg;
+          if (c.id === 'credit' && (r.hasCredit || r.isTotal)) bg = theme.creditBg;
           if (c.id === 'balance') {
             fw = '700';
             color = balColor;
-            if (r.hasCredit && !r.isOpening && !r.isTotal) bg = CREDIT_THEME.creditBg;
-            else if (r.isTotal) bg = CREDIT_THEME.tableHead;
+            if (r.hasCredit && !r.isOpening && !r.isTotal) bg = theme.creditBg;
+            else if (r.isTotal) bg = theme.tableHead;
           }
           const right = i === cols.length - 1 ? 'border-right:none;' : '';
           return `<td style="${cellBase}${right}font-size:12px;text-align:${c.align};background:${bg};color:${color};font-weight:${fw};">${escapeHtml(val)}</td>`;
@@ -238,40 +235,40 @@ export function buildCreditLedgerSnapshotHtml(
   const lineEnd = lineStart + Math.max(pageRows.length, 1) - 1;
   const partNote =
     partCount > 1
-      ? `<div style="text-align:center;font-size:11px;font-weight:700;line-height:1.3;color:${CREDIT_THEME.secondaryMuted};margin-top:6px;">Part ${partIndex} of ${partCount}${
+      ? `<div style="text-align:center;font-size:11px;font-weight:700;line-height:1.3;color:${theme.secondaryMuted};margin-top:6px;">Part ${partIndex} of ${partCount}${
           pageRows.length ? ` · Lines ${lineStart}–${lineEnd}` : ''
         }</div>`
       : '';
 
   const summaryBlock = showSummary
-    ? `<table style="width:100%;border-collapse:separate;border-spacing:0;margin-top:12px;table-layout:fixed;border:1px solid ${CREDIT_THEME.primaryBorder};">
+    ? `<table style="width:100%;border-collapse:separate;border-spacing:0;margin-top:12px;table-layout:fixed;border:1px solid ${theme.primaryBorder};">
         <tr>
-          <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
-            <div style="font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">Opening Balance</div>
-            <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatAmount(statement.opening_balance))}</div>
-            ${openOn ? `<div style="font-size:9px;line-height:1.3;color:${CREDIT_THEME.textMuted};margin-top:3px;">${escapeHtml(openOn)}</div>` : ''}
+          <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${theme.primaryBorder};background:${theme.white};">
+            <div style="font-size:10px;line-height:1.3;color:${theme.textMuted};">Opening Balance</div>
+            <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${theme.text};">Rs. ${escapeHtml(formatAmount(statement.opening_balance))}</div>
+            ${openOn ? `<div style="font-size:9px;line-height:1.3;color:${theme.textMuted};margin-top:3px;">${escapeHtml(openOn)}</div>` : ''}
           </td>
-          <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
-            <div style="font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">Total Debit(-)</div>
-            <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatAmount(statement.total_debit))}</div>
+          <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${theme.primaryBorder};background:${theme.white};">
+            <div style="font-size:10px;line-height:1.3;color:${theme.textMuted};">Total Debit(-)</div>
+            <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${theme.text};">Rs. ${escapeHtml(formatAmount(statement.total_debit))}</div>
           </td>
-          <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
-            <div style="font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">Total Credit(+)</div>
-            <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${CREDIT_THEME.text};">Rs. ${escapeHtml(formatAmount(statement.total_credit))}</div>
+          <td style="width:25%;padding:10px;vertical-align:top;border-right:1px solid ${theme.primaryBorder};background:${theme.white};">
+            <div style="font-size:10px;line-height:1.3;color:${theme.textMuted};">Total Credit(+)</div>
+            <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${theme.text};">Rs. ${escapeHtml(formatAmount(statement.total_credit))}</div>
           </td>
-          <td style="width:25%;padding:10px;vertical-align:top;background:${CREDIT_THEME.white};">
-            <div style="font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">Net Balance</div>
+          <td style="width:25%;padding:10px;vertical-align:top;background:${theme.white};">
+            <div style="font-size:10px;line-height:1.3;color:${theme.textMuted};">Net Balance</div>
             <div style="font-size:13px;font-weight:700;line-height:1.35;margin-top:4px;color:${netColor};">Rs. ${escapeHtml(formatAmount(statement.closing_balance))} ${isCr ? 'Cr' : 'Dr'}</div>
             <div style="font-size:9px;line-height:1.3;margin-top:3px;color:${netColor};">${escapeHtml(netHint)}</div>
           </td>
         </tr>
       </table>
-      <div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${CREDIT_THEME.secondary};">No. of Entries: ${totalEntries} (All)</div>`
-    : `<div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${CREDIT_THEME.secondary};">Entries continued…</div>`;
+      <div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${theme.secondary};">No. of Entries: ${totalEntries} (All)</div>`
+    : `<div style="margin-top:12px;margin-bottom:6px;font-size:11px;line-height:1.3;font-weight:700;color:${theme.secondary};">Entries continued…</div>`;
 
   const continuedFooter =
     !showTotals && partCount > 1
-      ? `<div style="margin-top:10px;text-align:right;font-size:11px;font-weight:600;color:${CREDIT_THEME.secondaryMuted};">Continued on next page…</div>`
+      ? `<div style="margin-top:10px;text-align:right;font-size:11px;font-weight:600;color:${theme.secondaryMuted};">Continued on next page…</div>`
       : '';
 
   return `<!doctype html>
@@ -282,18 +279,18 @@ export function buildCreditLedgerSnapshotHtml(
 </style>
 </head>
 <body style="margin:0;padding:0;background:#fff;">
-  <div id="credit-ledger-copy-root" style="width:794px;min-height:1123px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${CREDIT_THEME.text};background:${CREDIT_THEME.white};border:3px solid ${CREDIT_THEME.primary};display:flex;flex-direction:column;">
-    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
+  <div id="credit-ledger-copy-root" style="width:794px;min-height:1123px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${theme.text};background:${theme.white};border:3px solid ${theme.primary};display:flex;flex-direction:column;">
+    <div style="background:${theme.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
       <div style="font-weight:700;font-size:13px;line-height:1.3;">Manish Traders</div>
       <div style="font-size:12px;line-height:1.3;">Credit Ledger</div>
     </div>
-    <div style="padding:14px 16px 12px;background:${CREDIT_THEME.white};flex:1;">
-      <div style="text-align:center;font-size:17px;font-weight:800;line-height:1.3;color:${CREDIT_THEME.secondary};">${escapeHtml(customerName)} Statement</div>
-      <div style="text-align:center;font-size:11px;line-height:1.3;color:${CREDIT_THEME.textMuted};margin-top:4px;">(All dates)</div>
+    <div style="padding:14px 16px 12px;background:${theme.white};flex:1;">
+      <div style="text-align:center;font-size:17px;font-weight:800;line-height:1.3;color:${theme.secondary};">${escapeHtml(customerName)} Statement</div>
+      <div style="text-align:center;font-size:11px;line-height:1.3;color:${theme.textMuted};margin-top:4px;">(All dates)</div>
       ${partNote}
       ${summaryBlock}
 
-      <table style="width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;border:1px solid ${CREDIT_THEME.primaryBorder};background:${CREDIT_THEME.white};">
+      <table style="width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;border:1px solid ${theme.primaryBorder};background:${theme.white};">
         ${colgroup}
         <thead><tr>${ths}</tr></thead>
         <tbody>${trs}</tbody>
@@ -301,12 +298,12 @@ export function buildCreditLedgerSnapshotHtml(
 
       ${continuedFooter}
 
-      <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:10px;line-height:1.3;color:${CREDIT_THEME.textMuted};">
+      <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:10px;line-height:1.3;color:${theme.textMuted};">
         <div>Report Generated : ${escapeHtml(formatCreditDateTime(new Date()))}</div>
         <div>Page ${partIndex} of ${partCount}</div>
       </div>
     </div>
-    <div style="background:${CREDIT_THEME.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;font-size:12px;line-height:1.3;">
+    <div style="background:${theme.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;font-size:12px;line-height:1.3;">
       <div style="font-weight:700;">Manish Traders</div>
       <div>Credit Ledger</div>
     </div>

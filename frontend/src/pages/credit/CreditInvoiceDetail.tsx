@@ -37,6 +37,7 @@ import {
   CREDIT_INVOICE_CAPTURE_WIDTH,
   CREDIT_SHOP_NAME,
 } from './creditInvoiceHtml';
+import { useCreditDocThemes } from './creditDocTheme';
 import {
   buildCreditDocumentSnapshotBlobs,
   copyPngBlobToClipboard,
@@ -101,6 +102,8 @@ export default function CreditInvoiceDetail() {
   const invoiceId = parseInt(id || '', 10);
   const canManage = canManageCreditRecords();
   const canEdit = canEditCreditRecords();
+  // Re-render invoice HTML preview when document color changes
+  useCreditDocThemes();
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const tid = Math.random().toString(36).slice(2);
