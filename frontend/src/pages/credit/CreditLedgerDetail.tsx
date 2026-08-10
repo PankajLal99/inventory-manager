@@ -41,7 +41,25 @@ import {
   formatCreditDateTime,
   formatCreditStatementDate,
 } from './creditLedgerUtils';
-import { getLedgerTheme, hexToRgb, useCreditDocThemes } from './creditDocTheme';
+import {
+  docFooterFontPx,
+  docFooterFontWeight,
+  docHeaderFontPx,
+  docHeaderFontWeight,
+  docPageBackground,
+  docPdfFooterFontSize,
+  docPdfFontFamily,
+  docPdfHeaderFontSize,
+  docPdfRowFontSize,
+  docPdfSubHeaderFontSize,
+  docRowBackground,
+  docRowFontPx,
+  docSubHeaderFontPx,
+  docSubHeaderFontWeight,
+  getLedgerTheme,
+  hexToRgb,
+  useCreditDocThemes,
+} from './creditDocTheme';
 import {
   copyPngBlobToClipboard,
   buildCreditLedgerSnapshotBlobs,
@@ -641,11 +659,29 @@ export default function CreditLedgerDetail() {
     const PDF_MUTED = hexToRgb(theme.textMuted);
     const PDF_INK = hexToRgb(theme.text);
     const PDF_DEBIT_BG = hexToRgb(theme.debitBg);
-    const PDF_DEBIT_SOFT = hexToRgb(theme.debitBgSoft);
     const PDF_CREDIT_BG = hexToRgb(theme.creditBg);
-    const PDF_CREDIT_SOFT = hexToRgb(theme.creditBgSoft);
     const PDF_GREEN = hexToRgb(theme.creditText);
     const PDF_RED = hexToRgb(theme.debitText);
+
+    const PDF_PAGE = hexToRgb(docPageBackground(theme));
+    const pdfFont = docPdfFontFamily(theme);
+    const pdfHeaderSize = docPdfHeaderFontSize(theme);
+    const pdfSubSize = docPdfSubHeaderFontSize(theme);
+    const pdfBodySize = docPdfRowFontSize(theme);
+    const pdfFooterSize = docPdfFooterFontSize(theme);
+    const pdfRowWeight = theme.rowFontBold ? 'bold' : 'normal';
+    const pdfHeaderWeight = theme.headerFontBold ? 'bold' : 'normal';
+    const pdfSubWeight = theme.subHeaderFontBold ? 'bold' : 'normal';
+    const pdfFooterWeight = theme.footerFontBold ? 'bold' : 'normal';
+
+    const themeColorToPdfRgb = (
+      color: string,
+      fallback: [number, number, number]
+    ): [number, number, number] => {
+      const c = color.trim().toLowerCase();
+      if (!c || c === 'transparent') return fallback;
+      return hexToRgb(c);
+    };
 
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -667,22 +703,22 @@ export default function CreditLedgerDetail() {
     doc.setFillColor(...PDF_PRIMARY);
     doc.rect(0, 0, pageWidth, 8, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
+    doc.setFont(pdfFont, pdfHeaderWeight);
+    doc.setFontSize(pdfHeaderSize);
     doc.text('Manish Traders', marginX, 5.4);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFont(pdfFont, pdfSubWeight);
+    doc.setFontSize(pdfSubSize);
     doc.text('Credit Ledger', pageWidth - marginX, 5.4, { align: 'right' });
 
     // Title — tight
     let y = 14;
     doc.setTextColor(...PDF_SECONDARY);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
+    doc.setFont(pdfFont, pdfHeaderWeight);
+    doc.setFontSize(pdfHeaderSize);
     doc.text(`${customerName} Statement`, pageWidth / 2, y, { align: 'center' });
     y += 4.5;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFont(pdfFont, pdfSubWeight);
+    doc.setFontSize(pdfSubSize);
     doc.setTextColor(...PDF_MUTED);
     doc.text(`(${periodLabel})`, pageWidth / 2, y, { align: 'center' });
 
@@ -690,7 +726,7 @@ export default function CreditLedgerDetail() {
     y += 4;
     const boxH = 16;
     doc.setDrawColor(...PDF_BORDER);
-    doc.setFillColor(255, 255, 255);
+    doc.setFillColor(...PDF_PAGE);
     doc.setLineWidth(0.3);
     doc.roundedRect(marginX, y, contentW, boxH, 0.8, 0.8, 'FD');
 
@@ -728,17 +764,17 @@ export default function CreditLedgerDetail() {
         doc.setDrawColor(...PDF_BORDER);
         doc.line(x, y + 2, x, y + boxH - 2);
       }
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(6.5);
+      doc.setFont(pdfFont, pdfSubWeight);
+      doc.setFontSize(pdfSubSize * 0.85);
       doc.setTextColor(...PDF_MUTED);
       doc.text(card.label, x + 2.5, y + 4.5);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
+      doc.setFont(pdfFont, pdfSubWeight);
+      doc.setFontSize(pdfSubSize);
       doc.setTextColor(...card.color);
       doc.text(card.value, x + 2.5, y + 9.5, { maxWidth: colW - 5 });
       if (card.sub) {
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6);
+        doc.setFont(pdfFont, pdfFooterWeight);
+        doc.setFontSize(pdfFooterSize);
         doc.setTextColor(...(i === 3 ? card.color : PDF_MUTED));
         doc.text(card.sub, x + 2.5, y + 13.5, { maxWidth: colW - 5 });
       }
@@ -746,8 +782,8 @@ export default function CreditLedgerDetail() {
 
     y += boxH + 4;
     doc.setTextColor(...PDF_INK);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
+    doc.setFont(pdfFont, pdfSubWeight);
+    doc.setFontSize(pdfSubSize);
     const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
     doc.text(`No. of Entries: ${rows.length} ${entriesSuffix}`, marginX, y);
     y += 1.5;
@@ -773,19 +809,21 @@ export default function CreditLedgerDetail() {
       head: [cols.map((c) => c.label)],
       body,
       styles: {
-        fontSize: 7.5,
+        font: pdfFont,
+        fontSize: pdfBodySize,
         cellPadding: { top: 1.2, right: 2, bottom: 1.2, left: 2 },
         lineColor: PDF_BORDER,
         lineWidth: 0.1,
         textColor: PDF_INK,
         valign: 'middle',
         minCellHeight: 5,
+        fontStyle: pdfRowWeight,
       },
       headStyles: {
         fillColor: PDF_HEAD,
         textColor: PDF_INK,
-        fontStyle: 'bold',
-        fontSize: 7.5,
+        fontStyle: pdfSubWeight,
+        fontSize: pdfSubSize,
         cellPadding: { top: 1.4, right: 2, bottom: 1.4, left: 2 },
       },
       columnStyles,
@@ -803,10 +841,8 @@ export default function CreditLedgerDetail() {
         const rowMeta = tableRows[data.row.index];
         if (!rowMeta) return;
 
-        let rowBg: [number, number, number] = [255, 255, 255];
+        let rowBg = themeColorToPdfRgb(docRowBackground(theme, data.row.index), PDF_PAGE);
         if (rowMeta.isTotal) rowBg = PDF_HEAD;
-        else if (rowMeta.hasCredit && !rowMeta.hasDebit) rowBg = PDF_CREDIT_SOFT;
-        else if (rowMeta.hasDebit && !rowMeta.hasCredit) rowBg = PDF_DEBIT_SOFT;
         data.cell.styles.fillColor = rowBg;
 
         if (col.id === 'debit' && (rowMeta.hasDebit || rowMeta.isTotal)) {
@@ -824,10 +860,13 @@ export default function CreditLedgerDetail() {
             data.cell.styles.fontStyle = 'bold';
           }
           if (col.id === 'balance') data.cell.styles.textColor = PDF_MUTED;
-        }
-        if (rowMeta.isTotal) {
+        } else if (rowMeta.isTotal) {
           data.cell.styles.fontStyle = 'bold';
           data.cell.styles.textColor = PDF_SECONDARY;
+        } else if (theme.rowFontBold) {
+          data.cell.styles.fontStyle = 'bold';
+        } else {
+          data.cell.styles.fontStyle = 'normal';
         }
         if (col.id === 'balance' && rowMeta.balance && !rowMeta.isOpening) {
           const balCr = /cr/i.test(rowMeta.balance);
@@ -844,8 +883,8 @@ export default function CreditLedgerDetail() {
     });
 
     const finalY = ((doc as any).lastAutoTable?.finalY || y) + 4;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
+    doc.setFont(pdfFont, pdfFooterWeight);
+    doc.setFontSize(pdfFooterSize);
     doc.setTextColor(...PDF_MUTED);
     doc.text(
       `Report Generated : ${formatCreditDateTime(new Date())}`,
@@ -861,10 +900,10 @@ export default function CreditLedgerDetail() {
     doc.setFillColor(...PDF_PRIMARY);
     doc.rect(0, pageHeight - 8, pageWidth, 8, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
+    doc.setFont(pdfFont, pdfFooterWeight);
+    doc.setFontSize(pdfFooterSize);
     doc.text('Manish Traders', marginX, pageHeight - 3);
-    doc.setFont('helvetica', 'normal');
+    doc.setFont(pdfFont, pdfFooterWeight);
     doc.text('Credit Ledger', pageWidth - marginX, pageHeight - 3, { align: 'right' });
 
     const safeName = customerName.replace(/[^\w\-]+/g, '_').replace(/_+/g, '_');
@@ -1276,50 +1315,127 @@ export default function CreditLedgerDetail() {
           </div>
         ) : (
           <div
-            className="bg-white border-[3px] overflow-hidden"
-            style={{ borderColor: ledgerTheme.primary }}
+            className="border-[3px] overflow-hidden"
+            style={{
+              borderColor: ledgerTheme.primary,
+              background: docPageBackground(ledgerTheme),
+            }}
           >
             <div
               className="text-white px-4 py-2 flex items-center justify-between"
               style={{ background: ledgerTheme.primary }}
             >
-              <div className="font-bold text-sm">Manish Traders</div>
-              <div className="text-xs sm:text-sm">Credit Ledger</div>
+              <div
+                style={{
+                  fontSize: docHeaderFontPx(ledgerTheme),
+                  fontWeight: docHeaderFontWeight(ledgerTheme),
+                }}
+              >
+                Manish Traders
+              </div>
+              <div
+                style={{
+                  fontSize: docSubHeaderFontPx(ledgerTheme),
+                  fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                }}
+              >
+                Credit Ledger
+              </div>
             </div>
 
-            <div className="px-4 py-4 sm:px-5 bg-white">
+            <div
+              className="px-4 py-4 sm:px-5"
+              style={{
+                background: docPageBackground(ledgerTheme),
+                fontFamily: ledgerTheme.fontFamily,
+              }}
+            >
               <div className="text-center">
                 <div
-                  className="text-lg sm:text-xl font-extrabold"
-                  style={{ color: ledgerTheme.secondary }}
+                  style={{
+                    color: ledgerTheme.secondary,
+                    fontSize: docHeaderFontPx(ledgerTheme),
+                    fontWeight: docHeaderFontWeight(ledgerTheme),
+                  }}
                 >
                   {customerDisplayName} Statement
                 </div>
-                <div className="text-xs sm:text-sm text-stone-600 mt-0.5">({periodLabel})</div>
+                <div
+                  className="mt-0.5"
+                  style={{
+                    color: ledgerTheme.textMuted,
+                    fontSize: docSubHeaderFontPx(ledgerTheme),
+                    fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                  }}
+                >
+                  ({periodLabel})
+                </div>
               </div>
 
               <div
-                className="mt-3 grid grid-cols-2 lg:grid-cols-4 rounded overflow-hidden bg-white"
-                style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
+                className="mt-3 grid grid-cols-2 lg:grid-cols-4 rounded overflow-hidden"
+                style={{
+                  border: `1px solid ${ledgerTheme.primaryBorder}`,
+                  background: docPageBackground(ledgerTheme),
+                }}
               >
                 <div
                   className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r"
                   style={{ borderColor: ledgerTheme.primaryBorder }}
                 >
-                  <div className="text-[10px] sm:text-xs text-stone-500">Opening Balance</div>
-                  <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
+                  <div
+                    style={{
+                      color: ledgerTheme.textMuted,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
+                    Opening Balance
+                  </div>
+                  <div
+                    className="mt-0.5 tabular-nums"
+                    style={{
+                      color: ledgerTheme.text,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
                     Rs. {formatPdfAmount(statement?.opening_balance)}
                   </div>
                   {openingOnLabel ? (
-                    <div className="text-[10px] text-stone-500 mt-0.5">{openingOnLabel}</div>
+                    <div
+                      className="mt-0.5"
+                      style={{
+                        color: ledgerTheme.textMuted,
+                        fontSize: docFooterFontPx(ledgerTheme),
+                        fontWeight: docFooterFontWeight(ledgerTheme),
+                      }}
+                    >
+                      {openingOnLabel}
+                    </div>
                   ) : null}
                 </div>
                 <div
                   className="px-3 py-2.5 border-b lg:border-b-0 lg:border-r"
                   style={{ borderColor: ledgerTheme.primaryBorder }}
                 >
-                  <div className="text-[10px] sm:text-xs text-stone-500">Total Debit(-)</div>
-                  <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
+                  <div
+                    style={{
+                      color: ledgerTheme.textMuted,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
+                    Total Debit(-)
+                  </div>
+                  <div
+                    className="mt-0.5 tabular-nums"
+                    style={{
+                      color: ledgerTheme.text,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
                     Rs. {formatPdfAmount(statement?.total_debit)}
                   </div>
                 </div>
@@ -1327,24 +1443,53 @@ export default function CreditLedgerDetail() {
                   className="px-3 py-2.5 border-b sm:border-b-0 lg:border-r"
                   style={{ borderColor: ledgerTheme.primaryBorder }}
                 >
-                  <div className="text-[10px] sm:text-xs text-stone-500">Total Credit(+)</div>
-                  <div className="text-sm font-bold text-stone-900 mt-0.5 tabular-nums">
+                  <div
+                    style={{
+                      color: ledgerTheme.textMuted,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
+                    Total Credit(+)
+                  </div>
+                  <div
+                    className="mt-0.5 tabular-nums"
+                    style={{
+                      color: ledgerTheme.text,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
                     Rs. {formatPdfAmount(statement?.total_credit)}
                   </div>
                 </div>
                 <div className="px-3 py-2.5">
-                  <div className="text-[10px] sm:text-xs text-stone-500">Net Balance</div>
                   <div
-                    className={`text-sm font-bold mt-0.5 tabular-nums ${
-                      netIsCr ? 'text-green-700' : 'text-red-700'
-                    }`}
+                    style={{
+                      color: ledgerTheme.textMuted,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
+                    Net Balance
+                  </div>
+                  <div
+                    className="mt-0.5 tabular-nums"
+                    style={{
+                      color: netIsCr ? ledgerTheme.creditText : ledgerTheme.debitText,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
                   >
                     Rs. {formatPdfAmount(closingBalance)} {netIsCr ? 'Cr' : 'Dr'}
                   </div>
                   <div
-                    className={`text-[10px] mt-0.5 ${
-                      netIsCr ? 'text-green-700' : 'text-red-700'
-                    }`}
+                    className="mt-0.5"
+                    style={{
+                      color: netIsCr ? ledgerTheme.creditText : ledgerTheme.debitText,
+                      fontSize: docFooterFontPx(ledgerTheme),
+                      fontWeight: docFooterFontWeight(ledgerTheme),
+                    }}
                   >
                     {netHint}
                   </div>
@@ -1352,17 +1497,30 @@ export default function CreditLedgerDetail() {
               </div>
 
               <div
-                className="mt-3 text-xs sm:text-sm font-bold"
-                style={{ color: ledgerTheme.secondary }}
+                className="mt-3"
+                style={{
+                  color: ledgerTheme.secondary,
+                  fontSize: docSubHeaderFontPx(ledgerTheme),
+                  fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                }}
               >
                 No. of Entries: {rows.length} {entriesSuffix}
               </div>
 
               <div
-                className="mt-1.5 overflow-x-auto rounded bg-white"
-                style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
+                className="mt-1.5 overflow-x-auto rounded"
+                style={{
+                  border: `1px solid ${ledgerTheme.primaryBorder}`,
+                  background: docPageBackground(ledgerTheme),
+                }}
               >
-                <table className="min-w-full text-xs sm:text-sm border-collapse">
+                <table
+                  className="min-w-full border-collapse"
+                  style={{
+                    fontFamily: ledgerTheme.fontFamily,
+                    fontSize: docRowFontPx(ledgerTheme),
+                  }}
+                >
                   <thead>
                     <tr>
                       {visibleColumns.map((col) => {
@@ -1381,11 +1539,13 @@ export default function CreditLedgerDetail() {
                         return (
                           <th
                             key={col.id}
-                            className={`${align} px-2.5 py-1.5 font-bold whitespace-nowrap`}
+                            className={`${align} px-2.5 py-1.5 whitespace-nowrap`}
                             style={{
                               color: ledgerTheme.secondary,
                               background: bg,
                               border: `1px solid ${ledgerTheme.primaryBorder}`,
+                              fontSize: docSubHeaderFontPx(ledgerTheme),
+                              fontWeight: docSubHeaderFontWeight(ledgerTheme),
                             }}
                           >
                             {col.label}
@@ -1394,11 +1554,13 @@ export default function CreditLedgerDetail() {
                       })}
                       {canManage ? (
                         <th
-                          className="px-2 py-1.5 font-bold w-16"
+                          className="px-2 py-1.5 w-16"
                           style={{
                             color: ledgerTheme.secondary,
                             background: ledgerTheme.tableHead,
                             border: `1px solid ${ledgerTheme.primaryBorder}`,
+                            fontSize: docSubHeaderFontPx(ledgerTheme),
+                            fontWeight: docSubHeaderFontWeight(ledgerTheme),
                           }}
                         />
                       ) : null}
@@ -1493,20 +1655,22 @@ export default function CreditLedgerDetail() {
                       statementRows.map((r, idx) => {
                         const balCr = /cr/i.test(r.balance);
                         const balColor = r.isOpening
-                          ? 'text-stone-500'
+                          ? ledgerTheme.textMuted
                           : balCr
-                            ? 'text-green-700'
-                            : 'text-red-700';
-                        let rowBg = 'bg-white';
-                        if (r.isTotal) rowBg = '';
-                        else if (r.hasCredit && !r.hasDebit) rowBg = 'bg-green-50';
-                        else if (r.hasDebit && !r.hasCredit) rowBg = 'bg-red-50';
+                            ? ledgerTheme.creditText
+                            : ledgerTheme.debitText;
+                        const rowBg = r.isTotal
+                          ? ledgerTheme.tableHead
+                          : docRowBackground(ledgerTheme, idx);
+                        const rowWeight =
+                          r.isTotal || r.isOpening || ledgerTheme.rowFontBold
+                            ? 700
+                            : 500;
 
                         return (
                           <tr
                             key={idx}
-                            className={`${rowBg} ${r.isTotal ? 'font-bold' : ''}`}
-                            style={r.isTotal ? { background: ledgerTheme.tableHead } : undefined}
+                            style={{ background: rowBg }}
                           >
                             {visibleColumns.map((col) => {
                               const align =
@@ -1515,34 +1679,47 @@ export default function CreditLedgerDetail() {
                                   : col.align === 'center'
                                     ? 'text-center'
                                     : 'text-left';
-                              let extra = '';
-                              if (col.id === 'debit' && (r.hasDebit || r.isTotal)) extra = 'bg-red-100';
-                              if (col.id === 'credit' && (r.hasCredit || r.isTotal))
-                                extra = 'bg-green-100';
+                              let cellBg = rowBg;
+                              let color = ledgerTheme.text;
+                              let fw = rowWeight;
+                              if (col.id === 'debit' && (r.hasDebit || r.isTotal)) {
+                                cellBg = ledgerTheme.debitBg;
+                              }
+                              if (col.id === 'credit' && (r.hasCredit || r.isTotal)) {
+                                cellBg = ledgerTheme.creditBg;
+                              }
                               if (col.id === 'balance') {
-                                extra = `${balColor} font-bold ${
-                                  r.hasCredit && !r.isOpening && !r.isTotal ? 'bg-green-100' : ''
-                                }`;
+                                fw = 700;
+                                color = balColor;
+                                if (r.hasCredit && !r.isOpening && !r.isTotal) {
+                                  cellBg = ledgerTheme.creditBg;
+                                } else if (r.isTotal) {
+                                  cellBg = ledgerTheme.tableHead;
+                                }
                               }
                               if (col.id === 'type') {
-                                if (r.type === 'sale') extra = 'text-red-700 capitalize';
-                                else if (r.type === 'payment') extra = 'text-green-700 capitalize';
-                                else if (r.type === 'return') extra = 'text-blue-700 capitalize';
-                                else if (r.type) extra = 'capitalize';
+                                if (r.type === 'sale') color = ledgerTheme.debitText;
+                                else if (r.type === 'payment') color = ledgerTheme.creditText;
+                                else if (r.type === 'return') color = '#1d4ed8';
                               }
                               if (
                                 (col.id === 'date' || col.id === 'particulars') &&
                                 (r.isOpening || r.isTotal)
                               ) {
-                                extra = `${extra} font-bold`.trim();
+                                fw = 700;
                               }
                               return (
                                 <td
                                   key={col.id}
-                                  className={`px-2.5 py-1 text-stone-900 tabular-nums ${align} ${
+                                  className={`px-2.5 py-1 tabular-nums ${align} ${
                                     col.id === 'date' || col.id === 'vch' ? 'whitespace-nowrap' : ''
-                                  } ${extra}`}
-                                  style={{ border: `1px solid ${ledgerTheme.primaryBorder}` }}
+                                  } ${col.id === 'type' && r.type ? 'capitalize' : ''}`}
+                                  style={{
+                                    border: `1px solid ${ledgerTheme.primaryBorder}`,
+                                    background: cellBg,
+                                    color,
+                                    fontWeight: fw,
+                                  }}
                                 >
                                   {cellValue(r, col.id)}
                                 </td>
@@ -1584,17 +1761,28 @@ export default function CreditLedgerDetail() {
                 </table>
               </div>
 
-              <div className="mt-2.5 flex flex-wrap justify-between gap-2 text-[10px] sm:text-xs text-stone-500">
+              <div
+                className="mt-2.5 flex flex-wrap justify-between gap-2"
+                style={{
+                  color: ledgerTheme.textMuted,
+                  fontSize: docFooterFontPx(ledgerTheme),
+                  fontWeight: docFooterFontWeight(ledgerTheme),
+                }}
+              >
                 <div>Report Generated : {formatCreditDateTime(new Date())}</div>
                 <div>Page 1 of 1</div>
               </div>
             </div>
 
             <div
-              className="text-white px-4 py-2 flex items-center justify-between text-xs sm:text-sm"
-              style={{ background: ledgerTheme.primary }}
+              className="text-white px-4 py-2 flex items-center justify-between"
+              style={{
+                background: ledgerTheme.primary,
+                fontSize: docFooterFontPx(ledgerTheme),
+                fontWeight: docFooterFontWeight(ledgerTheme),
+              }}
             >
-              <div className="font-bold">Manish Traders</div>
+              <div>Manish Traders</div>
               <div>Credit Ledger</div>
             </div>
 

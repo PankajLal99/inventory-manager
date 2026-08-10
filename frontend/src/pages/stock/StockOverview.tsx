@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Boxes, ChevronDown, ChevronRight, ExternalLink, Loader2 } from 'lucide-react';
+import { Boxes, ChevronDown, ChevronRight, ExternalLink, FileText, Loader2 } from 'lucide-react';
 import { productsApi } from '../../lib/api';
 import PageHeader from '../../components/ui/PageHeader';
 import Input from '../../components/ui/Input';
+import Button from '../../components/ui/Button';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Pagination from '../../components/ui/Pagination';
 import { formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import { exportStockOverviewToPdf } from '../../utils/exportStockPdf';
 
 export default function StockOverview() {
   const navigate = useNavigate();
@@ -26,6 +28,7 @@ export default function StockOverview() {
   const [warehouseQtyGtZero, setWarehouseQtyGtZero] = useState(initialWhGtZero);
   const [expandAll, setExpandAll] = useState(() => localStorage.getItem(EXPAND_ALL_KEY) === 'true');
   const [expandedIds, setExpandedIds] = useState<Record<number, boolean>>({});
+  const [exporting, setExporting] = useState(false);
 
   // Keep URL in sync (shareable, back/forward friendly)
   useEffect(() => {
@@ -77,6 +80,22 @@ export default function StockOverview() {
     return params;
   }, [search, currentPage, warehouseQtyGtZero]);
 
+  const listBaseParams = useMemo(() => {
+    const params: any = {
+      tag: 'new',
+      exclude_other_custom: 'true',
+      limit: 100,
+    };
+    if (search.trim()) {
+      params.search = search.trim();
+      params.search_mode = 'name_only';
+    }
+    if (warehouseQtyGtZero) {
+      params.warehouse_qty_gt_zero = 'true';
+    }
+    return params;
+  }, [search, warehouseQtyGtZero]);
+
   const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['stock-overview', queryParams],
     queryFn: async () => {
@@ -109,6 +128,67 @@ export default function StockOverview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandAll, currentPage, search, (data as any)?.count]);
 
+  const fetchAllProductsForExport = async (): Promise<any[]> => {
+    const allRows: any[] = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const params = { ...listBaseParams, page };
+      const response = await productsApi.list(params);
+      const pageData = response.data;
+      const pageRows: any[] = Array.isArray(pageData?.results)
+        ? pageData.results
+        : Array.isArray(pageData?.data)
+          ? pageData.data
+          : Array.isArray(pageData)
+            ? pageData
+            : [];
+      allRows.push(...pageRows);
+
+      const pages = pageData?.total_pages;
+      if (pages != null && pages !== '' && !Number.isNaN(Number(pages))) {
+        hasMore = page < Number(pages);
+      } else if (pageData?.next != null && pageData.next !== '') {
+        hasMore = true;
+      } else {
+        const pageSize = Number(pageData?.page_size ?? pageData?.limit ?? 100);
+        const count = pageData?.count;
+        hasMore =
+          count != null &&
+          count !== '' &&
+          !Number.isNaN(Number(count)) &&
+          pageSize > 0 &&
+          page * pageSize < Number(count);
+      }
+
+      page += 1;
+      if (page > 500) break;
+    }
+
+    return allRows;
+  };
+
+  const handleExportPdf = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const allProducts = await fetchAllProductsForExport();
+      if (!allProducts.length) return;
+
+      const filterLabels: string[] = [];
+      if (search.trim()) filterLabels.push(`Search: ${search.trim()}`);
+      if (warehouseQtyGtZero) filterLabels.push('Warehouse Qty > 0');
+
+      exportStockOverviewToPdf({
+        products: allProducts,
+        filterLabels,
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (isLoading) {
     return <LoadingState message="Loading stock overview..." />;
   }
@@ -124,12 +204,27 @@ export default function StockOverview() {
         subtitle="Read-only overview of warehouse, shop allocation, and available stock"
         icon={Boxes}
         action={
-          <div className="w-full sm:w-[360px]">
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search product name..."
-            />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+            <div className="w-full sm:w-[360px]">
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search product name..."
+              />
+            </div>
+            <Button
+              variant="outline"
+              onClick={handleExportPdf}
+              disabled={exporting || totalItems === 0}
+              className="flex items-center justify-center gap-2 whitespace-nowrap"
+            >
+              {exporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+              {exporting ? 'Exporting…' : 'Export PDF'}
+            </Button>
           </div>
         }
       />
@@ -357,4 +452,3 @@ export default function StockOverview() {
     </div>
   );
 }
-

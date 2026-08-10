@@ -6,7 +6,7 @@ import {
   Bell,
   Download,
   ExternalLink,
-  FileSpreadsheet,
+  FileText,
   Filter,
   Package,
   PackageX,
@@ -14,7 +14,6 @@ import {
   ShoppingBag,
   X,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
 import { catalogApi, purchasingApi, reportsApi } from '../../lib/api';
 import PageHeader from '../../components/ui/PageHeader';
 import Button from '../../components/ui/Button';
@@ -25,7 +24,8 @@ import Select from '../../components/ui/Select';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
-import { formatNumber, toLocalDateString } from '../../lib/utils';
+import { formatNumber } from '../../lib/utils';
+import StockAlertExportModal from './StockAlertExportModal';
 
 type AlertTab = 'all' | 'sold_out' | 'low';
 
@@ -54,10 +54,6 @@ function listFromResponse(data: any): any[] {
   if (Array.isArray(data.data)) return data.data;
   if (Array.isArray(data)) return data;
   return [];
-}
-
-function statusLabel(status: StockAlertProduct['status']) {
-  return status === 'sold_out' ? 'Sold out' : 'Getting sold out';
 }
 
 function isMissingCategory(product: StockAlertProduct) {
@@ -94,19 +90,6 @@ function matchesIdOrNone(
   return String(id || '') === filterValue;
 }
 
-function buildExportRows(products: StockAlertProduct[]) {
-  return products.map((product) => ({
-    Status: statusLabel(product.status),
-    'Product Name': product.product__name || '-',
-    SKU: product.product__sku || '-',
-    Category: displayCategory(product),
-    Brand: displayBrand(product),
-    Supplier: displaySupplier(product),
-    Available: Math.round(product.available_quantity || 0),
-    'Low Stock Limit': product.product__low_stock_threshold || 0,
-  }));
-}
-
 export default function StockAlerts() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -118,6 +101,7 @@ export default function StockAlerts() {
   const [thresholdMin, setThresholdMin] = useState(0);
   const [thresholdMax, setThresholdMax] = useState(0);
   const [thresholdInitialized, setThresholdInitialized] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['stock-alerts', 'list'],
@@ -285,17 +269,12 @@ export default function StockAlerts() {
     setThresholdMax(Math.max(value, thresholdMin));
   };
 
-  const handleExportExcel = () => {
-    if (filteredAlerts.length === 0) return;
-
-    const rows = buildExportRows(filteredAlerts);
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Products to Order');
-
-    const fileName = `stock_alerts_order_list_${toLocalDateString(new Date())}.xlsx`;
-    XLSX.writeFile(wb, fileName);
-  };
+  const exportTabLabel =
+    activeTab === 'sold_out'
+      ? 'Sold out'
+      : activeTab === 'low'
+        ? 'Getting sold out'
+        : 'All alerts';
 
   if (isLoading) {
     return <LoadingState message="Loading stock alerts..." />;
@@ -322,12 +301,12 @@ export default function StockAlerts() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
-              onClick={handleExportExcel}
+              onClick={() => setShowExportModal(true)}
               disabled={filteredAlerts.length === 0}
               className="flex items-center gap-2"
             >
-              <FileSpreadsheet className="h-4 w-4" />
-              Export Excel
+              <FileText className="h-4 w-4" />
+              Export PDF
             </Button>
             <Button
               variant="outline"
@@ -545,8 +524,8 @@ export default function StockAlerts() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 text-sm text-gray-600">
             <Download className="h-4 w-4" />
-            Export uses the current filters and tab ({filteredAlerts.length} product
-            {filteredAlerts.length === 1 ? '' : 's'})
+            PDF export uses the current filters and tab ({filteredAlerts.length} product
+            {filteredAlerts.length === 1 ? '' : 's'}), grouped by category then brand
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -639,6 +618,15 @@ export default function StockAlerts() {
             </table>
           </div>
         </div>
+      )}
+
+      {showExportModal && (
+        <StockAlertExportModal
+          isOpen={showExportModal}
+          onClose={() => setShowExportModal(false)}
+          products={filteredAlerts}
+          tabLabel={exportTabLabel}
+        />
       )}
     </div>
   );

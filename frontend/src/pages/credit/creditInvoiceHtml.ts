@@ -1,6 +1,19 @@
 import { formatAmountINR } from '../../lib/utils';
 import { creditAmountInWords } from './CreditInvoiceDocument';
-import { getInvoiceTheme, type CreditDocTheme } from './creditDocTheme';
+import {
+  docFooterFontPx,
+  docFooterFontWeight,
+  docHeaderFontPx,
+  docHeaderFontWeight,
+  docPageBackground,
+  docRowBackground,
+  docRowFontPx,
+  docRowFontWeight,
+  docSubHeaderFontPx,
+  docSubHeaderFontWeight,
+  getInvoiceTheme,
+  type CreditDocTheme,
+} from './creditDocTheme';
 import { formatCreditInvoiceDate } from './creditLedgerUtils';
 
 export { CREDIT_THEME } from './creditDocTheme';
@@ -9,38 +22,6 @@ export type { CreditDocTheme } from './creditDocTheme';
 export const CREDIT_SHOP_NAME = 'MANISH TRADERS';
 export const CREDIT_INVOICE_CAPTURE_WIDTH = 794;
 export const CREDIT_INVOICE_CAPTURE_HEIGHT = 1123;
-
-/** Consistent type scale — avoids footer / summary size jumps */
-const FONT = {
-  xs: '11px',
-  sm: '12px',
-  md: '13px',
-  lg: '15px',
-  xl: '24px',
-};
-
-function rowFontPx(theme: CreditDocTheme): string {
-  const n = Number(theme.rowFontSize);
-  const px = Number.isFinite(n) ? Math.min(24, Math.max(9, Math.round(n))) : 12;
-  return `${px}px`;
-}
-
-function rowFontWeight(theme: CreditDocTheme): string {
-  return theme.rowFontBold ? '700' : '600';
-}
-
-function pageBackground(theme: CreditDocTheme): string {
-  return theme.white || '#ffffff';
-}
-
-function rowBackground(theme: CreditDocTheme, index: number): string {
-  if (index % 2 === 1) {
-    const alt = (theme.rowAlt || '').trim().toLowerCase();
-    if (!alt || alt === 'transparent') return 'transparent';
-    return theme.rowAlt;
-  }
-  return pageBackground(theme);
-}
 
 export type CreditInvoiceHtmlItem = {
   product_name?: string | null;
@@ -138,6 +119,12 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   const lineOffset = input.lineOffset ?? 0;
   const shopName = input.shop_name?.trim() || CREDIT_SHOP_NAME;
   const theme = getInvoiceTheme();
+  const headerFont = docHeaderFontPx(theme);
+  const headerWeight = docHeaderFontWeight(theme);
+  const subFont = docSubHeaderFontPx(theme);
+  const subWeight = docSubHeaderFontWeight(theme);
+  const footerFont = docFooterFontPx(theme);
+  const footerWeight = docFooterFontWeight(theme);
 
   const rows = items.map((item, idx) => {
     const rawQty = Math.round(parseFloat(String(item.quantity ?? 0)) || 0);
@@ -169,19 +156,19 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
 
   const partNote =
     partCount > 1
-      ? `<div style="font-size:${FONT.xs};margin-top:8px;color:${theme.textMuted};font-weight:600;">Part ${partIndex} of ${partCount}${
+      ? `<div style="font-size:${subFont};margin-top:8px;color:${theme.textMuted};font-weight:${subWeight};">Part ${partIndex} of ${partCount}${
           rows.length ? ` · Lines ${rows[0].idx}–${rows[rows.length - 1].idx}` : ''
         }</div>`
       : '';
 
   const voidBadge =
     input.status === 'void'
-      ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:${FONT.xs};font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b91c1c;background:#fee2e2;color:#b91c1c;">Void</div>`
+      ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:${subFont};font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b91c1c;background:#fee2e2;color:#b91c1c;">Void</div>`
       : '';
 
   const returnBadge = isReturn
-    ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:${FONT.xs};font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b45309;background:#fef3c7;color:#92400e;">Return Invoice</div>`
-    : '';
+    ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:${subFont};font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b45309;background:#fef3c7;color:#92400e;">Return Invoice</div>`
+      : '';
 
   const qtyDisplay = (qty: number) =>
     isReturn ? fmtReturnQty(qty) : fmtQty(qty);
@@ -192,13 +179,13 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
       : `${fmtQty(qty)} Pcs.`;
 
   const cellPad = '7px 8px';
-  const itemFont = rowFontPx(theme);
-  const itemWeight = rowFontWeight(theme);
-  const pageBg = pageBackground(theme);
+  const itemFont = docRowFontPx(theme);
+  const itemWeight = docRowFontWeight(theme);
+  const pageBg = docPageBackground(theme);
   const fontFamily = theme.fontFamily || 'Arial, Helvetica, sans-serif';
   const bodyRows = rows
     .map(
-      (r, i) => `<tr style="background:${rowBackground(theme, i)};">
+      (r, i) => `<tr style="background:${docRowBackground(theme, i)};">
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:42px;font-size:${itemFont};color:${theme.secondaryMuted};font-weight:${itemWeight};">${r.idx}</td>
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:left;font-size:${itemFont};font-weight:${itemWeight};color:${theme.text};">${escapeHtml(r.name)}</td>
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:${isReturn ? '78' : '64'}px;font-size:${itemFont};font-weight:${itemWeight};">${escapeHtml(qtyDisplay(r.qty))}</td>
@@ -210,22 +197,22 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
     .join('');
 
   const emptyRow = `<tr>
-    <td colspan="6" style="border:1px solid ${theme.primaryBorder};padding:28px;text-align:center;font-size:${FONT.sm};color:#a8a29e;">No line items</td>
+    <td colspan="6" style="border:1px solid ${theme.primaryBorder};padding:28px;text-align:center;font-size:${subFont};color:#a8a29e;">No line items</td>
   </tr>`;
 
   const qtyFooterRow = showTotals
     ? `<tr>
       <td style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};"></td>
-      <td style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};font-size:${FONT.sm};font-weight:700;color:${theme.secondary};">Total Quantity</td>
-      <td colspan="2" style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};text-align:right;font-size:${FONT.sm};font-weight:700;color:${theme.secondary};">${escapeHtml(qtyWithUnit(totalQty))}</td>
+      <td style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};font-size:${subFont};font-weight:${subWeight};color:${theme.secondary};">Total Quantity</td>
+      <td colspan="2" style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};text-align:right;font-size:${subFont};font-weight:${subWeight};color:${theme.secondary};">${escapeHtml(qtyWithUnit(totalQty))}</td>
       <td style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};"></td>
       <td style="border:1px solid ${theme.secondaryMuted};padding:${cellPad};background:${theme.tableHead};"></td>
     </tr>`
     : '';
 
-  const summaryRowStyle = `padding:8px 14px;font-size:${FONT.sm};border-bottom:1px solid ${theme.primaryBorder};`;
-  const summaryLabel = `color:${theme.textMuted};font-weight:600;`;
-  const summaryValue = `text-align:right;font-weight:700;color:${theme.text};`;
+  const summaryRowStyle = `padding:8px 14px;font-size:${footerFont};border-bottom:1px solid ${theme.primaryBorder};`;
+  const summaryLabel = `color:${theme.textMuted};font-weight:${footerWeight};`;
+  const summaryValue = `text-align:right;font-weight:${theme.footerFontBold ? '800' : '700'};color:${theme.text};`;
 
   const summaryRows = showTotals
     ? `
@@ -238,21 +225,21 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
         <td style="${summaryRowStyle}${summaryValue}">${escapeHtml(fmtMoney(subtotalAmt))}</td>
       </tr>
       <tr>
-        <td style="padding:9px 14px;font-size:${FONT.sm};color:${theme.white};font-weight:700;background:${theme.primary};border-bottom:1px solid ${theme.secondaryMuted};">Total</td>
-        <td style="padding:9px 14px;font-size:${FONT.sm};text-align:right;font-weight:800;color:${theme.white};background:${theme.primary};border-bottom:1px solid ${theme.secondaryMuted};">${escapeHtml(fmtMoney(totalAmt))}</td>
+        <td style="padding:9px 14px;font-size:${footerFont};color:${theme.white};font-weight:700;background:${theme.primary};border-bottom:1px solid ${theme.secondaryMuted};">Total</td>
+        <td style="padding:9px 14px;font-size:${footerFont};text-align:right;font-weight:800;color:${theme.white};background:${theme.primary};border-bottom:1px solid ${theme.secondaryMuted};">${escapeHtml(fmtMoney(totalAmt))}</td>
       </tr>`
     : '';
 
   const summaryBlock = showTotals
-    ? `<table style="width:100%;border-collapse:collapse;margin-top:14px;border:2px solid ${theme.primary};font-size:${FONT.sm};">
+    ? `<table style="width:100%;border-collapse:collapse;margin-top:14px;border:2px solid ${theme.primary};font-size:${footerFont};">
         <tr>
-          <td colspan="2" style="padding:9px 14px;background:${theme.primary};color:${theme.white};font-weight:700;font-size:${FONT.xs};letter-spacing:0.5px;text-transform:uppercase;">${summaryTitle}</td>
+          <td colspan="2" style="padding:9px 14px;background:${theme.primary};color:${theme.white};font-weight:700;font-size:${footerFont};letter-spacing:0.5px;text-transform:uppercase;">${summaryTitle}</td>
         </tr>
         ${summaryRows}
       </table>
-      <div style="margin-top:12px;padding:10px 14px;background:${pageBg};border:1px solid ${theme.primaryBorder};border-left:4px solid ${theme.primary};font-size:${FONT.sm};line-height:1.5;">
-        <span style="color:${theme.secondary};font-weight:700;">Amount in Words: </span>
-        <span style="color:${theme.text};font-weight:600;">${escapeHtml(creditAmountInWords(totalAmt))}</span>
+      <div style="margin-top:12px;padding:10px 14px;background:${pageBg};border:1px solid ${theme.primaryBorder};border-left:4px solid ${theme.primary};font-size:${footerFont};line-height:1.5;">
+        <span style="color:${theme.secondary};font-weight:${footerWeight};">Amount in Words: </span>
+        <span style="color:${theme.text};font-weight:${theme.footerFontBold ? '700' : '600'};">${escapeHtml(creditAmountInWords(totalAmt))}</span>
       </div>`
     : '';
 
@@ -262,25 +249,25 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
         ${summaryBlock}
         ${
           input.notes
-            ? `<div style="position:relative;font-size:${FONT.sm};color:${theme.textMuted};margin-top:12px;"><span style="color:${theme.secondary};font-weight:700;">Notes: </span>${escapeHtml(input.notes)}</div>`
+            ? `<div style="position:relative;font-size:${footerFont};color:${theme.textMuted};margin-top:12px;"><span style="color:${theme.secondary};font-weight:${footerWeight};">Notes: </span>${escapeHtml(input.notes)}</div>`
             : ''
         }
-        <table style="position:relative;width:100%;border-collapse:collapse;font-size:${FONT.sm};margin-top:18px;">
+        <table style="position:relative;width:100%;border-collapse:collapse;font-size:${footerFont};margin-top:18px;">
           <tr>
             <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
-              <div style="font-weight:700;color:${theme.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:${FONT.xs};">Terms &amp; Conditions</div>
-              <div style="font-size:${FONT.sm};color:${theme.textMuted};margin-top:5px;line-height:1.45;">${termsText}</div>
+              <div style="font-weight:${footerWeight};color:${theme.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:${footerFont};">Terms &amp; Conditions</div>
+              <div style="font-size:${footerFont};color:${theme.textMuted};margin-top:5px;line-height:1.45;font-weight:${footerWeight};">${termsText}</div>
             </td>
             <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
               <div style="height:32px;"></div>
-              <div style="display:inline-block;border-top:2px solid ${theme.secondaryMuted};padding:5px 18px 0;font-size:${FONT.sm};font-weight:700;color:${theme.secondary};">Receiver's Signature</div>
+              <div style="display:inline-block;border-top:2px solid ${theme.secondaryMuted};padding:5px 18px 0;font-size:${footerFont};font-weight:${footerWeight};color:${theme.secondary};">Receiver's Signature</div>
             </td>
           </tr>
         </table>
-        <div style="position:relative;margin-top:14px;text-align:center;font-size:${FONT.xs};color:${theme.textMuted};">Thank you for your business · ${escapeHtml(shopName)}</div>
+        <div style="position:relative;margin-top:14px;text-align:center;font-size:${footerFont};font-weight:${footerWeight};color:${theme.textMuted};">Thank you for your business · ${escapeHtml(shopName)}</div>
       </div>`
     : partCount > 1
-      ? `<div style="border-top:2px dashed ${theme.primaryBorder};padding:12px 24px;font-size:${FONT.sm};text-align:right;color:${theme.secondaryMuted};font-weight:600;background:${theme.primaryPale};">Continued on next page…</div>`
+      ? `<div style="border-top:2px dashed ${theme.primaryBorder};padding:12px 24px;font-size:${footerFont};text-align:right;color:${theme.secondaryMuted};font-weight:${footerWeight};background:${theme.primaryPale};">Continued on next page…</div>`
       : '';
 
   return `<!doctype html>
@@ -289,8 +276,8 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   <meta charset="UTF-8" />
   <title>${pageTitle} — ${escapeHtml(shopName)}</title>
 </head>
-<body style="margin:0;padding:0;background:#e7e5e4;font-size:${FONT.sm};">
-  <div id="credit-invoice-root" style="width:${CREDIT_INVOICE_CAPTURE_WIDTH}px;min-height:${CREDIT_INVOICE_CAPTURE_HEIGHT}px;margin:0;background:${pageBg};color:${theme.text};font-family:${fontFamily};font-size:${FONT.sm};line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${theme.primary};">
+<body style="margin:0;padding:0;background:#e7e5e4;font-size:${subFont};">
+  <div id="credit-invoice-root" style="width:${CREDIT_INVOICE_CAPTURE_WIDTH}px;min-height:${CREDIT_INVOICE_CAPTURE_HEIGHT}px;margin:0;background:${pageBg};color:${theme.text};font-family:${fontFamily};font-size:${subFont};line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${theme.primary};">
 
     <!-- Shop header -->
     <div style="position:relative;overflow:hidden;background:${theme.primary};padding:20px 28px;color:${theme.white};">
@@ -298,41 +285,41 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
       <table style="position:relative;z-index:1;width:100%;border-collapse:collapse;color:${theme.white};">
         <tr>
           <td style="vertical-align:middle;">
-            <div style="font-size:${FONT.xl};font-weight:800;letter-spacing:1px;text-transform:uppercase;line-height:1.2;color:${theme.white};">${escapeHtml(shopName)}</div>
-            <div style="font-size:${FONT.xs};font-weight:600;margin-top:5px;letter-spacing:0.5px;text-transform:uppercase;color:${theme.white};">${documentTitle}</div>
+            <div style="font-size:${headerFont};font-weight:${headerWeight};letter-spacing:1px;text-transform:uppercase;line-height:1.2;color:${theme.white};">${escapeHtml(shopName)}</div>
+            <div style="font-size:${subFont};font-weight:${subWeight};margin-top:5px;letter-spacing:0.5px;text-transform:uppercase;color:${theme.white};">${documentTitle}</div>
           </td>
           <td style="vertical-align:middle;text-align:right;width:240px;color:${theme.white};">
-            <div style="font-size:${FONT.xs};font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:${theme.white};">${numberLabel}</div>
-            <div style="font-size:${FONT.lg};font-weight:800;margin-top:4px;letter-spacing:0.3px;color:${theme.white};">${escapeHtml(input.invoice_number || '—')}</div>
+            <div style="font-size:${subFont};font-weight:${subWeight};letter-spacing:0.5px;text-transform:uppercase;color:${theme.white};">${numberLabel}</div>
+            <div style="font-size:${headerFont};font-weight:${headerWeight};margin-top:4px;letter-spacing:0.3px;color:${theme.white};">${escapeHtml(input.invoice_number || '—')}</div>
           </td>
         </tr>
       </table>
     </div>
 
     <!-- Party + date -->
-    <table style="width:100%;border-collapse:collapse;table-layout:fixed;background:${theme.primaryPale};border-bottom:2px solid ${theme.primaryBorder};font-size:${FONT.sm};">
+    <table style="width:100%;border-collapse:collapse;table-layout:fixed;background:${theme.primaryPale};border-bottom:2px solid ${theme.primaryBorder};font-size:${subFont};">
       <tr>
         <td style="width:58%;vertical-align:top;padding:14px 20px;border-right:1px solid ${theme.primaryBorder};">
-          <div style="font-size:${FONT.xs};font-weight:700;color:${theme.secondary};text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Bill To</div>
-          <div style="font-size:${FONT.lg};font-weight:800;text-transform:uppercase;letter-spacing:0.2px;color:${theme.text};line-height:1.25;">${escapeHtml(input.customer_name || '—')}</div>
-          ${input.customer_phone ? `<div style="font-size:${FONT.sm};color:${theme.textMuted};margin-top:4px;font-weight:600;">${escapeHtml(input.customer_phone)}</div>` : ''}
+          <div style="font-size:${subFont};font-weight:${subWeight};color:${theme.secondary};text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Bill To</div>
+          <div style="font-size:${headerFont};font-weight:${headerWeight};text-transform:uppercase;letter-spacing:0.2px;color:${theme.text};line-height:1.25;">${escapeHtml(input.customer_name || '—')}</div>
+          ${input.customer_phone ? `<div style="font-size:${subFont};color:${theme.textMuted};margin-top:4px;font-weight:${subWeight};">${escapeHtml(input.customer_phone)}</div>` : ''}
           ${returnBadge}
           ${voidBadge}
           ${partNote}
         </td>
         <td style="width:42%;vertical-align:top;padding:14px 20px;">
-          <table style="width:100%;border-collapse:collapse;font-size:${FONT.sm};">
+          <table style="width:100%;border-collapse:collapse;font-size:${subFont};">
             <tr>
-              <td style="padding:0 0 8px 0;font-weight:600;color:${theme.secondaryMuted};white-space:nowrap;">${numberLabel}</td>
-              <td style="padding:0 0 8px 0;font-weight:800;text-align:right;color:${theme.secondary};">${escapeHtml(input.invoice_number || '—')}</td>
+              <td style="padding:0 0 8px 0;font-weight:${subWeight};color:${theme.secondaryMuted};white-space:nowrap;">${numberLabel}</td>
+              <td style="padding:0 0 8px 0;font-weight:${headerWeight};text-align:right;color:${theme.secondary};">${escapeHtml(input.invoice_number || '—')}</td>
             </tr>
             <tr>
-              <td style="padding:0 0 8px 0;font-weight:600;color:${theme.secondaryMuted};white-space:nowrap;">Dated</td>
-              <td style="padding:0 0 8px 0;font-weight:700;text-align:right;color:${theme.text};">${escapeHtml(formatCreditInvoiceDate(input.created_at))}</td>
+              <td style="padding:0 0 8px 0;font-weight:${subWeight};color:${theme.secondaryMuted};white-space:nowrap;">Dated</td>
+              <td style="padding:0 0 8px 0;font-weight:${subWeight};text-align:right;color:${theme.text};">${escapeHtml(formatCreditInvoiceDate(input.created_at))}</td>
             </tr>
             <tr>
-              <td style="padding:0;font-weight:600;color:${theme.secondaryMuted};white-space:nowrap;">Payment</td>
-              <td style="padding:0;text-align:right;font-weight:700;color:${theme.primary};">${paymentLabel}</td>
+              <td style="padding:0;font-weight:${subWeight};color:${theme.secondaryMuted};white-space:nowrap;">Payment</td>
+              <td style="padding:0;text-align:right;font-weight:${subWeight};color:${theme.primary};">${paymentLabel}</td>
             </tr>
           </table>
         </td>
@@ -340,15 +327,15 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
     </table>
 
     <!-- Items -->
-    <table style="width:100%;border-collapse:collapse;font-size:${FONT.sm};table-layout:fixed;flex-shrink:0;">
+    <table style="width:100%;border-collapse:collapse;font-size:${subFont};table-layout:fixed;flex-shrink:0;">
       <thead>
         <tr style="background:${theme.tableHead};">
-          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:center;font-weight:700;color:${theme.secondary};width:42px;font-size:${FONT.xs};">S.N.</th>
-          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 8px;text-align:left;font-weight:700;color:${theme.secondary};font-size:${FONT.xs};">Description of Goods</th>
-          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:right;font-weight:700;color:${theme.secondary};width:64px;font-size:${FONT.xs};">Qty.</th>
-          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:center;font-weight:700;color:${theme.secondary};width:52px;font-size:${FONT.xs};">Unit</th>
-          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:right;font-weight:700;color:${theme.secondary};width:80px;font-size:${FONT.xs};">Rate (₹)</th>
-          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 8px;text-align:right;font-weight:700;color:${theme.secondary};width:96px;font-size:${FONT.xs};">Amount (₹)</th>
+          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:center;font-weight:${subWeight};color:${theme.secondary};width:42px;font-size:${subFont};">S.N.</th>
+          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 8px;text-align:left;font-weight:${subWeight};color:${theme.secondary};font-size:${subFont};">Description of Goods</th>
+          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:right;font-weight:${subWeight};color:${theme.secondary};width:64px;font-size:${subFont};">Qty.</th>
+          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:center;font-weight:${subWeight};color:${theme.secondary};width:52px;font-size:${subFont};">Unit</th>
+          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 6px;text-align:right;font-weight:${subWeight};color:${theme.secondary};width:80px;font-size:${subFont};">Rate (₹)</th>
+          <th style="border:1px solid ${theme.secondaryMuted};padding:8px 8px;text-align:right;font-weight:${subWeight};color:${theme.secondary};width:96px;font-size:${subFont};">Amount (₹)</th>
         </tr>
       </thead>
       <tbody>

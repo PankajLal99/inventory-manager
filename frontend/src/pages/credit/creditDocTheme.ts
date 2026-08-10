@@ -28,6 +28,18 @@ export type CreditDocTheme = {
   rowFontSize: number;
   /** Bold line-item rows */
   rowFontBold: boolean;
+  /** Top brand bar / main title font size in px */
+  headerFontSize: number;
+  /** Bold header text */
+  headerFontBold: boolean;
+  /** Bill-to band, table headings, meta labels font size in px */
+  subHeaderFontSize: number;
+  /** Bold sub-header text */
+  subHeaderFontBold: boolean;
+  /** Footer, terms, summary notes font size in px */
+  footerFontSize: number;
+  /** Bold footer text */
+  footerFontBold: boolean;
   /** CSS font-family stack for the document */
   fontFamily: string;
 };
@@ -40,6 +52,12 @@ export type CreditDocThemeOverrides = Partial<
     | 'rowAlt'
     | 'rowFontSize'
     | 'rowFontBold'
+    | 'headerFontSize'
+    | 'headerFontBold'
+    | 'subHeaderFontSize'
+    | 'subHeaderFontBold'
+    | 'footerFontSize'
+    | 'footerFontBold'
     | 'fontFamily'
   >
 >;
@@ -58,11 +76,32 @@ export const DOC_FONT_OPTIONS: { label: string; value: string }[] = [
   { label: 'Courier New', value: "'Courier New', Courier, monospace" },
 ];
 
-export const ROW_FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 15, 16, 18] as const;
+export const DOC_FONT_SIZE_OPTIONS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32] as const;
 
-const DEFAULT_TYPOGRAPHY = {
+/** @deprecated Use DOC_FONT_SIZE_OPTIONS */
+export const ROW_FONT_SIZE_OPTIONS = DOC_FONT_SIZE_OPTIONS;
+
+const DEFAULT_INVOICE_TYPOGRAPHY = {
+  headerFontSize: 24,
+  headerFontBold: true,
+  subHeaderFontSize: 12,
+  subHeaderFontBold: true,
   rowFontSize: 12,
   rowFontBold: false,
+  footerFontSize: 11,
+  footerFontBold: false,
+  fontFamily: 'Arial, Helvetica, sans-serif',
+};
+
+const DEFAULT_LEDGER_TYPOGRAPHY = {
+  headerFontSize: 17,
+  headerFontBold: true,
+  subHeaderFontSize: 11,
+  subHeaderFontBold: true,
+  rowFontSize: 12,
+  rowFontBold: false,
+  footerFontSize: 10,
+  footerFontBold: false,
   fontFamily: 'Arial, Helvetica, sans-serif',
 };
 
@@ -85,7 +124,7 @@ export const DEFAULT_INVOICE_THEME: CreditDocTheme = {
   creditBgSoft: '#f0fdf4',
   debitText: '#b91c1c',
   creditText: '#15803d',
-  ...DEFAULT_TYPOGRAPHY,
+  ...DEFAULT_INVOICE_TYPOGRAPHY,
 };
 
 /** Teal / slate — distinct from invoice amber for ledger statements */
@@ -107,7 +146,7 @@ export const DEFAULT_LEDGER_THEME: CreditDocTheme = {
   creditBgSoft: '#f0fdf4',
   debitText: '#b91c1c',
   creditText: '#15803d',
-  ...DEFAULT_TYPOGRAPHY,
+  ...DEFAULT_LEDGER_TYPOGRAPHY,
 };
 
 const DEFAULTS: Record<CreditDocKind, CreditDocTheme> = {
@@ -163,10 +202,102 @@ function lighten(hex: string, amount: number): string {
   return mix(hex, '#ffffff', amount);
 }
 
-function clampRowFontSize(n: unknown): number {
+function clampDocFontSize(n: unknown, fallback: number): number {
   const v = typeof n === 'number' ? n : parseInt(String(n ?? ''), 10);
-  if (!Number.isFinite(v)) return DEFAULT_TYPOGRAPHY.rowFontSize;
-  return Math.min(24, Math.max(9, Math.round(v)));
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(32, Math.max(8, Math.round(v)));
+}
+
+function docFontWeight(bold: boolean): string {
+  return bold ? '700' : '500';
+}
+
+function docFontPx(size: number): string {
+  return `${size}px`;
+}
+
+function docPdfFontSizePx(px: number): number {
+  return Math.max(6, Math.min(18, px * 0.625));
+}
+
+/** CSS font-size for document line-item rows (px). */
+export function docRowFontPx(theme: CreditDocTheme): string {
+  return docFontPx(clampDocFontSize(theme.rowFontSize, 12));
+}
+
+/** CSS font-weight for document line-item rows. */
+export function docRowFontWeight(theme: CreditDocTheme): string {
+  return docFontWeight(theme.rowFontBold);
+}
+
+export function docHeaderFontPx(theme: CreditDocTheme): string {
+  return docFontPx(clampDocFontSize(theme.headerFontSize, 24));
+}
+
+export function docHeaderFontWeight(theme: CreditDocTheme): string {
+  return docFontWeight(theme.headerFontBold);
+}
+
+export function docSubHeaderFontPx(theme: CreditDocTheme): string {
+  return docFontPx(clampDocFontSize(theme.subHeaderFontSize, 12));
+}
+
+export function docSubHeaderFontWeight(theme: CreditDocTheme): string {
+  return docFontWeight(theme.subHeaderFontBold);
+}
+
+export function docFooterFontPx(theme: CreditDocTheme): string {
+  return docFontPx(clampDocFontSize(theme.footerFontSize, 11));
+}
+
+export function docFooterFontWeight(theme: CreditDocTheme): string {
+  return docFontWeight(theme.footerFontBold);
+}
+
+export function docPdfRowFontSize(theme: CreditDocTheme): number {
+  return docPdfFontSizePx(clampDocFontSize(theme.rowFontSize, 12));
+}
+
+export function docPdfHeaderFontSize(theme: CreditDocTheme): number {
+  return docPdfFontSizePx(clampDocFontSize(theme.headerFontSize, 24));
+}
+
+export function docPdfSubHeaderFontSize(theme: CreditDocTheme): number {
+  return docPdfFontSizePx(clampDocFontSize(theme.subHeaderFontSize, 12));
+}
+
+export function docPdfFooterFontSize(theme: CreditDocTheme): number {
+  return docPdfFontSizePx(clampDocFontSize(theme.footerFontSize, 11));
+}
+
+/** Page / even-row background color. */
+export function docPageBackground(theme: CreditDocTheme): string {
+  return theme.white || '#ffffff';
+}
+
+/** Alternating (odd) row background — supports transparent. */
+export function docRowBackground(theme: CreditDocTheme, index: number): string {
+  if (index % 2 === 1) {
+    const alt = (theme.rowAlt || '').trim().toLowerCase();
+    if (!alt || alt === 'transparent') return 'transparent';
+    return theme.rowAlt;
+  }
+  return docPageBackground(theme);
+}
+
+/** jsPDF font family from theme (limited built-in faces). */
+export function docPdfFontFamily(theme: CreditDocTheme): 'helvetica' | 'times' | 'courier' {
+  const f = (theme.fontFamily || '').toLowerCase();
+  if (f.includes('courier') || f.includes('monospace')) return 'courier';
+  if (f.includes('times') || f.includes('georgia') || f.includes('serif')) return 'times';
+  return 'helvetica';
+}
+
+/** html2canvas backdrop — hex page bg only (transparent alt rows fall back to white). */
+export function docCaptureBackgroundColor(theme: CreditDocTheme): string {
+  const bg = docPageBackground(theme).trim();
+  if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(bg)) return bg;
+  return '#ffffff';
 }
 
 /** Build a full chrome palette from a primary brand color (keeps debit/credit semantic colors). */
@@ -201,16 +332,55 @@ function sanitizeOverrides(partial: CreditDocThemeOverrides | undefined): Credit
     const alt = normalizeColor(String(partial.rowAlt));
     if (alt) out.rowAlt = alt;
   }
-  if (partial.rowFontSize != null) {
-    out.rowFontSize = clampRowFontSize(partial.rowFontSize);
+  const sizeFields = [
+    'rowFontSize',
+    'headerFontSize',
+    'subHeaderFontSize',
+    'footerFontSize',
+  ] as const;
+  for (const key of sizeFields) {
+    if (partial[key] != null) {
+      out[key] = clampDocFontSize(partial[key], 12);
+    }
   }
-  if (typeof partial.rowFontBold === 'boolean') {
-    out.rowFontBold = partial.rowFontBold;
+  const boldFields = [
+    'rowFontBold',
+    'headerFontBold',
+    'subHeaderFontBold',
+    'footerFontBold',
+  ] as const;
+  for (const key of boldFields) {
+    if (typeof partial[key] === 'boolean') out[key] = partial[key];
   }
   if (typeof partial.fontFamily === 'string' && partial.fontFamily.trim()) {
     out.fontFamily = partial.fontFamily.trim();
   }
   return out;
+}
+
+function mergeTypography(theme: CreditDocTheme, partial: CreditDocThemeOverrides): CreditDocTheme {
+  const def = DEFAULTS.invoice; // fallback only for clamp
+  return {
+    ...theme,
+    rowFontSize: clampDocFontSize(partial.rowFontSize ?? theme.rowFontSize, theme.rowFontSize),
+    rowFontBold: partial.rowFontBold ?? theme.rowFontBold,
+    headerFontSize: clampDocFontSize(
+      partial.headerFontSize ?? theme.headerFontSize,
+      theme.headerFontSize
+    ),
+    headerFontBold: partial.headerFontBold ?? theme.headerFontBold,
+    subHeaderFontSize: clampDocFontSize(
+      partial.subHeaderFontSize ?? theme.subHeaderFontSize,
+      theme.subHeaderFontSize
+    ),
+    subHeaderFontBold: partial.subHeaderFontBold ?? theme.subHeaderFontBold,
+    footerFontSize: clampDocFontSize(
+      partial.footerFontSize ?? theme.footerFontSize,
+      theme.footerFontSize
+    ),
+    footerFontBold: partial.footerFontBold ?? theme.footerFontBold,
+    fontFamily: partial.fontFamily || theme.fontFamily || def.fontFamily,
+  };
 }
 
 function loadStored(): StoredThemes {
@@ -245,14 +415,7 @@ function resolveTheme(kind: CreditDocKind, stored: StoredThemes): CreditDocTheme
   const partial = sanitizeOverrides(stored[kind]);
   const primary = partial.primary || DEFAULTS[kind].primary;
   const built = themeFromPrimary(primary, kind);
-  return {
-    ...built,
-    ...partial,
-    primary: built.primary,
-    rowFontSize: clampRowFontSize(partial.rowFontSize ?? built.rowFontSize),
-    rowFontBold: partial.rowFontBold ?? built.rowFontBold,
-    fontFamily: partial.fontFamily || built.fontFamily,
-  };
+  return mergeTypography({ ...built, ...partial, primary: built.primary }, partial);
 }
 
 /** Snapshot of overrides currently saved (for server sync). */
@@ -260,11 +423,16 @@ function overridesFromTheme(theme: CreditDocTheme, kind: CreditDocKind): CreditD
   const def = DEFAULTS[kind];
   const out: CreditDocThemeOverrides = { primary: theme.primary };
   if (theme.white.toLowerCase() !== def.white.toLowerCase()) out.white = theme.white;
-  // Always persist rowAlt when not the auto-derived value so transparent sticks after primary changes
   const derivedAlt = themeFromPrimary(theme.primary, kind).rowAlt;
   if (theme.rowAlt.toLowerCase() !== derivedAlt.toLowerCase()) out.rowAlt = theme.rowAlt;
+  if (theme.headerFontSize !== def.headerFontSize) out.headerFontSize = theme.headerFontSize;
+  if (theme.headerFontBold !== def.headerFontBold) out.headerFontBold = theme.headerFontBold;
+  if (theme.subHeaderFontSize !== def.subHeaderFontSize) out.subHeaderFontSize = theme.subHeaderFontSize;
+  if (theme.subHeaderFontBold !== def.subHeaderFontBold) out.subHeaderFontBold = theme.subHeaderFontBold;
   if (theme.rowFontSize !== def.rowFontSize) out.rowFontSize = theme.rowFontSize;
   if (theme.rowFontBold !== def.rowFontBold) out.rowFontBold = theme.rowFontBold;
+  if (theme.footerFontSize !== def.footerFontSize) out.footerFontSize = theme.footerFontSize;
+  if (theme.footerFontBold !== def.footerFontBold) out.footerFontBold = theme.footerFontBold;
   if (theme.fontFamily !== def.fontFamily) out.fontFamily = theme.fontFamily;
   return out;
 }
@@ -275,13 +443,18 @@ function storedPayload(stored: StoredThemes): StoredThemes {
     const theme = resolveTheme(kind, stored);
     const def = DEFAULTS[kind];
     const o = overridesFromTheme(theme, kind);
-    // Keep at least primary if anything customized, or empty if fully default
     const hasCustom =
       (o.primary && o.primary.toLowerCase() !== def.primary.toLowerCase()) ||
       o.white != null ||
       o.rowAlt != null ||
+      o.headerFontSize != null ||
+      o.headerFontBold != null ||
+      o.subHeaderFontSize != null ||
+      o.subHeaderFontBold != null ||
       o.rowFontSize != null ||
       o.rowFontBold != null ||
+      o.footerFontSize != null ||
+      o.footerFontBold != null ||
       o.fontFamily != null;
     if (hasCustom) out[kind] = o;
   });

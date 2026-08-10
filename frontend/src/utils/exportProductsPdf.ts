@@ -12,8 +12,7 @@ export type ProductExportColumnId =
   | 'available'
   | 'shop_stock'
   | 'warehouse_stock'
-  | 'purchase_price'
-  | 'selling_price'
+  | 'price'
   | 'low_stock_threshold'
   | 'status'
   | 'stock_bifurcation'
@@ -35,8 +34,7 @@ export const PRODUCT_EXPORT_COLUMNS: ProductExportColumnDef[] = [
   { id: 'available', label: 'Available', defaultOn: false },
   { id: 'shop_stock', label: 'Shop Stock', defaultOn: false },
   { id: 'warehouse_stock', label: 'Warehouse Stock', defaultOn: false },
-  { id: 'purchase_price', label: 'Purchase Price', defaultOn: false },
-  { id: 'selling_price', label: 'Selling Price', defaultOn: false },
+  { id: 'price', label: 'Price', defaultOn: false },
   { id: 'low_stock_threshold', label: 'Low Stock Limit', defaultOn: false },
   { id: 'status', label: 'Status', defaultOn: false },
   { id: 'stock_bifurcation', label: 'Stock by Supplier', defaultOn: false },
@@ -75,8 +73,17 @@ function formatPdfMoney(value: string | number | null | undefined) {
 }
 
 function parseMoney(value: string | number | null | undefined): number | null {
-  const n = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
-  return Number.isFinite(n) ? n : null;
+  if (value === null || value === undefined || value === '') return null;
+  const cleaned =
+    typeof value === 'number' ? value : parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(cleaned) ? cleaned : null;
+}
+
+/** Positive money only — empty / 0 / invalid are treated as missing. */
+function parsePositiveMoney(value: string | number | null | undefined): number | null {
+  const n = parseMoney(value);
+  if (n === null || n <= 0) return null;
+  return n;
 }
 
 function applyPriceOffset(
@@ -86,6 +93,60 @@ function applyPriceOffset(
   const n = parseMoney(value);
   if (n === null) return null;
   return n + (Number.isFinite(priceOffset) && priceOffset > 0 ? priceOffset : 0);
+}
+
+export type ResolvedExportPrices = {
+  /** From purchase_items.unit_price (via supplier_breakdown / product field). */
+  purchasePrice: number | null;
+  /** Actual selling from purchase_items.selling_price when > 0. */
+  sellingPrice: number | null;
+  /** Selling if set, otherwise purchase. */
+  effectiveSellingPrice: number | null;
+  /** True when selling was empty/0 and purchase was used instead. */
+  sellingFellBackToPurchase: boolean;
+};
+
+/**
+ * Resolve export prices from purchases data.
+ * Prefer supplier_breakdown rows (PurchaseItem), then top-level product fields.
+ */
+export function resolveExportPrices(product: any): ResolvedExportPrices {
+  const breakdown = Array.isArray(product?.supplier_breakdown) ? product.supplier_breakdown : [];
+
+  let maxPurchaseFromPurchases = 0;
+  let maxSellingFromPurchases = 0;
+  for (const row of breakdown) {
+    const purchase = parsePositiveMoney(row?.purchase_price_value ?? row?.purchase_price);
+    const selling = parsePositiveMoney(row?.selling_price_value);
+    if (purchase && purchase > maxPurchaseFromPurchases) maxPurchaseFromPurchases = purchase;
+    if (selling && selling > maxSellingFromPurchases) maxSellingFromPurchases = selling;
+  }
+
+  const topPurchase = parsePositiveMoney(product?.purchase_price);
+  const topSelling = parsePositiveMoney(product?.selling_price);
+
+  // Always prefer purchase-table breakdown when present.
+  const purchasePrice =
+    maxPurchaseFromPurchases > 0 ? maxPurchaseFromPurchases : topPurchase;
+
+  // When breakdown exists, only trust selling_price_value from purchase rows
+  // (top-level selling_price may already be a silent purchase fallback from the API).
+  let sellingPrice: number | null = null;
+  if (breakdown.length > 0) {
+    sellingPrice = maxSellingFromPurchases > 0 ? maxSellingFromPurchases : null;
+  } else {
+    sellingPrice = topSelling;
+  }
+
+  const sellingFellBackToPurchase = sellingPrice === null && purchasePrice !== null;
+  const effectiveSellingPrice = sellingPrice ?? purchasePrice;
+
+  return {
+    purchasePrice,
+    sellingPrice,
+    effectiveSellingPrice,
+    sellingFellBackToPurchase,
+  };
 }
 
 function getProductStatus(product: any, tagFilter: string): string {
@@ -116,9 +177,11 @@ function cellValue(
   columnId: ProductExportColumnId,
   tagFilter: string,
   rowIndex = 0,
-  priceOffset = 0
+  priceOffset = 0,
+  prices?: ResolvedExportPrices
 ): string {
   const stock = getStockInfo(product);
+  const resolved = prices ?? resolveExportPrices(product);
 
   switch (columnId) {
     case 'sr':
@@ -143,10 +206,8 @@ function cellValue(
       return formatPdfNumber(product.shop_stock);
     case 'warehouse_stock':
       return formatPdfNumber(product.warehouse_stock);
-    case 'purchase_price':
-      return formatPdfMoney(applyPriceOffset(product.purchase_price, priceOffset));
-    case 'selling_price':
-      return formatPdfMoney(applyPriceOffset(product.selling_price, priceOffset));
+    case 'price':
+      return formatPdfMoney(applyPriceOffset(resolved.effectiveSellingPrice, priceOffset));
     case 'low_stock_threshold':
       return formatPdfNumber(product.low_stock_threshold);
     case 'status':
@@ -158,6 +219,94 @@ function cellValue(
     default:
       return '-';
   }
+}
+
+export type SellingPriceFallbackItem = {
+  id: string | number | null;
+  name: string;
+  category: string;
+  brand: string;
+  /** Purchase price used as selling fallback (before offset). */
+  originalPrice: number;
+  /** Price after custom PDF offset. */
+  updatedPrice: number;
+};
+
+export type SellingPriceFallbackGroup = {
+  category: string;
+  brands: Array<{
+    brand: string;
+    products: SellingPriceFallbackItem[];
+  }>;
+};
+
+export type SellingPriceFallbackInfo = {
+  count: number;
+  groups: SellingPriceFallbackGroup[];
+};
+
+function formatPlainMoney(value: number): string {
+  return value.toLocaleString('en-IN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+}
+
+/**
+ * Products whose selling price is empty/0 and will use purchase price in the export,
+ * grouped by category then brand, with original → updated prices after offset.
+ */
+export function getSellingPriceFallbackInfo(
+  products: any[],
+  priceOffset = 0
+): SellingPriceFallbackInfo {
+  const safeOffset =
+    Number.isFinite(priceOffset) && priceOffset > 0 ? Math.floor(priceOffset) : 0;
+
+  const items: SellingPriceFallbackItem[] = [];
+  products.forEach((product, index) => {
+    const prices = resolveExportPrices(product);
+    if (!prices.sellingFellBackToPurchase || prices.purchasePrice === null) return;
+
+    const originalPrice = prices.purchasePrice;
+    items.push({
+      id: product.id ?? null,
+      name: sanitizePdfText(product.name) || `Product #${product.id ?? index + 1}`,
+      category: categoryLabel(product),
+      brand: brandLabel(product),
+      originalPrice,
+      updatedPrice: originalPrice + safeOffset,
+    });
+  });
+
+  items.sort((a, b) => {
+    const byCategory = compareText(a.category, b.category);
+    if (byCategory !== 0) return byCategory;
+    const byBrand = compareText(a.brand, b.brand);
+    if (byBrand !== 0) return byBrand;
+    return compareText(a.name, b.name);
+  });
+
+  const groups: SellingPriceFallbackGroup[] = [];
+  for (const item of items) {
+    let categoryGroup = groups.find((g) => g.category === item.category);
+    if (!categoryGroup) {
+      categoryGroup = { category: item.category, brands: [] };
+      groups.push(categoryGroup);
+    }
+    let brandGroup = categoryGroup.brands.find((b) => b.brand === item.brand);
+    if (!brandGroup) {
+      brandGroup = { brand: item.brand, products: [] };
+      categoryGroup.brands.push(brandGroup);
+    }
+    brandGroup.products.push(item);
+  }
+
+  return { count: items.length, groups };
+}
+
+export function formatFallbackPriceChange(item: SellingPriceFallbackItem): string {
+  return `${formatPlainMoney(item.originalPrice)} → ${formatPlainMoney(item.updatedPrice)}`;
 }
 
 function categoryLabel(product: any): string {
@@ -203,6 +352,7 @@ function buildGroupedBody(
   sorted.forEach((product) => {
     const category = categoryLabel(product);
     const brand = brandLabel(product);
+    const prices = resolveExportPrices(product);
 
     if (category !== lastCategory) {
       rows.push({ kind: 'category', label: `Category: ${category}` });
@@ -217,7 +367,9 @@ function buildGroupedBody(
 
     rows.push({
       kind: 'product',
-      cells: cols.map((col) => cellValue(product, col.id, tagFilter, productIndex, priceOffset)),
+      cells: cols.map((col) =>
+        cellValue(product, col.id, tagFilter, productIndex, priceOffset, prices)
+      ),
     });
     productIndex += 1;
   });
@@ -270,7 +422,7 @@ export function exportProductsToPdf({
   products,
   columnIds,
   tagFilter = 'new',
-  filterLabels = [],
+  filterLabels: _filterLabels = [],
   priceOffset = 0,
 }: ExportProductsPdfOptions): void {
   const selectedColumns = PRODUCT_EXPORT_COLUMNS.filter((c) => columnIds.includes(c.id));
@@ -292,33 +444,11 @@ export function exportProductsToPdf({
 
   doc.setFontSize(9);
   doc.setTextColor(107, 114, 128);
-  let metaY = 25;
+  const metaY = 25;
   doc.text(`Generated: ${toLocalDateString(new Date())}`, margin, metaY);
 
-  const tagLabel =
-    tagFilter === 'new'
-      ? 'All Products'
-      : tagFilter.charAt(0).toUpperCase() + tagFilter.slice(1).replace('-', ' ');
-  metaY += 5;
-  doc.text(`View: ${tagLabel}`, margin, metaY);
-
-  metaY += 5;
-  doc.text('Grouped by: Category, then Brand', margin, metaY);
-
-  if (safeOffset > 0) {
-    metaY += 5;
-    doc.text(`Price adjustment (PDF only): +Rs. ${safeOffset}`, margin, metaY);
-  }
-
-  if (filterLabels.length > 0) {
-    metaY += 5;
-    const filterLine = `Filters: ${filterLabels.join(' | ')}`;
-    const wrapped = doc.splitTextToSize(filterLine, pageWidth - margin * 2);
-    doc.text(wrapped, margin, metaY);
-    metaY += wrapped.length * 4;
-  }
-
   const groupedRows = buildGroupedBody(products, cols, tagFilter, safeOffset);
+
   const body = groupedRows.map((row) => {
     if (row.kind === 'product') return row.cells;
     // Span-style label in first cell; rest empty (styled in didParseCell)

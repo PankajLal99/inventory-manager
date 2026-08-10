@@ -4,7 +4,7 @@ import {
   DEFAULT_INVOICE_THEME,
   DEFAULT_LEDGER_THEME,
   DOC_FONT_OPTIONS,
-  ROW_FONT_SIZE_OPTIONS,
+  DOC_FONT_SIZE_OPTIONS,
   useCreditDocThemes,
   type CreditDocKind,
   type CreditDocTheme,
@@ -28,6 +28,7 @@ const LEDGER_PRESETS = [
 
 const BG_PRESETS = ['#ffffff', '#fffbeb', '#f8fafc', '#fafaf9', '#f0fdfa', '#fef3c7'];
 const ROW_ALT_PRESETS = ['#fff7ed', '#fef3c7', '#f0fdfa', '#f1f5f9', '#fafaf9', '#fee2e2'];
+const LEDGER_ROW_ALT_PRESETS = ['#f0fdfa', '#ecfdf5', '#f1f5f9', '#fafaf9', '#fef3c7', '#fee2e2'];
 
 type Props = {
   /** Restrict picker to one document kind (omit for both). */
@@ -197,18 +198,62 @@ function ColorRow({
   );
 }
 
-function InvoiceStyleSection({
+function FontSizeBoldRow({
+  label,
+  size,
+  bold,
+  onSizeChange,
+  onBoldChange,
+}: {
+  label: string;
+  size: number;
+  bold: boolean;
+  onSizeChange: (size: number) => void;
+  onBoldChange: (bold: boolean) => void;
+}) {
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+      <label className="space-y-1">
+        <span className="text-[11px] font-semibold text-stone-600">{label}</span>
+        <select
+          value={size}
+          onChange={(e) => onSizeChange(Number(e.target.value))}
+          className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-300"
+        >
+          {DOC_FONT_SIZE_OPTIONS.map((px) => (
+            <option key={px} value={px}>
+              {px}px
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-1.5 pb-1.5 cursor-pointer select-none whitespace-nowrap">
+        <input
+          type="checkbox"
+          checked={bold}
+          onChange={(e) => onBoldChange(e.target.checked)}
+          className="h-3.5 w-3.5 rounded border-stone-300 text-stone-800 focus:ring-stone-400"
+        />
+        <span className="text-[11px] font-semibold text-stone-700">Bold</span>
+      </label>
+    </div>
+  );
+}
+
+function DocStyleSection({
+  title,
   theme,
+  rowAltPresets,
   onUpdate,
 }: {
+  title: string;
   theme: CreditDocTheme;
+  rowAltPresets: string[];
   onUpdate: (patch: Partial<CreditDocTheme>) => void;
 }) {
   return (
     <div className="space-y-3 pt-1 border-t border-stone-100">
-      <div className="text-[11px] font-bold uppercase tracking-wide text-stone-500">
-        Invoice style
-      </div>
+      <div className="text-[11px] font-bold uppercase tracking-wide text-stone-500">{title}</div>
 
       <SwatchRow
         label="Page background"
@@ -220,56 +265,61 @@ function InvoiceStyleSection({
       <SwatchRow
         label="Alternating row"
         value={theme.rowAlt}
-        presets={ROW_ALT_PRESETS}
+        presets={rowAltPresets}
         allowTransparent
         onChange={(hex) => onUpdate({ rowAlt: hex })}
       />
 
-      <div className="grid grid-cols-2 gap-2">
-        <label className="space-y-1">
-          <span className="text-[11px] font-semibold text-stone-600">Row font size</span>
-          <select
-            value={theme.rowFontSize}
-            onChange={(e) => onUpdate({ rowFontSize: Number(e.target.value) })}
-            className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-300"
-          >
-            {ROW_FONT_SIZE_OPTIONS.map((size) => (
-              <option key={size} value={size}>
-                {size}px
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="space-y-1">
-          <span className="text-[11px] font-semibold text-stone-600">Font</span>
-          <select
-            value={
-              DOC_FONT_OPTIONS.some((f) => f.value === theme.fontFamily)
-                ? theme.fontFamily
-                : DOC_FONT_OPTIONS[0].value
-            }
-            onChange={(e) => onUpdate({ fontFamily: e.target.value })}
-            className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-300"
-          >
-            {DOC_FONT_OPTIONS.map((f) => (
-              <option key={f.value} value={f.value}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <label className="flex items-center gap-2 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          checked={theme.rowFontBold}
-          onChange={(e) => onUpdate({ rowFontBold: e.target.checked })}
-          className="h-3.5 w-3.5 rounded border-stone-300 text-stone-800 focus:ring-stone-400"
-        />
-        <span className="text-[11px] font-semibold text-stone-700">Bold invoice row items</span>
+      <label className="block space-y-1">
+        <span className="text-[11px] font-semibold text-stone-600">Font family</span>
+        <select
+          value={
+            DOC_FONT_OPTIONS.some((f) => f.value === theme.fontFamily)
+              ? theme.fontFamily
+              : DOC_FONT_OPTIONS[0].value
+          }
+          onChange={(e) => onUpdate({ fontFamily: e.target.value })}
+          className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-300"
+        >
+          {DOC_FONT_OPTIONS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
       </label>
+
+      <FontSizeBoldRow
+        label="Header font size"
+        size={theme.headerFontSize}
+        bold={theme.headerFontBold}
+        onSizeChange={(headerFontSize) => onUpdate({ headerFontSize })}
+        onBoldChange={(headerFontBold) => onUpdate({ headerFontBold })}
+      />
+
+      <FontSizeBoldRow
+        label="Sub-header font size"
+        size={theme.subHeaderFontSize}
+        bold={theme.subHeaderFontBold}
+        onSizeChange={(subHeaderFontSize) => onUpdate({ subHeaderFontSize })}
+        onBoldChange={(subHeaderFontBold) => onUpdate({ subHeaderFontBold })}
+      />
+
+      <FontSizeBoldRow
+        label="Row font size"
+        size={theme.rowFontSize}
+        bold={theme.rowFontBold}
+        onSizeChange={(rowFontSize) => onUpdate({ rowFontSize })}
+        onBoldChange={(rowFontBold) => onUpdate({ rowFontBold })}
+      />
+
+      <FontSizeBoldRow
+        label="Footer font size"
+        size={theme.footerFontSize}
+        bold={theme.footerFontBold}
+        onSizeChange={(footerFontSize) => onUpdate({ footerFontSize })}
+        onBoldChange={(footerFontBold) => onUpdate({ footerFontBold })}
+      />
     </div>
   );
 }
@@ -341,8 +391,10 @@ export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
           ) : null}
 
           {showInvoice ? (
-            <InvoiceStyleSection
+            <DocStyleSection
+              title="Invoice style"
               theme={invoice}
+              rowAltPresets={ROW_ALT_PRESETS}
               onUpdate={(patch) => updateTheme('invoice', patch)}
             />
           ) : null}
@@ -356,6 +408,15 @@ export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
               defaultPrimary={DEFAULT_LEDGER_THEME.primary}
               onChange={setPrimary}
               onReset={reset}
+            />
+          ) : null}
+
+          {showLedger ? (
+            <DocStyleSection
+              title="Ledger style"
+              theme={ledger}
+              rowAltPresets={LEDGER_ROW_ALT_PRESETS}
+              onUpdate={(patch) => updateTheme('ledger', patch)}
             />
           ) : null}
 

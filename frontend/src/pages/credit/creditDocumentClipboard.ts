@@ -4,7 +4,7 @@ import {
   CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
-import { getInvoiceTheme } from './creditDocTheme';
+import { getInvoiceTheme, getLedgerTheme, docCaptureBackgroundColor } from './creditDocTheme';
 import {
   buildCreditLedgerSnapshotHtml,
   buildCreditLedgerSnapshotPageHtmlList,
@@ -31,10 +31,11 @@ function chunkSnapshotRows<T>(rows: T[], size: number): T[][] {
   return chunks.length > 0 ? chunks : [[]];
 }
 
-function captureBackgroundColor(): string {
-  const bg = getInvoiceTheme().white?.trim();
-  if (bg && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(bg)) return bg;
-  return '#ffffff';
+function captureBackgroundColor(html: string): string {
+  if (html.includes('credit-ledger-copy-root')) {
+    return docCaptureBackgroundColor(getLedgerTheme());
+  }
+  return docCaptureBackgroundColor(getInvoiceTheme());
 }
 
 export async function renderSnapshotHtmlToBlob(
@@ -64,7 +65,7 @@ export async function renderSnapshotHtmlToBlob(
     scale: 2,
     useCORS: true,
     logging: false,
-    backgroundColor: captureBackgroundColor(),
+    backgroundColor: captureBackgroundColor(html),
     windowWidth: w,
     windowHeight: h,
     width: w,

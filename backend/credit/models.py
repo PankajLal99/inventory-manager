@@ -350,13 +350,14 @@ class CreditPayment(models.Model):
     upi_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     notes = models.TextField(blank=True)
     paid_at = models.DateTimeField(default=timezone.now, help_text='Payment date/time')
-    source_ledger_entry = models.OneToOneField(
+    source_ledger_entry = models.ForeignKey(
         'parties.LedgerEntry',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='synced_credit_payment',
-        help_text='Main-app manual payment mirrored from Payments page (is_sent)',
+        related_name='synced_credit_payments',
+        help_text='Main-app manual payment mirrored from Payments page (is_sent). '
+                  'Mixed mode may create one cash and one UPI row for the same source.',
     )
     created_by = models.ForeignKey(
         User,

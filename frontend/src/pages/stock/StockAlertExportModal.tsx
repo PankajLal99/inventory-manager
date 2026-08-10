@@ -1,0 +1,163 @@
+import { useState } from 'react';
+import { Download, Loader2 } from 'lucide-react';
+import Modal from '../../components/ui/Modal';
+import Button from '../../components/ui/Button';
+import {
+  STOCK_ALERT_EXPORT_COLUMNS,
+  defaultStockAlertExportColumnIds,
+  exportStockAlertsToPdf,
+  type StockAlertExportColumnId,
+  type StockAlertExportRow,
+} from '../../utils/exportStockPdf';
+
+type StockAlertExportModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  products: StockAlertExportRow[];
+  tabLabel: string;
+};
+
+export default function StockAlertExportModal({
+  isOpen,
+  onClose,
+  products,
+  tabLabel,
+}: StockAlertExportModalProps) {
+  const [selectedIds, setSelectedIds] = useState<StockAlertExportColumnId[]>(
+    () => defaultStockAlertExportColumnIds()
+  );
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedCount = selectedIds.length;
+
+  const toggleColumn = (id: StockAlertExportColumnId) => {
+    setSelectedIds((prev) => {
+      if (prev.includes(id)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((c) => c !== id);
+      }
+      return [...prev, id];
+    });
+  };
+
+  const selectDefaults = () => setSelectedIds(defaultStockAlertExportColumnIds());
+  const selectAll = () => setSelectedIds(STOCK_ALERT_EXPORT_COLUMNS.map((c) => c.id));
+
+  const handleExport = () => {
+    if (selectedIds.length === 0) {
+      setError('Select at least one column.');
+      return;
+    }
+    if (!products.length) {
+      setError('No products to export for the current filters.');
+      return;
+    }
+
+    setError(null);
+    setExporting(true);
+    try {
+      exportStockAlertsToPdf({
+        products,
+        columnIds: selectedIds,
+        tabLabel,
+      });
+      onClose();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to export stock alerts.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Export Stock Alerts to PDF" size="md">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Exports {products.length} product{products.length === 1 ? '' : 's'} from the current
+          filters and tab ({tabLabel}).
+        </p>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold text-gray-900">
+              Columns
+              <span className="ml-2 text-xs font-normal text-gray-500">
+                ({selectedCount} selected)
+              </span>
+            </h4>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={selectDefaults}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+              >
+                Defaults
+              </button>
+              <button
+                type="button"
+                onClick={selectAll}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+              >
+                Select all
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-64 overflow-auto rounded-lg border border-gray-200 p-2">
+            {STOCK_ALERT_EXPORT_COLUMNS.map((col) => {
+              const checked = selectedIds.includes(col.id);
+              return (
+                <label
+                  key={col.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm text-gray-700"
+                >
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    checked={checked}
+                    onChange={() => toggleColumn(col.id)}
+                  />
+                  <span>
+                    {col.label}
+                    {col.defaultOn ? (
+                      <span className="ml-1 text-[10px] uppercase tracking-wide text-gray-400">
+                        default
+                      </span>
+                    ) : null}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <p className="text-xs text-gray-500">
+          PDF is grouped by category, then brand, and ends with a summary of product, category, and
+          brand counts.
+        </p>
+
+        {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+          <Button variant="outline" onClick={onClose} disabled={exporting}>
+            Cancel
+          </Button>
+          <Button onClick={handleExport} disabled={exporting || selectedIds.length === 0}>
+            {exporting ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 inline animate-spin" />
+                Exporting…
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4 mr-2 inline" />
+                Export PDF
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
