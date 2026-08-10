@@ -217,7 +217,7 @@ export function buildCreditLedgerSnapshotHtml(
         : balCr
           ? theme.creditText
           : theme.debitText;
-      const weight = r.isOpening || r.isTotal ? '700' : theme.rowFontBold ? '700' : '500';
+      const weight = r.isOpening || r.isTotal ? '700' : itemWeight;
       let rowBg = docRowBackground(theme, rowIdx);
       if (r.isTotal) rowBg = theme.tableHead;
 
