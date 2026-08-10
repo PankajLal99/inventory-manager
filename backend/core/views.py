@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
+import json
 
 from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
 from .models import Setting, AuditLog
@@ -199,6 +200,51 @@ def user_me(request):
         user_data['can_access_history'] = is_superuser_or_staff
     
     return Response(user_data)
+
+
+DOCUMENT_THEME_KEY = 'credit_doc_themes'
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def document_theme(request):
+    """
+    Shop-wide credit document theme (invoice / ledger colors + invoice typography).
+    Shared across all users — not scoped to the logged-in user id.
+    """
+    setting, _ = Setting.objects.get_or_create(
+        key=DOCUMENT_THEME_KEY,
+        defaults={
+            'value': '{}',
+            'description': 'Credit invoice/ledger document theme (colors, fonts, row styles)',
+        },
+    )
+
+    if request.method == 'GET':
+        try:
+            data = json.loads(setting.value or '{}')
+            if not isinstance(data, dict):
+                data = {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+        return Response(data)
+
+    payload = request.data
+    if not isinstance(payload, dict):
+        return Response({'detail': 'Expected a JSON object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Persist only invoice/ledger override bags
+    cleaned = {}
+    for kind in ('invoice', 'ledger'):
+        raw = payload.get(kind)
+        if isinstance(raw, dict):
+            cleaned[kind] = raw
+
+    setting.value = json.dumps(cleaned)
+    if not setting.description:
+        setting.description = 'Credit invoice/ledger document theme (colors, fonts, row styles)'
+    setting.save(update_fields=['value', 'description', 'updated_at'])
+    return Response(cleaned)
 
 
 # Setting views

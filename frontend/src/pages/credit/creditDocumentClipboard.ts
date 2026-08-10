@@ -4,6 +4,7 @@ import {
   CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
+import { getInvoiceTheme } from './creditDocTheme';
 import {
   buildCreditLedgerSnapshotHtml,
   buildCreditLedgerSnapshotPageHtmlList,
@@ -28,6 +29,12 @@ function chunkSnapshotRows<T>(rows: T[], size: number): T[][] {
     chunks.push(rows.slice(i, i + size));
   }
   return chunks.length > 0 ? chunks : [[]];
+}
+
+function captureBackgroundColor(): string {
+  const bg = getInvoiceTheme().white?.trim();
+  if (bg && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(bg)) return bg;
+  return '#ffffff';
 }
 
 export async function renderSnapshotHtmlToBlob(
@@ -57,7 +64,7 @@ export async function renderSnapshotHtmlToBlob(
     scale: 2,
     useCORS: true,
     logging: false,
-    backgroundColor: '#ffffff',
+    backgroundColor: captureBackgroundColor(),
     windowWidth: w,
     windowHeight: h,
     width: w,

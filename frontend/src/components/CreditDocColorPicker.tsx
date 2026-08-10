@@ -3,8 +3,11 @@ import { Palette, RotateCcw, X } from 'lucide-react';
 import {
   DEFAULT_INVOICE_THEME,
   DEFAULT_LEDGER_THEME,
+  DOC_FONT_OPTIONS,
+  ROW_FONT_SIZE_OPTIONS,
   useCreditDocThemes,
   type CreditDocKind,
+  type CreditDocTheme,
 } from '../pages/credit/creditDocTheme';
 
 const INVOICE_PRESETS = [
@@ -23,11 +26,95 @@ const LEDGER_PRESETS = [
   '#166534', // green
 ];
 
+const BG_PRESETS = ['#ffffff', '#fffbeb', '#f8fafc', '#fafaf9', '#f0fdfa', '#fef3c7'];
+const ROW_ALT_PRESETS = ['#fff7ed', '#fef3c7', '#f0fdfa', '#f1f5f9', '#fafaf9', '#fee2e2'];
+
 type Props = {
   /** Restrict picker to one document kind (omit for both). */
   kinds?: CreditDocKind[];
   className?: string;
 };
+
+function SwatchRow({
+  label,
+  value,
+  presets,
+  allowTransparent,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  presets: string[];
+  allowTransparent?: boolean;
+  onChange: (hex: string) => void;
+}) {
+  const isTransparent = value.toLowerCase() === 'transparent';
+  const colorValue = isTransparent ? '#ffffff' : value;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-stone-600">{label}</span>
+        <span className="text-[10px] font-mono text-stone-400 truncate max-w-[110px]">
+          {isTransparent ? 'transparent' : value}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {allowTransparent ? (
+          <button
+            type="button"
+            title="Transparent"
+            onClick={() => onChange('transparent')}
+            className={`h-7 w-7 rounded-md ring-offset-1 transition relative overflow-hidden ${
+              isTransparent ? 'ring-2 ring-stone-800 scale-105' : 'ring-1 ring-black/10 hover:scale-105'
+            }`}
+            style={{
+              background:
+                'linear-gradient(45deg, #e7e5e4 25%, transparent 25%), linear-gradient(-45deg, #e7e5e4 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e7e5e4 75%), linear-gradient(-45deg, transparent 75%, #e7e5e4 75%)',
+              backgroundSize: '8px 8px',
+              backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+              backgroundColor: '#fff',
+            }}
+            aria-label={`${label} transparent`}
+          />
+        ) : null}
+        {presets.map((hex) => {
+          const active = !isTransparent && value.toLowerCase() === hex.toLowerCase();
+          return (
+            <button
+              key={hex}
+              type="button"
+              title={hex}
+              onClick={() => onChange(hex)}
+              className={`h-7 w-7 rounded-md ring-offset-1 transition ${
+                active ? 'ring-2 ring-stone-800 scale-105' : 'ring-1 ring-black/10 hover:scale-105'
+              }`}
+              style={{ background: hex }}
+              aria-label={`${label} ${hex}`}
+            />
+          );
+        })}
+        <label
+          className="relative h-7 w-7 rounded-md ring-1 ring-black/10 overflow-hidden cursor-pointer hover:ring-stone-400"
+          title="Custom color"
+        >
+          <span
+            className="absolute inset-0"
+            style={{
+              background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
+            }}
+          />
+          <input
+            type="color"
+            value={colorValue}
+            onChange={(e) => onChange(e.target.value)}
+            className="absolute inset-0 opacity-0 cursor-pointer"
+            aria-label={`${label} custom color`}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
 
 function ColorRow({
   label,
@@ -94,8 +181,7 @@ function ColorRow({
           <span
             className="absolute inset-0"
             style={{
-              background:
-                'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
+              background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
             }}
           />
           <input
@@ -111,12 +197,89 @@ function ColorRow({
   );
 }
 
+function InvoiceStyleSection({
+  theme,
+  onUpdate,
+}: {
+  theme: CreditDocTheme;
+  onUpdate: (patch: Partial<CreditDocTheme>) => void;
+}) {
+  return (
+    <div className="space-y-3 pt-1 border-t border-stone-100">
+      <div className="text-[11px] font-bold uppercase tracking-wide text-stone-500">
+        Invoice style
+      </div>
+
+      <SwatchRow
+        label="Page background"
+        value={theme.white}
+        presets={BG_PRESETS}
+        onChange={(hex) => onUpdate({ white: hex })}
+      />
+
+      <SwatchRow
+        label="Alternating row"
+        value={theme.rowAlt}
+        presets={ROW_ALT_PRESETS}
+        allowTransparent
+        onChange={(hex) => onUpdate({ rowAlt: hex })}
+      />
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1">
+          <span className="text-[11px] font-semibold text-stone-600">Row font size</span>
+          <select
+            value={theme.rowFontSize}
+            onChange={(e) => onUpdate({ rowFontSize: Number(e.target.value) })}
+            className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-300"
+          >
+            {ROW_FONT_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size}px
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-[11px] font-semibold text-stone-600">Font</span>
+          <select
+            value={
+              DOC_FONT_OPTIONS.some((f) => f.value === theme.fontFamily)
+                ? theme.fontFamily
+                : DOC_FONT_OPTIONS[0].value
+            }
+            onChange={(e) => onUpdate({ fontFamily: e.target.value })}
+            className="w-full rounded-md border border-stone-200 bg-white px-2 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-2 focus:ring-stone-300"
+          >
+            {DOC_FONT_OPTIONS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={theme.rowFontBold}
+          onChange={(e) => onUpdate({ rowFontBold: e.target.checked })}
+          className="h-3.5 w-3.5 rounded border-stone-300 text-stone-800 focus:ring-stone-400"
+        />
+        <span className="text-[11px] font-semibold text-stone-700">Bold invoice row items</span>
+      </label>
+    </div>
+  );
+}
+
 /**
  * Floating corner control to pick document chrome colors for credit invoice / ledger.
- * Persists via localStorage and refreshes live previews / PDF / snapshots.
+ * Persists shop-wide (API + local cache) and refreshes live previews / PDF / snapshots.
  */
 export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
-  const { invoice, ledger, setPrimary, reset, resetAll } = useCreditDocThemes();
+  const { invoice, ledger, setPrimary, updateTheme, reset, resetAll } = useCreditDocThemes();
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -147,19 +310,19 @@ export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
       className={`fixed bottom-4 right-4 z-50 print:hidden ${className}`}
     >
       {open ? (
-        <div className="mb-2 w-[260px] rounded-xl border border-stone-200 bg-white shadow-xl shadow-stone-900/10 ring-1 ring-black/[0.04] p-3.5 space-y-3.5">
+        <div className="mb-2 w-[300px] max-h-[min(78vh,640px)] overflow-y-auto rounded-xl border border-stone-200 bg-white shadow-xl shadow-stone-900/10 ring-1 ring-black/[0.04] p-3.5 space-y-3.5">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <div className="text-sm font-bold text-stone-900">Document colors</div>
+              <div className="text-sm font-bold text-stone-900">Document theme</div>
               <div className="text-[11px] text-stone-500 mt-0.5 leading-snug">
-                Invoice and ledger use separate schemes. Changes apply to preview, PDF, and copy.
+                Shared for all users. Applies to preview, PDF, and copy image.
               </div>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="p-1 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100"
-              aria-label="Close color picker"
+              className="p-1 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100 shrink-0"
+              aria-label="Close theme picker"
             >
               <X className="h-4 w-4" />
             </button>
@@ -167,7 +330,7 @@ export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
 
           {showInvoice ? (
             <ColorRow
-              label="Invoice"
+              label="Invoice accent"
               kind="invoice"
               primary={invoice.primary}
               presets={INVOICE_PRESETS}
@@ -177,9 +340,16 @@ export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
             />
           ) : null}
 
+          {showInvoice ? (
+            <InvoiceStyleSection
+              theme={invoice}
+              onUpdate={(patch) => updateTheme('invoice', patch)}
+            />
+          ) : null}
+
           {showLedger ? (
             <ColorRow
-              label="Ledger"
+              label="Ledger accent"
               kind="ledger"
               primary={ledger.primary}
               presets={LEDGER_PRESETS}
@@ -209,8 +379,8 @@ export default function CreditDocColorPicker({ kinds, className = '' }: Props) {
             ? 'bg-stone-900 text-white'
             : 'bg-white text-stone-700 hover:bg-stone-50'
         }`}
-        title="Document colors"
-        aria-label="Open document color picker"
+        title="Document theme"
+        aria-label="Open document theme picker"
         aria-expanded={open}
       >
         <Palette className="h-5 w-5" />

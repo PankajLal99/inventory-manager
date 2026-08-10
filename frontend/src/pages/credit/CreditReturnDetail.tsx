@@ -41,7 +41,7 @@ import {
   CREDIT_INVOICE_CAPTURE_HEIGHT,
   CREDIT_INVOICE_CAPTURE_WIDTH,
 } from './creditInvoiceHtml';
-import { useCreditDocThemes } from './creditDocTheme';
+import { useCreditDocThemes, getInvoiceTheme } from './creditDocTheme';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -340,7 +340,7 @@ export default function CreditReturnDetail() {
       scale: 2,
       useCORS: true,
       logging: false,
-      backgroundColor: '#ffffff',
+      backgroundColor: getInvoiceTheme().white || '#ffffff',
       windowWidth: w,
       windowHeight: h,
       width: w,

@@ -274,7 +274,7 @@ export default function CreditLedgerDetail() {
   const selectedCustomer = statement?.customer || customerMeta;
   const rows = useMemo(() => {
     const list = [...(statement?.rows || [])];
-    // Day → activity (sale → return → payment) → time (matches backend running balance)
+    // Oldest datetime on top (ascending)
     list.sort(compareLedgerStatementRows);
     const q = search.trim().toLowerCase();
     if (!q) return list;

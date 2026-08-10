@@ -37,7 +37,7 @@ import {
   CREDIT_INVOICE_CAPTURE_WIDTH,
   CREDIT_SHOP_NAME,
 } from './creditInvoiceHtml';
-import { useCreditDocThemes } from './creditDocTheme';
+import { useCreditDocThemes, getInvoiceTheme } from './creditDocTheme';
 import {
   buildCreditDocumentSnapshotBlobs,
   copyPngBlobToClipboard,
@@ -360,7 +360,7 @@ export default function CreditInvoiceDetail() {
       scale: 2,
       useCORS: true,
       logging: false,
-      backgroundColor: '#ffffff',
+      backgroundColor: getInvoiceTheme().white || '#ffffff',
       windowWidth: w,
       windowHeight: h,
       width: w,

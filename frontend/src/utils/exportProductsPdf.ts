@@ -74,6 +74,20 @@ function formatPdfMoney(value: string | number | null | undefined) {
   })}`;
 }
 
+function parseMoney(value: string | number | null | undefined): number | null {
+  const n = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function applyPriceOffset(
+  value: string | number | null | undefined,
+  priceOffset: number
+): number | null {
+  const n = parseMoney(value);
+  if (n === null) return null;
+  return n + (Number.isFinite(priceOffset) && priceOffset > 0 ? priceOffset : 0);
+}
+
 function getProductStatus(product: any, tagFilter: string): string {
   if (tagFilter && tagFilter !== 'new') {
     const labels: Record<string, string> = {
@@ -101,7 +115,8 @@ function cellValue(
   product: any,
   columnId: ProductExportColumnId,
   tagFilter: string,
-  rowIndex = 0
+  rowIndex = 0,
+  priceOffset = 0
 ): string {
   const stock = getStockInfo(product);
 
@@ -129,9 +144,9 @@ function cellValue(
     case 'warehouse_stock':
       return formatPdfNumber(product.warehouse_stock);
     case 'purchase_price':
-      return formatPdfMoney(product.purchase_price);
+      return formatPdfMoney(applyPriceOffset(product.purchase_price, priceOffset));
     case 'selling_price':
-      return formatPdfMoney(product.selling_price);
+      return formatPdfMoney(applyPriceOffset(product.selling_price, priceOffset));
     case 'low_stock_threshold':
       return formatPdfNumber(product.low_stock_threshold);
     case 'status':
@@ -143,6 +158,71 @@ function cellValue(
     default:
       return '-';
   }
+}
+
+function categoryLabel(product: any): string {
+  return sanitizePdfText(product.category_name) || 'Uncategorized';
+}
+
+function brandLabel(product: any): string {
+  return sanitizePdfText(product.brand_name) || 'No Brand';
+}
+
+function compareText(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+}
+
+/** Sort products by category, then brand, then name. */
+export function sortProductsByCategoryThenBrand(products: any[]): any[] {
+  return [...products].sort((a, b) => {
+    const byCategory = compareText(categoryLabel(a), categoryLabel(b));
+    if (byCategory !== 0) return byCategory;
+    const byBrand = compareText(brandLabel(a), brandLabel(b));
+    if (byBrand !== 0) return byBrand;
+    return compareText(sanitizePdfText(a.name) || '', sanitizePdfText(b.name) || '');
+  });
+}
+
+type PdfBodyRow =
+  | { kind: 'category'; label: string }
+  | { kind: 'brand'; label: string }
+  | { kind: 'product'; cells: string[] };
+
+function buildGroupedBody(
+  products: any[],
+  cols: ProductExportColumnDef[],
+  tagFilter: string,
+  priceOffset: number
+): PdfBodyRow[] {
+  const sorted = sortProductsByCategoryThenBrand(products);
+  const rows: PdfBodyRow[] = [];
+  let lastCategory = '';
+  let lastBrand = '';
+  let productIndex = 0;
+
+  sorted.forEach((product) => {
+    const category = categoryLabel(product);
+    const brand = brandLabel(product);
+
+    if (category !== lastCategory) {
+      rows.push({ kind: 'category', label: `Category: ${category}` });
+      lastCategory = category;
+      lastBrand = '';
+    }
+
+    if (brand !== lastBrand) {
+      rows.push({ kind: 'brand', label: `Brand: ${brand}` });
+      lastBrand = brand;
+    }
+
+    rows.push({
+      kind: 'product',
+      cells: cols.map((col) => cellValue(product, col.id, tagFilter, productIndex, priceOffset)),
+    });
+    productIndex += 1;
+  });
+
+  return rows;
 }
 
 export type ProductExportSummary = {
@@ -182,6 +262,8 @@ export type ExportProductsPdfOptions = {
   columnIds: ProductExportColumnId[];
   tagFilter?: string;
   filterLabels?: string[];
+  /** Temporary amount added to purchase/selling price columns in the PDF only. */
+  priceOffset?: number;
 };
 
 export function exportProductsToPdf({
@@ -189,11 +271,15 @@ export function exportProductsToPdf({
   columnIds,
   tagFilter = 'new',
   filterLabels = [],
+  priceOffset = 0,
 }: ExportProductsPdfOptions): void {
   const selectedColumns = PRODUCT_EXPORT_COLUMNS.filter((c) => columnIds.includes(c.id));
   const cols = selectedColumns.length
     ? selectedColumns
     : PRODUCT_EXPORT_COLUMNS.filter((c) => c.defaultOn);
+
+  const safeOffset =
+    Number.isFinite(priceOffset) && priceOffset > 0 ? Math.floor(priceOffset) : 0;
 
   const orientation = cols.length > 6 ? 'landscape' : 'portrait';
   const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
@@ -216,6 +302,14 @@ export function exportProductsToPdf({
   metaY += 5;
   doc.text(`View: ${tagLabel}`, margin, metaY);
 
+  metaY += 5;
+  doc.text('Grouped by: Category, then Brand', margin, metaY);
+
+  if (safeOffset > 0) {
+    metaY += 5;
+    doc.text(`Price adjustment (PDF only): +Rs. ${safeOffset}`, margin, metaY);
+  }
+
   if (filterLabels.length > 0) {
     metaY += 5;
     const filterLine = `Filters: ${filterLabels.join(' | ')}`;
@@ -224,9 +318,12 @@ export function exportProductsToPdf({
     metaY += wrapped.length * 4;
   }
 
-  const body = products.map((product, index) =>
-    cols.map((col) => cellValue(product, col.id, tagFilter, index))
-  );
+  const groupedRows = buildGroupedBody(products, cols, tagFilter, safeOffset);
+  const body = groupedRows.map((row) => {
+    if (row.kind === 'product') return row.cells;
+    // Span-style label in first cell; rest empty (styled in didParseCell)
+    return [row.label, ...Array(Math.max(cols.length - 1, 0)).fill('')];
+  });
 
   const columnStyles: Record<number, { cellWidth?: number; halign?: 'center' | 'left' | 'right' }> = {};
   cols.forEach((col, idx) => {
@@ -254,6 +351,29 @@ export function exportProductsToPdf({
     columnStyles,
     alternateRowStyles: { fillColor: [249, 250, 251] },
     margin: { left: margin, right: margin },
+    didParseCell: (data) => {
+      if (data.section !== 'body') return;
+      const rowMeta = groupedRows[data.row.index];
+      if (!rowMeta || rowMeta.kind === 'product') return;
+
+      if (data.column.index === 0) {
+        data.cell.colSpan = cols.length;
+        data.cell.styles.fontStyle = 'bold';
+        data.cell.styles.halign = 'left';
+        if (rowMeta.kind === 'category') {
+          data.cell.styles.fillColor = [30, 64, 175];
+          data.cell.styles.textColor = 255;
+          data.cell.styles.fontSize = cols.length > 8 ? 8 : 9;
+        } else {
+          data.cell.styles.fillColor = [219, 234, 254];
+          data.cell.styles.textColor = [30, 64, 175];
+          data.cell.styles.fontSize = cols.length > 8 ? 7 : 8;
+        }
+      } else {
+        data.cell.styles.fillColor = rowMeta.kind === 'category' ? [30, 64, 175] : [219, 234, 254];
+        data.cell.text = [];
+      }
+    },
   });
 
   const summary = buildProductExportSummary(products);

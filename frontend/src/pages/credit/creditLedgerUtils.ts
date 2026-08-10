@@ -1,4 +1,4 @@
-import { formatAmountINR, formatAppDate, toLocalDateString } from '../../lib/utils';
+import { formatAmountINR, formatAppDate } from '../../lib/utils';
 import { auth } from '../../lib/auth';
 
 function userGroupNames(user = auth.getUser()): string[] {
@@ -265,50 +265,21 @@ export function collectionEventStyle(eventType: string | undefined): {
   }
 }
 
-/** Within a calendar day: sales → returns → payments/cash → adjustments. */
-const LEDGER_TXN_ACTIVITY_RANK: Record<string, number> = {
-  sale: 0,
-  return: 1,
-  payment: 2,
-  adjustment: 3,
-};
-
-export function ledgerActivityRank(row: {
-  txn_type?: string | null;
-  particulars?: string | null;
-}): number {
-  const t = String(row.txn_type || '').trim().toLowerCase();
-  if (t in LEDGER_TXN_ACTIVITY_RANK) return LEDGER_TXN_ACTIVITY_RANK[t];
-  const p = String(row.particulars || '').trim().toLowerCase();
-  if (p.includes('return')) return 1;
-  if (p.includes('sale') || p.includes('sales')) return 0;
-  if (p.includes('cash') || p.includes('upi') || p.includes('payment')) return 2;
-  return 3;
-}
-
-/** Match backend statement order: day → activity → time → id. */
+/** Chronological statement order: event_at / created_at ascending, then id. */
 export function compareLedgerStatementRows(
   a: {
     id?: number | string | null;
     created_at?: string | null;
-    txn_type?: string | null;
-    particulars?: string | null;
+    event_at?: string | null;
   },
   b: {
     id?: number | string | null;
     created_at?: string | null;
-    txn_type?: string | null;
-    particulars?: string | null;
+    event_at?: string | null;
   }
 ): number {
-  const da = a.created_at ? toLocalDateString(a.created_at) : '';
-  const db = b.created_at ? toLocalDateString(b.created_at) : '';
-  if (da !== db) return da < db ? -1 : 1;
-  const ra = ledgerActivityRank(a);
-  const rb = ledgerActivityRank(b);
-  if (ra !== rb) return ra - rb;
-  const ta = new Date(a.created_at || 0).getTime();
-  const tb = new Date(b.created_at || 0).getTime();
+  const ta = new Date(a.event_at || a.created_at || 0).getTime();
+  const tb = new Date(b.event_at || b.created_at || 0).getTime();
   if (ta !== tb) return ta - tb;
   return (Number(a.id) || 0) - (Number(b.id) || 0);
 }

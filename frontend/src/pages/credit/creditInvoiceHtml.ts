@@ -19,6 +19,29 @@ const FONT = {
   xl: '24px',
 };
 
+function rowFontPx(theme: CreditDocTheme): string {
+  const n = Number(theme.rowFontSize);
+  const px = Number.isFinite(n) ? Math.min(24, Math.max(9, Math.round(n))) : 12;
+  return `${px}px`;
+}
+
+function rowFontWeight(theme: CreditDocTheme): string {
+  return theme.rowFontBold ? '700' : '600';
+}
+
+function pageBackground(theme: CreditDocTheme): string {
+  return theme.white || '#ffffff';
+}
+
+function rowBackground(theme: CreditDocTheme, index: number): string {
+  if (index % 2 === 1) {
+    const alt = (theme.rowAlt || '').trim().toLowerCase();
+    if (!alt || alt === 'transparent') return 'transparent';
+    return theme.rowAlt;
+  }
+  return pageBackground(theme);
+}
+
 export type CreditInvoiceHtmlItem = {
   product_name?: string | null;
   quantity?: string | number | null;
@@ -169,15 +192,19 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
       : `${fmtQty(qty)} Pcs.`;
 
   const cellPad = '7px 8px';
+  const itemFont = rowFontPx(theme);
+  const itemWeight = rowFontWeight(theme);
+  const pageBg = pageBackground(theme);
+  const fontFamily = theme.fontFamily || 'Arial, Helvetica, sans-serif';
   const bodyRows = rows
     .map(
-      (r, i) => `<tr style="background:${i % 2 === 1 ? theme.rowAlt : theme.white};">
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:42px;font-size:${FONT.sm};color:${theme.secondaryMuted};font-weight:600;">${r.idx}</td>
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:left;font-size:${FONT.sm};font-weight:600;color:${theme.text};">${escapeHtml(r.name)}</td>
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:${isReturn ? '78' : '64'}px;font-size:${FONT.sm};font-weight:600;">${escapeHtml(qtyDisplay(r.qty))}</td>
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:${isReturn ? '64' : '52'}px;font-size:${FONT.sm};color:${theme.textMuted};">${escapeHtml(unitDisplay)}</td>
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:80px;font-size:${FONT.sm};">${escapeHtml(formatAmountINR(r.price))}</td>
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:96px;font-size:${FONT.sm};font-weight:700;color:${theme.secondary};">${escapeHtml(formatAmountINR(r.amount))}</td>
+      (r, i) => `<tr style="background:${rowBackground(theme, i)};">
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:42px;font-size:${itemFont};color:${theme.secondaryMuted};font-weight:${itemWeight};">${r.idx}</td>
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:left;font-size:${itemFont};font-weight:${itemWeight};color:${theme.text};">${escapeHtml(r.name)}</td>
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:${isReturn ? '78' : '64'}px;font-size:${itemFont};font-weight:${itemWeight};">${escapeHtml(qtyDisplay(r.qty))}</td>
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:${isReturn ? '64' : '52'}px;font-size:${itemFont};font-weight:${itemWeight};color:${theme.textMuted};">${escapeHtml(unitDisplay)}</td>
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:80px;font-size:${itemFont};font-weight:${itemWeight};">${escapeHtml(formatAmountINR(r.price))}</td>
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:96px;font-size:${itemFont};font-weight:${theme.rowFontBold ? '800' : '700'};color:${theme.secondary};">${escapeHtml(formatAmountINR(r.amount))}</td>
     </tr>`
     )
     .join('');
@@ -223,7 +250,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
         </tr>
         ${summaryRows}
       </table>
-      <div style="margin-top:12px;padding:10px 14px;background:${theme.white};border:1px solid ${theme.primaryBorder};border-left:4px solid ${theme.primary};font-size:${FONT.sm};line-height:1.5;">
+      <div style="margin-top:12px;padding:10px 14px;background:${pageBg};border:1px solid ${theme.primaryBorder};border-left:4px solid ${theme.primary};font-size:${FONT.sm};line-height:1.5;">
         <span style="color:${theme.secondary};font-weight:700;">Amount in Words: </span>
         <span style="color:${theme.text};font-weight:600;">${escapeHtml(creditAmountInWords(totalAmt))}</span>
       </div>`
@@ -263,7 +290,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
   <title>${pageTitle} — ${escapeHtml(shopName)}</title>
 </head>
 <body style="margin:0;padding:0;background:#e7e5e4;font-size:${FONT.sm};">
-  <div id="credit-invoice-root" style="width:${CREDIT_INVOICE_CAPTURE_WIDTH}px;min-height:${CREDIT_INVOICE_CAPTURE_HEIGHT}px;margin:0;background:${theme.white};color:${theme.text};font-family:Arial,Helvetica,sans-serif;font-size:${FONT.sm};line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${theme.primary};">
+  <div id="credit-invoice-root" style="width:${CREDIT_INVOICE_CAPTURE_WIDTH}px;min-height:${CREDIT_INVOICE_CAPTURE_HEIGHT}px;margin:0;background:${pageBg};color:${theme.text};font-family:${fontFamily};font-size:${FONT.sm};line-height:1.4;box-sizing:border-box;display:flex;flex-direction:column;border:3px solid ${theme.primary};">
 
     <!-- Shop header -->
     <div style="position:relative;overflow:hidden;background:${theme.primary};padding:20px 28px;color:${theme.white};">

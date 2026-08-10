@@ -1214,33 +1214,19 @@ def _active_ledger_entries(qs):
     )
 
 
-def _ledger_activity_rank(entry):
+def _ledger_with_event_at(qs):
     """
-    Within a calendar day, group by activity (particulars):
-    sales → returns → payments/cash → manual adjustments.
+    One combined stream of sales / returns / payments / manual debit-credit.
+    event_at = each source's own timestamp (payment.paid_at, return/invoice
+    created_at, else ledger created_at) for true chronological order.
     """
-    if entry.payment_id:
-        return 2
-    if entry.credit_return_id:
-        return 1
-    if entry.invoice_id:
-        return 0
-    return 3
-
-
-def _ledger_statement_sort_key(entry):
-    """Oldest day first; within day, activity order then time/id."""
-    created = entry.created_at
-    if created is not None and timezone.is_aware(created):
-        local_dt = timezone.localtime(created)
-    else:
-        local_dt = created
-    day = local_dt.date() if local_dt is not None else timezone.localdate()
-    return (
-        day,
-        _ledger_activity_rank(entry),
-        created or timezone.now(),
-        entry.id or 0,
+    return qs.annotate(
+        event_at=Coalesce(
+            F('payment__paid_at'),
+            F('credit_return__created_at'),
+            F('invoice__created_at'),
+            F('created_at'),
+        )
     )
 
 
@@ -1617,8 +1603,8 @@ def credit_ledger_list(request):
 def credit_ledger_statement(request):
     """
     Classic account statement for one credit customer:
-    opening balance, rows ordered by day then activity
-    (sale → return → payment/cash → adjustment),
+    opening balance, all events merged and ordered by each event's own
+    datetime (sale / return / payment / manual debit-credit),
     debit/credit columns, running balance, period totals.
     """
     customer_id = request.query_params.get('customer') or request.query_params.get('credit_customer_id')
@@ -1634,24 +1620,26 @@ def credit_ledger_statement(request):
     date_to = request.query_params.get('date_to')
     txn_type = request.query_params.get('txn_type', '').strip().lower()
 
-    base = _active_ledger_entries(
-        CreditLedgerEntry.objects.filter(customer_id=customer.id).select_related(
-            'invoice', 'credit_return', 'payment', 'created_by'
+    base = _ledger_with_event_at(
+        _active_ledger_entries(
+            CreditLedgerEntry.objects.filter(customer_id=customer.id).select_related(
+                'invoice', 'credit_return', 'payment', 'created_by'
+            )
         )
     )
 
-    # Opening balance = signed sum of all entries before date_from
+    # Opening balance = signed sum of all events before date_from (by event time)
     opening = Decimal('0.00')
     if date_from:
-        prior = base.filter(created_at__date__lt=date_from)
+        prior = base.filter(event_at__date__lt=date_from)
         for e in prior.only('entry_type', 'amount'):
             opening += _ledger_signed_amount(e)
 
     qs = base
     if date_from:
-        qs = qs.filter(created_at__date__gte=date_from)
+        qs = qs.filter(event_at__date__gte=date_from)
     if date_to:
-        qs = qs.filter(created_at__date__lte=date_to)
+        qs = qs.filter(event_at__date__lte=date_to)
     if txn_type == 'payment':
         qs = qs.filter(payment__isnull=False)
     elif txn_type == 'return':
@@ -1659,8 +1647,8 @@ def credit_ledger_statement(request):
     elif txn_type == 'sale':
         qs = qs.filter(payment__isnull=True, credit_return__isnull=True)
 
-    # Oldest day first; within a day: sales → returns → cash/payments → adjustments
-    entries = sorted(list(qs), key=_ledger_statement_sort_key)
+    # Combined stream sorted by each event's individual datetime
+    entries = list(qs.order_by('event_at', 'id'))
     serializer = CreditLedgerEntrySerializer(entries, many=True)
 
     running = opening
@@ -1674,8 +1662,12 @@ def credit_ledger_statement(request):
         total_credit += credit
         running += _ledger_signed_amount(entry)
         bal_side = 'Dr' if running >= 0 else 'Cr'
+        event_at = getattr(entry, 'event_at', None) or entry.created_at
         rows.append({
             **raw,
+            # Statement clock = source event time (not when the ledger row was written)
+            'created_at': event_at,
+            'event_at': event_at,
             'debit': debit,
             'credit': credit,
             'running_balance': abs(running),

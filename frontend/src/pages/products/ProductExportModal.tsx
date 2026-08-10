@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
+import Input from '../../components/ui/Input';
 import {
   PRODUCT_EXPORT_COLUMNS,
   defaultProductExportColumnIds,
@@ -20,6 +21,15 @@ type ProductExportModalProps = {
   visibleCount: number;
 };
 
+function parsePriceOffset(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return 0;
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n;
+}
+
 export default function ProductExportModal({
   isOpen,
   onClose,
@@ -31,10 +41,13 @@ export default function ProductExportModal({
   const [selectedIds, setSelectedIds] = useState<ProductExportColumnId[]>(
     () => defaultProductExportColumnIds()
   );
+  const [priceOffsetInput, setPriceOffsetInput] = useState('');
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedCount = selectedIds.length;
+  const includesPriceColumn =
+    selectedIds.includes('purchase_price') || selectedIds.includes('selling_price');
 
   const previewNote = useMemo(() => {
     if (filterLabels.length === 0) {
@@ -62,6 +75,13 @@ export default function ProductExportModal({
       setError('Select at least one column.');
       return;
     }
+
+    const priceOffset = parsePriceOffset(priceOffsetInput);
+    if (priceOffset === null) {
+      setError('Price adjustment must be a positive whole number (or leave blank).');
+      return;
+    }
+
     setError(null);
     setExporting(true);
     try {
@@ -75,6 +95,7 @@ export default function ProductExportModal({
         columnIds: selectedIds,
         tagFilter,
         filterLabels,
+        priceOffset,
       });
       onClose();
     } catch (e: any) {
@@ -143,8 +164,31 @@ export default function ProductExportModal({
           </div>
         </div>
 
+        <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+          <Input
+            label="Price adjustment (PDF only)"
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            placeholder="e.g. 50"
+            value={priceOffsetInput}
+            onChange={(e) => setPriceOffsetInput(e.target.value)}
+          />
+          <p className="text-xs text-gray-500">
+            Adds this amount to Purchase Price and/or Selling Price columns in the PDF only.
+            Database prices are not changed.
+            {!includesPriceColumn ? (
+              <span className="block mt-1 text-amber-600">
+                Select Purchase Price or Selling Price above for this to appear in the PDF.
+              </span>
+            ) : null}
+          </p>
+        </div>
+
         <p className="text-xs text-gray-500">
-          PDF ends with a summary of product, category, and brand counts.
+          PDF is grouped by category, then brand, and ends with a summary of product, category, and
+          brand counts.
         </p>
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}

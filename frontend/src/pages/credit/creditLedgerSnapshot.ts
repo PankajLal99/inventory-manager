@@ -70,6 +70,7 @@ export type CreditLedgerStatementSnapshot = {
   rows?: Array<{
     id?: number;
     created_at?: string | null;
+    event_at?: string | null;
     txn_type?: string | null;
     vch_no?: string | null;
     particulars?: string | null;
@@ -279,7 +280,7 @@ export function buildCreditLedgerSnapshotHtml(
 </style>
 </head>
 <body style="margin:0;padding:0;background:#fff;">
-  <div id="credit-ledger-copy-root" style="width:794px;min-height:1123px;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:${theme.text};background:${theme.white};border:3px solid ${theme.primary};display:flex;flex-direction:column;">
+  <div id="credit-ledger-copy-root" style="width:794px;min-height:1123px;box-sizing:border-box;font-family:${theme.fontFamily || 'Arial, Helvetica, sans-serif'};color:${theme.text};background:${theme.white};border:3px solid ${theme.primary};display:flex;flex-direction:column;">
     <div style="background:${theme.primary};color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
       <div style="font-weight:700;font-size:13px;line-height:1.3;">Manish Traders</div>
       <div style="font-size:12px;line-height:1.3;">Credit Ledger</div>
