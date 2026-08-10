@@ -12,7 +12,8 @@ export type ProductExportColumnId =
   | 'available'
   | 'shop_stock'
   | 'warehouse_stock'
-  | 'price'
+  | 'purchase_price'
+  | 'selling_price'
   | 'low_stock_threshold'
   | 'status'
   | 'stock_bifurcation'
@@ -21,6 +22,8 @@ export type ProductExportColumnId =
 export type ProductExportColumnDef = {
   id: ProductExportColumnId;
   label: string;
+  /** PDF table header when different from the popup label. */
+  pdfLabel?: string;
   defaultOn: boolean;
 };
 
@@ -34,12 +37,17 @@ export const PRODUCT_EXPORT_COLUMNS: ProductExportColumnDef[] = [
   { id: 'available', label: 'Available', defaultOn: false },
   { id: 'shop_stock', label: 'Shop Stock', defaultOn: false },
   { id: 'warehouse_stock', label: 'Warehouse Stock', defaultOn: false },
-  { id: 'price', label: 'Price', defaultOn: false },
+  { id: 'purchase_price', label: 'Purchase Price', pdfLabel: 'Price', defaultOn: false },
+  { id: 'selling_price', label: 'Selling Price', pdfLabel: 'Price', defaultOn: false },
   { id: 'low_stock_threshold', label: 'Low Stock Limit', defaultOn: false },
   { id: 'status', label: 'Status', defaultOn: false },
   { id: 'stock_bifurcation', label: 'Stock by Supplier', defaultOn: false },
   { id: 'price_bifurcation', label: 'Price by Supplier', defaultOn: false },
 ];
+
+export function pdfColumnLabel(col: ProductExportColumnDef): string {
+  return col.pdfLabel ?? col.label;
+}
 
 export function defaultProductExportColumnIds(): ProductExportColumnId[] {
   return PRODUCT_EXPORT_COLUMNS.filter((c) => c.defaultOn).map((c) => c.id);
@@ -206,7 +214,9 @@ function cellValue(
       return formatPdfNumber(product.shop_stock);
     case 'warehouse_stock':
       return formatPdfNumber(product.warehouse_stock);
-    case 'price':
+    case 'purchase_price':
+      return formatPdfMoney(applyPriceOffset(resolved.purchasePrice, priceOffset));
+    case 'selling_price':
       return formatPdfMoney(applyPriceOffset(resolved.effectiveSellingPrice, priceOffset));
     case 'low_stock_threshold':
       return formatPdfNumber(product.low_stock_threshold);
@@ -464,7 +474,7 @@ export function exportProductsToPdf({
 
   autoTable(doc, {
     startY: metaY + 4,
-    head: [cols.map((c) => c.label)],
+    head: [cols.map((c) => pdfColumnLabel(c))],
     body,
     styles: {
       fontSize: cols.length > 8 ? 7 : 8,

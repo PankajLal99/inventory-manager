@@ -52,7 +52,8 @@ export default function ProductExportModal({
   const [pendingOffset, setPendingOffset] = useState(0);
 
   const selectedCount = selectedIds.length;
-  const includesPriceColumn = selectedIds.includes('price');
+  const includesPriceColumn =
+    selectedIds.includes('purchase_price') || selectedIds.includes('selling_price');
   const showFallbackWarning =
     pendingProducts !== null && fallbackInfo !== null && fallbackInfo.count > 0;
 
@@ -69,6 +70,13 @@ export default function ProductExportModal({
         // Keep at least one column selected
         if (prev.length <= 1) return prev;
         return prev.filter((c) => c !== id);
+      }
+      // Purchase vs selling price — one Price column in PDF; pick one in the popup
+      if (id === 'purchase_price') {
+        return [...prev.filter((c) => c !== 'selling_price'), id];
+      }
+      if (id === 'selling_price') {
+        return [...prev.filter((c) => c !== 'purchase_price'), id];
       }
       return [...prev, id];
     });
@@ -116,7 +124,7 @@ export default function ProductExportModal({
         return;
       }
 
-      if (selectedIds.includes('price')) {
+      if (selectedIds.includes('selling_price')) {
         const fallback = getSellingPriceFallbackInfo(products, priceOffset);
         if (fallback.count > 0) {
           setPendingProducts(products);
@@ -223,10 +231,11 @@ export default function ProductExportModal({
               onChange={(e) => setPriceOffsetInput(e.target.value)}
             />
             <p className="text-xs text-gray-500">
-            Adds this amount to the Price column in the PDF only. Database prices are not changed.
+            Adds this amount to the selected price column in the PDF only (shown as "Price").
+            Database prices are not changed.
             {!includesPriceColumn ? (
               <span className="block mt-1 text-amber-600">
-                Select Price above for this to appear in the PDF.
+                Select Purchase Price or Selling Price above for this to appear in the PDF.
               </span>
             ) : null}
             </p>
