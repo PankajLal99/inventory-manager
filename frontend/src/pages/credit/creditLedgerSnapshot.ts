@@ -172,6 +172,7 @@ export type CreditLedgerStatementSnapshot = {
   closing_side?: string | null;
   total_debit?: string | number | null;
   total_credit?: string | number | null;
+  includeTime?: boolean;
   rows?: Array<{
     id?: number;
     created_at?: string | null;
@@ -204,13 +205,16 @@ function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
 }
 
 function toSnapRows(
-  rows: NonNullable<CreditLedgerStatementSnapshot['rows']>
+  rows: NonNullable<CreditLedgerStatementSnapshot['rows']>,
+  includeTime = false
 ): SnapRow[] {
   return rows.map((row) => {
     const debit = formatMoney(row.debit);
     const credit = formatMoney(row.credit);
     return {
-      date: formatCreditStatementDate(row.created_at),
+      date: includeTime
+        ? formatCreditDateTime(row.created_at)
+        : formatCreditStatementDate(row.created_at),
       particulars: sanitizeText(row.particulars || '') || '',
       debit,
       credit,
@@ -230,6 +234,7 @@ export type CreditLedgerSnapshotPageOptions = {
   showTotals: boolean;
   lineStart: number;
   periodLabel?: string;
+  includeTime?: boolean;
 };
 
 /** One A4-style ledger page HTML (use with partIndex/partCount for multi-page). */
@@ -238,7 +243,8 @@ export function buildCreditLedgerSnapshotHtml(
   page?: Partial<CreditLedgerSnapshotPageOptions>
 ): string {
   const allRows = sortStatementRows(statement);
-  const snapAll = toSnapRows(allRows);
+  const includeTime = page?.includeTime ?? statement.includeTime ?? false;
+  const snapAll = toSnapRows(allRows, includeTime);
   const partIndex = page?.partIndex ?? 1;
   const partCount = page?.partCount ?? 1;
   const pageRows = page?.pageRows ?? snapAll;
@@ -341,7 +347,15 @@ export function buildCreditLedgerSnapshotHtml(
     })
     .join('');
 
-  const colgroup = `
+  const colgroup = includeTime
+    ? `
+    <col style="width:28%;" />
+    <col style="width:24%;" />
+    <col style="width:16%;" />
+    <col style="width:16%;" />
+    <col style="width:16%;" />
+  `
+    : `
     <col style="width:22%;" />
     <col style="width:30%;" />
     <col style="width:16%;" />
@@ -442,15 +456,17 @@ function pagePeriodLabel(rows: NonNullable<CreditLedgerStatementSnapshot['rows']
 /** Build one HTML string per ledger page using the saved/requested split. */
 export function buildCreditLedgerSnapshotPageHtmlList(
   statement: CreditLedgerStatementSnapshot,
-  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
+  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT,
+  options?: { includeTime?: boolean }
 ): string[] {
+  const includeTime = options?.includeTime ?? statement.includeTime ?? false;
   const allRows = sortStatementRows(statement);
   const chunks = chunkLedgerRowsForExport(allRows, split);
   const partCount = chunks.length;
   let lineStart = 1;
 
   return chunks.map((chunk, i) => {
-    const pageRows = toSnapRows(chunk);
+    const pageRows = toSnapRows(chunk, includeTime);
     const html = buildCreditLedgerSnapshotHtml(statement, {
       pageRows,
       partIndex: i + 1,
@@ -460,6 +476,7 @@ export function buildCreditLedgerSnapshotPageHtmlList(
       showTotals: i === partCount - 1,
       lineStart,
       periodLabel: pagePeriodLabel(chunk),
+      includeTime,
     });
     lineStart += pageRows.length;
     return html;

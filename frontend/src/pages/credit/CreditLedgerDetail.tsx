@@ -88,6 +88,7 @@ type TxnType = '' | 'sale' | 'payment' | 'return';
 type LedgerColumnId =
   | 'sr'
   | 'date'
+  | 'time'
   | 'type'
   | 'vch'
   | 'particulars'
@@ -102,9 +103,12 @@ const LEDGER_COLUMN_DEFS: Array<{
   defaultOn: boolean;
   align?: 'left' | 'right' | 'center';
   pdfWidth?: number;
+  /** Shown in Columns settings only — not a table column. */
+  settingsOnly?: boolean;
 }> = [
   { id: 'sr', label: 'Sr', defaultOn: false, align: 'center', pdfWidth: 10 },
   { id: 'date', label: 'Date', defaultOn: true, align: 'left', pdfWidth: 18 },
+  { id: 'time', label: 'Time with date', defaultOn: false, settingsOnly: true },
   { id: 'type', label: 'Type', defaultOn: false, align: 'left', pdfWidth: 18 },
   { id: 'vch', label: 'Vch No.', defaultOn: false, align: 'left', pdfWidth: 26 },
   { id: 'particulars', label: 'Particulars', defaultOn: true, align: 'left' },
@@ -138,9 +142,9 @@ function formatPdfDate(value?: string | null) {
   return formatCreditDate(value);
 }
 
-/** Statement / table date columns: DD/MM/YYYY (+ time when present). */
-function formatPdfDateShort(value?: string | null) {
-  return formatCreditStatementDate(value);
+/** Statement / table date columns: DD/MM/YYYY, or DD/MM/YYYY h:mm AM/PM when time is on. */
+function formatPdfDateShort(value?: string | null, includeTime = false) {
+  return includeTime ? formatCreditDateTime(value) : formatCreditStatementDate(value);
 }
 
 /** jsPDF Helvetica can't render ₹ / emoji — keep printable Latin text only */
@@ -335,15 +339,17 @@ export default function CreditLedgerDetail() {
     setPreparingPictures(false);
   }, [rows, customerId, dateFrom, dateTo, txnType, exportSplit]);
 
+  const showTime = !!columnVisibility.time;
+
   const visibleColumns = useMemo(
-    () => LEDGER_COLUMN_DEFS.filter((c) => columnVisibility[c.id]),
+    () => LEDGER_COLUMN_DEFS.filter((c) => !c.settingsOnly && columnVisibility[c.id]),
     [columnVisibility]
   );
 
   const toggleColumn = (id: LedgerColumnId) => {
     setColumnVisibility((prev) => {
       const next = { ...prev, [id]: !prev[id] };
-      const anyOn = LEDGER_COLUMN_DEFS.some((c) => next[c.id]);
+      const anyOn = LEDGER_COLUMN_DEFS.some((c) => !c.settingsOnly && next[c.id]);
       if (!anyOn) {
         toast('Keep at least one column visible', 'error');
         return prev;
@@ -368,10 +374,9 @@ export default function CreditLedgerDetail() {
   };
 
   const showAllColumns = () => {
-    const all = Object.fromEntries(LEDGER_COLUMN_DEFS.map((c) => [c.id, true])) as Record<
-      LedgerColumnId,
-      boolean
-    >;
+    const all = Object.fromEntries(
+      LEDGER_COLUMN_DEFS.map((c) => [c.id, c.settingsOnly ? !!columnVisibility[c.id] : true])
+    ) as Record<LedgerColumnId, boolean>;
     setColumnVisibility(all);
     try {
       localStorage.setItem(LEDGER_COLUMNS_STORAGE_KEY, JSON.stringify(all));
@@ -399,7 +404,7 @@ export default function CreditLedgerDetail() {
         credit_customer_id: Number(customerId),
         payment_method: paymentMethod,
         notes: paymentNotes.trim() || undefined,
-        paid_at: paymentDate ? `${paymentDate}T12:00:00` : undefined,
+        paid_at: paymentDate ? dateStringWithCurrentTimeISO(paymentDate) : undefined,
       };
       if (paymentMethod === 'mixed') {
         payload.cash_amount = parseFloat(cashAmount || '0');
@@ -569,10 +574,10 @@ export default function CreditLedgerDetail() {
     }> = [];
 
     const openingDate = dateFrom
-      ? formatPdfDateShort(dateFrom)
+      ? formatPdfDateShort(dateFrom, showTime)
       : oldestRow?.created_at
-        ? formatPdfDateShort(oldestRow.created_at)
-        : formatPdfDateShort(new Date().toISOString());
+        ? formatPdfDateShort(oldestRow.created_at, showTime)
+        : formatPdfDateShort(new Date().toISOString(), showTime);
 
     // Brought-forward row only when filtering from a start date (avoids duplicating opening-balance entries on "All")
     if (dateFrom) {
@@ -595,7 +600,7 @@ export default function CreditLedgerDetail() {
       const credit = formatPdfMoney(row.credit);
       out.push({
         sr: String(idx + 1),
-        date: formatPdfDateShort(row.created_at),
+        date: formatPdfDateShort(row.created_at, showTime),
         type: sanitizePdfText(row.txn_type || '') || '',
         vch: sanitizePdfText(row.vch_no || '') || '',
         particulars: sanitizePdfText(row.particulars || '') || '',
@@ -630,7 +635,7 @@ export default function CreditLedgerDetail() {
     });
 
     return out;
-  }, [statement, rows, dateFrom, oldestRow]);
+  }, [statement, rows, dateFrom, oldestRow, showTime]);
 
   const cellValue = (r: (typeof statementRows)[number], id: LedgerColumnId) => {
     switch (id) {
@@ -638,6 +643,8 @@ export default function CreditLedgerDetail() {
         return r.sr;
       case 'date':
         return r.date;
+      case 'time':
+        return '';
       case 'type':
         return r.type;
       case 'vch':
@@ -807,16 +814,20 @@ export default function CreditLedgerDetail() {
       bodyRows.map((r) => ({ ...r, created_at: r.rawDate })),
       split
     );
-    const cols = visibleColumns.length ? visibleColumns : LEDGER_COLUMN_DEFS.filter((c) => c.defaultOn);
+    const cols = visibleColumns.length
+      ? visibleColumns
+      : LEDGER_COLUMN_DEFS.filter((c) => !c.settingsOnly && c.defaultOn);
     const flexIds = new Set<LedgerColumnId>(['particulars', 'narration']);
-    const fixedW = cols.reduce((sum, c) => sum + (flexIds.has(c.id) ? 0 : c.pdfWidth || 20), 0);
+    const colPdfWidth = (c: (typeof LEDGER_COLUMN_DEFS)[number]) =>
+      c.id === 'date' && showTime ? 36 : c.pdfWidth || 20;
+    const fixedW = cols.reduce((sum, c) => sum + (flexIds.has(c.id) ? 0 : colPdfWidth(c)), 0);
     const flexCount = cols.filter((c) => flexIds.has(c.id)).length || 1;
     const flexEach = Math.max(24, (contentW - fixedW) / flexCount);
 
     const columnStyles: Record<number, any> = {};
     cols.forEach((c, i) => {
       columnStyles[i] = {
-        cellWidth: flexIds.has(c.id) ? flexEach : c.pdfWidth || 20,
+        cellWidth: flexIds.has(c.id) ? flexEach : colPdfWidth(c),
         halign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left',
       };
     });
@@ -1094,6 +1105,7 @@ export default function CreditLedgerDetail() {
         {
           ...statement,
           rows,
+          includeTime: showTime,
         },
         split
       );

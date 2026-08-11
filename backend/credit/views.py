@@ -15,7 +15,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -1214,20 +1214,42 @@ def _active_ledger_entries(qs):
     )
 
 
-def _ledger_with_event_at(qs):
-    """
-    One combined stream of sales / returns / payments / manual debit-credit.
-    event_at = each source's own timestamp (payment.paid_at, return/invoice
-    created_at, else ledger created_at) for true chronological order.
-    """
-    return qs.annotate(
-        event_at=Coalesce(
-            F('payment__paid_at'),
-            F('credit_return__created_at'),
-            F('invoice__created_at'),
-            F('created_at'),
-        )
-    )
+def _ledger_event_at(entry):
+    """Each source's own timestamp (payment / return / invoice / ledger row)."""
+    payment = getattr(entry, 'payment', None)
+    if getattr(entry, 'payment_id', None) and payment is not None and getattr(payment, 'paid_at', None):
+        return payment.paid_at
+    credit_return = getattr(entry, 'credit_return', None)
+    if (
+        getattr(entry, 'credit_return_id', None)
+        and credit_return is not None
+        and getattr(credit_return, 'created_at', None)
+    ):
+        return credit_return.created_at
+    invoice = getattr(entry, 'invoice', None)
+    if getattr(entry, 'invoice_id', None) and invoice is not None and getattr(invoice, 'created_at', None):
+        return invoice.created_at
+    return entry.created_at
+
+
+def _as_aware_datetime(value):
+    if value is None:
+        return None
+    if timezone.is_naive(value):
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    return value
+
+
+def _event_local_date(value):
+    aware = _as_aware_datetime(value)
+    if aware is None:
+        return None
+    return timezone.localtime(aware).date()
+
+
+def _event_sort_key(entry):
+    dt = _as_aware_datetime(_ledger_event_at(entry))
+    return (dt.timestamp() if dt is not None else 0.0, entry.id or 0)
 
 
 def _is_manual_ledger_entry(entry):
@@ -1603,9 +1625,8 @@ def credit_ledger_list(request):
 def credit_ledger_statement(request):
     """
     Classic account statement for one credit customer:
-    opening balance, all events merged and ordered by each event's own
-    datetime (sale / return / payment / manual debit-credit),
-    debit/credit columns, running balance, period totals.
+    all sales / returns / payments / manual entries merged into one list,
+    then sorted by each event's own datetime.
     """
     customer_id = request.query_params.get('customer') or request.query_params.get('credit_customer_id')
     if not customer_id:
@@ -1619,8 +1640,10 @@ def credit_ledger_statement(request):
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
     txn_type = request.query_params.get('txn_type', '').strip().lower()
+    from_d = parse_date(str(date_from).strip()) if date_from else None
+    to_d = parse_date(str(date_to).strip()) if date_to else None
 
-    base = _ledger_with_event_at(
+    merged = list(
         _active_ledger_entries(
             CreditLedgerEntry.objects.filter(customer_id=customer.id).select_related(
                 'invoice', 'credit_return', 'payment', 'created_by'
@@ -1628,41 +1651,39 @@ def credit_ledger_statement(request):
         )
     )
 
-    # Opening balance = signed sum of all events before date_from (by event time)
+    # Opening = signed sum of every event before date_from (all types).
     opening = Decimal('0.00')
-    if date_from:
-        prior = base.filter(event_at__date__lt=date_from)
-        for e in prior.only('entry_type', 'amount'):
-            opening += _ledger_signed_amount(e)
+    period_entries = []
+    for entry in merged:
+        local_d = _event_local_date(_ledger_event_at(entry))
+        if from_d and (local_d is None or local_d < from_d):
+            opening += _ledger_signed_amount(entry)
+            continue
+        if to_d and local_d is not None and local_d > to_d:
+            continue
+        if txn_type == 'payment' and not entry.payment_id:
+            continue
+        if txn_type == 'return' and not entry.credit_return_id:
+            continue
+        if txn_type == 'sale' and (entry.payment_id or entry.credit_return_id):
+            continue
+        period_entries.append(entry)
 
-    qs = base
-    if date_from:
-        qs = qs.filter(event_at__date__gte=date_from)
-    if date_to:
-        qs = qs.filter(event_at__date__lte=date_to)
-    if txn_type == 'payment':
-        qs = qs.filter(payment__isnull=False)
-    elif txn_type == 'return':
-        qs = qs.filter(credit_return__isnull=False)
-    elif txn_type == 'sale':
-        qs = qs.filter(payment__isnull=True, credit_return__isnull=True)
-
-    # Combined stream sorted by each event's individual datetime
-    entries = list(qs.order_by('event_at', 'id'))
-    serializer = CreditLedgerEntrySerializer(entries, many=True)
+    period_entries.sort(key=_event_sort_key)
+    serializer = CreditLedgerEntrySerializer(period_entries, many=True)
 
     running = opening
     total_debit = Decimal('0.00')
     total_credit = Decimal('0.00')
     rows = []
-    for raw, entry in zip(serializer.data, entries):
+    for raw, entry in zip(serializer.data, period_entries):
         debit = entry.amount if entry.entry_type == 'debit' else Decimal('0.00')
         credit = entry.amount if entry.entry_type == 'credit' else Decimal('0.00')
         total_debit += debit
         total_credit += credit
         running += _ledger_signed_amount(entry)
         bal_side = 'Dr' if running >= 0 else 'Cr'
-        event_at = getattr(entry, 'event_at', None) or entry.created_at
+        event_at = _ledger_event_at(entry)
         rows.append({
             **raw,
             # Statement clock = source event time (not when the ledger row was written)

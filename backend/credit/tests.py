@@ -1,7 +1,19 @@
-from django.test import TestCase
+from datetime import datetime
+from decimal import Decimal
 
+from django.test import TestCase
+from django.utils import timezone
+from rest_framework import status
+
+from backend.core.test_utils import AuthenticatedAPIClient, TestDataFactory
 from backend.credit.customer_sync import sync_linked_credit_customers_from_party
-from backend.credit.models import CreditCustomer
+from backend.credit.models import (
+    CreditCustomer,
+    CreditInvoice,
+    CreditLedgerEntry,
+    CreditPayment,
+    CreditReturn,
+)
 from backend.parties.models import Customer, CustomerGroup
 
 
@@ -48,3 +60,137 @@ class PartyCreditCustomerSyncTest(TestCase):
         credit.refresh_from_db()
         self.assertEqual(credit.name, 'Credit Only')
         self.assertEqual(credit.phone, '9222222222')
+
+
+class CreditLedgerStatementOrderTests(TestCase):
+    """Statement merges every source into one list, then sorts by event datetime."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.client = AuthenticatedAPIClient()
+        self.client.authenticate_user(self.user)
+        self.store = TestDataFactory.create_store()
+        self.customer = CreditCustomer.objects.create(name='Khata Test', phone='9000000001')
+        self.tz = timezone.get_current_timezone()
+
+    def _at(self, year, month, day, hour, minute=0):
+        return timezone.make_aware(datetime(year, month, day, hour, minute), self.tz)
+
+    def test_merges_all_sources_and_sorts_by_event_datetime(self):
+        written_now = timezone.now()
+
+        # Insert newest-looking ledger rows first so SQL created_at order would be wrong.
+        mistake = CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='debit',
+            amount=Decimal('50.00'),
+            description='DOUBLE BILL MISTAKE',
+            created_at=self._at(2026, 8, 11, 18, 20),
+        )
+
+        ret = CreditReturn.objects.create(
+            return_number='CRRET-TEST-1',
+            store=self.store,
+            customer=self.customer,
+            total=Decimal('20.00'),
+            created_at=self._at(2026, 8, 10, 12, 0),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            credit_return=ret,
+            entry_type='credit',
+            amount=Decimal('20.00'),
+            created_at=written_now,
+        )
+
+        same_day_pay = CreditPayment.objects.create(
+            customer=self.customer,
+            payment_method='upi',
+            amount=Decimal('30.00'),
+            upi_amount=Decimal('30.00'),
+            cash_amount=Decimal('0.00'),
+            paid_at=self._at(2026, 8, 8, 16, 45),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            payment=same_day_pay,
+            entry_type='credit',
+            amount=Decimal('30.00'),
+            created_at=written_now,
+        )
+
+        sale_same_day = CreditInvoice.objects.create(
+            invoice_number='CR-TEST-SAME',
+            store=self.store,
+            customer=self.customer,
+            total=Decimal('80.00'),
+            created_at=self._at(2026, 8, 8, 11, 0),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=sale_same_day,
+            entry_type='debit',
+            amount=Decimal('80.00'),
+            created_at=written_now,
+        )
+
+        sale = CreditInvoice.objects.create(
+            invoice_number='CR-TEST-SALE',
+            store=self.store,
+            customer=self.customer,
+            total=Decimal('100.00'),
+            created_at=self._at(2026, 8, 4, 14, 15),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            invoice=sale,
+            entry_type='debit',
+            amount=Decimal('100.00'),
+            created_at=written_now,
+        )
+
+        first_pay = CreditPayment.objects.create(
+            customer=self.customer,
+            payment_method='upi',
+            amount=Decimal('40.00'),
+            upi_amount=Decimal('40.00'),
+            cash_amount=Decimal('0.00'),
+            paid_at=self._at(2026, 8, 1, 9, 30),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            payment=first_pay,
+            entry_type='credit',
+            amount=Decimal('40.00'),
+            created_at=written_now,
+        )
+
+        CreditLedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='debit',
+            amount=Decimal('200.00'),
+            description='Opening Balance',
+            created_at=self._at(2026, 7, 24, 10, 0),
+        )
+
+        response = self.client.get(
+            f'/api/v1/credit/ledger/statement/?customer={self.customer.id}'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        particulars = [row['particulars'] for row in response.data['rows']]
+        self.assertEqual(
+            particulars,
+            [
+                'Opening Balance',
+                'Cr UPI',
+                'Dr Sales',
+                'Dr Sales',
+                'Cr UPI',
+                'Cr Return',
+                'DOUBLE BILL MISTAKE',
+            ],
+        )
+        # Same calendar day still ordered by clock time (sale 11:00 before UPI 16:45).
+        self.assertEqual(response.data['rows'][3]['txn_type'], 'sale')
+        self.assertEqual(response.data['rows'][4]['txn_type'], 'payment')
+        self.assertEqual(response.data['rows'][-1]['id'], mistake.id)
