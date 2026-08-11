@@ -107,7 +107,7 @@ type SnapRow = {
 };
 
 function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
-  return [...(statement.rows || [])].sort(compareLedgerStatementRows);
+  return [...(statement.rows || [])].sort((a, b) => compareLedgerStatementRows(b, a));
 }
 
 function toSnapRows(
@@ -170,7 +170,8 @@ export function buildCreditLedgerSnapshotHtml(
   const isCr = netSide === 'CR';
   const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
   const netColor = isCr ? theme.creditText : theme.debitText;
-  const openOn = allRows[0]?.created_at ? `on ${formatCreditDate(allRows[0].created_at)}` : '';
+  const oldestRow = allRows.length ? allRows[allRows.length - 1] : undefined;
+  const openOn = oldestRow?.created_at ? `on ${formatCreditDate(oldestRow.created_at)}` : '';
 
   const tableRows: SnapRow[] = [...pageRows];
   if (showTotals) {

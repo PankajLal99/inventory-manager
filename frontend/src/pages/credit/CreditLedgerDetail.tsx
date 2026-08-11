@@ -292,8 +292,8 @@ export default function CreditLedgerDetail() {
   const selectedCustomer = statement?.customer || customerMeta;
   const rows = useMemo(() => {
     const list = [...(statement?.rows || [])];
-    // Oldest datetime on top (ascending)
-    list.sort(compareLedgerStatementRows);
+    // Latest datetime on top (descending)
+    list.sort((a, b) => compareLedgerStatementRows(b, a));
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter((row: any) => {
@@ -309,6 +309,8 @@ export default function CreditLedgerDetail() {
       return hay.includes(q);
     });
   }, [statement?.rows, search]);
+
+  const oldestRow = rows.length ? rows[rows.length - 1] : undefined;
 
   // Reset multi-page picture queue when statement / filters change
   useEffect(() => {
@@ -528,8 +530,8 @@ export default function CreditLedgerDetail() {
     : `(${customerFirstName} will give)`;
   const openingOnLabel = dateFrom
     ? `on ${formatPdfDate(dateFrom)}`
-    : rows[0]?.created_at
-      ? `on ${formatPdfDate(rows[0].created_at)}`
+    : oldestRow?.created_at
+      ? `on ${formatPdfDate(oldestRow.created_at)}`
       : '';
   const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
 
@@ -559,8 +561,8 @@ export default function CreditLedgerDetail() {
 
     const openingDate = dateFrom
       ? formatPdfDateShort(dateFrom)
-      : rows[0]?.created_at
-        ? formatPdfDateShort(rows[0].created_at)
+      : oldestRow?.created_at
+        ? formatPdfDateShort(oldestRow.created_at)
         : formatPdfDateShort(new Date().toISOString());
 
     // Brought-forward row only when filtering from a start date (avoids duplicating opening-balance entries on "All")
@@ -619,7 +621,7 @@ export default function CreditLedgerDetail() {
     });
 
     return out;
-  }, [statement, rows, dateFrom]);
+  }, [statement, rows, dateFrom, oldestRow]);
 
   const cellValue = (r: (typeof statementRows)[number], id: LedgerColumnId) => {
     switch (id) {
@@ -695,8 +697,8 @@ export default function CreditLedgerDetail() {
     const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
     const openOn = dateFrom
       ? `on ${formatPdfDate(dateFrom)}`
-      : rows[0]?.created_at
-        ? `on ${formatPdfDate(rows[0].created_at)}`
+      : oldestRow?.created_at
+        ? `on ${formatPdfDate(oldestRow.created_at)}`
         : '';
 
     // Top brand bar — ledger chrome color
