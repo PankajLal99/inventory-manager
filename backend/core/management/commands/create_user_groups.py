@@ -59,6 +59,11 @@ class Command(BaseCommand):
                     ('*', 'All permissions'),  # Will be handled specially
                 ]
             },
+            {
+                'name': 'SalaryBook',
+                'description': 'Salary Book portal — payroll, attendance, advances',
+                'permissions': [],
+            },
         ]
 
         created_count = 0

@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     'backend.pos',
     'backend.credit',
     'backend.reports',
+    'backend.salary_book',
 ]
 
 MIDDLEWARE = [
@@ -196,7 +197,7 @@ AUTH_USER_MODEL = 'core.User'
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'backend.salary_book.authentication.SalaryBookJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getAuthScopeForPath, isCreditAppPath, type AuthScope } from './authPaths';
+import { getAuthScopeForPath, isCreditAppPath, isSalaryBookPath, type AuthScope } from './authPaths';
 
 // Get API URL from runtime config (for production) or build-time env (for development)
 // Priority: window.__ENV__ > import.meta.env.VITE_API_URL > default
@@ -33,11 +33,13 @@ const MAIN_ACCESS = 'access_token';
 const MAIN_REFRESH = 'refresh_token';
 const CREDIT_ACCESS = 'credit_access_token';
 const CREDIT_REFRESH = 'credit_refresh_token';
+const SALARY_BOOK_ACCESS = 'salary_book_access_token';
+const SALARY_BOOK_REFRESH = 'salary_book_refresh_token';
 
 function tokenKeys(scope: AuthScope) {
-  return scope === 'credit'
-    ? { access: CREDIT_ACCESS, refresh: CREDIT_REFRESH }
-    : { access: MAIN_ACCESS, refresh: MAIN_REFRESH };
+  if (scope === 'credit') return { access: CREDIT_ACCESS, refresh: CREDIT_REFRESH };
+  if (scope === 'salary_book') return { access: SALARY_BOOK_ACCESS, refresh: SALARY_BOOK_REFRESH };
+  return { access: MAIN_ACCESS, refresh: MAIN_REFRESH };
 }
 
 const api = axios.create({
@@ -55,8 +57,10 @@ api.interceptors.request.use(
     }
     const scope: AuthScope = (config as any).authScope || getAuthScopeForPath();
     (config as any).authScope = scope;
+    const url = String(config.url || '');
+    const isRefresh = url.includes('/auth/refresh/');
     const token = localStorage.getItem(tokenKeys(scope).access);
-    if (token) {
+    if (token && !isRefresh) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
@@ -73,6 +77,10 @@ api.interceptors.response.use(
     const originalRequest = error.config;
 
     // Handle 401 Unauthorized - try to refresh token for that scope only
+    const failedUrl = String(originalRequest?.url || '');
+    if (failedUrl.includes('/auth/refresh/')) {
+      return Promise.reject(error);
+    }
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       const scope: AuthScope =
@@ -81,11 +89,16 @@ api.interceptors.response.use(
       try {
         const refreshToken = localStorage.getItem(keys.refresh);
         if (refreshToken) {
-          const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {
+          const refreshUrl =
+            scope === 'salary_book'
+              ? `${API_BASE_URL}/salary-book/auth/refresh/`
+              : `${API_BASE_URL}/auth/refresh/`;
+          const response = await axios.post(refreshUrl, {
             refresh: refreshToken,
           });
-          const { access } = response.data;
+          const { access, refresh } = response.data;
           localStorage.setItem(keys.access, access);
+          if (refresh) localStorage.setItem(keys.refresh, refresh);
           originalRequest.headers.Authorization = `Bearer ${access}`;
           return api(originalRequest);
         }
@@ -98,10 +111,16 @@ api.interceptors.response.use(
           const onAuthPage =
             path.includes('/login') ||
             path.includes('/credit-login') ||
-            path.includes('/register');
+            path.includes('/register') ||
+            path.includes('/salary-book/login');
           if (!onAuthPage) {
-            const creditPath = isCreditAppPath(path) || scope === 'credit';
-            window.location.href = creditPath ? '/credit-login' : '/login';
+            if (isSalaryBookPath(path) || scope === 'salary_book') {
+              window.location.href = '/salary-book/login';
+            } else if (isCreditAppPath(path) || scope === 'credit') {
+              window.location.href = '/credit-login';
+            } else {
+              window.location.href = '/login';
+            }
           }
         }
         return Promise.reject(refreshError);
@@ -696,6 +715,85 @@ export const creditApi = {
       api.get(`/credit/ledger/customers/${customerId}/delete/`),
     deleteCustomer: (customerId: number) =>
       api.delete(`/credit/ledger/customers/${customerId}/delete/`),
+  },
+};
+
+const sb = { authScope: 'salary_book' as AuthScope };
+
+export const salaryBookApi = {
+  login: (username: string, password: string) =>
+    api.post('/salary-book/auth/login/', { username, password }, sb as any),
+  refresh: (refresh: string) =>
+    api.post('/salary-book/auth/refresh/', { refresh }, sb as any),
+  me: () => api.get('/salary-book/auth/me/', sb as any),
+  updateMe: (data: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+  }) => api.patch('/salary-book/auth/me/', data, sb as any),
+  changePassword: (data: { current_password: string; new_password: string }) =>
+    api.post('/salary-book/auth/change-password/', data, sb as any),
+  dashboard: (params?: { year?: number; month?: number }) =>
+    api.get('/salary-book/dashboard/', { params, ...sb } as any),
+  calendar: (params?: { year?: number; month?: number; employee?: number }) =>
+    api.get('/salary-book/calendar/', { params, ...sb } as any),
+  settings: {
+    get: () => api.get('/salary-book/settings/', sb as any),
+    update: (data: any) => api.patch('/salary-book/settings/', data, sb as any),
+  },
+  employees: {
+    list: (params?: any) => api.get('/salary-book/employees/', { params, ...sb } as any),
+    get: (id: number) => api.get(`/salary-book/employees/${id}/`, sb as any),
+    create: (data: any) => api.post('/salary-book/employees/', data, sb as any),
+    update: (id: number, data: any) => api.patch(`/salary-book/employees/${id}/`, data, sb as any),
+    attendance: (id: number, params?: any) =>
+      api.get(`/salary-book/employees/${id}/attendance/`, { params, ...sb } as any),
+    leaves: (id: number, params?: any) =>
+      api.get(`/salary-book/employees/${id}/leaves/`, { params, ...sb } as any),
+    advances: (id: number, params?: any) =>
+      api.get(`/salary-book/employees/${id}/advances/`, { params, ...sb } as any),
+    salaries: (id: number, params?: any) =>
+      api.get(`/salary-book/employees/${id}/salaries/`, { params, ...sb } as any),
+  },
+  attendance: {
+    list: (params?: any) => api.get('/salary-book/attendance/', { params, ...sb } as any),
+    create: (data: FormData | Record<string, unknown>) =>
+      api.post('/salary-book/attendance/', data, sb as any),
+    get: (id: number) => api.get(`/salary-book/attendance/${id}/`, sb as any),
+    update: (id: number, data: FormData | Record<string, unknown>) =>
+      api.patch(`/salary-book/attendance/${id}/`, data, sb as any),
+  },
+  leaves: {
+    list: (params?: any) => api.get('/salary-book/leaves/', { params, ...sb } as any),
+    create: (data: any) => api.post('/salary-book/leaves/', data, sb as any),
+    void: (id: number) => api.post(`/salary-book/leaves/${id}/void/`, {}, sb as any),
+  },
+  advances: {
+    list: (params?: any) => api.get('/salary-book/advances/', { params, ...sb } as any),
+    create: (data: any) => api.post('/salary-book/advances/', data, sb as any),
+    void: (id: number) => api.post(`/salary-book/advances/${id}/void/`, {}, sb as any),
+  },
+  salaries: {
+    list: (params?: { year?: number; month?: number }) =>
+      api.get('/salary-book/salaries/', { params, ...sb } as any),
+    generate: (data: { year: number; month: number }) =>
+      api.post('/salary-book/salaries/generate/', data, sb as any),
+    get: (id: number) => api.get(`/salary-book/salaries/${id}/`, sb as any),
+    finalize: (id: number) => api.post(`/salary-book/salaries/${id}/finalize/`, {}, sb as any),
+    reopen: (id: number) => api.post(`/salary-book/salaries/${id}/reopen/`, {}, sb as any),
+  },
+  payments: {
+    list: (params?: any) => api.get('/salary-book/payments/', { params, ...sb } as any),
+    create: (data: any) => api.post('/salary-book/payments/', data, sb as any),
+    void: (id: number) => api.post(`/salary-book/payments/${id}/void/`, {}, sb as any),
+  },
+  reports: {
+    attendance: (params?: any) =>
+      api.get('/salary-book/reports/attendance/', { params, ...sb } as any),
+    leaves: (params?: any) => api.get('/salary-book/reports/leaves/', { params, ...sb } as any),
+    advances: (params?: any) => api.get('/salary-book/reports/advances/', { params, ...sb } as any),
+    salaries: (params?: any) => api.get('/salary-book/reports/salaries/', { params, ...sb } as any),
   },
 };
 

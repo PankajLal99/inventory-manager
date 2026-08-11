@@ -3,8 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#2563eb" />
     <title>Inventory Manager</title>
+    <script>
+      (function () {
+        if (location.pathname.indexOf('/salary-book') !== 0) return;
+        document.documentElement.classList.add('salary-book');
+        document.title = 'Salary Book';
+        var theme = document.querySelector('meta[name="theme-color"]');
+        if (theme) theme.setAttribute('content', '#047857');
+        var icon = document.querySelector('link[rel="icon"]');
+        if (icon) {
+          icon.setAttribute('href', '/favicon-salary-book.svg');
+          icon.setAttribute('type', 'image/svg+xml');
+        }
+        var apple = document.createElement('link');
+        apple.rel = 'apple-touch-icon';
+        apple.href = '/icons/salary-book-180.png';
+        document.head.appendChild(apple);
+        var manifest = document.createElement('link');
+        manifest.rel = 'manifest';
+        manifest.href = '/salary-book.webmanifest';
+        document.head.appendChild(manifest);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

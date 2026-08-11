@@ -4,10 +4,25 @@ import { useEffect, useState } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider } from './lib/toast';
 import { auth } from './lib/auth';
-import { isCreditAppPath } from './lib/authPaths';
+import { isCreditAppPath, isSalaryBookPath } from './lib/authPaths';
 import { isAccountsOnlyUser } from './pages/credit/creditLedgerUtils';
 import Login from './pages/auth/Login';
 import CreditLogin from './pages/auth/CreditLogin';
+import SalaryBookLogin from './pages/salary-book/SalaryBookLogin';
+import SalaryBookLayout from './components/layout/SalaryBookLayout';
+import SalaryBookDashboard from './pages/salary-book/Dashboard';
+import EmployeeList from './pages/salary-book/EmployeeList';
+import EmployeeForm from './pages/salary-book/EmployeeForm';
+import EmployeeDetails from './pages/salary-book/EmployeeDetails';
+import AttendancePage from './pages/salary-book/AttendancePage';
+import LeaveList from './pages/salary-book/LeaveList';
+import AdvanceList from './pages/salary-book/AdvanceList';
+import SalaryBookPage from './pages/salary-book/SalaryBookPage';
+import SalaryDetails from './pages/salary-book/SalaryDetails';
+import ReportsPage from './pages/salary-book/ReportsPage';
+import SettingsPage from './pages/salary-book/SettingsPage';
+import CalendarPage from './pages/salary-book/CalendarPage';
+import ProfilePage from './pages/salary-book/ProfilePage';
 import Register from './pages/auth/Register';
 import Dashboard from './pages/dashboard/Dashboard';
 import Products from './pages/products/Products';
@@ -90,6 +105,7 @@ export const getCacheConfig = () => ({
  */
 function AppShell() {
   const location = useLocation();
+  const onSalaryBook = isSalaryBookPath(location.pathname);
   const onCredit = isCreditAppPath(location.pathname);
   const [accountsRedirect, setAccountsRedirect] = useState<string | null>(null);
   const [checkingAccounts, setCheckingAccounts] = useState(
@@ -100,7 +116,7 @@ function AppShell() {
     let cancelled = false;
 
     const enforceAccountsCreditOnly = async () => {
-      if (onCredit) {
+      if (onCredit || onSalaryBook) {
         if (!cancelled) {
           setAccountsRedirect(null);
           setCheckingAccounts(false);
@@ -165,7 +181,7 @@ function AppShell() {
     return () => {
       cancelled = true;
     };
-  }, [onCredit, location.pathname]);
+  }, [onCredit, onSalaryBook, location.pathname]);
 
   if (accountsRedirect) {
     return <Navigate to={accountsRedirect} replace />;
@@ -177,6 +193,13 @@ function AppShell() {
         Checking access…
       </div>
     );
+  }
+
+  if (onSalaryBook) {
+    if (!auth.isSalaryBookAuthenticated()) {
+      return <Navigate to="/salary-book/login" replace />;
+    }
+    return <SalaryBookLayout />;
   }
 
   if (onCredit) {
@@ -218,6 +241,7 @@ function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/credit-login" element={<CreditLogin />} />
+              <Route path="/salary-book/login" element={<SalaryBookLogin />} />
               <Route path="/register" element={<Register />} />
               <Route path="/vendor-purchases" element={<VendorPurchases />} />
               <Route path="/vendor-purchases/:id" element={<VendorPurchaseDetail />} />
@@ -231,6 +255,21 @@ function App() {
                 <Route path="credit-returns/:id" element={<CreditReturnDetail />} />
                 <Route path="credit-ledger" element={<CreditLedger />} />
                 <Route path="credit-ledger/:customerId" element={<CreditLedgerDetail />} />
+
+                <Route path="salary-book" element={<SalaryBookDashboard />} />
+                <Route path="salary-book/employees" element={<EmployeeList />} />
+                <Route path="salary-book/employees/new" element={<EmployeeForm />} />
+                <Route path="salary-book/employees/:id" element={<EmployeeDetails />} />
+                <Route path="salary-book/employees/:id/edit" element={<EmployeeForm />} />
+                <Route path="salary-book/attendance" element={<AttendancePage />} />
+                <Route path="salary-book/calendar" element={<CalendarPage />} />
+                <Route path="salary-book/leaves" element={<LeaveList />} />
+                <Route path="salary-book/advances" element={<AdvanceList />} />
+                <Route path="salary-book/salaries" element={<SalaryBookPage />} />
+                <Route path="salary-book/salaries/:id" element={<SalaryDetails />} />
+                <Route path="salary-book/reports" element={<ReportsPage />} />
+                <Route path="salary-book/settings" element={<SettingsPage />} />
+                <Route path="salary-book/profile" element={<ProfilePage />} />
 
                 {/* Full inventory app */}
                 <Route index element={<FullAppOnly><POS /></FullAppOnly>} />

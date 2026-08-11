@@ -29,7 +29,28 @@ class AzureBlobStorage(Storage):
         return f"{self.folder}/{clean_name}"
 
     def _open(self, name, mode="rb"):
-        raise NotImplementedError("Reading blobs through Django storage is not implemented")
+        if not self.account_name or not self.account_key:
+            raise FileNotFoundError(name)
+        try:
+            from azure.core.exceptions import ResourceNotFoundError
+            from azure.storage.blob import BlobServiceClient
+            from django.core.files.base import ContentFile
+        except ImportError as exc:
+            raise FileNotFoundError(name) from exc
+
+        connection_string = (
+            f"DefaultEndpointsProtocol=https;"
+            f"AccountName={self.account_name};"
+            f"AccountKey={self.account_key};"
+            "EndpointSuffix=core.windows.net"
+        )
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        blob_client = blob_service_client.get_blob_client(container=self.container, blob=name)
+        try:
+            data = blob_client.download_blob().readall()
+        except ResourceNotFoundError as exc:
+            raise FileNotFoundError(name) from exc
+        return ContentFile(data, name=name)
 
     def _save(self, name, content):
         if not self.account_name or not self.account_key:
@@ -109,3 +130,42 @@ class AzureBlobStorage(Storage):
 @deconstructible
 class ProductImageStorage(AzureBlobStorage):
     folder = "mt-images"
+
+
+@deconstructible
+class SalaryBookImageStorage(ProductImageStorage):
+    """Same Azure container as POS product images, under mt-images/salary-book/."""
+
+    folder = "mt-images/salary-book"
+
+    def _use_azure(self):
+        return bool(self.account_name and self.account_key)
+
+    def _local(self):
+        from django.core.files.storage import FileSystemStorage
+
+        return FileSystemStorage()
+
+    def _save(self, name, content):
+        if self._use_azure():
+            return super()._save(name, content)
+        return self._local()._save(name, content)
+
+    def _open(self, name, mode="rb"):
+        if self._use_azure() and str(name).startswith(self.folder):
+            return super()._open(name, mode)
+        return self._local()._open(name, mode)
+
+    def delete(self, name):
+        if self._use_azure() and str(name).startswith(self.folder):
+            return super().delete(name)
+        return self._local().delete(name)
+
+    def url(self, name):
+        if not name:
+            return ""
+        if str(name).startswith(("http://", "https://", "data:image")):
+            return str(name)
+        if self._use_azure() and str(name).startswith(self.folder):
+            return super().url(name)
+        return self._local().url(name)
