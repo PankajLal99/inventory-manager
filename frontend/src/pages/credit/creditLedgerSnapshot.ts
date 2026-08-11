@@ -97,7 +97,8 @@ type LedgerDatedRow = {
 };
 
 /**
- * Split newest-first rows into calendar-day windows (inclusive).
+ * Split oldest-first rows into calendar-day windows (inclusive).
+ * First page is the oldest window; latest entries land on the last page.
  * Pass maxRowsPerPage to also cap a busy window; omit for days-only paging.
  */
 export function chunkLedgerRowsByDays<T extends LedgerDatedRow>(
@@ -105,24 +106,24 @@ export function chunkLedgerRowsByDays<T extends LedgerDatedRow>(
   daysPerPage = LEDGER_SNAPSHOT_DAYS_PER_PAGE,
   maxRowsPerPage?: number
 ): T[][] {
-  const sorted = [...rows].sort((a, b) => compareLedgerStatementRows(b, a));
+  const sorted = [...rows].sort(compareLedgerStatementRows);
   if (!sorted.length) return [[]];
 
-  const newestDay = startOfLocalDayMs(sorted[0].event_at || sorted[0].created_at);
+  const oldestDay = startOfLocalDayMs(sorted[0].event_at || sorted[0].created_at);
   const dayChunks: T[][] = [];
   let chunk: T[] = [];
-  let windowEnd = newestDay;
-  let windowStart = addLocalDaysMs(windowEnd, -(daysPerPage - 1));
+  let windowStart = oldestDay;
+  let windowEnd = addLocalDaysMs(windowStart, daysPerPage - 1);
 
   for (const row of sorted) {
     const day = startOfLocalDayMs(row.event_at || row.created_at);
-    while (day < windowStart) {
+    while (day > windowEnd) {
       if (chunk.length) {
         dayChunks.push(chunk);
         chunk = [];
       }
-      windowEnd = addLocalDaysMs(windowStart, -1);
-      windowStart = addLocalDaysMs(windowEnd, -(daysPerPage - 1));
+      windowStart = addLocalDaysMs(windowEnd, 1);
+      windowEnd = addLocalDaysMs(windowStart, daysPerPage - 1);
     }
     chunk.push(row);
   }
@@ -144,7 +145,7 @@ export function chunkLedgerRowsForExport<T extends LedgerDatedRow>(
   split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
 ): T[][] {
   const normalized = normalizeLedgerExportSplit(split);
-  const sorted = [...rows].sort((a, b) => compareLedgerStatementRows(b, a));
+  const sorted = [...rows].sort(compareLedgerStatementRows);
   if (!sorted.length) return [[]];
 
   if (normalized.useDays && normalized.useRows) {
@@ -199,7 +200,7 @@ type SnapRow = {
 };
 
 function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
-  return [...(statement.rows || [])].sort((a, b) => compareLedgerStatementRows(b, a));
+  return [...(statement.rows || [])].sort(compareLedgerStatementRows);
 }
 
 function toSnapRows(
@@ -264,7 +265,7 @@ export function buildCreditLedgerSnapshotHtml(
   const isCr = netSide === 'CR';
   const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
   const netColor = isCr ? theme.creditText : theme.debitText;
-  const oldestRow = allRows.length ? allRows[allRows.length - 1] : undefined;
+  const oldestRow = allRows.length ? allRows[0] : undefined;
   const openOn = oldestRow?.created_at ? `on ${formatCreditDate(oldestRow.created_at)}` : '';
 
   const tableRows: SnapRow[] = [...pageRows];
@@ -429,8 +430,8 @@ export function buildCreditLedgerSnapshotHtml(
 
 function pagePeriodLabel(rows: NonNullable<CreditLedgerStatementSnapshot['rows']>): string {
   if (!rows.length) return 'All dates';
-  const newest = rows[0];
-  const oldest = rows[rows.length - 1];
+  const oldest = rows[0];
+  const newest = rows[rows.length - 1];
   const from = formatCreditDate(oldest.event_at || oldest.created_at);
   const to = formatCreditDate(newest.event_at || newest.created_at);
   if (from === '—' && to === '—') return `${LEDGER_SNAPSHOT_DAYS_PER_PAGE} days`;

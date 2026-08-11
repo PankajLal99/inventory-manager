@@ -845,8 +845,8 @@ export default function CreditLedgerDetail() {
 
     const chunkPeriod = (chunk: typeof bodyRows) => {
       if (!chunk.length) return periodLabel;
-      const newest = chunk[0].rawDate;
-      const oldest = chunk[chunk.length - 1].rawDate;
+      const oldest = chunk[0].rawDate;
+      const newest = chunk[chunk.length - 1].rawDate;
       const from = formatPdfDate(oldest);
       const to = formatPdfDate(newest);
       if (!from || from === to) return to || periodLabel;

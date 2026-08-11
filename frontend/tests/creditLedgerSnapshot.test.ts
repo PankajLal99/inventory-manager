@@ -23,11 +23,11 @@ describe('chunkLedgerRowsByDays', () => {
     const rows = [row(1, '2026-08-11'), row(2, '2026-07-27')]
     const pages = chunkLedgerRowsByDays(rows, 15)
     expect(pages).toHaveLength(2)
-    expect(pages[0].map((r) => r.id)).toEqual([1])
-    expect(pages[1].map((r) => r.id)).toEqual([2])
+    expect(pages[0].map((r) => r.id)).toEqual([2])
+    expect(pages[1].map((r) => r.id)).toEqual([1])
   })
 
-  it('puts the newest 15-day window first', () => {
+  it('puts the oldest 15-day window first (latest at the end)', () => {
     const rows = [
       row(1, '2026-08-11'),
       row(2, '2026-08-01'),
@@ -35,9 +35,9 @@ describe('chunkLedgerRowsByDays', () => {
       row(4, '2026-07-05'),
     ]
     const pages = chunkLedgerRowsByDays(rows, 15)
-    expect(pages[0].map((r) => r.id)).toEqual([1, 2])
-    expect(pages[1].map((r) => r.id)).toEqual([3])
-    expect(pages[2].map((r) => r.id)).toEqual([4])
+    expect(pages[0].map((r) => r.id)).toEqual([4])
+    expect(pages[1].map((r) => r.id)).toEqual([3, 2])
+    expect(pages[2].map((r) => r.id)).toEqual([1])
   })
 })
 
@@ -47,8 +47,8 @@ describe('chunkLedgerRowsForExport', () => {
     const split = { useRows: true, useDays: false, rowsPerPage: 2, daysPerPage: 15 }
     const pages = chunkLedgerRowsForExport(rows, split)
     expect(pages).toHaveLength(2)
-    expect(pages[0]).toHaveLength(2)
-    expect(pages[1]).toHaveLength(2)
+    expect(pages[0].map((r) => r.id)).toEqual([4, 3])
+    expect(pages[1].map((r) => r.id)).toEqual([2, 1])
     expect(ledgerSnapshotPageCount(rows, split)).toBe(2)
   })
 
@@ -60,9 +60,7 @@ describe('chunkLedgerRowsForExport', () => {
       rowsPerPage: 40,
       daysPerPage: 2,
     })
-    expect(pages).toHaveLength(2)
-    expect(pages[0].map((r) => r.id)).toEqual([1, 2])
-    expect(pages[1].map((r) => r.id)).toEqual([3])
+    expect(pages.map((part) => part.map((r) => r.id))).toEqual([[3], [2], [1]])
   })
 
   it('makes 25 images when 25 rows are 1 per day', () => {
