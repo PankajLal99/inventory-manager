@@ -17,14 +17,9 @@ import {
   formatCreditDateTime,
   formatCreditStatementDate,
 } from './creditLedgerUtils';
-import {
-  DEFAULT_LEDGER_EXPORT_SPLIT,
-  normalizeLedgerExportSplit,
-  type LedgerExportSplit,
-} from './ledgerExportSettings';
 
-/** @deprecated Use DEFAULT_LEDGER_EXPORT_SPLIT.rowsPerPage */
-export const LEDGER_SNAPSHOT_ROWS_PER_PAGE = DEFAULT_LEDGER_EXPORT_SPLIT.rowsPerPage;
+/** Entry rows per ledger snapshot page (e.g. 80 rows → 2 pages). */
+export const LEDGER_SNAPSHOT_ROWS_PER_PAGE = 40;
 
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
@@ -76,85 +71,6 @@ function chunkRows<T>(rows: T[], size: number): T[][] {
   return chunks;
 }
 
-function startOfLocalDayMs(value?: string | null): number {
-  const d = new Date(value || 0);
-  if (!Number.isFinite(d.getTime())) return 0;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-function addLocalDaysMs(dayMs: number, days: number): number {
-  const d = new Date(dayMs);
-  d.setDate(d.getDate() + days);
-  return d.getTime();
-}
-
-type LedgerDatedRow = {
-  created_at?: string | null;
-  event_at?: string | null;
-};
-
-export function chunkLedgerRowsByDays<T extends LedgerDatedRow>(
-  rows: T[],
-  daysPerPage: number,
-  maxRowsPerPage?: number
-): T[][] {
-  const sorted = [...rows].sort((a, b) => compareLedgerStatementRows(b, a));
-  if (!sorted.length) return [[]];
-
-  const newestDay = startOfLocalDayMs(sorted[0].event_at || sorted[0].created_at);
-  const dayChunks: T[][] = [];
-  let chunk: T[] = [];
-  let windowEnd = newestDay;
-  let windowStart = addLocalDaysMs(windowEnd, -(daysPerPage - 1));
-
-  for (const row of sorted) {
-    const day = startOfLocalDayMs(row.event_at || row.created_at);
-    while (day < windowStart) {
-      if (chunk.length) {
-        dayChunks.push(chunk);
-        chunk = [];
-      }
-      windowEnd = addLocalDaysMs(windowStart, -1);
-      windowStart = addLocalDaysMs(windowEnd, -(daysPerPage - 1));
-    }
-    chunk.push(row);
-  }
-  if (chunk.length) dayChunks.push(chunk);
-
-  if (!maxRowsPerPage || maxRowsPerPage <= 0) {
-    return dayChunks.length ? dayChunks : [[]];
-  }
-
-  const pages: T[][] = [];
-  for (const dayChunk of dayChunks) {
-    pages.push(...chunkRows(dayChunk, maxRowsPerPage).filter((part) => part.length > 0));
-  }
-  return pages.length ? pages : [[]];
-}
-
-export function chunkLedgerRowsForExport<T extends LedgerDatedRow>(
-  rows: T[],
-  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
-): T[][] {
-  const normalized = normalizeLedgerExportSplit(split);
-  const sorted = [...rows].sort((a, b) => compareLedgerStatementRows(b, a));
-  if (!sorted.length) return [[]];
-  if (normalized.useDays && normalized.useRows) {
-    return chunkLedgerRowsByDays(sorted, normalized.daysPerPage, normalized.rowsPerPage);
-  }
-  if (normalized.useDays) {
-    return chunkLedgerRowsByDays(sorted, normalized.daysPerPage);
-  }
-  return chunkRows(sorted, normalized.rowsPerPage);
-}
-
-export function ledgerSnapshotPageCount(
-  rows: LedgerDatedRow[],
-  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
-): number {
-  return Math.max(1, chunkLedgerRowsForExport(rows, split).length);
-}
-
 export type CreditLedgerStatementSnapshot = {
   customer?: { name?: string | null; phone?: string | null } | null;
   opening_balance?: string | number | null;
@@ -191,7 +107,7 @@ type SnapRow = {
 };
 
 function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
-  return [...(statement.rows || [])].sort((a, b) => compareLedgerStatementRows(b, a));
+  return [...(statement.rows || [])].sort(compareLedgerStatementRows);
 }
 
 function toSnapRows(
@@ -254,8 +170,7 @@ export function buildCreditLedgerSnapshotHtml(
   const isCr = netSide === 'CR';
   const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
   const netColor = isCr ? theme.creditText : theme.debitText;
-  const oldestRow = allRows.length ? allRows[allRows.length - 1] : undefined;
-  const openOn = oldestRow?.created_at ? `on ${formatCreditDate(oldestRow.created_at)}` : '';
+  const openOn = allRows[0]?.created_at ? `on ${formatCreditDate(allRows[0].created_at)}` : '';
 
   const tableRows: SnapRow[] = [...pageRows];
   if (showTotals) {
@@ -417,28 +332,25 @@ export function buildCreditLedgerSnapshotHtml(
 </body></html>`;
 }
 
-/** Build one HTML string per ledger page using saved row/day split. */
+/** Build one HTML string per ledger page (40 rows each). */
 export function buildCreditLedgerSnapshotPageHtmlList(
   statement: CreditLedgerStatementSnapshot,
-  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
+  rowsPerPage = LEDGER_SNAPSHOT_ROWS_PER_PAGE
 ): string[] {
   const allRows = sortStatementRows(statement);
-  const chunks = chunkLedgerRowsForExport(allRows, split);
+  const snapAll = toSnapRows(allRows);
+  const chunks = chunkRows(snapAll, rowsPerPage);
   const partCount = chunks.length;
-  let lineStart = 1;
 
-  return chunks.map((chunk, i) => {
-    const pageRows = toSnapRows(chunk);
-    const html = buildCreditLedgerSnapshotHtml(statement, {
+  return chunks.map((pageRows, i) =>
+    buildCreditLedgerSnapshotHtml(statement, {
       pageRows,
       partIndex: i + 1,
       partCount,
-      totalEntries: allRows.length,
+      totalEntries: snapAll.length,
       showSummary: i === 0,
       showTotals: i === partCount - 1,
-      lineStart,
-    });
-    lineStart += pageRows.length;
-    return html;
-  });
+      lineStart: i * rowsPerPage + 1,
+    })
+  );
 }
