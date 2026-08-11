@@ -1252,6 +1252,20 @@ def _event_sort_key(entry):
     return (dt.timestamp() if dt is not None else 0.0, entry.id or 0)
 
 
+def _event_at_iso(value):
+    aware = _as_aware_datetime(value)
+    if aware is None:
+        return None
+    return timezone.localtime(aware).isoformat(timespec='milliseconds')
+
+
+def _event_at_ms(value):
+    aware = _as_aware_datetime(value)
+    if aware is None:
+        return 0
+    return int(aware.timestamp() * 1000)
+
+
 def _is_manual_ledger_entry(entry):
     """Opening balance / manual adjustments — not invoice, return, or main-ledger sync."""
     if entry.invoice_id or entry.credit_return_id:
@@ -1684,11 +1698,13 @@ def credit_ledger_statement(request):
         running += _ledger_signed_amount(entry)
         bal_side = 'Dr' if running >= 0 else 'Cr'
         event_at = _ledger_event_at(entry)
+        event_iso = _event_at_iso(event_at)
         rows.append({
             **raw,
             # Statement clock = source event time (not when the ledger row was written)
-            'created_at': event_at,
-            'event_at': event_at,
+            'created_at': event_iso,
+            'event_at': event_iso,
+            'event_at_ms': _event_at_ms(event_at),
             'debit': debit,
             'credit': credit,
             'running_balance': abs(running),

@@ -16,6 +16,7 @@ import {
   formatCreditDate,
   formatCreditDateTime,
   formatCreditStatementDate,
+  ledgerEventTimeMs,
 } from './creditLedgerUtils';
 import {
   DEFAULT_LEDGER_EXPORT_SPLIT,
@@ -79,9 +80,16 @@ function chunkRows<T>(rows: T[], size: number): T[][] {
   return chunks;
 }
 
-function startOfLocalDayMs(value?: string | null): number {
-  const d = new Date(value || 0);
-  if (!Number.isFinite(d.getTime())) return 0;
+type LedgerDatedRow = {
+  created_at?: string | null;
+  event_at?: string | null;
+  event_at_ms?: number | null;
+};
+
+function startOfLocalDayMs(row: LedgerDatedRow): number {
+  const t = ledgerEventTimeMs(row);
+  if (!t) return 0;
+  const d = new Date(t);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
@@ -90,11 +98,6 @@ function addLocalDaysMs(dayMs: number, days: number): number {
   d.setDate(d.getDate() + days);
   return d.getTime();
 }
-
-type LedgerDatedRow = {
-  created_at?: string | null;
-  event_at?: string | null;
-};
 
 /**
  * Split oldest-first rows into calendar-day windows (inclusive).
@@ -109,14 +112,14 @@ export function chunkLedgerRowsByDays<T extends LedgerDatedRow>(
   const sorted = [...rows].sort(compareLedgerStatementRows);
   if (!sorted.length) return [[]];
 
-  const oldestDay = startOfLocalDayMs(sorted[0].event_at || sorted[0].created_at);
+  const oldestDay = startOfLocalDayMs(sorted[0]);
   const dayChunks: T[][] = [];
   let chunk: T[] = [];
   let windowStart = oldestDay;
   let windowEnd = addLocalDaysMs(windowStart, daysPerPage - 1);
 
   for (const row of sorted) {
-    const day = startOfLocalDayMs(row.event_at || row.created_at);
+    const day = startOfLocalDayMs(row);
     while (day > windowEnd) {
       if (chunk.length) {
         dayChunks.push(chunk);
@@ -177,6 +180,7 @@ export type CreditLedgerStatementSnapshot = {
     id?: number;
     created_at?: string | null;
     event_at?: string | null;
+    event_at_ms?: number | null;
     txn_type?: string | null;
     vch_no?: string | null;
     particulars?: string | null;
@@ -213,8 +217,8 @@ function toSnapRows(
     const credit = formatMoney(row.credit);
     return {
       date: includeTime
-        ? formatCreditDateTime(row.created_at)
-        : formatCreditStatementDate(row.created_at),
+        ? formatCreditDateTime(row.event_at || row.created_at)
+        : formatCreditStatementDate(row.event_at || row.created_at),
       particulars: sanitizeText(row.particulars || '') || '',
       debit,
       credit,

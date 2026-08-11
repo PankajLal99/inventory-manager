@@ -38,6 +38,7 @@ import {
   collectionStatusBadgeVariant,
   collectionStatusLabel,
   compareLedgerStatementRows,
+  ledgerEventTimeMs,
   formatCreditDate,
   formatCreditDateTime,
   formatCreditStatementDate,
@@ -570,6 +571,7 @@ export default function CreditLedgerDetail() {
       entryType?: string;
       rawAmount?: string | number;
       rawDate?: string;
+      eventAtMs?: number;
       rawDescription?: string;
     }> = [];
 
@@ -600,7 +602,7 @@ export default function CreditLedgerDetail() {
       const credit = formatPdfMoney(row.credit);
       out.push({
         sr: String(idx + 1),
-        date: formatPdfDateShort(row.created_at, showTime),
+        date: formatPdfDateShort(row.event_at || row.created_at, showTime),
         type: sanitizePdfText(row.txn_type || '') || '',
         vch: sanitizePdfText(row.vch_no || '') || '',
         particulars: sanitizePdfText(row.particulars || '') || '',
@@ -614,7 +616,8 @@ export default function CreditLedgerDetail() {
         isManual: !!row.is_manual,
         entryType: row.entry_type,
         rawAmount: row.amount,
-        rawDate: row.created_at,
+        rawDate: row.event_at || row.created_at,
+        eventAtMs: ledgerEventTimeMs(row),
         rawDescription: row.description || row.narration || '',
       });
     });
@@ -811,7 +814,12 @@ export default function CreditLedgerDetail() {
     const totalRows = allTableRows.filter((r) => r.isTotal);
     const bodyRows = allTableRows.filter((r) => !r.isOpening && !r.isTotal);
     const rowChunks = chunkLedgerRowsForExport(
-      bodyRows.map((r) => ({ ...r, created_at: r.rawDate })),
+      bodyRows.map((r) => ({
+        ...r,
+        created_at: r.rawDate,
+        event_at: r.rawDate,
+        event_at_ms: r.eventAtMs,
+      })),
       split
     );
     const cols = visibleColumns.length
