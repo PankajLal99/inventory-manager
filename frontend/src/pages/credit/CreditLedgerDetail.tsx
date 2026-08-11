@@ -303,8 +303,8 @@ export default function CreditLedgerDetail() {
   const selectedCustomer = statement?.customer || customerMeta;
   const rows = useMemo(() => {
     const list = [...(statement?.rows || [])];
-    // Latest datetime on top (descending)
-    list.sort((a, b) => compareLedgerStatementRows(b, a));
+    // Oldest datetime on top (ascending) — latest at the end
+    list.sort(compareLedgerStatementRows);
     const q = search.trim().toLowerCase();
     if (!q) return list;
     return list.filter((row: any) => {
@@ -321,7 +321,7 @@ export default function CreditLedgerDetail() {
     });
   }, [statement?.rows, search]);
 
-  const oldestRow = rows.length ? rows[rows.length - 1] : undefined;
+  const oldestRow = rows.length ? rows[0] : undefined;
   const copyPageCount = ledgerSnapshotPageCount(rows, exportSplit);
 
   const persistExportSplit = (next: LedgerExportSplit) => {
