@@ -10,6 +10,10 @@ import {
   buildCreditLedgerSnapshotPageHtmlList,
   type CreditLedgerStatementSnapshot,
 } from './creditLedgerSnapshot';
+import {
+  loadLedgerExportSplit,
+  type LedgerExportSplit,
+} from './ledgerExportSettings';
 import { setPendingLedgerClipboardImage } from './pendingLedgerClipboard';
 
 export const SNAPSHOT_ROWS_PER_PAGE = 25;
@@ -237,13 +241,14 @@ export async function copyCreditDocumentImageToClipboard(
 }
 
 /**
- * Render ledger statement as one PNG per page (40 rows/page), then merge vertically.
+ * Render ledger statement as one PNG per page (rows or days split).
  */
 export async function buildCreditLedgerSnapshotBlobs(
   iframe: HTMLIFrameElement,
-  statement: CreditLedgerStatementSnapshot
+  statement: CreditLedgerStatementSnapshot,
+  split: LedgerExportSplit = loadLedgerExportSplit()
 ): Promise<Blob[]> {
-  const pages = buildCreditLedgerSnapshotPageHtmlList(statement);
+  const pages = buildCreditLedgerSnapshotPageHtmlList(statement, split);
   const blobs: Blob[] = [];
   for (let i = 0; i < pages.length; i++) {
     const blob = await renderSnapshotHtmlToBlob(iframe, pages[i]);

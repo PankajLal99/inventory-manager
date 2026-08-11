@@ -17,9 +17,17 @@ import {
   formatCreditDateTime,
   formatCreditStatementDate,
 } from './creditLedgerUtils';
+import {
+  DEFAULT_LEDGER_EXPORT_SPLIT,
+  normalizeLedgerExportSplit,
+  type LedgerExportSplit,
+} from './ledgerExportSettings';
 
-/** Entry rows per ledger snapshot page (e.g. 80 rows → 2 pages). */
-export const LEDGER_SNAPSHOT_ROWS_PER_PAGE = 40;
+/** @deprecated Use DEFAULT_LEDGER_EXPORT_SPLIT.daysPerPage */
+export const LEDGER_SNAPSHOT_DAYS_PER_PAGE = DEFAULT_LEDGER_EXPORT_SPLIT.daysPerPage;
+
+/** @deprecated Use DEFAULT_LEDGER_EXPORT_SPLIT.rowsPerPage */
+export const LEDGER_SNAPSHOT_ROWS_PER_PAGE = DEFAULT_LEDGER_EXPORT_SPLIT.rowsPerPage;
 
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
@@ -69,6 +77,90 @@ function chunkRows<T>(rows: T[], size: number): T[][] {
     chunks.push(rows.slice(i, i + size));
   }
   return chunks;
+}
+
+function startOfLocalDayMs(value?: string | null): number {
+  const d = new Date(value || 0);
+  if (!Number.isFinite(d.getTime())) return 0;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function addLocalDaysMs(dayMs: number, days: number): number {
+  const d = new Date(dayMs);
+  d.setDate(d.getDate() + days);
+  return d.getTime();
+}
+
+type LedgerDatedRow = {
+  created_at?: string | null;
+  event_at?: string | null;
+};
+
+/**
+ * Split newest-first rows into calendar-day windows (inclusive).
+ * Pass maxRowsPerPage to also cap a busy window; omit for days-only paging.
+ */
+export function chunkLedgerRowsByDays<T extends LedgerDatedRow>(
+  rows: T[],
+  daysPerPage = LEDGER_SNAPSHOT_DAYS_PER_PAGE,
+  maxRowsPerPage?: number
+): T[][] {
+  const sorted = [...rows].sort((a, b) => compareLedgerStatementRows(b, a));
+  if (!sorted.length) return [[]];
+
+  const newestDay = startOfLocalDayMs(sorted[0].event_at || sorted[0].created_at);
+  const dayChunks: T[][] = [];
+  let chunk: T[] = [];
+  let windowEnd = newestDay;
+  let windowStart = addLocalDaysMs(windowEnd, -(daysPerPage - 1));
+
+  for (const row of sorted) {
+    const day = startOfLocalDayMs(row.event_at || row.created_at);
+    while (day < windowStart) {
+      if (chunk.length) {
+        dayChunks.push(chunk);
+        chunk = [];
+      }
+      windowEnd = addLocalDaysMs(windowStart, -1);
+      windowStart = addLocalDaysMs(windowEnd, -(daysPerPage - 1));
+    }
+    chunk.push(row);
+  }
+  if (chunk.length) dayChunks.push(chunk);
+
+  if (!maxRowsPerPage || maxRowsPerPage <= 0) {
+    return dayChunks.length ? dayChunks : [[]];
+  }
+
+  const pages: T[][] = [];
+  for (const dayChunk of dayChunks) {
+    pages.push(...chunkRows(dayChunk, maxRowsPerPage).filter((part) => part.length > 0));
+  }
+  return pages.length ? pages : [[]];
+}
+
+export function chunkLedgerRowsForExport<T extends LedgerDatedRow>(
+  rows: T[],
+  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
+): T[][] {
+  const normalized = normalizeLedgerExportSplit(split);
+  const sorted = [...rows].sort((a, b) => compareLedgerStatementRows(b, a));
+  if (!sorted.length) return [[]];
+
+  if (normalized.useDays && normalized.useRows) {
+    return chunkLedgerRowsByDays(sorted, normalized.daysPerPage, normalized.rowsPerPage);
+  }
+  if (normalized.useDays) {
+    return chunkLedgerRowsByDays(sorted, normalized.daysPerPage);
+  }
+  return chunkRows(sorted, normalized.rowsPerPage);
+}
+
+export function ledgerSnapshotPageCount(
+  rows: LedgerDatedRow[],
+  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
+): number {
+  return Math.max(1, chunkLedgerRowsForExport(rows, split).length);
 }
 
 export type CreditLedgerStatementSnapshot = {
@@ -136,6 +228,7 @@ export type CreditLedgerSnapshotPageOptions = {
   showSummary: boolean;
   showTotals: boolean;
   lineStart: number;
+  periodLabel?: string;
 };
 
 /** One A4-style ledger page HTML (use with partIndex/partCount for multi-page). */
@@ -152,6 +245,7 @@ export function buildCreditLedgerSnapshotHtml(
   const showSummary = page?.showSummary ?? true;
   const showTotals = page?.showTotals ?? true;
   const lineStart = page?.lineStart ?? 1;
+  const periodLabel = page?.periodLabel || 'All dates';
   const theme = getLedgerTheme();
   const pageBg = docPageBackground(theme);
   const headerFont = docHeaderFontPx(theme);
@@ -308,7 +402,7 @@ export function buildCreditLedgerSnapshotHtml(
     </div>
     <div style="padding:14px 16px 12px;background:${pageBg};flex:1;">
       <div style="text-align:center;font-size:${headerFont};font-weight:${headerWeight};line-height:1.3;color:${theme.secondary};">${escapeHtml(customerName)} Statement</div>
-      <div style="text-align:center;font-size:${subFont};font-weight:${subWeight};line-height:1.3;color:${theme.textMuted};margin-top:4px;">(All dates)</div>
+      <div style="text-align:center;font-size:${subFont};font-weight:${subWeight};line-height:1.3;color:${theme.textMuted};margin-top:4px;">(${escapeHtml(periodLabel)})</div>
       ${partNote}
       ${summaryBlock}
 
@@ -333,25 +427,40 @@ export function buildCreditLedgerSnapshotHtml(
 </body></html>`;
 }
 
-/** Build one HTML string per ledger page (40 rows each). */
+function pagePeriodLabel(rows: NonNullable<CreditLedgerStatementSnapshot['rows']>): string {
+  if (!rows.length) return 'All dates';
+  const newest = rows[0];
+  const oldest = rows[rows.length - 1];
+  const from = formatCreditDate(oldest.event_at || oldest.created_at);
+  const to = formatCreditDate(newest.event_at || newest.created_at);
+  if (from === '—' && to === '—') return `${LEDGER_SNAPSHOT_DAYS_PER_PAGE} days`;
+  if (from === to) return to;
+  return `${from} - ${to}`;
+}
+
+/** Build one HTML string per ledger page using the saved/requested split. */
 export function buildCreditLedgerSnapshotPageHtmlList(
   statement: CreditLedgerStatementSnapshot,
-  rowsPerPage = LEDGER_SNAPSHOT_ROWS_PER_PAGE
+  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
 ): string[] {
   const allRows = sortStatementRows(statement);
-  const snapAll = toSnapRows(allRows);
-  const chunks = chunkRows(snapAll, rowsPerPage);
+  const chunks = chunkLedgerRowsForExport(allRows, split);
   const partCount = chunks.length;
+  let lineStart = 1;
 
-  return chunks.map((pageRows, i) =>
-    buildCreditLedgerSnapshotHtml(statement, {
+  return chunks.map((chunk, i) => {
+    const pageRows = toSnapRows(chunk);
+    const html = buildCreditLedgerSnapshotHtml(statement, {
       pageRows,
       partIndex: i + 1,
       partCount,
-      totalEntries: snapAll.length,
+      totalEntries: allRows.length,
       showSummary: i === 0,
       showTotals: i === partCount - 1,
-      lineStart: i * rowsPerPage + 1,
-    })
-  );
+      lineStart,
+      periodLabel: pagePeriodLabel(chunk),
+    });
+    lineStart += pageRows.length;
+    return html;
+  });
 }
