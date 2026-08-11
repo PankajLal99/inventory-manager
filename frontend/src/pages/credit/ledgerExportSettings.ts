@@ -84,6 +84,14 @@ export function saveLedgerExportSplit(value: Partial<LedgerExportSplit>): Ledger
   return next;
 }
 
+export function ledgerExportSplitBadge(split: LedgerExportSplit): string {
+  const n = normalizeLedgerExportSplit(split);
+  const parts: string[] = [];
+  if (n.useDays) parts.push(`${n.daysPerPage}d`);
+  if (n.useRows) parts.push(`${n.rowsPerPage}r`);
+  return parts.join('·') || '—';
+}
+
 export function ledgerExportSplitLabel(split: LedgerExportSplit): string {
   const normalized = normalizeLedgerExportSplit(split);
   const parts: string[] = [];

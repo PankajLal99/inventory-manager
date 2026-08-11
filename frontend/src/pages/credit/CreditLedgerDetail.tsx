@@ -15,6 +15,7 @@ import {
   Plus,
   Printer,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
@@ -64,13 +65,14 @@ import {
   copyPngBlobToClipboard,
   buildCreditLedgerSnapshotBlobs,
 } from './creditDocumentClipboard';
-import LedgerExportSplitModal from './LedgerExportSplitModal';
-import type { LedgerExportAction } from './LedgerExportSplitModal';
 import {
   chunkLedgerRowsForExport,
   ledgerSnapshotPageCount,
 } from './creditLedgerSnapshot';
 import {
+  LEDGER_EXPORT_DAY_PRESETS,
+  LEDGER_EXPORT_ROW_PRESETS,
+  ledgerExportSplitBadge,
   loadLedgerExportSplit,
   saveLedgerExportSplit,
   type LedgerExportSplit,
@@ -226,6 +228,7 @@ export default function CreditLedgerDetail() {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnSettings, setShowColumnSettings] = useState(false);
+  const [showCopySettings, setShowCopySettings] = useState(false);
   const [columnVisibility, setColumnVisibility] =
     useState<Record<LedgerColumnId, boolean>>(loadColumnVisibility);
   const [search, setSearch] = useState('');
@@ -253,8 +256,6 @@ export default function CreditLedgerDetail() {
   const [showLedgerImageBanner, setShowLedgerImageBanner] = useState(false);
   const [copyingLedgerImage, setCopyingLedgerImage] = useState(false);
   const [exportSplit, setExportSplit] = useState<LedgerExportSplit>(loadLedgerExportSplit);
-  const [showExportModal, setShowExportModal] = useState(false);
-  const [exportAction, setExportAction] = useState<LedgerExportAction>('picture');
   const [pictureCopied, setPictureCopied] = useState<boolean[]>([]);
   const [preparingPictures, setPreparingPictures] = useState(false);
   const canManage = canManageCreditRecords();
@@ -321,6 +322,11 @@ export default function CreditLedgerDetail() {
   }, [statement?.rows, search]);
 
   const oldestRow = rows.length ? rows[rows.length - 1] : undefined;
+  const copyPageCount = ledgerSnapshotPageCount(rows, exportSplit);
+
+  const persistExportSplit = (next: LedgerExportSplit) => {
+    setExportSplit(saveLedgerExportSplit(next));
+  };
 
   // Reset prepared images when statement / filters / split change
   useEffect(() => {
@@ -1134,10 +1140,7 @@ export default function CreditLedgerDetail() {
           <button
             type="button"
             className="shrink-0 text-xs font-semibold text-amber-900 underline"
-            onClick={() => {
-              setExportAction('picture');
-              setShowExportModal(true);
-            }}
+            onClick={() => setShowCopySettings(true)}
           >
             Change split
           </button>
@@ -1171,42 +1174,6 @@ export default function CreditLedgerDetail() {
       : pictureCopied.length > 1
         ? 'Copy again'
         : 'Copy Picture';
-
-  const openExportModal = (action: LedgerExportAction) => {
-    if (
-      action === 'picture' &&
-      pictureBlobsRef.current.length > 0 &&
-      nextUncopiedPictureIndex() >= 0
-    ) {
-      void copyLedgerPicture();
-      return;
-    }
-    setExportAction(action);
-    setShowExportModal(true);
-  };
-
-  const persistExportSplit = (split: LedgerExportSplit) => {
-    setExportSplit(saveLedgerExportSplit(split));
-    toast('Saved for next picture copy and PDF', 'success');
-  };
-
-  const confirmExport = (split: LedgerExportSplit, save: boolean) => {
-    if (save) {
-      setExportSplit(saveLedgerExportSplit(split));
-    }
-    setShowExportModal(false);
-    if (exportAction === 'picture') {
-      pictureBlobsRef.current = [];
-      setPictureCopied([]);
-      void copyLedgerPicture(split);
-      return;
-    }
-    if (exportAction === 'pdf-download') {
-      exportPDF(split);
-      return;
-    }
-    void copyPDF(split);
-  };
 
   const copyPDF = async (split: LedgerExportSplit = exportSplit) => {
     const built = buildCreditLedgerPdf(split);
@@ -1321,14 +1288,14 @@ export default function CreditLedgerDetail() {
           </Button>
           {statement ? (
             <>
-              <Button variant="outline" size="sm" onClick={() => openExportModal('pdf-download')}>
+              <Button variant="outline" size="sm" onClick={() => exportPDF()}>
                 <FileText className="h-4 w-4 mr-1.5" />
                 PDF
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openExportModal('picture')}
+                onClick={() => void copyLedgerPicture()}
                 disabled={copyingLedgerImage}
                 title="Copy ledger picture to clipboard for WhatsApp"
               >
@@ -1338,7 +1305,7 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openExportModal('pdf-copy')}
+                onClick={() => void copyPDF()}
                 disabled={copyingPdf}
                 title="Copy ledger PDF to clipboard"
               >
@@ -1380,7 +1347,10 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowColumnSettings((v) => !v)}
+                onClick={() => {
+                  setShowCopySettings(false);
+                  setShowColumnSettings((v) => !v);
+                }}
                 className="flex items-center gap-2"
               >
                 <Columns3 className="h-4 w-4" />
@@ -1424,6 +1394,146 @@ export default function CreditLedgerDetail() {
                     <Button variant="outline" size="sm" className="flex-1" onClick={resetColumns}>
                       Reset
                     </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setShowColumnSettings(false);
+                  setShowCopySettings((v) => !v);
+                }}
+                className="flex items-center gap-2"
+                title="Copy / PDF page split"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Copy settings
+                <span className="bg-amber-800 text-white rounded-full min-w-[1.25rem] h-5 px-1.5 flex items-center justify-center text-xs">
+                  {ledgerExportSplitBadge(exportSplit)}
+                </span>
+              </Button>
+              {showCopySettings ? (
+                <div className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-stone-200 bg-white shadow-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-stone-800">Copy / PDF pages</div>
+                    <button
+                      type="button"
+                      className="text-stone-400 hover:text-stone-600"
+                      onClick={() => setShowCopySettings(false)}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-stone-500 mb-2">
+                    Saved on this device. Copy Picture uses these settings immediately.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="rounded border-stone-300 text-amber-700 focus:ring-amber-600"
+                      checked={exportSplit.useRows}
+                      onChange={() =>
+                        persistExportSplit({
+                          ...exportSplit,
+                          useRows: !exportSplit.useRows,
+                          useDays: exportSplit.useDays || exportSplit.useRows,
+                        })
+                      }
+                    />
+                    Split by rows
+                  </label>
+                  {exportSplit.useRows ? (
+                    <div className="mt-1.5 mb-2">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={String(exportSplit.rowsPerPage)}
+                        onChange={(e) =>
+                          persistExportSplit({
+                            ...exportSplit,
+                            rowsPerPage: Number(e.target.value) || 1,
+                          })
+                        }
+                        className="h-8 py-1 text-sm"
+                      />
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {LEDGER_EXPORT_ROW_PRESETS.map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() =>
+                              persistExportSplit({ ...exportSplit, useRows: true, rowsPerPage: n })
+                            }
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              exportSplit.rowsPerPage === n
+                                ? 'border-amber-800 bg-amber-800 text-white'
+                                : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                            }`}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer mt-2">
+                    <input
+                      type="checkbox"
+                      className="rounded border-stone-300 text-amber-700 focus:ring-amber-600"
+                      checked={exportSplit.useDays}
+                      onChange={() =>
+                        persistExportSplit({
+                          ...exportSplit,
+                          useDays: !exportSplit.useDays,
+                          useRows: exportSplit.useRows || exportSplit.useDays,
+                        })
+                      }
+                    />
+                    Split by days
+                  </label>
+                  {exportSplit.useDays ? (
+                    <div className="mt-1.5">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={366}
+                        value={String(exportSplit.daysPerPage)}
+                        onChange={(e) =>
+                          persistExportSplit({
+                            ...exportSplit,
+                            daysPerPage: Number(e.target.value) || 1,
+                          })
+                        }
+                        className="h-8 py-1 text-sm"
+                      />
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {LEDGER_EXPORT_DAY_PRESETS.map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() =>
+                              persistExportSplit({ ...exportSplit, useDays: true, daysPerPage: n })
+                            }
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              exportSplit.daysPerPage === n
+                                ? 'border-amber-800 bg-amber-800 text-white'
+                                : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                            }`}
+                          >
+                            {n}d
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600">
+                    {copyPageCount === 1
+                      ? '1 image / PDF section'
+                      : `${copyPageCount} images — Copy 1 … Copy ${copyPageCount}`}
                   </div>
                 </div>
               ) : null}
@@ -1975,7 +2085,7 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openExportModal('picture')}
+                onClick={() => void copyLedgerPicture()}
                 disabled={copyingLedgerImage}
                 title="Copy ledger picture to clipboard for WhatsApp"
               >
@@ -1985,14 +2095,14 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => openExportModal('pdf-copy')}
+                onClick={() => void copyPDF()}
                 disabled={copyingPdf}
                 title="Copy ledger PDF to clipboard"
               >
                 <ClipboardCopy className="h-4 w-4 mr-1" />
                 {copyingPdf ? 'Copying…' : 'Copy PDF'}
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => openExportModal('pdf-download')}>
+              <Button variant="secondary" size="sm" onClick={() => exportPDF()}>
                 <Printer className="h-4 w-4 mr-1" />
                 Download PDF
               </Button>
@@ -2210,17 +2320,6 @@ export default function CreditLedgerDetail() {
           </Button>
         </div>
       </Modal>
-
-      <LedgerExportSplitModal
-        isOpen={showExportModal}
-        action={exportAction}
-        initial={exportSplit}
-        previewPageCount={(split) => ledgerSnapshotPageCount(rows, split)}
-        busy={copyingLedgerImage || copyingPdf || preparingPictures}
-        onClose={() => setShowExportModal(false)}
-        onSave={persistExportSplit}
-        onConfirm={confirmExport}
-      />
 
       <iframe
         ref={pictureCopyFrameRef}
