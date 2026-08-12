@@ -2,6 +2,7 @@ import django_filters
 import re
 from django.db.models import Q, Count, Exists, OuterRef
 from .models import Product, Barcode
+from .barcode_resolution import clean_scanned_barcode
 from backend.pos.models import InvoiceItem, CartItem
 from backend.purchasing.models import PurchaseItem
 
@@ -62,7 +63,7 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
     if not search_value or not search_value.strip():
         return None
     
-    barcode_clean = search_value.strip().upper()
+    barcode_clean = clean_scanned_barcode(search_value)
     
     # Cache: exact id lookup (use get, not first) — skip when skip_cache=True (e.g. invoice creation)
     if not skip_cache:

@@ -65,7 +65,7 @@ urlpatterns = [
     path('barcodes/', barcode_list_create, name='barcode-list-create'),
     path('barcodes/<int:pk>/', barcode_detail, name='barcode-detail'),
     path('barcodes/by-barcode/', barcode_by_barcode, name='barcode-by-barcode-query'),  # Query parameter version
-    path('barcodes/by-barcode/<str:barcode>/', barcode_by_barcode, name='barcode-by-barcode'),  # Path parameter version
+    path('barcodes/by-barcode/<path:barcode>/', barcode_by_barcode, name='barcode-by-barcode'),  # Path param (path: allows slashes)
     path('barcodes/<int:barcode_id>/update-tag/', update_barcode_tag, name='update-barcode-tag'),
     path('barcodes/bulk-update-tags/', bulk_update_barcode_tags, name='bulk-update-barcode-tags'),
     

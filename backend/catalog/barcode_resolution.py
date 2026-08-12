@@ -1,13 +1,25 @@
 """Strict Barcode lookups: barcode and short_code are globally unique — use get(), never queryset.first()."""
 
+import re
+
 from backend.catalog.models import Barcode
+
+
+def clean_scanned_barcode(barcode_str: str) -> str:
+    """Trim, drop scanner-inserted whitespace, uppercase.
+
+    Physical scanners often insert a space next to a slash, e.g. "ON/ -0185" vs "ON/-0185".
+    """
+    if not barcode_str:
+        return ''
+    return re.sub(r'\s+', '', str(barcode_str).strip()).upper()
 
 
 def get_catalog_barcode_by_printed_value(raw: str):
     """Return the single Barcode row for this printed value, or None."""
     if raw is None:
         return None
-    raw = str(raw).strip().upper()
+    raw = clean_scanned_barcode(raw)
     if not raw:
         return None
     try:

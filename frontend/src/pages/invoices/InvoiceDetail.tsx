@@ -44,7 +44,7 @@ import {
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
 import CartLineScannedTime from '../../components/pos/CartLineScannedTime';
-import { addScannedBarcodeToInvoice } from '../../lib/scanningQueue';
+import { addScannedBarcodeToInvoice, looksLikeBarcode } from '../../lib/scanningQueue';
 import InvoiceTagEditor, { InvoiceTagChip } from '../../components/invoices/InvoiceTagEditor';
 import type { InvoiceTag } from '../../lib/invoiceTags';
 import {
@@ -842,13 +842,6 @@ export default function InvoiceDetail() {
     }, 300);
     return () => clearTimeout(handler);
   }, [barcodeInput]);
-
-  // Helper function to detect if input looks like a barcode
-  const looksLikeBarcode = (input: string): boolean => {
-    if (!input || input.length < 3) return false;
-    const barcodePattern = /^[A-Za-z0-9\-_]+$/;
-    return barcodePattern.test(input) && (input.length >= 4 || input.includes('-') || input.includes('_'));
-  };
 
   const trimmedBarcodeInput = useMemo(() => debouncedBarcodeInput.trim(), [debouncedBarcodeInput]);
 

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getAuthScopeForPath, isCreditAppPath, type AuthScope } from './authPaths';
+import { sanitizeScannedBarcode } from './scanningQueue';
 
 // Get API URL from runtime config (for production) or build-time env (for development)
 // Priority: window.__ENV__ > import.meta.env.VITE_API_URL > default
@@ -159,18 +160,22 @@ export const productsApi = {
   invoices: (id: number, params?: { limit?: number; offset?: number }) =>
     api.get(`/products/${id}/invoices/`, { params }),
   byBarcode: (barcode: string, barcodeOnly: boolean = false, noCache: boolean = false) => {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = {
+      // Query param so slashes (e.g. ON/-0185) are not treated as extra URL path segments
+      barcode: sanitizeScannedBarcode(barcode),
+    };
     if (barcodeOnly) params.barcode_only = 'true';
     if (noCache) params.no_cache = 'true';
-    return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
+    return api.get('/barcodes/by-barcode/', { params });
   },
   byBarcodePos: (barcode: string, noCache: boolean = true) => {
     const params: Record<string, string> = {
+      barcode: sanitizeScannedBarcode(barcode),
       barcode_only: 'true',
       pos_scan: 'true',
     };
     if (noCache) params.no_cache = 'true';
-    return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
+    return api.get('/barcodes/by-barcode/', { params });
   },
   generateLabel: (zplCode: string) => api.post('/products/generate-label/', { zpl_code: zplCode }),
   generateLabels: (

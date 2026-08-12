@@ -4,29 +4,49 @@
  */
 
 /**
- * Split a single line of input by newlines or pipes into trimmed barcode strings.
+ * Strip scanner artifacts from a scanned/typed barcode:
+ * whitespace (including NBSP / zero-width), then uppercase.
+ * Example: "ON/ -0185" -> "ON/-0185"
+ */
+export function sanitizeScannedBarcode(value: string): string {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+}
+
+/**
+ * Split a single line of input by newlines or pipes into sanitized barcode strings.
  * Used when user pastes multiple barcodes or scanner buffers several scans.
  */
 export function parseBarcodesFromInput(input: string): string[] {
   if (!input || typeof input !== 'string') return [];
   return input
     .split(/[\n|]+/)
-    .map((s) => s.trim())
+    .map((s) => sanitizeScannedBarcode(s))
     .filter(Boolean);
 }
 
 /**
  * Heuristic: does the string look like a barcode (vs free-text search)?
  * Used to decide whether to send to the queue vs search.
+ * Collapses scanner spaces next to / - _ so "ON/ -0185" still counts as a barcode,
+ * but "FRAME A33" (space between words) stays a product-name search.
  */
 export function looksLikeBarcode(input: string): boolean {
-  if (!input || input.length < 3) return false;
-  const barcodePattern = /^[A-Za-z0-9\-_]+$/;
-  return barcodePattern.test(input) && (input.length >= 4 || input.includes('-') || input.includes('_'));
+  if (!input || typeof input !== 'string') return false;
+  const collapsed = input
+    .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s*([/\-_])\s*/g, '$1')
+    .trim();
+  if (collapsed.length < 3) return false;
+  const barcodePattern = /^[A-Za-z0-9\-_\/]+$/;
+  return barcodePattern.test(collapsed) && (collapsed.length >= 4 || /[-_/]/.test(collapsed));
 }
 
 export function normalizeBarcodeKey(value: string): string {
-  return value.trim().toUpperCase();
+  return sanitizeScannedBarcode(value);
 }
 
 export type InvoiceLineBarcodeFields = {
@@ -110,10 +130,10 @@ export async function addScannedBarcodeToInvoice(params: {
   lookupBarcode: (barcode: string) => Promise<BarcodeLookupProduct | null | undefined>;
   addItem: (payload: Record<string, unknown>) => Promise<unknown>;
 }): Promise<AddScannedBarcodeToInvoiceResult> {
-  const trimmed = params.barcode?.trim();
+  const trimmed = sanitizeScannedBarcode(params.barcode);
   if (!trimmed) return { ok: false, message: '', silent: true };
 
-  const scanKey = normalizeBarcodeKey(trimmed);
+  const scanKey = trimmed;
   if (inFlightInvoiceBarcodeScans.has(scanKey)) {
     return { ok: false, message: '', silent: true };
   }

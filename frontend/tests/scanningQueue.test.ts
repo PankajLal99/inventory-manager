@@ -4,6 +4,7 @@ import {
   looksLikeBarcode,
   isBarcodeAlreadyOnInvoiceItems,
   normalizeBarcodeKey,
+  sanitizeScannedBarcode,
 } from '../src/lib/scanningQueue'
 
 describe('parseBarcodesFromInput', () => {
@@ -21,26 +22,31 @@ describe('parseBarcodesFromInput', () => {
 
   it('splits by newlines', () => {
     expect(parseBarcodesFromInput('A\nB\nC')).toEqual(['A', 'B', 'C'])
-    expect(parseBarcodesFromInput('code1\ncode2')).toEqual(['code1', 'code2'])
+    expect(parseBarcodesFromInput('code1\ncode2')).toEqual(['CODE1', 'CODE2'])
   })
 
   it('splits by pipe', () => {
     expect(parseBarcodesFromInput('A|B|C')).toEqual(['A', 'B', 'C'])
-    expect(parseBarcodesFromInput('x|y')).toEqual(['x', 'y'])
+    expect(parseBarcodesFromInput('x|y')).toEqual(['X', 'Y'])
   })
 
   it('splits by mixed newlines and pipes', () => {
-    expect(parseBarcodesFromInput('a\nb|c\nd')).toEqual(['a', 'b', 'c', 'd'])
+    expect(parseBarcodesFromInput('a\nb|c\nd')).toEqual(['A', 'B', 'C', 'D'])
   })
 
   it('trims each segment', () => {
-    expect(parseBarcodesFromInput('  a  \n  b  \n  c  ')).toEqual(['a', 'b', 'c'])
-    expect(parseBarcodesFromInput(' x | y ')).toEqual(['x', 'y'])
+    expect(parseBarcodesFromInput('  a  \n  b  \n  c  ')).toEqual(['A', 'B', 'C'])
+    expect(parseBarcodesFromInput(' x | y ')).toEqual(['X', 'Y'])
+  })
+
+  it('strips scanner-inserted spaces inside a barcode', () => {
+    expect(parseBarcodesFromInput('ON/ -0185')).toEqual(['ON/-0185'])
+    expect(parseBarcodesFromInput('  ON/ -0185  \nABC- 1')).toEqual(['ON/-0185', 'ABC-1'])
   })
 
   it('filters out empty segments after trim', () => {
-    expect(parseBarcodesFromInput('a\n\nb\n\nc')).toEqual(['a', 'b', 'c'])
-    expect(parseBarcodesFromInput('a||b')).toEqual(['a', 'b'])
+    expect(parseBarcodesFromInput('a\n\nb\n\nc')).toEqual(['A', 'B', 'C'])
+    expect(parseBarcodesFromInput('a||b')).toEqual(['A', 'B'])
   })
 
   it('handles null/undefined by returning empty array', () => {
@@ -69,6 +75,11 @@ describe('looksLikeBarcode', () => {
     expect(looksLikeBarcode('abcd')).toBe(true) // length >= 4
   })
 
+  it('returns true for barcodes that include a slash', () => {
+    expect(looksLikeBarcode('ON/-0185')).toBe(true)
+    expect(looksLikeBarcode('ON/ -0185')).toBe(true)
+  })
+
   it('returns true for 3-char strings that contain hyphen or underscore', () => {
     expect(looksLikeBarcode('a-b')).toBe(true)
     expect(looksLikeBarcode('x_y')).toBe(true)
@@ -80,9 +91,27 @@ describe('looksLikeBarcode', () => {
   })
 })
 
+describe('sanitizeScannedBarcode', () => {
+  it('strips scanner spaces and uppercases', () => {
+    expect(sanitizeScannedBarcode('ON/ -0185')).toBe('ON/-0185')
+    expect(sanitizeScannedBarcode('  on/-0185  ')).toBe('ON/-0185')
+    expect(sanitizeScannedBarcode('ABC-\t0001')).toBe('ABC-0001')
+  })
+
+  it('returns empty string for blank input', () => {
+    expect(sanitizeScannedBarcode('')).toBe('')
+    expect(sanitizeScannedBarcode('   ')).toBe('')
+  })
+})
+
 describe('normalizeBarcodeKey', () => {
   it('trims and uppercases barcode values', () => {
     expect(normalizeBarcodeKey('  sc-1  ')).toBe('SC-1')
+  })
+
+  it('treats scanner-inserted spaces as the same key', () => {
+    expect(normalizeBarcodeKey('ON/ -0185')).toBe('ON/-0185')
+    expect(normalizeBarcodeKey('ON/-0185')).toBe('ON/-0185')
   })
 })
 

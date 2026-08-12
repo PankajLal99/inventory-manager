@@ -5,9 +5,21 @@ from django.test import TestCase
 from backend.catalog.barcode_resolution import (
     get_catalog_barcode_by_printed_value,
     single_barcode_for_untracked_product,
+    clean_scanned_barcode,
 )
 from backend.catalog.models import Barcode
 from backend.core.test_utils import TestDataFactory
+
+
+class CleanScannedBarcodeTests(TestCase):
+    def test_strips_scanner_space_around_slash(self):
+        self.assertEqual(clean_scanned_barcode('ON/ -0185'), 'ON/-0185')
+        self.assertEqual(clean_scanned_barcode('  on/-0185  '), 'ON/-0185')
+
+    def test_blank_returns_empty(self):
+        self.assertEqual(clean_scanned_barcode(''), '')
+        self.assertEqual(clean_scanned_barcode('   '), '')
+        self.assertEqual(clean_scanned_barcode(None), '')
 
 
 class GetCatalogBarcodeByPrintedValueTests(TestCase):
@@ -33,6 +45,11 @@ class GetCatalogBarcodeByPrintedValueTests(TestCase):
 
     def test_unknown_value_returns_none(self):
         self.assertIsNone(get_catalog_barcode_by_printed_value('NO-SUCH-CODE-999'))
+
+    def test_strips_scanner_space_before_lookup(self):
+        p = TestDataFactory.create_product(track_inventory=True)
+        b = TestDataFactory.create_barcode(p, barcode='ON/-0185', tag='new')
+        self.assertEqual(get_catalog_barcode_by_printed_value('ON/ -0185').pk, b.pk)
 
 
 class SingleBarcodeForUntrackedProductTests(TestCase):

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
+import { parseBarcodesFromInput, looksLikeBarcode, sanitizeScannedBarcode } from '../../lib/scanningQueue';
 import { formatNumber, formatAmountINR, formatAppDate, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
 import { creditAmountInWords } from '../credit/CreditInvoiceDocument';
 import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
@@ -576,10 +577,11 @@ export default function POS() {
   // Helper to add item to queue
   const addToQueue = useCallback((barcodes: string[]) => {
     const newItems: QueueItem[] = barcodes
-      .filter(code => code.trim().length > 0)
+      .map(code => sanitizeScannedBarcode(code))
+      .filter(code => code.length > 0)
       .map(code => ({
         id: Math.random().toString(36).substring(7),
-        code: code.trim(),
+        code,
         status: 'pending',
         timestamp: Date.now()
       }));
@@ -992,19 +994,6 @@ export default function POS() {
       }
     }
   }, [trimmedBarcodeInput, cart?.data?.items, queryClient, barcodeInput]);
-
-  // Helper function to detect if input looks like a barcode (vs product name)
-  // Barcodes typically: alphanumeric, may have dashes/underscores, specific length patterns
-  // Supports both old format (e.g., FRAM-20240101-0001) and new category-based format (e.g., HOU-56789)
-  const looksLikeBarcode = (input: string): boolean => {
-    if (!input || input.length < 3) return false;
-    // If it contains only alphanumeric, dashes, underscores, and is reasonably long, likely a barcode
-    const barcodePattern = /^[A-Za-z0-9\-_]+$/;
-    // Barcodes are usually at least 4 characters and often have patterns like dashes
-    // New category-based format: PREFIX-NUMBER (e.g., HOU-56789, FRA-0001)
-    // Old format: BASE-DATE-SERIAL (e.g., FRAM-20240101-0001)
-    return barcodePattern.test(input) && (input.length >= 4 || input.includes('-') || input.includes('_'));
-  };
 
   const { data: _barcodeCheck } = useQuery({
     queryKey: ['barcode-check', trimmedBarcodeInput, cartBarcodesKey],
@@ -2925,9 +2914,8 @@ export default function POS() {
   };
 
   const handleBarcodeScan = async (barcode: string) => {
-    if (!barcode || !barcode.trim()) return;
-
-    const trimmedBarcode = barcode.trim();
+    const trimmedBarcode = sanitizeScannedBarcode(barcode);
+    if (!trimmedBarcode) return;
 
     // Check if currently processing this barcode to prevent race conditions
     if (processingBarcodesRef.current.has(trimmedBarcode)) {
@@ -4196,7 +4184,10 @@ export default function POS() {
                       // CRITICAL: Get value directly from DOM element, not from state
                       // Physical scanners type faster than React state updates, so we must read from DOM
                       const inputElement = e.currentTarget as HTMLInputElement;
-                      const barcodeToScan = (inputElement.value || '').trim();
+                      const rawInput = inputElement.value || '';
+                      const barcodeToScan = looksLikeBarcode(rawInput)
+                        ? sanitizeScannedBarcode(rawInput)
+                        : rawInput.trim();
 
                       // If barcode is empty, don't process
                       if (!barcodeToScan) {
@@ -4339,7 +4330,7 @@ export default function POS() {
                       }
                       // Queue Implementation for rapid scanning
                       // Split input by newlines or pipes (common descriptors) in case multiple scans were pasted or buffered
-                      const barcodes = barcodeToScan.split(/[\n|]+/).map(s => s.trim()).filter(Boolean);
+                      const barcodes = parseBarcodesFromInput(inputElement.value || '');
 
                       if (barcodes.length > 0) {
                         addToQueue(barcodes);

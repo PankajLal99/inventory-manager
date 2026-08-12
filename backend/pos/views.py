@@ -19,6 +19,7 @@ from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, R
 from backend.catalog.barcode_resolution import (
     get_catalog_barcode_by_printed_value,
     single_barcode_for_untracked_product,
+    clean_scanned_barcode,
 )
 from backend.catalog.models import Barcode, Product, ProductVariant
 from backend.catalog.barcode_cache import invalidate_barcode_cache
@@ -1862,7 +1863,7 @@ def cart_items(request, pk):
     barcode_value = request.data.get('barcode') or request.data.get('barcode_value')
     sku_value = request.data.get('sku')
     scanned_value = barcode_value or sku_value
-    scanned_value_str = str(scanned_value).strip().upper() if scanned_value else None
+    scanned_value_str = clean_scanned_barcode(scanned_value) if scanned_value else None
     
     # Check if this barcode is already sold (assigned to an invoice item)
     # Allow 'new' and 'returned' tags to be added to cart - they are available for sale
@@ -5350,7 +5351,7 @@ def invoice_items(request, pk):
             pass
 
     if not resolved_barcode_obj and raw_barcode_value:
-        barcode_clean = str(raw_barcode_value).strip().upper()
+        barcode_clean = clean_scanned_barcode(raw_barcode_value)
         try:
             resolved_barcode_obj = Barcode.objects.get(barcode=barcode_clean)
         except Barcode.DoesNotExist:
@@ -5364,7 +5365,7 @@ def invoice_items(request, pk):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-    barcode_clean = str(raw_barcode_value).strip().upper() if raw_barcode_value else None
+    barcode_clean = clean_scanned_barcode(raw_barcode_value) if raw_barcode_value else None
 
     serializer = InvoiceItemSerializer(data=item_data)
     if not serializer.is_valid():
@@ -6000,7 +6001,7 @@ def replacement_check(request):
         barcode_obj = None
         
         if barcode_value:
-            barcode_clean = str(barcode_value).strip().upper()
+            barcode_clean = clean_scanned_barcode(barcode_value)
             barcode_obj = None
             try:
                 barcode_obj = Barcode.objects.select_related('product').get(barcode=barcode_clean)
@@ -6215,7 +6216,7 @@ def replacement_create(request):
         return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Standardize and exact match: try barcode then short_code (never .first())
-    barcode_clean = str(barcode_value).strip().upper()
+    barcode_clean = clean_scanned_barcode(barcode_value)
     barcode_obj = None
     try:
         barcode_obj = Barcode.objects.get(barcode=barcode_clean)

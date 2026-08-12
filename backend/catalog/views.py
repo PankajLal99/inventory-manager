@@ -15,6 +15,7 @@ import re
 from urllib.parse import unquote
 from .models import Category, Brand, TaxRate, Product, ProductVariant, Barcode, ProductComponent, BarcodeLabel, DefectiveProductMoveOut, DefectiveProductItem
 from .filters import normalize_barcode_for_search, find_barcode_by_search_value
+from .barcode_resolution import clean_scanned_barcode
 from .serializers import (
     CategorySerializer, BrandSerializer, TaxRateSerializer, ProductSerializer,
     ProductListSerializer, ProductVariantSerializer, BarcodeSerializer, ProductComponentSerializer,
@@ -1799,8 +1800,10 @@ def barcode_by_barcode(request, barcode=None):
         if not barcode:
             return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Clean and standardize: trim, URL decode, uppercase for consistent lookup
-        barcode_clean = unquote(str(barcode)).strip().upper()
+        # Clean and standardize: URL decode, strip scanner whitespace, uppercase
+        barcode_clean = clean_scanned_barcode(unquote(str(barcode)))
+        if not barcode_clean:
+            return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if we should only search barcodes (skip SKU fallback)
         barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'

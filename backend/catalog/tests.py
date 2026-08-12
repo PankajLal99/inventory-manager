@@ -842,6 +842,49 @@ class BarcodeLookupPosScanTests(TransactionTestCase):
         self.assertEqual(response.data.get("sold_invoice"), invoice.invoice_number)
 
 
+class BarcodeLookupSlashAndSpaceTests(TransactionTestCase):
+    """Barcodes with slashes must not 404; scanner-inserted spaces are stripped."""
+
+    def setUp(self):
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.product = TestDataFactory.create_product(name="Slash Barcode Product", track_inventory=True)
+        self.barcode = TestDataFactory.create_barcode_with_purchase(
+            user=self.user,
+            product=self.product,
+            barcode="ON/-0185",
+            tag='new',
+        )
+
+    def test_query_param_lookup_with_slash(self):
+        response = self.client.get(
+            "/api/v1/barcodes/by-barcode/",
+            {"barcode": "ON/-0185", "barcode_only": "true", "pos_scan": "true", "no_cache": "true"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.product.id)
+        self.assertEqual(response.data.get("canonical_barcode"), "ON/-0185")
+
+    def test_query_param_lookup_strips_scanner_space(self):
+        response = self.client.get(
+            "/api/v1/barcodes/by-barcode/",
+            {"barcode": "ON/ -0185", "barcode_only": "true", "pos_scan": "true", "no_cache": "true"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.product.id)
+
+    def test_path_lookup_with_slash(self):
+        response = self.client.get(
+            "/api/v1/barcodes/by-barcode/ON/-0185/",
+            {"barcode_only": "true", "pos_scan": "true", "no_cache": "true"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.product.id)
+
+
 class BarcodeTagTransitionTests(TransactionTestCase):
     """Tag update rules for catalog barcode status changes."""
 
