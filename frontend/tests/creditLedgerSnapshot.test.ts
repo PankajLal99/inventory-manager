@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildCreditLedgerSnapshotPageHtmlList,
   chunkLedgerRowsByDays,
   chunkLedgerRowsForExport,
   ledgerSnapshotPageCount,
@@ -78,5 +79,58 @@ describe('chunkLedgerRowsForExport', () => {
     })
     expect(pages).toHaveLength(25)
     expect(pages.every((part) => part.length === 1)).toBe(true)
+  })
+})
+
+describe('buildCreditLedgerSnapshotPageHtmlList', () => {
+  it('prepends balance brought forward on continued pages', () => {
+    const statement = {
+      customer: { name: 'Test Customer' },
+      opening_balance: '0',
+      opening_side: 'Dr',
+      closing_balance: '300',
+      closing_side: 'Dr',
+      total_debit: '500',
+      total_credit: '200',
+      rows: [
+        {
+          id: 1,
+          created_at: '2026-08-01T10:00:00',
+          particulars: 'Dr Sales',
+          debit: '100',
+          credit: '0',
+          running_balance: '100',
+          balance_side: 'Dr',
+        },
+        {
+          id: 2,
+          created_at: '2026-08-02T10:00:00',
+          particulars: 'Dr Sales',
+          debit: '200',
+          credit: '0',
+          running_balance: '300',
+          balance_side: 'Dr',
+        },
+        {
+          id: 3,
+          created_at: '2026-08-03T10:00:00',
+          particulars: 'Cr UPI',
+          debit: '0',
+          credit: '50',
+          running_balance: '250',
+          balance_side: 'Dr',
+        },
+      ],
+    }
+    const pages = buildCreditLedgerSnapshotPageHtmlList(statement, {
+      useRows: true,
+      useDays: false,
+      rowsPerPage: 2,
+      daysPerPage: 15,
+    })
+    expect(pages).toHaveLength(2)
+    expect(pages[0]).not.toContain('Balance Carried Forward')
+    expect(pages[1]).toContain('Balance Carried Forward')
+    expect(pages[1]).toContain('300.00 Dr')
   })
 })

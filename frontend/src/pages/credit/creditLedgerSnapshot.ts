@@ -208,6 +208,23 @@ function sortStatementRows(statement: CreditLedgerStatementSnapshot) {
   return [...(statement.rows || [])].sort(compareLedgerStatementRows);
 }
 
+function makeBroughtForwardSnapRow(
+  prevChunk: NonNullable<CreditLedgerStatementSnapshot['rows']>,
+  includeTime: boolean
+): SnapRow | null {
+  if (!prevChunk.length) return null;
+  const snapPrev = toSnapRows(prevChunk, includeTime);
+  const lastLine = snapPrev[snapPrev.length - 1];
+  if (!lastLine?.balance) return null;
+  return {
+    date: '',
+    particulars: 'Balance Carried Forward',
+    debit: '',
+    credit: '',
+    balance: lastLine.balance,
+    isOpening: true,
+  };
+}
 function toSnapRows(
   rows: NonNullable<CreditLedgerStatementSnapshot['rows']>,
   includeTime = false
@@ -470,7 +487,13 @@ export function buildCreditLedgerSnapshotPageHtmlList(
   let lineStart = 1;
 
   return chunks.map((chunk, i) => {
-    const pageRows = toSnapRows(chunk, includeTime);
+    let pageRows = toSnapRows(chunk, includeTime);
+    if (i > 0) {
+      const broughtForward = makeBroughtForwardSnapRow(chunks[i - 1], includeTime);
+      if (broughtForward) {
+        pageRows = [broughtForward, ...pageRows];
+      }
+    }
     const html = buildCreditLedgerSnapshotHtml(statement, {
       pageRows,
       partIndex: i + 1,

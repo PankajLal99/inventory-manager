@@ -873,8 +873,26 @@ export default function CreditLedgerDetail() {
     };
 
     rowChunks.forEach((chunk, chunkIdx) => {
+      const prevChunk = chunkIdx > 0 ? rowChunks[chunkIdx - 1] : null;
+      const lastPrev = prevChunk?.[prevChunk.length - 1];
+      const broughtForwardRow =
+        lastPrev != null
+          ? {
+              sr: '',
+              date: '',
+              type: '',
+              vch: '',
+              particulars: 'Balance Carried Forward',
+              narration: '',
+              debit: '',
+              credit: '',
+              balance: lastPrev.balance,
+              isOpening: true,
+            }
+          : null;
+
       const tableRows = [
-        ...(chunkIdx === 0 ? openingRows : []),
+        ...(chunkIdx === 0 ? openingRows : broughtForwardRow ? [broughtForwardRow] : []),
         ...chunk,
         ...(chunkIdx === rowChunks.length - 1 ? totalRows : []),
       ];
