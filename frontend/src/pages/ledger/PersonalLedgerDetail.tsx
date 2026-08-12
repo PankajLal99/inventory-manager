@@ -314,13 +314,7 @@ export default function PersonalLedgerDetail() {
         <div className="flex items-center gap-4">
           <Button
             variant="outline"
-            onClick={() => {
-              if (window.history.length > 1) {
-                navigate(-1);
-                return;
-              }
-              navigate(personalLedgerListPath);
-            }}
+            onClick={() => navigate(personalLedgerListPath)}
             size="sm"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />

@@ -2,6 +2,7 @@ import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { auth } from '../../lib/auth';
+import { clearPersonalLedgerUnlockIfLeaving } from '../../lib/personalLedgerUnlock';
 import { productsApi, reportsApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
@@ -66,6 +67,10 @@ export default function Layout() {
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  useEffect(() => {
+    clearPersonalLedgerUnlockIfLeaving(location.pathname);
+  }, [location.pathname]);
 
   const { data: stockAlertsData } = useQuery({
     queryKey: ['stock-alerts', 'counts'],

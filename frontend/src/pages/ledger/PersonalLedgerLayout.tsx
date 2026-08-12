@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Lock } from 'lucide-react';
+import { isPersonalLedgerUnlocked, setPersonalLedgerUnlocked } from '../../lib/personalLedgerUnlock';
 
 const PIN_LENGTH = 6;
 const PERSONAL_LEDGER_PIN = '980980';
 
 export default function PersonalLedgerLayout() {
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(isPersonalLedgerUnlocked);
   const [pinDigits, setPinDigits] = useState<string[]>(() => Array(PIN_LENGTH).fill(''));
   const [pinError, setPinError] = useState('');
   const pinInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -34,6 +35,7 @@ export default function PersonalLedgerLayout() {
     if (next.every(Boolean)) {
       const pin = next.join('');
       if (pin === PERSONAL_LEDGER_PIN) {
+        setPersonalLedgerUnlocked(true);
         setUnlocked(true);
       } else {
         setPinError('Wrong PIN');
