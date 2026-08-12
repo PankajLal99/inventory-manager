@@ -875,7 +875,7 @@ export default function CreditLedgerDetail() {
     rowChunks.forEach((chunk, chunkIdx) => {
       const prevChunk = chunkIdx > 0 ? rowChunks[chunkIdx - 1] : null;
       const lastPrev = prevChunk?.[prevChunk.length - 1];
-      const broughtForwardRow =
+      const broughtForwardRow: (typeof statementRows)[number] | null =
         lastPrev != null
           ? {
               sr: '',
