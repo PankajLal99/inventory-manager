@@ -238,6 +238,13 @@ export default function CreditLedgerDetail() {
     useState<Record<LedgerColumnId, boolean>>(loadColumnVisibility);
   const [search, setSearch] = useState('');
   const { ledger: ledgerTheme } = useCreditDocThemes();
+  const [exportSplit, setExportSplit] = useState<LedgerExportSplit>(loadLedgerExportSplit);
+  const [rowsPerPageDraft, setRowsPerPageDraft] = useState(() =>
+    String(loadLedgerExportSplit().rowsPerPage)
+  );
+  const [daysPerPageDraft, setDaysPerPageDraft] = useState(() =>
+    String(loadLedgerExportSplit().daysPerPage)
+  );
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showDebitModal, setShowDebitModal] = useState(false);
@@ -260,7 +267,6 @@ export default function CreditLedgerDetail() {
   const [copyingPdf, setCopyingPdf] = useState(false);
   const [showLedgerImageBanner, setShowLedgerImageBanner] = useState(false);
   const [copyingLedgerImage, setCopyingLedgerImage] = useState(false);
-  const [exportSplit, setExportSplit] = useState<LedgerExportSplit>(loadLedgerExportSplit);
   const [pictureCopied, setPictureCopied] = useState<boolean[]>([]);
   const [preparingPictures, setPreparingPictures] = useState(false);
   const canManage = canManageCreditRecords();
@@ -329,8 +335,68 @@ export default function CreditLedgerDetail() {
   const oldestRow = rows.length ? rows[0] : undefined;
   const copyPageCount = ledgerSnapshotPageCount(rows, exportSplit);
 
-  const persistExportSplit = (next: LedgerExportSplit) => {
-    setExportSplit(saveLedgerExportSplit(next));
+  const persistExportSplit = (patch: Partial<LedgerExportSplit>) => {
+    const next = saveLedgerExportSplit({ ...exportSplit, ...patch });
+    setExportSplit(next);
+    setRowsPerPageDraft(String(next.rowsPerPage));
+    setDaysPerPageDraft(String(next.daysPerPage));
+    return next;
+  };
+
+  const commitRowsPerPageDraft = () => {
+    const parsed = parseInt(rowsPerPageDraft, 10);
+    const next = persistExportSplit({
+      rowsPerPage: Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage,
+    });
+    return next;
+  };
+
+  const commitDaysPerPageDraft = () => {
+    const parsed = parseInt(daysPerPageDraft, 10);
+    const next = persistExportSplit({
+      daysPerPage: Number.isFinite(parsed) ? parsed : exportSplit.daysPerPage,
+    });
+    return next;
+  };
+
+  const flushCopySettings = () => {
+    const withRows = saveLedgerExportSplit({
+      ...exportSplit,
+      rowsPerPage: (() => {
+        const parsed = parseInt(rowsPerPageDraft, 10);
+        return Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage;
+      })(),
+      daysPerPage: (() => {
+        const parsed = parseInt(daysPerPageDraft, 10);
+        return Number.isFinite(parsed) ? parsed : exportSplit.daysPerPage;
+      })(),
+    });
+    setExportSplit(withRows);
+    setRowsPerPageDraft(String(withRows.rowsPerPage));
+    setDaysPerPageDraft(String(withRows.daysPerPage));
+    return withRows;
+  };
+
+  const openCopySettings = () => {
+    const loaded = loadLedgerExportSplit();
+    setExportSplit(loaded);
+    setRowsPerPageDraft(String(loaded.rowsPerPage));
+    setDaysPerPageDraft(String(loaded.daysPerPage));
+    setShowColumnSettings(false);
+    setShowCopySettings(true);
+  };
+
+  const closeCopySettings = () => {
+    flushCopySettings();
+    setShowCopySettings(false);
+  };
+
+  const toggleCopySettings = () => {
+    if (showCopySettings) {
+      closeCopySettings();
+      return;
+    }
+    openCopySettings();
   };
 
   // Reset prepared images when statement / filters / split change
@@ -1026,7 +1092,7 @@ export default function CreditLedgerDetail() {
     return { doc, fileName };
   };
 
-  const exportPDF = (split: LedgerExportSplit = exportSplit) => {
+  const exportPDF = (split: LedgerExportSplit = flushCopySettings()) => {
     const built = buildCreditLedgerPdf(split);
     if (!built) return;
     built.doc.save(built.fileName);
@@ -1107,7 +1173,7 @@ export default function CreditLedgerDetail() {
     return -1;
   };
 
-  const copyLedgerPicture = async (split: LedgerExportSplit = exportSplit) => {
+  const copyLedgerPicture = async (split: LedgerExportSplit = flushCopySettings()) => {
     if (!statement) {
       toast('Ledger not ready yet', 'error');
       return;
@@ -1185,7 +1251,7 @@ export default function CreditLedgerDetail() {
           <button
             type="button"
             className="shrink-0 text-xs font-semibold text-amber-900 underline"
-            onClick={() => setShowCopySettings(true)}
+            onClick={() => openCopySettings()}
           >
             Change split
           </button>
@@ -1220,7 +1286,7 @@ export default function CreditLedgerDetail() {
         ? 'Copy again'
         : 'Copy Picture';
 
-  const copyPDF = async (split: LedgerExportSplit = exportSplit) => {
+  const copyPDF = async (split: LedgerExportSplit = flushCopySettings()) => {
     const built = buildCreditLedgerPdf(split);
     if (!built) return;
 
@@ -1393,6 +1459,7 @@ export default function CreditLedgerDetail() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
+                  if (showCopySettings) flushCopySettings();
                   setShowCopySettings(false);
                   setShowColumnSettings((v) => !v);
                 }}
@@ -1447,10 +1514,7 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  setShowColumnSettings(false);
-                  setShowCopySettings((v) => !v);
-                }}
+                onClick={() => toggleCopySettings()}
                 className="flex items-center gap-2"
                 title="Copy / PDF page split"
               >
@@ -1467,13 +1531,13 @@ export default function CreditLedgerDetail() {
                     <button
                       type="button"
                       className="text-stone-400 hover:text-stone-600"
-                      onClick={() => setShowCopySettings(false)}
+                      onClick={() => closeCopySettings()}
                     >
                       <X className="h-4 w-4" />
                     </button>
                   </div>
                   <p className="text-xs text-stone-500 mb-2">
-                    Saved on this device. Copy Picture uses these settings immediately.
+                    Saved on this device when you change a value or close this panel.
                   </p>
                   <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer">
                     <input
@@ -1482,7 +1546,6 @@ export default function CreditLedgerDetail() {
                       checked={exportSplit.useRows}
                       onChange={() =>
                         persistExportSplit({
-                          ...exportSplit,
                           useRows: !exportSplit.useRows,
                           useDays: exportSplit.useDays || exportSplit.useRows,
                         })
@@ -1496,13 +1559,16 @@ export default function CreditLedgerDetail() {
                         type="number"
                         min={1}
                         max={200}
-                        value={String(exportSplit.rowsPerPage)}
-                        onChange={(e) =>
-                          persistExportSplit({
-                            ...exportSplit,
-                            rowsPerPage: Number(e.target.value) || 1,
-                          })
-                        }
+                        value={rowsPerPageDraft}
+                        onChange={(e) => setRowsPerPageDraft(e.target.value)}
+                        onBlur={() => commitRowsPerPageDraft()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitRowsPerPageDraft();
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
                         className="h-8 py-1 text-sm"
                       />
                       <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1511,7 +1577,7 @@ export default function CreditLedgerDetail() {
                             key={n}
                             type="button"
                             onClick={() =>
-                              persistExportSplit({ ...exportSplit, useRows: true, rowsPerPage: n })
+                              persistExportSplit({ useRows: true, rowsPerPage: n })
                             }
                             className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
                               exportSplit.rowsPerPage === n
@@ -1532,7 +1598,6 @@ export default function CreditLedgerDetail() {
                       checked={exportSplit.useDays}
                       onChange={() =>
                         persistExportSplit({
-                          ...exportSplit,
                           useDays: !exportSplit.useDays,
                           useRows: exportSplit.useRows || exportSplit.useDays,
                         })
@@ -1546,13 +1611,16 @@ export default function CreditLedgerDetail() {
                         type="number"
                         min={1}
                         max={366}
-                        value={String(exportSplit.daysPerPage)}
-                        onChange={(e) =>
-                          persistExportSplit({
-                            ...exportSplit,
-                            daysPerPage: Number(e.target.value) || 1,
-                          })
-                        }
+                        value={daysPerPageDraft}
+                        onChange={(e) => setDaysPerPageDraft(e.target.value)}
+                        onBlur={() => commitDaysPerPageDraft()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitDaysPerPageDraft();
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
                         className="h-8 py-1 text-sm"
                       />
                       <div className="mt-1.5 flex flex-wrap gap-1">
@@ -1561,7 +1629,7 @@ export default function CreditLedgerDetail() {
                             key={n}
                             type="button"
                             onClick={() =>
-                              persistExportSplit({ ...exportSplit, useDays: true, daysPerPage: n })
+                              persistExportSplit({ useDays: true, daysPerPage: n })
                             }
                             className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
                               exportSplit.daysPerPage === n
