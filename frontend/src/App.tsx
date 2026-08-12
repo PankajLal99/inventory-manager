@@ -38,6 +38,7 @@ import Ledger from './pages/ledger/Ledger';
 import LedgerDetail from './pages/ledger/LedgerDetail';
 import PersonalLedger from './pages/ledger/PersonalLedger';
 import PersonalLedgerDetail from './pages/ledger/PersonalLedgerDetail';
+import PersonalLedgerLayout from './pages/ledger/PersonalLedgerLayout';
 import InternalLedger from './pages/ledger/InternalLedger';
 import InternalLedgerDetail from './pages/ledger/InternalLedgerDetail';
 import Stores from './pages/stores/Stores';
@@ -277,8 +278,10 @@ function App() {
                 <Route path="repairs" element={<FullAppOnly><Repairs /></FullAppOnly>} />
                 <Route path="ledger" element={<FullAppOnly><Ledger /></FullAppOnly>} />
                 <Route path="ledger/:customerId" element={<FullAppOnly><LedgerDetail /></FullAppOnly>} />
-                <Route path="personal-ledger" element={<FullAppOnly><PersonalLedger /></FullAppOnly>} />
-                <Route path="personal-ledger/:customerId" element={<FullAppOnly><PersonalLedgerDetail /></FullAppOnly>} />
+                <Route path="personal-ledger" element={<FullAppOnly><PersonalLedgerLayout /></FullAppOnly>}>
+                  <Route index element={<PersonalLedger />} />
+                  <Route path=":customerId" element={<PersonalLedgerDetail />} />
+                </Route>
                 <Route path="internal-ledger" element={<FullAppOnly><InternalLedger /></FullAppOnly>} />
                 <Route path="internal-ledger/:customerId" element={<FullAppOnly><InternalLedgerDetail /></FullAppOnly>} />
                 <Route path="payment-reminders" element={<FullAppOnly><PaymentReminders /></FullAppOnly>} />
