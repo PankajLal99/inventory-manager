@@ -1072,7 +1072,7 @@ export default function CreditLedgerDetail() {
       markPictureCopied(index);
       toast(
         total > 1
-          ? `Image ${index + 1} of ${total} copied — paste in WhatsApp, then copy the next image`
+          ? `Image ${index + 1} of ${total} copied — paste in WhatsApp, then copy the next (older) image`
           : 'Ledger picture copied — paste in WhatsApp',
         'success'
       );
@@ -1081,7 +1081,13 @@ export default function CreditLedgerDetail() {
     }
   };
 
-  const nextUncopiedPictureIndex = () => pictureCopied.findIndex((done) => !done);
+  /** Next page to copy: latest (last page) first, then older pages in reverse. */
+  const nextUncopiedPictureIndex = () => {
+    for (let i = pictureCopied.length - 1; i >= 0; i--) {
+      if (!pictureCopied[i]) return i;
+    }
+    return -1;
+  };
 
   const copyLedgerPicture = async (split: LedgerExportSplit = exportSplit) => {
     if (!statement) {
@@ -1100,7 +1106,7 @@ export default function CreditLedgerDetail() {
       return;
     }
     if (pictureBlobsRef.current.length > 0 && readyNext < 0) {
-      await copyPreparedPicturePage(0);
+      await copyPreparedPicturePage(pictureBlobsRef.current.length - 1);
       return;
     }
 
@@ -1123,9 +1129,10 @@ export default function CreditLedgerDetail() {
       }
 
       pictureBlobsRef.current = blobs;
-      setPictureCopied(blobs.map((_, i) => i === 0));
+      const lastIdx = blobs.length - 1;
+      setPictureCopied(blobs.map((_, i) => i === lastIdx));
 
-      if (!(await copyPngBlobToClipboard(blobs[0]))) {
+      if (!(await copyPngBlobToClipboard(blobs[lastIdx]))) {
         setPictureCopied(blobs.map(() => false));
         toast('Could not copy picture. Check clipboard permissions.', 'error');
         return;
@@ -1133,7 +1140,7 @@ export default function CreditLedgerDetail() {
 
       toast(
         blobs.length > 1
-          ? `Image 1 of ${blobs.length} copied. Use Copy 2 … Copy ${blobs.length} for each next image.`
+          ? `Image ${blobs.length} of ${blobs.length} copied (latest first). Use Copy ${blobs.length - 1} … Copy 1 for earlier pages.`
           : 'Ledger picture copied — paste in WhatsApp',
         'success'
       );
@@ -1553,7 +1560,7 @@ export default function CreditLedgerDetail() {
                   <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600">
                     {copyPageCount === 1
                       ? '1 image / PDF section'
-                      : `${copyPageCount} images — Copy 1 … Copy ${copyPageCount}`}
+                      : `${copyPageCount} images — Copy ${copyPageCount} … Copy 1 (latest first)`}
                   </div>
                 </div>
               ) : null}
