@@ -102,9 +102,8 @@ function addLocalDaysMs(dayMs: number, days: number): number {
 }
 
 /**
- * Walk oldest → newest and start a new page when the row cap or day window
- * is hit — whichever comes first. A 10-day page is closed even if it has
- * fewer than 15 rows; a busy week still splits at the row cap.
+ * Walk oldest → newest and start a new page at the day window (days-only mode).
+ * When rows is also on, export uses the row cap instead — see chunkLedgerRowsForExport.
  */
 function splitLedgerRowsByLimits<T extends LedgerDatedRow>(
   rows: T[],
@@ -166,15 +165,16 @@ export function chunkLedgerRowsForExport<T extends LedgerDatedRow>(
   const sorted = [...rows].sort(compareLedgerStatementRows);
   if (!sorted.length) return [[]];
 
-  if (normalized.useDays) {
-    return splitLedgerRowsByLimits(sorted, {
-      useDays: true,
-      daysPerPage: normalized.daysPerPage,
-      useRows: normalized.useRows,
-      rowsPerPage: normalized.rowsPerPage,
-    });
+  // Rows take priority: if Split by rows is on, ignore the day window.
+  if (normalized.useRows) {
+    return chunkRows(sorted, normalized.rowsPerPage);
   }
-  return chunkRows(sorted, normalized.rowsPerPage);
+  return splitLedgerRowsByLimits(sorted, {
+    useDays: true,
+    daysPerPage: normalized.daysPerPage,
+    useRows: false,
+    rowsPerPage: Number.POSITIVE_INFINITY,
+  });
 }
 
 export function ledgerSnapshotPageCount(
@@ -182,6 +182,43 @@ export function ledgerSnapshotPageCount(
   split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
 ): number {
   return Math.max(1, chunkLedgerRowsForExport(rows, split).length);
+}
+
+/** Inclusive calendar-day span from oldest to newest entry (local). */
+export function ledgerEntrySpanDays(rows: LedgerDatedRow[]): number {
+  if (!rows.length) return 0;
+  const sorted = [...rows].sort(compareLedgerStatementRows);
+  const first = startOfLocalDayMs(sorted[0]);
+  const last = startOfLocalDayMs(sorted[sorted.length - 1]);
+  if (!first || !last) return 0;
+  return Math.max(1, Math.round((last - first) / 86_400_000) + 1);
+}
+
+/** Human reason for copy/PDF page count. */
+export function ledgerExportSplitExplain(
+  rows: LedgerDatedRow[],
+  split: LedgerExportSplit = DEFAULT_LEDGER_EXPORT_SPLIT
+): string {
+  const n = normalizeLedgerExportSplit(split);
+  const pageCount = ledgerSnapshotPageCount(rows, n);
+  const entryCount = rows.length;
+  const spanDays = ledgerEntrySpanDays(rows);
+  const entryLabel = `${entryCount} ${entryCount === 1 ? 'entry' : 'entries'}`;
+  const spanLabel = spanDays ? ` spanning ${spanDays} day${spanDays === 1 ? '' : 's'}` : '';
+  const rowsOverDays =
+    n.useRows && n.useDays
+      ? ` Rows (${n.rowsPerPage}) take priority over days (${n.daysPerPage}).`
+      : '';
+
+  if (pageCount <= 1) {
+    return `1 image / PDF section · ${entryLabel}${spanLabel}.${rowsOverDays}`;
+  }
+
+  const latestHint = `Copy ${pageCount} … Copy 1 (latest first)`;
+  if (n.useRows) {
+    return `${pageCount} images — ${latestHint}. Split by rows (${n.rowsPerPage}): ${entryLabel}.${rowsOverDays}`;
+  }
+  return `${pageCount} images — ${latestHint}. Split by days (${n.daysPerPage}): ${entryLabel}${spanLabel}.`;
 }
 
 export type CreditLedgerStatementSnapshot = {

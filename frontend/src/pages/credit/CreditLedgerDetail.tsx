@@ -68,7 +68,7 @@ import {
 } from './creditDocumentClipboard';
 import {
   chunkLedgerRowsForExport,
-  ledgerSnapshotPageCount,
+  ledgerExportSplitExplain,
 } from './creditLedgerSnapshot';
 import {
   LEDGER_EXPORT_DAY_PRESETS,
@@ -333,7 +333,7 @@ export default function CreditLedgerDetail() {
   }, [statement?.rows, search]);
 
   const oldestRow = rows.length ? rows[0] : undefined;
-  const copyPageCount = ledgerSnapshotPageCount(rows, exportSplit);
+  const copySplitExplain = ledgerExportSplitExplain(rows, exportSplit);
 
   const persistExportSplit = (patch: Partial<LedgerExportSplit>) => {
     const next = saveLedgerExportSplit({ ...exportSplit, ...patch });
@@ -1537,8 +1537,8 @@ export default function CreditLedgerDetail() {
                     </button>
                   </div>
                   <p className="text-xs text-stone-500 mb-2">
-                    Saved on this device. When both are on, a new image starts at the row
-                    limit or the day limit — whichever comes first.
+                    Saved on this device. When both are on, Split by rows takes priority.
+                    Split by days is used only when rows is off.
                   </p>
                   <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer">
                     <input
@@ -1644,10 +1644,8 @@ export default function CreditLedgerDetail() {
                       </div>
                     </div>
                   ) : null}
-                  <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600">
-                    {copyPageCount === 1
-                      ? '1 image / PDF section'
-                      : `${copyPageCount} images — Copy ${copyPageCount} … Copy 1 (latest first)`}
+                  <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600 leading-snug">
+                    {copySplitExplain}
                   </div>
                 </div>
               ) : null}

@@ -54,22 +54,33 @@ class BarcodeSerializer(serializers.ModelSerializer):
             'sold_price', 'sold_quantity', 'defective_move_out_info', 'created_at'
         ]
 
+    def _serialize_defective_move_out(self, move_out):
+        if not move_out:
+            return None
+        return {
+            'moved_out': True,
+            'move_out_id': move_out.id,
+            'move_out_number': move_out.move_out_number,
+            'reason': move_out.get_reason_display(),
+            'notes': move_out.notes or '',
+            'sent_date': str(move_out.sent_date) if move_out.sent_date else None,
+        }
+
     def get_defective_move_out_info(self, obj):
-        """Return move-out info if this defective barcode has already been moved out."""
+        """Return move-out info if this defective barcode is on a move-out item."""
         if obj.tag != 'defective':
             return None
         # Use prefetched data when available (from optimized list view)
-        if hasattr(obj, '_prefetched_objects_cache') and 'defective_move_outs' in obj._prefetched_objects_cache:
-            items = obj._prefetched_objects_cache['defective_move_outs']
+        cache = getattr(obj, '_prefetched_objects_cache', None)
+        if cache is not None and 'defective_move_outs' in cache:
+            items = cache['defective_move_outs']
             if items:
-                move_out = items[0].move_out
-                return {
-                    'moved_out': True,
-                    'move_out_number': move_out.move_out_number,
-                    'reason': move_out.get_reason_display(),
-                    'notes': move_out.notes or '',
-                }
-        return None
+                return self._serialize_defective_move_out(items[0].move_out)
+            return None
+        move_out_item = obj.defective_move_outs.select_related('move_out').first()
+        if not move_out_item:
+            return None
+        return self._serialize_defective_move_out(move_out_item.move_out)
     
     def _get_active_invoice_item(self, obj):
         """Helper to get the active (non-void) invoice item for this barcode"""

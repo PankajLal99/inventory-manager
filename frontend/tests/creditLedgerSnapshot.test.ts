@@ -3,6 +3,7 @@ import {
   buildCreditLedgerSnapshotPageHtmlList,
   chunkLedgerRowsByDays,
   chunkLedgerRowsForExport,
+  ledgerExportSplitExplain,
   ledgerSnapshotPageCount,
 } from '../src/pages/credit/creditLedgerSnapshot'
 
@@ -65,18 +66,29 @@ describe('chunkLedgerRowsForExport', () => {
     expect(pages.map((part) => part.map((r) => r.id))).toEqual([[3], [2, 1]])
   })
 
-  it('starts a new page after 10 days even when there are fewer than 15 rows', () => {
+  it('keeps 3 far-apart rows on 1 image when rows take priority over days', () => {
+    const rows = [row(1, '2026-07-24'), row(2, '2026-08-08'), row(3, '2026-08-11')]
+    const split = { useRows: true, useDays: true, rowsPerPage: 15, daysPerPage: 10 }
+    expect(ledgerSnapshotPageCount(rows, split)).toBe(1)
+    const explain = ledgerExportSplitExplain(rows, split)
+    expect(explain).toContain('1 image')
+    expect(explain).toContain('Rows (15) take priority over days (10)')
+  })
+
+  it('still splits by days when rows is off', () => {
     const rows = [
       row(1, '2026-08-01'),
       row(2, '2026-08-05'),
       row(3, '2026-08-12'),
       row(4, '2026-08-20'),
     ]
-    const split = { useRows: true, useDays: true, rowsPerPage: 15, daysPerPage: 10 }
-    const pages = chunkLedgerRowsForExport(rows, split)
+    const pages = chunkLedgerRowsForExport(rows, {
+      useRows: false,
+      useDays: true,
+      rowsPerPage: 15,
+      daysPerPage: 10,
+    })
     expect(pages.map((part) => part.map((r) => r.id))).toEqual([[1, 2], [3, 4]])
-    expect(pages.every((part) => part.length < 15)).toBe(true)
-    expect(ledgerSnapshotPageCount(rows, split)).toBe(2)
   })
 
   it('still splits a busy 10-day window at 15 rows', () => {

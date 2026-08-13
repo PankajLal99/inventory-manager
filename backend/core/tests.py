@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 
-from backend.catalog.models import Product, Barcode, Category
+from backend.catalog.models import Product, Barcode, Category, DefectiveProductMoveOut, DefectiveProductItem
 from backend.locations.models import Store
 from backend.pos.models import Invoice, InvoiceItem
 from backend.parties.models import Supplier
@@ -190,6 +190,44 @@ class GlobalSearchBarcodeTests(APITestCase):
         barcodes = response.data.get('barcodes', [])
         self.assertEqual(len(barcodes), 1, 'Backend normalizes query to upper; lowercase search should find EXACT-BARCODE-001')
         self.assertEqual(barcodes[0]['barcode'], 'EXACT-BARCODE-001')
+
+    def test_defective_barcode_without_move_out_has_no_move_out_info(self):
+        """Defective barcodes that are not on a move-out stay tagged Defective."""
+        url = reverse('global-search')
+        response = self.client.get(url, {'q': 'EXACT-BARCODE-002', 'type': 'barcode'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        barcodes = response.data.get('barcodes', [])
+        self.assertEqual(len(barcodes), 1)
+        self.assertEqual(barcodes[0]['tag'], 'defective')
+        self.assertIn('Defective', barcodes[0]['tag_display'])
+        self.assertFalse(barcodes[0].get('defective_move_out_info'))
+
+    def test_defective_barcode_in_move_out_includes_written_to_supplier_info(self):
+        """Defective barcodes on a move-out item include move-out info for search display."""
+        move_out = DefectiveProductMoveOut.objects.create(
+            move_out_number='DEF-SEARCH-001',
+            store=self.store,
+            reason='defective',
+            total_items=1,
+        )
+        DefectiveProductItem.objects.create(
+            move_out=move_out,
+            product=self.product,
+            barcode=self.barcode_defective,
+            purchase_price=Decimal('0.00'),
+        )
+
+        url = reverse('global-search')
+        response = self.client.get(url, {'q': 'EXACT-BARCODE-002', 'type': 'barcode'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        barcodes = response.data.get('barcodes', [])
+        self.assertEqual(len(barcodes), 1)
+        self.assertEqual(barcodes[0]['tag'], 'defective')
+        info = barcodes[0].get('defective_move_out_info') or {}
+        self.assertTrue(info.get('moved_out'))
+        self.assertEqual(info.get('move_out_id'), move_out.id)
+        self.assertEqual(info.get('move_out_number'), 'DEF-SEARCH-001')
+        self.assertEqual(info.get('reason'), 'Defective')
 
 
 class GlobalSearchProductPriceFallbackTests(APITestCase):

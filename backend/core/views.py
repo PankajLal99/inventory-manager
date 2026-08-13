@@ -478,7 +478,11 @@ def global_search(request):
             Barcode.objects
             .filter(barcode_q)
             .select_related('product', 'purchase__supplier', 'purchase_item__purchase__supplier')
-            .prefetch_related('invoice_items__invoice', 'invoice_items__invoice__customer')
+            .prefetch_related(
+                'invoice_items__invoice',
+                'invoice_items__invoice__customer',
+                'defective_move_outs__move_out',
+            )
         )[:20]
         add_to_results('barcodes', barcodes, BarcodeSerializer)
     
