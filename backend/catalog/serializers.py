@@ -475,6 +475,13 @@ class ProductListSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         return request.query_params.get('tag', None) if request else None
 
+    def _is_lite(self):
+        """Products page list: skip unused breakdown/price fields."""
+        request = self.context.get('request')
+        if not request:
+            return False
+        return str(request.query_params.get('lite', '')).lower() in ('true', '1', 'yes')
+
     def _needs_barcode_details(self):
         """Whether this tag filter requires individual barcode objects in the list.
         'sold' only needs an aggregate count; individual barcodes are fetched
@@ -611,6 +618,9 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def _get_new_returned_count(self, obj):
         """Count of barcodes with tag 'new' or 'returned' (available to sell)."""
+        tag = self._get_tag_filter()
+        if hasattr(obj, 'annotated_barcode_count') and tag in (None, 'new'):
+            return float(obj.annotated_barcode_count)
         prefetched_barcodes = self._get_prefetched_barcodes(obj)
         if prefetched_barcodes is not None:
             return float(sum(1 for barcode in prefetched_barcodes if barcode.tag in ['new', 'returned']))
@@ -634,16 +644,25 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_available_quantity(self, obj):
         """Available in shop view: (new+returned barcodes) minus warehouse qty from finalized purchases (floored at 0)."""
         nr = self._get_new_returned_count(obj)
+        if self._is_lite():
+            warehouse_map = self.context.get('warehouse_qty_by_product') or {}
+            wh = float(warehouse_map.get(obj.id, 0) or 0)
+            return float(max(0, nr - wh))
         wh = self._get_warehouse_from_purchase(obj)
         return float(max(0, nr - wh))
 
     def get_shop_stock(self, obj):
         """Shop available = sum of shop_barcode_count from supplier breakdown (accounts for sales)."""
+        if self._is_lite():
+            return 0.0
         breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         return float(sum(b['shop_barcode_count'] for b in breakdown))
 
     def get_warehouse_stock(self, obj):
         """Warehouse available = sum of warehouse_available from supplier breakdown (accounts for sales)."""
+        if self._is_lite():
+            warehouse_map = self.context.get('warehouse_qty_by_product') or {}
+            return float(warehouse_map.get(obj.id, 0) or 0)
         breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         return float(sum(b.get('warehouse_available', b['warehouse_stock']) for b in breakdown))
 
@@ -672,6 +691,8 @@ class ProductListSerializer(serializers.ModelSerializer):
         tag = self._get_tag_filter()
         if tag == 'sold' and hasattr(obj, 'annotated_barcode_count'):
             return int(obj.annotated_barcode_count)
+        if self._is_lite() and tag != 'sold':
+            return 0
 
         from backend.pos.models import InvoiceItem
         
@@ -699,7 +720,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_purchase_price(self, obj):
         """Get purchase price from product's primary barcode or first barcode"""
-        if self._get_tag_filter() == 'sold':
+        if self._is_lite() or self._get_tag_filter() == 'sold':
             return None
         from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
 
@@ -723,7 +744,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_selling_price(self, obj):
         """Get selling price from product's primary barcode or first barcode.
         Returns None if selling_price is 0 or null, indicating fallback to purchase price."""
-        if self._get_tag_filter() == 'sold':
+        if self._is_lite() or self._get_tag_filter() == 'sold':
             return None
         from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
 
@@ -752,7 +773,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_stock_bifurcation(self, obj):
         """Stock breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT counted."""
-        if self._get_tag_filter() not in (None, 'new'):
+        if self._is_lite() or self._get_tag_filter() not in (None, 'new'):
             return ""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
@@ -775,7 +796,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_price_bifurcation(self, obj):
         """Price breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT included."""
-        if self._get_tag_filter() not in (None, 'new'):
+        if self._is_lite() or self._get_tag_filter() not in (None, 'new'):
             return ""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
@@ -810,7 +831,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ", ".join(parts)
 
     def get_supplier_breakdown(self, obj):
-        if self._get_tag_filter() not in (None, 'new'):
+        if self._is_lite() or self._get_tag_filter() not in (None, 'new'):
             return []
         request = self.context.get('request')
         include_zero = False
@@ -838,18 +859,24 @@ class DefectiveProductItemSerializer(serializers.ModelSerializer):
 
 
 class DefectiveProductMoveOutSerializer(serializers.ModelSerializer):
-    items = DefectiveProductItemSerializer(many=True, read_only=True)
+    items = serializers.SerializerMethodField()
     store_name = serializers.CharField(source='store.name', read_only=True)
     invoice_number = serializers.CharField(source='invoice.invoice_number', read_only=True)
     customer_name = serializers.CharField(source='invoice.customer.name', read_only=True, default=None)
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     reason_display = serializers.CharField(source='get_reason_display', read_only=True)
+
+    def get_items(self, obj):
+        if not self.context.get('include_items'):
+            return []
+        items = obj.items.all()
+        return DefectiveProductItemSerializer(items, many=True).data
     
     class Meta:
         model = DefectiveProductMoveOut
         fields = [
             'id', 'move_out_number', 'store', 'store_name', 'invoice', 'invoice_number',
-            'customer_name', 'reason', 'reason_display', 'notes', 'total_loss', 'total_adjustment',
+            'customer_name', 'reason', 'reason_display', 'notes', 'sent_date', 'total_loss', 'total_adjustment',
             'total_items', 'created_by', 'created_by_username', 'created_at', 'updated_at', 'items'
         ]
         read_only_fields = ['move_out_number', 'total_loss', 'total_items', 'created_by', 'created_at', 'updated_at']

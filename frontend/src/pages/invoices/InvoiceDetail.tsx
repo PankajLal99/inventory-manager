@@ -887,6 +887,9 @@ export default function InvoiceDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['products'] }); // Refresh products to show updated stock
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['existing-move-outs'] });
       setShowDeleteModal(false);
       navigate(invoicesListPath);
     },
@@ -1161,6 +1164,7 @@ export default function InvoiceDetail() {
 
   // Edit invoice (cart): show for non-void
   const isReplacementReturn = inv?.is_replacement_return === true;
+  const isDefectiveInvoice = inv?.invoice_type === 'defective';
   const canEditItems = inv.status !== 'void' && !isReplacementReturn;
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
@@ -1643,6 +1647,8 @@ export default function InvoiceDetail() {
         await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
         await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
         queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+        queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+        queryClient.invalidateQueries({ queryKey: ['products'] });
       },
     });
     if (!result.ok) {
@@ -2154,13 +2160,13 @@ export default function InvoiceDetail() {
             <span>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding)) + ' (Cr)' : '₹' + formatNumber(totalOutstanding)}</span>
           </div>
           ` : ''}
-          ${parseFloat(invoice.paid_amount || '0') > 0 ? `
+          ${parseFloat(invoice.paid_amount || '0') > 0 && invoice.invoice_type !== 'defective' ? `
             <div class="summary-row">
               <span>Paid:</span>
               <span>₹${formatNumber(invoice.paid_amount || '0')}</span>
             </div>
             ` : ''}
-          ${parseFloat(invoice.due_amount || '0') > 0 ? `
+          ${parseFloat(invoice.due_amount || '0') > 0 && invoice.invoice_type !== 'defective' ? `
             <div class="summary-row">
               <span>Due:</span>
               <span>₹${formatNumber(invoice.due_amount || '0')}</span>
@@ -2743,13 +2749,13 @@ export default function InvoiceDetail() {
                 )}
               </>
             )}
-            {parseFloat(inv.paid_amount || '0') > 0 && (
+            {parseFloat(inv.paid_amount || '0') > 0 && !isDefectiveInvoice && (
               <div className="flex justify-between items-center py-2 bg-green-50 rounded-lg px-3">
                 <span className="text-sm font-medium text-green-700">Paid</span>
                 <span className="text-sm font-semibold text-green-700">₹{formatNumber(inv.paid_amount || '0')}</span>
               </div>
             )}
-            {parseFloat(inv.due_amount || '0') > 0 && (
+            {parseFloat(inv.due_amount || '0') > 0 && !isDefectiveInvoice && (
               <div className="space-y-2">
                 <div className="flex justify-between items-center py-2 bg-red-50 rounded-lg px-3">
                   <span className="text-sm font-medium text-red-700">Due</span>
@@ -2771,6 +2777,45 @@ export default function InvoiceDetail() {
       </div>
 
       {/* Invoice Items */}
+      {isDefectiveInvoice && (
+        <Card className="no-print">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Add defective barcode</h3>
+          <p className="text-sm text-gray-600 mb-3">
+            Only barcodes already marked defective can be added to this move-out invoice.
+          </p>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <Input
+                type="text"
+                placeholder="Scan or type a defective barcode..."
+                value={barcodeInput}
+                autoComplete="off"
+                onChange={(e) => setBarcodeInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const value = (e.currentTarget.value || '').trim();
+                    if (value) {
+                      void handleBarcodeScan(value);
+                    }
+                  }
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              onClick={() => {
+                if (barcodeInput.trim()) {
+                  void handleBarcodeScan(barcodeInput);
+                }
+              }}
+              disabled={!barcodeInput.trim() || addItemMutation.isPending}
+            >
+              {addItemMutation.isPending ? 'Adding...' : 'Add'}
+            </Button>
+          </div>
+        </Card>
+      )}
       {visibleInvoiceItems.length > 0 && (
         <Card className="print-area">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">

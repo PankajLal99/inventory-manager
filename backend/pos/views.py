@@ -21,7 +21,7 @@ from backend.catalog.barcode_resolution import (
     single_barcode_for_untracked_product,
     clean_scanned_barcode,
 )
-from backend.catalog.models import Barcode, Product, ProductVariant
+from backend.catalog.models import Barcode, Product, ProductVariant, DefectiveProductMoveOut, DefectiveProductItem
 from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.inventory.models import Stock
 from backend.locations.models import Store
@@ -3856,6 +3856,7 @@ def invoice_detail(request, pk):
                 )
         
         # Wrap all mutations in a single atomic transaction to prevent partial state
+        deleted_defective_move_outs = False
         with transaction.atomic():
             # Re-fetch invoice with lock to prevent concurrent modifications
             invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
@@ -3964,7 +3965,29 @@ def invoice_detail(request, pk):
             invoice_number = invoice.invoice_number
             invoice_id = str(invoice.id)
             items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
-            
+
+            # Remove linked defective move-outs (and their items) so barcodes
+            # are no longer treated as already moved out.
+            related_move_outs = list(DefectiveProductMoveOut.objects.filter(invoice=invoice))
+            deleted_defective_move_outs = bool(related_move_outs)
+            for move_out in related_move_outs:
+                create_audit_log(
+                    request=request,
+                    action='delete',
+                    model_name='DefectiveProductMoveOut',
+                    object_id=str(move_out.id),
+                    object_name=f"Move Out {move_out.move_out_number}",
+                    object_reference=move_out.move_out_number,
+                    barcode=None,
+                    changes={
+                        'move_out_number': move_out.move_out_number,
+                        'invoice_number': invoice_number,
+                        'context': 'invoice_deleted',
+                        'total_items': move_out.total_items,
+                    },
+                )
+                move_out.delete()
+
             # Delete the invoice (this will cascade delete invoice items and payments)
             invoice.delete()
             
@@ -3985,6 +4008,9 @@ def invoice_detail(request, pk):
                 }
             )
         
+        if deleted_defective_move_outs:
+            from backend.core.cache_signals import invalidate_products_cache_manual
+            invalidate_products_cache_manual()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -5242,6 +5268,45 @@ def invoice_exchange(request, pk):
     return Response({'message': 'Exchange functionality to be implemented'})
 
 
+def _barcode_purchase_price(barcode_obj):
+    if not barcode_obj:
+        return Decimal('0.00')
+    purchase_item = getattr(barcode_obj, 'purchase_item', None)
+    if purchase_item is None:
+        barcode_obj = Barcode.objects.select_related('purchase_item').filter(pk=barcode_obj.pk).first() or barcode_obj
+        purchase_item = getattr(barcode_obj, 'purchase_item', None)
+    if purchase_item and purchase_item.unit_price:
+        return purchase_item.unit_price or Decimal('0.00')
+    return Decimal('0.00')
+
+
+def _link_defective_barcode_to_move_out(invoice, item):
+    """Keep move-out items in sync when a defective barcode is added to its invoice."""
+    barcode_obj = item.barcode
+    if not barcode_obj:
+        return
+    price = _barcode_purchase_price(barcode_obj)
+    item.unit_price = price
+    item.manual_unit_price = price
+    item.line_total = price * (item.quantity or Decimal('1.000'))
+    item.save(update_fields=['unit_price', 'manual_unit_price', 'line_total'])
+
+    move_out = DefectiveProductMoveOut.objects.filter(invoice=invoice).first()
+    if not move_out:
+        return
+    if DefectiveProductItem.objects.filter(barcode=barcode_obj).exists():
+        return
+    DefectiveProductItem.objects.create(
+        move_out=move_out,
+        product=item.product,
+        barcode=barcode_obj,
+        purchase_price=price,
+    )
+    move_out.total_loss = (move_out.total_loss or Decimal('0.00')) + price
+    move_out.total_items = (move_out.total_items or 0) + 1
+    move_out.save(update_fields=['total_loss', 'total_items'])
+
+
 def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
     """Validate barcode can be added to invoice. Returns error Response or None if OK."""
     dup_q = Q(barcode=barcode_obj)
@@ -5256,6 +5321,19 @@ def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
             {'error': 'This barcode is already on this invoice.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    if invoice.invoice_type == 'defective':
+        if barcode_obj.tag != 'defective':
+            return Response(
+                {'error': 'Only defective barcodes can be added to a move-out invoice.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if DefectiveProductItem.objects.filter(barcode=barcode_obj).exists():
+            return Response(
+                {'error': 'This defective barcode is already on a move-out.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return None
 
     if barcode_obj.tag == 'in-cart':
         if invoice.items.filter(barcode=barcode_obj).exists():
@@ -5292,7 +5370,9 @@ def invoice_items(request, pk):
     
     # Only restrict for void invoices - allow adding items to non-void
     # (pending/credit/other) invoices so they can be edited.
-    if invoice.status == 'void':
+    # Defective move-out invoices are stored as void; they may still receive
+    # additional defective barcodes.
+    if invoice.status == 'void' and invoice.invoice_type != 'defective':
         return Response(
             {'error': 'Items cannot be added to void invoices'},
             status=status.HTTP_400_BAD_REQUEST
@@ -5405,7 +5485,17 @@ def invoice_items(request, pk):
         item.save()
 
         # Find and assign barcode for this item (if quantity is 1)
-        if item.quantity == Decimal('1.000') and not item.barcode:
+        if invoice.invoice_type == 'defective':
+            if not item.barcode:
+                item.delete()
+                return Response(
+                    {'error': 'Scan a defective barcode to add it to this move-out invoice.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            _link_defective_barcode_to_move_out(invoice, item)
+            from backend.core.cache_signals import invalidate_products_cache_manual
+            transaction.on_commit(invalidate_products_cache_manual)
+        elif item.quantity == Decimal('1.000') and not item.barcode:
             # Get all barcodes already in this invoice (to avoid duplicates)
             invoice_barcodes = set()
             for inv_item in invoice.items.exclude(id=item.id):
@@ -5649,7 +5739,13 @@ def update_invoice_totals(invoice):
     subtotal = sum(item.line_total for item in items)
     invoice.subtotal = subtotal
     invoice.total = subtotal - invoice.discount_amount + invoice.tax_amount
-    invoice.due_amount = invoice.total - invoice.paid_amount
+    if invoice.invoice_type == 'defective':
+        # Move-out invoices are not sales. Keep paid in sync with total so a
+        # newly added barcode increases the total instead of creating a due.
+        invoice.paid_amount = invoice.total
+        invoice.due_amount = Decimal('0.00')
+    else:
+        invoice.due_amount = invoice.total - invoice.paid_amount
     
     invoice.save()
 

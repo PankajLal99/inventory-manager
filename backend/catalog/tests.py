@@ -262,6 +262,42 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertEqual(data['warehouse_stock'], 8)  # 4 + 4
 
 
+    def test_lite_list_skips_breakdown_and_keeps_available(self):
+        """Products page lite=true skips unused fields but still returns stock counts."""
+        purchase = TestDataFactory.create_purchase(user=self.user, status='finalized')
+        TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product,
+            quantity=Decimal('10'), shop_quantity=Decimal('7'), warehouse_quantity=Decimal('3')
+        )
+        for _ in range(5):
+            TestDataFactory.create_barcode_with_purchase(self.user, self.product, tag='new')
+        response = self.client.get('/api/v1/products/', {'lite': 'true', 'tag': 'new'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        product_data = next((p for p in response.data.get('results', []) if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+        self.assertEqual(product_data['available_quantity'], 2.0)
+        self.assertEqual(product_data.get('supplier_breakdown'), [])
+        self.assertEqual(product_data.get('stock_bifurcation'), '')
+        self.assertEqual(product_data.get('price_bifurcation'), '')
+        self.assertIsNone(product_data.get('purchase_price'))
+        self.assertEqual(product_data.get('barcodes'), [])
+
+    def test_lite_does_not_change_full_list_shape(self):
+        """Default list (no lite) still includes supplier breakdown for other screens."""
+        purchase = TestDataFactory.create_purchase(user=self.user, status='finalized')
+        TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product,
+            quantity=Decimal('10'), shop_quantity=Decimal('7'), warehouse_quantity=Decimal('3')
+        )
+        TestDataFactory.create_barcode_with_purchase(self.user, self.product, tag='new')
+        response = self.client.get('/api/v1/products/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        product_data = next((p for p in response.data.get('results', []) if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+        self.assertIsInstance(product_data.get('supplier_breakdown'), list)
+        self.assertGreater(len(product_data.get('supplier_breakdown') or []), 0)
+
+
 class ProductQuantityTests(TransactionTestCase):
     def setUp(self):
         # TransactionTestCase ensures a clean state, but let's be super sure
@@ -744,6 +780,30 @@ class DefectiveMoveOutListTests(TransactionTestCase):
         self.assertIn('customer_name', move_out)
         self.assertEqual(move_out['customer_name'], 'ListTestSupplier')
 
+    def test_list_omits_item_rows(self):
+        """List payload should not serialize every barcode; totals still come back."""
+        b1 = self._make_defective_barcode()
+        self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [b1.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+
+        response = self.client.get('/api/v1/defective-products/move-outs/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data if isinstance(response.data, list) else response.data.get('results', response.data)
+        move_out = results[0]
+        self.assertEqual(move_out.get('items'), [])
+        self.assertGreaterEqual(move_out.get('total_items'), 1)
+        self.assertIn('sent_date', move_out)
+        self.assertIn('notes', move_out)
+
+        detail = self.client.get(f'/api/v1/defective-products/move-outs/{move_out["id"]}/')
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(detail.data.get('items') or []), 1)
+
     def test_products_defective_list_excludes_already_moved_out_barcodes(self):
         """Defective products list should not include barcodes already linked to move-out items."""
         b1 = self._make_defective_barcode()
@@ -770,6 +830,212 @@ class DefectiveMoveOutListTests(TransactionTestCase):
         barcode_ids = {b['id'] for b in barcodes}
         self.assertNotIn(b1.id, barcode_ids)
         self.assertIn(b2.id, barcode_ids)
+
+
+class DefectiveMoveOutDeleteTests(TransactionTestCase):
+    """Deleting a move-out (or its invoice) must free barcodes for another move-out."""
+
+    def setUp(self):
+        from backend.catalog.models import DefectiveProductMoveOut
+        from backend.pos.models import Invoice
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        DefectiveProductMoveOut.objects.all().delete()
+        Invoice.objects.all().delete()
+
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier(name='DeleteTestSupplier')
+        self.product = TestDataFactory.create_product(name='DeleteTestProduct', track_inventory=True)
+
+    def _make_defective_barcode(self):
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, store=self.store)
+        purchase_item = TestDataFactory.create_purchase_item(purchase=purchase, product=self.product, quantity=Decimal('1'))
+        return TestDataFactory.create_barcode(product=self.product, tag='defective', purchase_item=purchase_item)
+
+    def _create_move_out(self, barcode):
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [barcode.id],
+            'reason': 'return_to_supplier',
+            'notes': '',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return response.data['move_outs'][0]
+
+    def test_delete_move_out_removes_record_and_invoice(self):
+        from backend.catalog.models import DefectiveProductMoveOut, DefectiveProductItem
+        from backend.pos.models import Invoice
+
+        barcode = self._make_defective_barcode()
+        move_out = self._create_move_out(barcode)
+        move_out_id = move_out['id']
+        invoice_id = move_out['invoice']
+
+        response = self.client.delete(f'/api/v1/defective-products/move-outs/{move_out_id}/')
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        self.assertFalse(DefectiveProductMoveOut.objects.filter(pk=move_out_id).exists())
+        self.assertFalse(DefectiveProductItem.objects.filter(move_out_id=move_out_id).exists())
+        self.assertFalse(Invoice.objects.filter(pk=invoice_id).exists())
+
+        barcode.refresh_from_db()
+        self.assertEqual(barcode.tag, 'defective')
+
+    def test_delete_move_out_unsticks_barcode_for_another_move_out(self):
+        barcode = self._make_defective_barcode()
+        move_out = self._create_move_out(barcode)
+
+        list_response = self.client.get('/api/v1/products/', {'tag': 'defective', 'supplier': self.supplier.id})
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        product_data = next((p for p in list_response.data.get('results', []) if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+        self.assertNotIn(barcode.id, {b['id'] for b in product_data.get('barcodes', [])})
+
+        delete_response = self.client.delete(f'/api/v1/defective-products/move-outs/{move_out["id"]}/')
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+
+        list_response = self.client.get('/api/v1/products/', {'tag': 'defective', 'supplier': self.supplier.id})
+        product_data = next((p for p in list_response.data.get('results', []) if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+        self.assertIn(barcode.id, {b['id'] for b in product_data.get('barcodes', [])})
+
+        recreate = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [barcode.id],
+            'reason': 'return_to_supplier',
+            'notes': '',
+        }, format='json')
+        self.assertEqual(recreate.status_code, status.HTTP_201_CREATED)
+
+    def test_delete_invoice_also_deletes_move_out(self):
+        from backend.catalog.models import DefectiveProductMoveOut, DefectiveProductItem
+        from backend.pos.models import Invoice
+
+        barcode = self._make_defective_barcode()
+        move_out = self._create_move_out(barcode)
+        move_out_id = move_out['id']
+        invoice_id = move_out['invoice']
+
+        response = self.client.delete(f'/api/v1/pos/invoices/{invoice_id}/')
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        self.assertFalse(Invoice.objects.filter(pk=invoice_id).exists())
+        self.assertFalse(DefectiveProductMoveOut.objects.filter(pk=move_out_id).exists())
+        self.assertFalse(DefectiveProductItem.objects.filter(move_out_id=move_out_id).exists())
+
+        barcode.refresh_from_db()
+        self.assertEqual(barcode.tag, 'defective')
+
+
+class DefectiveMoveOutDetailsAndInvoiceAddTests(TransactionTestCase):
+    """Notes/sent_date updates and adding only defective barcodes to a move-out invoice."""
+
+    def setUp(self):
+        from backend.catalog.models import DefectiveProductMoveOut
+        from backend.pos.models import Invoice
+        Barcode.all_objects.all().delete()
+        Product.all_objects.all().delete()
+        DefectiveProductMoveOut.objects.all().delete()
+        Invoice.objects.all().delete()
+
+        self.client = AuthenticatedAPIClient()
+        self.user = TestDataFactory.create_user(is_staff=True)
+        self.client.authenticate_user(self.user)
+        self.store = TestDataFactory.create_store()
+        self.supplier = TestDataFactory.create_supplier(name='DetailsSupplier')
+        self.product = TestDataFactory.create_product(name='DetailsProduct', track_inventory=True)
+
+    def _make_barcode(self, tag='defective'):
+        purchase = TestDataFactory.create_purchase(user=self.user, supplier=self.supplier, store=self.store)
+        purchase_item = TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product, quantity=Decimal('1'), unit_price=Decimal('50.00')
+        )
+        return TestDataFactory.create_barcode(product=self.product, tag=tag, purchase_item=purchase_item)
+
+    def _create_move_out(self, barcode):
+        response = self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [barcode.id],
+            'reason': 'return_to_supplier',
+            'notes': '',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return response.data['move_outs'][0]
+
+    def test_patch_notes_and_sent_date(self):
+        barcode = self._make_barcode()
+        move_out = self._create_move_out(barcode)
+        response = self.client.patch(f'/api/v1/defective-products/move-outs/{move_out["id"]}/', {
+            'notes': 'Box 2, 4 frames',
+            'sent_date': '2026-08-20',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['notes'], 'Box 2, 4 frames')
+        self.assertEqual(str(response.data['sent_date']), '2026-08-20')
+        self.assertIn('id', response.data)
+
+    def test_add_defective_barcode_to_move_out_invoice(self):
+        from backend.catalog.models import DefectiveProductItem
+        first = self._make_barcode()
+        extra = self._make_barcode()
+        move_out = self._create_move_out(first)
+        invoice_id = move_out['invoice']
+
+        response = self.client.post(f'/api/v1/pos/invoices/{invoice_id}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': extra.id,
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        extra.refresh_from_db()
+        self.assertEqual(extra.tag, 'defective')
+        self.assertTrue(DefectiveProductItem.objects.filter(barcode=extra, move_out_id=move_out['id']).exists())
+
+        from backend.pos.models import Invoice
+        invoice = Invoice.objects.get(pk=invoice_id)
+        self.assertEqual(invoice.total, Decimal('100.00'))
+        self.assertEqual(invoice.paid_amount, invoice.total)
+        self.assertEqual(invoice.due_amount, Decimal('0.00'))
+
+    def test_reject_non_defective_barcode_on_move_out_invoice(self):
+        first = self._make_barcode()
+        fresh = self._make_barcode(tag='new')
+        move_out = self._create_move_out(first)
+        invoice_id = move_out['invoice']
+
+        response = self.client.post(f'/api/v1/pos/invoices/{invoice_id}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': fresh.id,
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('defective', str(response.data).lower())
+
+    def test_reject_barcode_already_on_a_move_out(self):
+        first = self._make_barcode()
+        extra = self._make_barcode()
+        first_move_out = self._create_move_out(first)
+        self._create_move_out(extra)
+
+        response = self.client.post(f'/api/v1/pos/invoices/{first_move_out["invoice"]}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': extra.id,
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already', str(response.data).lower())
 
 
 class BarcodeLookupPosScanTests(TransactionTestCase):

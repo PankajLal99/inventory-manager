@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
@@ -17,18 +17,60 @@ import ProductForm from './ProductForm';
 import ProductExportModal from './ProductExportModal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 
+const PRODUCTS_FILTERS_STORAGE_KEY = 'products:filters:v1';
+const PRODUCTS_LIST_STALE_MS = 30_000;
+const PRODUCTS_REF_STALE_MS = 5 * 60_000;
+
+type PersistedProductFilters = {
+  category: string;
+  brand: string;
+  supplier: string;
+};
+
+function readPersistedProductFilters(): PersistedProductFilters | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(PRODUCTS_FILTERS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedProductFilters>;
+    return {
+      category: typeof parsed.category === 'string' ? parsed.category : '',
+      brand: typeof parsed.brand === 'string' ? parsed.brand : '',
+      supplier: typeof parsed.supplier === 'string' ? parsed.supplier : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedProductFilters(filters: PersistedProductFilters): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PRODUCTS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
+  } catch {
+    // quota / private mode
+  }
+}
+
 export default function Products() {
   const navigate = useNavigate();
   const user = auth.getUser();
   const userGroups = user?.groups || [];
   const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
   const [searchParams, setSearchParams] = useSearchParams();
+  const persistedFilters = useRef(readPersistedProductFilters()).current;
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<number | undefined>();
   const [search, setSearch] = useState(searchParams.get('search') || '');
-  const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
-  const [brandFilter, setBrandFilter] = useState(searchParams.get('brand') || '');
-  const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
+  const [categoryFilter, setCategoryFilter] = useState(
+    searchParams.get('category') || persistedFilters?.category || ''
+  );
+  const [brandFilter, setBrandFilter] = useState(
+    searchParams.get('brand') || persistedFilters?.brand || ''
+  );
+  const [supplierFilter, setSupplierFilter] = useState(
+    searchParams.get('supplier') || persistedFilters?.supplier || ''
+  );
   const [stockStatusFilter, setStockStatusFilter] = useState(searchParams.get('stock_status') || '');
   const [tagFilter, setTagFilter] = useState(searchParams.get('tag') || 'new'); // Default to 'new' (fresh)
   const [activeStockTab, setActiveStockTab] = useState<'stock' | 'low' | 'out'>('stock');
@@ -47,7 +89,7 @@ export default function Products() {
   const [barcodeScanError, setBarcodeScanError] = useState<string | null>(null);
   const [showMoveOutModal, setShowMoveOutModal] = useState(false);
   const [moveOutData, setMoveOutData] = useState({
-    reason: 'defective',
+    reason: 'return_to_supplier',
     notes: '',
   });
   const [moveOutMode, setMoveOutMode] = useState<'new' | 'existing'>('new');
@@ -81,6 +123,8 @@ export default function Products() {
       return response.data;
     },
     retry: false,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   const { data: brandsData } = useQuery({
@@ -90,6 +134,8 @@ export default function Products() {
       return response.data;
     },
     retry: false,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   // Fetch suppliers for filter
@@ -100,27 +146,37 @@ export default function Products() {
       return response.data;
     },
     retry: false,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
-  // Sync URL params with state on mount
+  // Sync URL params with state on mount.
+  // Category/brand/supplier only apply when present in the URL so a bare /products
+  // visit (or reload without those params) can restore persisted filters.
   useEffect(() => {
     const urlSearch = searchParams.get('search') || '';
-    const urlCategory = searchParams.get('category') || '';
-    const urlBrand = searchParams.get('brand') || '';
-    const urlSupplier = searchParams.get('supplier') || '';
     const urlStockStatus = searchParams.get('stock_status') || '';
     const urlTag = searchParams.get('tag') || 'new'; // Default to 'new' if not in URL
 
     if (urlSearch !== search) setSearch(urlSearch);
-    if (urlCategory !== categoryFilter) setCategoryFilter(urlCategory);
-    if (urlBrand !== brandFilter) setBrandFilter(urlBrand);
-    if (urlSupplier !== supplierFilter) setSupplierFilter(urlSupplier);
+    if (searchParams.has('category')) {
+      const urlCategory = searchParams.get('category') || '';
+      if (urlCategory !== categoryFilter) setCategoryFilter(urlCategory);
+    }
+    if (searchParams.has('brand')) {
+      const urlBrand = searchParams.get('brand') || '';
+      if (urlBrand !== brandFilter) setBrandFilter(urlBrand);
+    }
+    if (searchParams.has('supplier')) {
+      const urlSupplier = searchParams.get('supplier') || '';
+      if (urlSupplier !== supplierFilter) setSupplierFilter(urlSupplier);
+    }
     if (urlStockStatus !== stockStatusFilter) setStockStatusFilter(urlStockStatus);
     if (urlTag !== tagFilter) setTagFilter(urlTag);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update URL params when filters change
+  // Update URL params when filters change, and persist category/brand/supplier.
   useEffect(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
@@ -130,6 +186,11 @@ export default function Products() {
     if (stockStatusFilter) params.set('stock_status', stockStatusFilter);
     if (tagFilter) params.set('tag', tagFilter);
     setSearchParams(params, { replace: true });
+    writePersistedProductFilters({
+      category: categoryFilter,
+      brand: brandFilter,
+      supplier: supplierFilter,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
 
@@ -153,6 +214,8 @@ export default function Products() {
     params.tag = tagFilter || 'new';
     // Exclude Other/Custom products (name starts with "Other -") from Products page list
     params.exclude_other_custom = 'true';
+    // Skip unused breakdown/price fields so the Fresh tab can render without extra work
+    params.lite = 'true';
     // Pagination
     params.page = currentPage;
     params.limit = 50;
@@ -168,6 +231,8 @@ export default function Products() {
     },
     retry: false,
     placeholderData: keepPreviousData,
+    staleTime: PRODUCTS_LIST_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   // Reset to page 1 when filters change
@@ -197,7 +262,6 @@ export default function Products() {
     });
   }, [data]);
 
-  // Fetch stores and warehouses
   const { data: storesResponse } = useQuery({
     queryKey: ['stores'],
     queryFn: async () => {
@@ -205,15 +269,9 @@ export default function Products() {
       return response.data || response;
     },
     retry: false,
-  });
-
-  const { data: _warehousesResponse } = useQuery({
-    queryKey: ['warehouses'],
-    queryFn: async () => {
-      const response = await catalogApi.warehouses.list();
-      return response.data || response;
-    },
-    retry: false,
+    enabled: showMoveOutModal || showAdjustmentForm,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   // Handle different response formats
@@ -236,96 +294,8 @@ export default function Products() {
     return false;
   })();
 
-  // Get all product IDs that need label status checks (with caching)
-  const productIdsForLabelCheck = useMemo(() => {
-    if (!allProducts || allProducts.length === 0) return [];
-    return allProducts
-      .filter((product: any) => product.barcodes && product.barcodes.length > 0)
-      .map((product: any) => product.id)
-      .filter((id: number) => id > 0); // Filter out invalid IDs
-  }, [allProducts]);
-
-  // Use React Query to cache label status checks for all products
-  const labelStatusQueries = useQueries({
-    queries: productIdsForLabelCheck.map((productId: number) => ({
-      queryKey: ['label-status', productId],
-      queryFn: async () => {
-        try {
-          const response = await productsApi.labelsStatus(productId);
-          return { productId, data: response.data, error: null };
-        } catch (error: any) {
-          // Silently handle 404 errors - endpoint may not be available or product may not have barcodes
-          if (error.response?.status === 404) {
-            return { productId, data: { all_generated: false }, error: null };
-          }
-          return { productId, data: { all_generated: false }, error: error.message };
-        }
-      },
-      retry: false,
-      enabled: productId > 0,
-    })),
-  });
-
-  // Update labelStatuses state from cached queries
-  // Use ref to track processed states and prevent infinite loops
-  type LabelStatusQueryData = { productId: number; data: { all_generated?: boolean }; error: null } | { productId: number; data: { all_generated: boolean }; error: string };
-
-  const queriesDataRef = useRef<string>('');
-
-  // Create a stable dependency string that doesn't change size
-  const productIdsString = useMemo(() => {
-    return productIdsForLabelCheck.join(',');
-  }, [
-    productIdsForLabelCheck.length,
-    productIdsForLabelCheck.join(',')
-  ]);
-
-  const queriesDependencyString = useMemo(() => {
-    return labelStatusQueries.map(q => {
-      const qData = q.data as LabelStatusQueryData | undefined;
-      return qData ? `${qData.productId}:${qData.data?.all_generated ?? false}:${q.isFetching}` : '';
-    }).filter(Boolean).join('|');
-  }, [
-    productIdsString,
-    labelStatusQueries.length
-  ]);
-
-  useEffect(() => {
-    // Only process if data actually changed
-    if (queriesDataRef.current === queriesDependencyString) {
-      return;
-    }
-
-    queriesDataRef.current = queriesDependencyString;
-
-    labelStatusQueries.forEach((query) => {
-      const queryData = query.data as LabelStatusQueryData | undefined;
-      if (queryData && typeof queryData.productId === 'number') {
-        const productId = queryData.productId;
-        const all_generated = queryData.data?.all_generated || false;
-        const generating = query.isFetching || false;
-
-        // Update state only if it changed
-        setLabelStatuses(prev => {
-          const current = prev[productId];
-
-          // Only update if the value actually changed
-          if (current?.all_generated === all_generated && current?.generating === generating) {
-            return prev;
-          }
-
-          return {
-            ...prev,
-            [productId]: {
-              all_generated,
-              generating
-            }
-          };
-        });
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queriesDependencyString]);
+  const productHasStockForLabels = (product: any) =>
+    (Number(product?.barcodeCount) || 0) > 0 || (Number(product?.stock_quantity) || 0) > 0;
 
   // Enhance products with calculated stock fields
   const productsWithStock = useMemo(() => {
@@ -370,14 +340,6 @@ export default function Products() {
     if (Array.isArray(storesResponse)) return storesResponse;
     return [];
   })();
-
-  // const _warehouses = (() => {
-  //   if (!warehousesResponse) return [];
-  //   if (Array.isArray(warehousesResponse.results)) return warehousesResponse.results;
-  //   if (Array.isArray(warehousesResponse.data)) return warehousesResponse.data;
-  //   if (Array.isArray(warehousesResponse)) return warehousesResponse;
-  //   return [];
-  // })();
 
   const adjustmentMutation = useMutation({
     mutationFn: (data: any) => inventoryApi.adjustments.create(data),
@@ -1133,7 +1095,7 @@ export default function Products() {
       setSelectedDefectiveProducts(new Set());
       setSelectedDefectiveProductsData(new Map());
       setShowMoveOutModal(false);
-      setMoveOutData({ reason: 'defective', notes: '' });
+      setMoveOutData({ reason: 'return_to_supplier', notes: '' });
       setMoveOutMode('new');
       setSelectedExistingMoveOutId(null);
 
@@ -1181,7 +1143,7 @@ export default function Products() {
       setSelectedDefectiveProducts(new Set());
       setSelectedDefectiveProductsData(new Map());
       setShowMoveOutModal(false);
-      setMoveOutData({ reason: 'defective', notes: '' });
+      setMoveOutData({ reason: 'return_to_supplier', notes: '' });
       setMoveOutMode('new');
       setSelectedExistingMoveOutId(null);
 
@@ -1303,6 +1265,38 @@ export default function Products() {
       [product.id]: { all_generated: false, generating: true }
     }));
     generateLabelsMutation.mutate(product.id);
+  };
+
+  const handleLabelButtonClick = async (product: any) => {
+    const cached = labelStatuses[product.id];
+    if (cached?.all_generated) {
+      await handlePrintLabels(product);
+      return;
+    }
+    if (cached && cached.all_generated === false && !cached.generating) {
+      await handleGenerateLabels(product);
+      return;
+    }
+
+    setGeneratingLabelsFor(product.id);
+    try {
+      const response = await productsApi.labelsStatus(product.id);
+      const allGenerated = Boolean(response.data?.all_generated);
+      setLabelStatuses((prev) => ({
+        ...prev,
+        [product.id]: { all_generated: allGenerated, generating: false },
+      }));
+      setGeneratingLabelsFor(null);
+      if (allGenerated) {
+        await handlePrintLabels(product);
+      } else {
+        await handleGenerateLabels(product);
+      }
+    } catch (error: any) {
+      setGeneratingLabelsFor(null);
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to check label status';
+      alert(errorMsg);
+    }
   };
 
 
@@ -1523,9 +1517,6 @@ export default function Products() {
       purchaseValue,
     };
   }, [tagFilter, productsList, moveOutsData]);
-
-  // Label status is now automatically fetched and cached via useQueries above
-  // No need for manual checking in useEffect - React Query handles it
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-64">Loading...</div>;
@@ -2252,7 +2243,7 @@ export default function Products() {
                 let statusBadge;
                 if (currentTagFilter === 'new') {
                   const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-                  const hasStock = (product.barcodeCount || 0) > 0;
+                  const hasStock = (product.barcodeCount || 0) > 0 || (Number(product.stock_quantity) || 0) > 0;
                   if (!hasBarcodes && !hasStock) {
                     statusBadge = <Badge variant="warning">Not Purchased</Badge>;
                   } else if (product.isOutOfStock) {
@@ -2423,11 +2414,11 @@ export default function Products() {
                                 </button>
                                 {renderProductImageAction(product)}
                                 {(() => {
-                                  const hasBarcodes = product.barcodes && product.barcodes.length > 0;
+                                  const hasLabels = productHasStockForLabels(product) || (product.barcodes && product.barcodes.length > 0);
                                   const status = labelStatuses[product.id];
                                   const isGenerating = generatingLabelsFor === product.id || (status?.generating);
                                   const allGenerated = status?.all_generated;
-                                  if (!hasBarcodes) return null;
+                                  if (!hasLabels) return null;
                                   if (isGenerating) {
                                     return (
                                       <button
@@ -2442,7 +2433,7 @@ export default function Products() {
                                   if (allGenerated) {
                                     return (
                                       <button
-                                        onClick={() => handlePrintLabels(product)}
+                                        onClick={() => handleLabelButtonClick(product)}
                                         className="flex items-center justify-center w-8 h-8 text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
                                         title="Print Labels"
                                       >
@@ -2452,9 +2443,9 @@ export default function Products() {
                                   }
                                   return (
                                     <button
-                                      onClick={() => handleGenerateLabels(product)}
+                                      onClick={() => handleLabelButtonClick(product)}
                                       className="flex items-center justify-center w-8 h-8 text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                      title="Generate Labels"
+                                      title={status ? 'Generate Labels' : 'Print or generate labels'}
                                     >
                                       <Printer className="h-3.5 w-3.5" />
                                     </button>
@@ -2616,7 +2607,7 @@ export default function Products() {
           if (tagFilter === 'new') {
             // Check if product has no barcodes (not purchased yet)
             const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-            const hasStock = (product.barcodeCount || 0) > 0;
+            const hasStock = (product.barcodeCount || 0) > 0 || (Number(product.stock_quantity) || 0) > 0;
 
             if (!hasBarcodes && !hasStock) {
               statusBadge = <Badge variant="warning">Not Purchased</Badge>;
@@ -2653,7 +2644,7 @@ export default function Products() {
             );
           }
 
-          const hasBarcodes = product.barcodes && product.barcodes.length > 0;
+          const hasLabels = productHasStockForLabels(product) || (product.barcodes && product.barcodes.length > 0);
           const status = labelStatuses[product.id];
           const isGenerating = generatingLabelsFor === product.id || (status?.generating);
           const allGenerated = status?.all_generated;
@@ -2735,7 +2726,7 @@ export default function Products() {
                         <Eye className="h-3.5 w-3.5" />
                       </button>
                       {renderProductImageAction(product, true)}
-                      {hasBarcodes && (
+                      {hasLabels && (
                         <>
                           {isGenerating ? (
                             <button
@@ -2747,7 +2738,7 @@ export default function Products() {
                             </button>
                           ) : allGenerated ? (
                             <button
-                              onClick={() => handlePrintLabels(product)}
+                              onClick={() => handleLabelButtonClick(product)}
                               className="flex items-center justify-center w-7 h-7 text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
                               title="Print Labels"
                             >
@@ -2755,9 +2746,9 @@ export default function Products() {
                             </button>
                           ) : (
                             <button
-                              onClick={() => handleGenerateLabels(product)}
+                              onClick={() => handleLabelButtonClick(product)}
                               className="flex items-center justify-center w-7 h-7 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
-                              title="Generate Labels"
+                              title={status ? 'Generate Labels' : 'Print or generate labels'}
                             >
                               <Printer className="h-3.5 w-3.5" />
                             </button>
@@ -3355,7 +3346,7 @@ export default function Products() {
           isOpen={showMoveOutModal}
           onClose={() => {
             setShowMoveOutModal(false);
-            setMoveOutData({ reason: 'defective', notes: '' });
+            setMoveOutData({ reason: 'return_to_supplier', notes: '' });
             setMoveOutMode('new');
             setSelectedExistingMoveOutId(null);
           }}
@@ -3425,20 +3416,11 @@ export default function Products() {
               <>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Reason <span className="text-red-500">*</span>
+                    Reason
                   </label>
-                  <Select
-                    value={moveOutData.reason}
-                    onChange={(e) => setMoveOutData({ ...moveOutData, reason: e.target.value })}
-                    required
-                  >
-                    <option value="defective">Defective</option>
-                    <option value="damaged">Damaged</option>
-                    <option value="expired">Expired</option>
-                    <option value="return_to_supplier">Return to Supplier</option>
-                    <option value="disposal">Disposal</option>
-                    <option value="other">Other</option>
-                  </Select>
+                  <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm text-gray-900">
+                    Return to Supplier
+                  </div>
                 </div>
 
                 <div>
@@ -3462,7 +3444,7 @@ export default function Products() {
                 variant="outline"
                 onClick={() => {
                   setShowMoveOutModal(false);
-                  setMoveOutData({ reason: 'defective', notes: '' });
+                  setMoveOutData({ reason: 'return_to_supplier', notes: '' });
                   setMoveOutMode('new');
                   setSelectedExistingMoveOutId(null);
                 }}

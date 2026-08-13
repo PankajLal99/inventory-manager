@@ -87,7 +87,9 @@ type LedgerDatedRow = {
 };
 
 function startOfLocalDayMs(row: LedgerDatedRow): number {
-  const t = ledgerEventTimeMs(row);
+  // Prefer event/created timestamps so paging matches the dates shown on the statement.
+  const t =
+    ledgerEventTimeMs(row.event_at || row.created_at || null) || ledgerEventTimeMs(row);
   if (!t) return 0;
   const d = new Date(t);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -100,7 +102,46 @@ function addLocalDaysMs(dayMs: number, days: number): number {
 }
 
 /**
- * Split oldest-first rows into calendar-day windows (inclusive).
+ * Walk oldest → newest and start a new page when the row cap or day window
+ * is hit — whichever comes first. A 10-day page is closed even if it has
+ * fewer than 15 rows; a busy week still splits at the row cap.
+ */
+function splitLedgerRowsByLimits<T extends LedgerDatedRow>(
+  rows: T[],
+  limits: { useDays: boolean; daysPerPage: number; useRows: boolean; rowsPerPage: number }
+): T[][] {
+  const sorted = [...rows].sort(compareLedgerStatementRows);
+  if (!sorted.length) return [[]];
+
+  const pages: T[][] = [];
+  let chunk: T[] = [];
+  let windowStart = 0;
+
+  const rowOpensNewPage = (row: T) => {
+    if (!chunk.length) return false;
+    if (limits.useRows && chunk.length >= limits.rowsPerPage) return true;
+    if (limits.useDays) {
+      const day = startOfLocalDayMs(row);
+      const windowEnd = addLocalDaysMs(windowStart, Math.max(1, limits.daysPerPage) - 1);
+      if (day > windowEnd) return true;
+    }
+    return false;
+  };
+
+  for (const row of sorted) {
+    if (rowOpensNewPage(row)) {
+      pages.push(chunk);
+      chunk = [];
+    }
+    if (!chunk.length) windowStart = startOfLocalDayMs(row);
+    chunk.push(row);
+  }
+  if (chunk.length) pages.push(chunk);
+  return pages.length ? pages : [[]];
+}
+
+/**
+ * Split oldest-first rows into day windows (inclusive) from each page's first entry.
  * First page is the oldest window; latest entries land on the last page.
  * Pass maxRowsPerPage to also cap a busy window; omit for days-only paging.
  */
@@ -109,38 +150,12 @@ export function chunkLedgerRowsByDays<T extends LedgerDatedRow>(
   daysPerPage = LEDGER_SNAPSHOT_DAYS_PER_PAGE,
   maxRowsPerPage?: number
 ): T[][] {
-  const sorted = [...rows].sort(compareLedgerStatementRows);
-  if (!sorted.length) return [[]];
-
-  const oldestDay = startOfLocalDayMs(sorted[0]);
-  const dayChunks: T[][] = [];
-  let chunk: T[] = [];
-  let windowStart = oldestDay;
-  let windowEnd = addLocalDaysMs(windowStart, daysPerPage - 1);
-
-  for (const row of sorted) {
-    const day = startOfLocalDayMs(row);
-    while (day > windowEnd) {
-      if (chunk.length) {
-        dayChunks.push(chunk);
-        chunk = [];
-      }
-      windowStart = addLocalDaysMs(windowEnd, 1);
-      windowEnd = addLocalDaysMs(windowStart, daysPerPage - 1);
-    }
-    chunk.push(row);
-  }
-  if (chunk.length) dayChunks.push(chunk);
-
-  if (!maxRowsPerPage || maxRowsPerPage <= 0) {
-    return dayChunks.length ? dayChunks : [[]];
-  }
-
-  const pages: T[][] = [];
-  for (const dayChunk of dayChunks) {
-    pages.push(...chunkRows(dayChunk, maxRowsPerPage).filter((part) => part.length > 0));
-  }
-  return pages.length ? pages : [[]];
+  return splitLedgerRowsByLimits(rows, {
+    useDays: true,
+    daysPerPage,
+    useRows: !!(maxRowsPerPage && maxRowsPerPage > 0),
+    rowsPerPage: maxRowsPerPage && maxRowsPerPage > 0 ? maxRowsPerPage : Number.POSITIVE_INFINITY,
+  });
 }
 
 export function chunkLedgerRowsForExport<T extends LedgerDatedRow>(
@@ -151,11 +166,13 @@ export function chunkLedgerRowsForExport<T extends LedgerDatedRow>(
   const sorted = [...rows].sort(compareLedgerStatementRows);
   if (!sorted.length) return [[]];
 
-  if (normalized.useDays && normalized.useRows) {
-    return chunkLedgerRowsByDays(sorted, normalized.daysPerPage, normalized.rowsPerPage);
-  }
   if (normalized.useDays) {
-    return chunkLedgerRowsByDays(sorted, normalized.daysPerPage);
+    return splitLedgerRowsByLimits(sorted, {
+      useDays: true,
+      daysPerPage: normalized.daysPerPage,
+      useRows: normalized.useRows,
+      rowsPerPage: normalized.rowsPerPage,
+    });
   }
   return chunkRows(sorted, normalized.rowsPerPage);
 }

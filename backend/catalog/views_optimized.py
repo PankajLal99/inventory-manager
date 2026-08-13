@@ -8,7 +8,7 @@ Key optimizations:
 4. Batch processing where possible
 5. Early filtering to reduce dataset size
 """
-from django.db.models import Q, Count, Prefetch
+from django.db.models import Q, Count, Prefetch, Sum
 from django.core.cache import cache
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -66,6 +66,8 @@ def _optimized_product_list_internal(request):
         'warehouse_qty_gt_zero': request.query_params.get('warehouse_qty_gt_zero', ''),
         'page': request.query_params.get('page', 1),
         'limit': request.query_params.get('limit', 50),
+        'lite': request.query_params.get('lite', ''),
+        'include_barcodes': request.query_params.get('include_barcodes', ''),
     }
     
     # Try cache first (skip if Redis not available)
@@ -97,6 +99,7 @@ def _optimized_product_list_internal(request):
     low_stock = request.query_params.get('low_stock', None)
     out_of_stock = request.query_params.get('out_of_stock', None)
     include_barcodes = request.query_params.get('include_barcodes', 'false')
+    is_lite = str(request.query_params.get('lite', '')).lower() in ('true', '1', 'yes')
     
     # Determine which barcode tags to count/fetch based on filter
     tag_to_barcode_tags = {
@@ -111,10 +114,13 @@ def _optimized_product_list_internal(request):
 
     # Tags that need individual barcode objects in the list response
     # 'sold' excluded: list only needs aggregate count; View SKU modal fetches details
-    needs_barcode_prefetch = (
-        tag in ['new', 'defective', 'returned', 'in-cart', 'unknown'] or
+    # Fresh/new list does not serialize barcodes; skip prefetch unless lite is off
+    # and bifurcation fields need them (POS/search).
+    needs_barcode_details = (
+        tag in ['defective', 'returned', 'in-cart', 'unknown'] or
         include_barcodes.lower() == 'true'
     )
+    needs_barcode_prefetch = needs_barcode_details or (not is_lite and tag in ['new', None, ''])
 
     # Always annotate the count (cheap aggregate, used for Quantity columns)
     queryset = queryset.annotate(
@@ -174,7 +180,7 @@ def _optimized_product_list_internal(request):
     # Build active-cart context ONCE and reuse for stock filtering + serializer context.
     active_cart_barcodes = set()
     active_cart_product_quantities = {}
-    if needs_stock_calculation or needs_barcode_prefetch:
+    if needs_stock_calculation or (needs_barcode_prefetch and not is_lite):
         cart_rows = CartItem.objects.filter(cart__status='active').values_list(
             'scanned_barcodes', 'product_id', 'quantity'
         )
@@ -326,11 +332,26 @@ def _optimized_product_list_internal(request):
                 ).values_list('barcode_id', flat=True)
             )
 
+    warehouse_qty_by_product = {}
+    if is_lite and page_results:
+        from backend.purchasing.models import PurchaseItem
+        page_product_ids = [p.id for p in page_results if getattr(p, 'id', None)]
+        if page_product_ids:
+            warehouse_qty_by_product = {
+                row['product_id']: float(row['wh'] or 0)
+                for row in PurchaseItem.objects.filter(
+                    product_id__in=page_product_ids,
+                    purchase__status='finalized',
+                    purchase__deleted_at__isnull=True,
+                ).values('product_id').annotate(wh=Sum('warehouse_quantity'))
+            }
+
     context = {
         'request': request,
         'active_cart_barcodes': active_cart_barcodes,
         'active_cart_product_quantities': active_cart_product_quantities,
         'moved_out_barcode_ids': moved_out_barcode_ids,
+        'warehouse_qty_by_product': warehouse_qty_by_product,
     }
 
     # Serialize only the current page

@@ -53,7 +53,7 @@ describe('chunkLedgerRowsForExport', () => {
     expect(ledgerSnapshotPageCount(rows, split)).toBe(2)
   })
 
-  it('splits by a custom day window', () => {
+  it('splits by a custom day window from each page start', () => {
     const rows = [row(1, '2026-08-11'), row(2, '2026-08-10'), row(3, '2026-08-05')]
     const pages = chunkLedgerRowsForExport(rows, {
       useRows: false,
@@ -61,7 +61,35 @@ describe('chunkLedgerRowsForExport', () => {
       rowsPerPage: 40,
       daysPerPage: 2,
     })
-    expect(pages.map((part) => part.map((r) => r.id))).toEqual([[3], [2], [1]])
+    // Aug 5 is its own 2-day page; Aug 10–11 fit on the next page.
+    expect(pages.map((part) => part.map((r) => r.id))).toEqual([[3], [2, 1]])
+  })
+
+  it('starts a new page after 10 days even when there are fewer than 15 rows', () => {
+    const rows = [
+      row(1, '2026-08-01'),
+      row(2, '2026-08-05'),
+      row(3, '2026-08-12'),
+      row(4, '2026-08-20'),
+    ]
+    const split = { useRows: true, useDays: true, rowsPerPage: 15, daysPerPage: 10 }
+    const pages = chunkLedgerRowsForExport(rows, split)
+    expect(pages.map((part) => part.map((r) => r.id))).toEqual([[1, 2], [3, 4]])
+    expect(pages.every((part) => part.length < 15)).toBe(true)
+    expect(ledgerSnapshotPageCount(rows, split)).toBe(2)
+  })
+
+  it('still splits a busy 10-day window at 15 rows', () => {
+    const rows = Array.from({ length: 20 }, (_, i) => row(i + 1, '2026-08-01'))
+    const pages = chunkLedgerRowsForExport(rows, {
+      useRows: true,
+      useDays: true,
+      rowsPerPage: 15,
+      daysPerPage: 10,
+    })
+    expect(pages).toHaveLength(2)
+    expect(pages[0]).toHaveLength(15)
+    expect(pages[1]).toHaveLength(5)
   })
 
   it('makes 25 images when 25 rows are 1 per day', () => {

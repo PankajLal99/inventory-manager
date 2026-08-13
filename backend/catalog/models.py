@@ -287,9 +287,10 @@ class DefectiveProductMoveOut(models.Model):
 
     move_out_number = models.CharField(max_length=100, unique=True)
     store = models.ForeignKey('locations.Store', on_delete=models.CASCADE, related_name='defective_move_outs')
-    invoice = models.ForeignKey('pos.Invoice', on_delete=models.SET_NULL, null=True, blank=True, related_name='defective_move_outs')
+    invoice = models.ForeignKey('pos.Invoice', on_delete=models.CASCADE, null=True, blank=True, related_name='defective_move_outs')
     reason = models.CharField(max_length=50, choices=REASON_CHOICES, default='defective')
     notes = models.TextField(blank=True)
+    sent_date = models.DateField(null=True, blank=True)
     total_loss = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     total_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     total_items = models.IntegerField(default=0)

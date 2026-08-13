@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from backend.core.permissions import IsAuthenticatedOrVendorPurchaseLabels
-from django.db.models import Q, Count, Sum, OuterRef, Subquery, Value, DecimalField
+from django.db.models import Q, Count, Sum, OuterRef, Subquery, Value, DecimalField, Prefetch
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -2636,7 +2636,7 @@ def defective_product_move_out(request):
 
             created_move_outs.append(move_out)
 
-        serializer = DefectiveProductMoveOutSerializer(created_move_outs, many=True)
+        serializer = DefectiveProductMoveOutSerializer(created_move_outs, many=True, context={'include_items': True})
         first = created_move_outs[0]
         return Response({
             'move_outs': serializer.data,
@@ -2657,7 +2657,9 @@ def defective_product_move_out(request):
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_list(request):
     """List all defective product move-outs"""
-    move_outs = DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items').all()
+    move_outs = DefectiveProductMoveOut.objects.select_related(
+        'store', 'invoice', 'invoice__customer', 'created_by'
+    ).all()
     
     # Apply filters
     store_id = request.query_params.get('store', None)
@@ -2696,33 +2698,96 @@ def defective_product_move_out_list(request):
     
     move_outs = move_outs.order_by('-created_at')
     
-    serializer = DefectiveProductMoveOutSerializer(move_outs, many=True)
+    serializer = DefectiveProductMoveOutSerializer(move_outs, many=True, context={'include_items': False})
     return Response(serializer.data)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_detail(request, pk):
-    """Get details of a specific move-out or update total_adjustment"""
-    move_out = get_object_or_404(DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items'), pk=pk)
+    """Get details of a specific move-out, update total_adjustment, or delete it.
+
+    Deleting a move-out also deletes its items and the linked invoice (if any).
+    Barcodes stay tagged defective so they can be moved out again.
+    """
+    if request.method == 'DELETE':
+        from django.db import transaction
+        with transaction.atomic():
+            move_out = get_object_or_404(
+                DefectiveProductMoveOut.objects.select_for_update(),
+                pk=pk,
+            )
+            invoice = move_out.invoice
+            create_audit_log(
+                request=request,
+                action='delete',
+                model_name='DefectiveProductMoveOut',
+                object_id=str(move_out.id),
+                object_name=f"Move Out {move_out.move_out_number}",
+                object_reference=move_out.move_out_number,
+                barcode=None,
+                changes={
+                    'move_out_number': move_out.move_out_number,
+                    'invoice_number': invoice.invoice_number if invoice else None,
+                    'total_items': move_out.total_items,
+                },
+            )
+            move_out.delete()
+            if invoice is not None:
+                invoice.delete()
+        from backend.core.cache_signals import invalidate_products_cache_manual
+        invalidate_products_cache_manual()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    move_out = get_object_or_404(
+        DefectiveProductMoveOut.objects.select_related(
+            'store', 'invoice', 'invoice__customer', 'created_by'
+        ).prefetch_related(
+            Prefetch('items', queryset=DefectiveProductItem.objects.select_related('product', 'barcode')),
+        ),
+        pk=pk,
+    )
     
     if request.method == 'PATCH':
-        # Only allow updating total_adjustment
+        update_fields = []
         total_adjustment = request.data.get('total_adjustment')
         if total_adjustment is not None:
             try:
                 move_out.total_adjustment = Decimal(str(total_adjustment))
-                move_out.save(update_fields=['total_adjustment'])
+                update_fields.append('total_adjustment')
             except (ValueError, InvalidOperation):
                 return Response({
                     'error': 'Invalid total_adjustment value'
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'notes' in request.data:
+            notes = request.data.get('notes')
+            move_out.notes = '' if notes is None else str(notes)
+            update_fields.append('notes')
+
+        if 'sent_date' in request.data:
+            raw_sent = request.data.get('sent_date')
+            if raw_sent in (None, ''):
+                move_out.sent_date = None
+                update_fields.append('sent_date')
+            else:
+                from datetime import datetime
+                try:
+                    move_out.sent_date = datetime.strptime(str(raw_sent)[:10], '%Y-%m-%d').date()
+                    update_fields.append('sent_date')
+                except ValueError:
+                    return Response({
+                        'error': 'Invalid sent_date. Use YYYY-MM-DD.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+        if update_fields:
+            move_out.save(update_fields=update_fields)
         
-        serializer = DefectiveProductMoveOutSerializer(move_out)
+        serializer = DefectiveProductMoveOutSerializer(move_out, context={'include_items': True})
         return Response(serializer.data)
     
     # GET request
-    serializer = DefectiveProductMoveOutSerializer(move_out)
+    serializer = DefectiveProductMoveOutSerializer(move_out, context={'include_items': True})
     return Response(serializer.data)
 
 
@@ -2821,8 +2886,9 @@ def defective_product_move_out_add_items(request, pk):
             if invoice:
                 invoice.subtotal = invoice.subtotal + added_loss
                 invoice.total = invoice.total + added_loss
-                invoice.paid_amount = invoice.paid_amount + added_loss
-                invoice.save(update_fields=['subtotal', 'total', 'paid_amount'])
+                invoice.paid_amount = invoice.total
+                invoice.due_amount = Decimal('0.00')
+                invoice.save(update_fields=['subtotal', 'total', 'paid_amount', 'due_amount'])
 
             create_audit_log(
                 request=request,
@@ -2842,7 +2908,7 @@ def defective_product_move_out_add_items(request, pk):
 
         # Re-fetch for serialization
         move_out.refresh_from_db()
-        serializer = DefectiveProductMoveOutSerializer(move_out)
+        serializer = DefectiveProductMoveOutSerializer(move_out, context={'include_items': True})
         return Response({
             'move_out': serializer.data,
             'added_items': len(new_barcodes),

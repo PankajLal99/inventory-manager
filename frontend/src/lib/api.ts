@@ -471,7 +471,9 @@ export const catalogApi = {
     moveOuts: {
       list: (params?: any) => api.get('/defective-products/move-outs/', { params }),
       get: (id: number) => api.get(`/defective-products/move-outs/${id}/`),
-      updateAdjustment: (id: number, data: { total_adjustment: number }) => api.patch(`/defective-products/move-outs/${id}/`, data),
+      delete: (id: number) => api.delete(`/defective-products/move-outs/${id}/`),
+      updateAdjustment: (id: number, data: { total_adjustment?: number; notes?: string; sent_date?: string | null }) =>
+        api.patch(`/defective-products/move-outs/${id}/`, data),
       addItems: (id: number, data: any) => api.post(`/defective-products/move-outs/${id}/add-items/`, data),
     },
   },

@@ -108,10 +108,13 @@ export type BarcodeLookupProduct = {
   id: number;
   barcode_id?: number | null;
   barcode_available?: boolean;
+  barcode_tag?: string | null;
   sold_invoice?: string;
   selling_price?: number | null;
   canonical_barcode?: string | null;
   matched_barcode?: string | null;
+  defective_moved_out?: boolean;
+  defective_move_out_number?: string;
 };
 
 export type AddScannedBarcodeToInvoiceResult =
@@ -140,7 +143,8 @@ export async function addScannedBarcodeToInvoice(params: {
 
   const isDraft = params.invoiceStatus === 'draft';
   const isPendingOrCredit = params.invoiceType === 'pending' || params.invoiceType === 'credit';
-  if (!isDraft || !isPendingOrCredit) {
+  const isDefectiveInvoice = params.invoiceType === 'defective';
+  if (!isDefectiveInvoice && (!isDraft || !isPendingOrCredit)) {
     return {
       ok: false,
       message: 'Items can only be added to draft pending or draft credit invoices. Please ensure the invoice is in draft status with pending/credit type.',
@@ -182,7 +186,21 @@ export async function addScannedBarcodeToInvoice(params: {
       return { ok: false, message: 'This barcode is already on this invoice.', duplicate: true };
     }
 
-    if (product.barcode_available === false) {
+    if (isDefectiveInvoice) {
+      if (String(product.barcode_tag || '').toLowerCase() !== 'defective') {
+        return {
+          ok: false,
+          message: 'Only defective barcodes can be added to a move-out invoice. Mark the item as defective first.',
+        };
+      }
+      if (product.defective_moved_out) {
+        const moveOutNum = product.defective_move_out_number ? ` (${product.defective_move_out_number})` : '';
+        return {
+          ok: false,
+          message: `This defective barcode is already on a move-out${moveOutNum}.`,
+        };
+      }
+    } else if (product.barcode_available === false) {
       const errorMsg = product.sold_invoice
         ? `This item (SKU: ${trimmed}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
         : `This item (SKU: ${trimmed}) has already been sold and is not available in inventory.`;

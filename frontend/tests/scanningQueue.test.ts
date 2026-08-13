@@ -5,6 +5,7 @@ import {
   isBarcodeAlreadyOnInvoiceItems,
   normalizeBarcodeKey,
   sanitizeScannedBarcode,
+  addScannedBarcodeToInvoice,
 } from '../src/lib/scanningQueue'
 
 describe('parseBarcodesFromInput', () => {
@@ -134,5 +135,93 @@ describe('isBarcodeAlreadyOnInvoiceItems', () => {
   it('does not treat shared product_sku as duplicate barcode', () => {
     const items = [{ barcode_value: 'BC-001', barcode_id: 1, product_sku: 'SHARED-SKU' }]
     expect(isBarcodeAlreadyOnInvoiceItems('BC-002', items, { barcode_id: 2 })).toBe(false)
+  })
+})
+
+describe('addScannedBarcodeToInvoice for defective move-out invoices', () => {
+  it('rejects non-defective barcodes', async () => {
+    const result = await addScannedBarcodeToInvoice({
+      barcode: 'DEF-1',
+      items: [],
+      invoiceStatus: 'void',
+      invoiceType: 'defective',
+      lookupBarcode: async () => ({
+        id: 1,
+        barcode_id: 11,
+        barcode_tag: 'new',
+        barcode_available: true,
+      }),
+      addItem: async () => {
+        throw new Error('should not add')
+      },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message.toLowerCase()).toContain('defective')
+    }
+  })
+
+  it('rejects barcodes already on a move-out', async () => {
+    const result = await addScannedBarcodeToInvoice({
+      barcode: 'DEF-2',
+      items: [],
+      invoiceStatus: 'void',
+      invoiceType: 'defective',
+      lookupBarcode: async () => ({
+        id: 1,
+        barcode_id: 12,
+        barcode_tag: 'defective',
+        barcode_available: false,
+        defective_moved_out: true,
+        defective_move_out_number: 'DEF-ABC',
+      }),
+      addItem: async () => {
+        throw new Error('should not add')
+      },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message.toLowerCase()).toContain('already')
+    }
+  })
+
+  it('adds a defective barcode that is not already moved out', async () => {
+    const added: unknown[] = []
+    const result = await addScannedBarcodeToInvoice({
+      barcode: 'DEF-3',
+      items: [],
+      invoiceStatus: 'void',
+      invoiceType: 'defective',
+      lookupBarcode: async () => ({
+        id: 7,
+        barcode_id: 13,
+        barcode_tag: 'defective',
+        barcode_available: false,
+        canonical_barcode: 'DEF-3',
+      }),
+      addItem: async (payload) => {
+        added.push(payload)
+      },
+    })
+    expect(result.ok).toBe(true)
+    expect(added).toHaveLength(1)
+    expect((added[0] as { barcode_id: number }).barcode_id).toBe(13)
+  })
+
+  it('still blocks adding to regular paid invoices', async () => {
+    const result = await addScannedBarcodeToInvoice({
+      barcode: 'NEW-1',
+      items: [],
+      invoiceStatus: 'paid',
+      invoiceType: 'cash',
+      lookupBarcode: async () => ({ id: 1, barcode_available: true }),
+      addItem: async () => {
+        throw new Error('should not add')
+      },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message.toLowerCase()).toContain('draft')
+    }
   })
 })

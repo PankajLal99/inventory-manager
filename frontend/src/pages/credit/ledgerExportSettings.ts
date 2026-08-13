@@ -17,7 +17,7 @@ export const DEFAULT_LEDGER_EXPORT_SPLIT: LedgerExportSplit = {
 };
 
 export const LEDGER_EXPORT_ROW_PRESETS = [1, 5, 10, 15, 25, 40, 50, 80] as const;
-export const LEDGER_EXPORT_DAY_PRESETS = [1, 2, 5, 7, 15, 30] as const;
+export const LEDGER_EXPORT_DAY_PRESETS = [1, 2, 5, 7, 10, 15, 30] as const;
 
 const MIN_ROWS = 1;
 const MAX_ROWS = 200;

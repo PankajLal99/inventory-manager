@@ -706,6 +706,63 @@ export default function CreditLedgerDetail() {
     return out;
   }, [statement, rows, dateFrom, oldestRow, showTime]);
 
+  const ledgerPreviewPages = useMemo(() => {
+    const openingRows = statementRows.filter((r) => r.isOpening);
+    const totalRows = statementRows.filter((r) => r.isTotal);
+    const bodyRows = statementRows.filter((r) => !r.isOpening && !r.isTotal);
+    if (!bodyRows.length) {
+      return [
+        {
+          rows: statementRows,
+          period: periodLabel,
+          showSummary: true,
+          showContinued: false,
+        },
+      ];
+    }
+    const chunks = chunkLedgerRowsForExport(
+      bodyRows.map((r) => ({
+        ...r,
+        created_at: r.rawDate,
+        event_at: r.rawDate,
+        event_at_ms: r.eventAtMs,
+      })),
+      exportSplit
+    );
+    return chunks.map((chunk, i) => {
+      const prev = i > 0 ? chunks[i - 1] : undefined;
+      const lastPrev = prev?.[prev.length - 1];
+      const broughtForward: (typeof statementRows)[number] | null =
+        lastPrev != null
+          ? {
+              sr: '',
+              date: '',
+              type: '',
+              vch: '',
+              particulars: 'Balance Carried Forward',
+              narration: '',
+              debit: '',
+              credit: '',
+              balance: lastPrev.balance,
+              isOpening: true,
+            }
+          : null;
+      const from = formatPdfDate(chunk[0]?.rawDate);
+      const to = formatPdfDate(chunk[chunk.length - 1]?.rawDate);
+      const chunkPeriod = !from || from === to ? to || periodLabel : `${from} - ${to}`;
+      return {
+        rows: [
+          ...(i === 0 ? openingRows : broughtForward ? [broughtForward] : []),
+          ...chunk,
+          ...(i === chunks.length - 1 ? totalRows : []),
+        ],
+        period: i === 0 ? periodLabel : chunkPeriod,
+        showSummary: i === 0,
+        showContinued: i > 0,
+      };
+    });
+  }, [statementRows, exportSplit, periodLabel]);
+
   const cellValue = (r: (typeof statementRows)[number], id: LedgerColumnId) => {
     switch (id) {
       case 'sr':
@@ -1537,7 +1594,8 @@ export default function CreditLedgerDetail() {
                     </button>
                   </div>
                   <p className="text-xs text-stone-500 mb-2">
-                    Saved on this device when you change a value or close this panel.
+                    Saved on this device. When both are on, a new image starts at the row
+                    limit or the day limit — whichever comes first.
                   </p>
                   <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer">
                     <input
@@ -1717,7 +1775,10 @@ export default function CreditLedgerDetail() {
             <ErrorState message="Failed to load statement" onRetry={() => refetch()} />
           </div>
         ) : (
+          <div className="space-y-4">
+          {ledgerPreviewPages.map((page, pageIdx) => (
           <div
+            key={pageIdx}
             className="border-[3px] overflow-hidden"
             style={{
               borderColor: ledgerTheme.primary,
@@ -1771,10 +1832,24 @@ export default function CreditLedgerDetail() {
                     fontWeight: docSubHeaderFontWeight(ledgerTheme),
                   }}
                 >
-                  ({periodLabel})
+                  ({page.period})
                 </div>
+                {ledgerPreviewPages.length > 1 ? (
+                  <div
+                    className="mt-1.5"
+                    style={{
+                      color: ledgerTheme.secondary,
+                      fontSize: docSubHeaderFontPx(ledgerTheme),
+                      fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                    }}
+                  >
+                    Part {pageIdx + 1} of {ledgerPreviewPages.length}
+                  </div>
+                ) : null}
               </div>
 
+              {page.showSummary ? (
+              <>
               <div
                 className="mt-3 grid grid-cols-2 lg:grid-cols-4 rounded overflow-hidden"
                 style={{
@@ -1909,6 +1984,19 @@ export default function CreditLedgerDetail() {
               >
                 No. of Entries: {rows.length} {entriesSuffix}
               </div>
+              </>
+              ) : (
+              <div
+                className="mt-3"
+                style={{
+                  color: ledgerTheme.secondary,
+                  fontSize: docSubHeaderFontPx(ledgerTheme),
+                  fontWeight: docSubHeaderFontWeight(ledgerTheme),
+                }}
+              >
+                Entries continued…
+              </div>
+              )}
 
               <div
                 className="mt-1.5 overflow-x-auto rounded"
@@ -2055,7 +2143,7 @@ export default function CreditLedgerDetail() {
                           ))}
                       </>
                     ) : (
-                      statementRows.map((r, idx) => {
+                      page.rows.map((r, idx) => {
                         const balCr = /cr/i.test(r.balance);
                         const balColor = r.isOpening
                           ? ledgerTheme.textMuted
@@ -2173,7 +2261,9 @@ export default function CreditLedgerDetail() {
                 }}
               >
                 <div>Report Generated : {formatCreditDateTime(new Date())}</div>
-                <div>Page 1 of 1</div>
+                <div>
+                  Page {pageIdx + 1} of {ledgerPreviewPages.length}
+                </div>
               </div>
             </div>
 
@@ -2189,6 +2279,7 @@ export default function CreditLedgerDetail() {
               <div>Credit Ledger</div>
             </div>
 
+            {pageIdx === ledgerPreviewPages.length - 1 ? (
             <div
               className="px-4 py-2.5 border-t flex flex-col gap-2 bg-white"
               style={{ borderColor: ledgerTheme.primaryBorder }}
@@ -2221,6 +2312,9 @@ export default function CreditLedgerDetail() {
               </Button>
               </div>
             </div>
+            ) : null}
+          </div>
+          ))}
           </div>
         )}
       </div>
