@@ -545,7 +545,7 @@ export default function Repairs() {
     ];
   })();
 
-  // Search is applied server-side (invoice_number + customer_name)
+  // Search is applied server-side (customer name, model; mobile if numeric)
   const filteredRepairs = repairInvoices;
   const canSeeSuperMetrics = (user?.groups || []).includes('Super');
   const canSeeTotalColumn = canSeeSuperMetrics;
@@ -752,14 +752,14 @@ export default function Repairs() {
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700">
-                Search (invoice #, customer, contact, model, barcode, short code)
+                Search (customer, model, mobile)
               </label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input
                   type="text"
                   value={listSearch}
-                  placeholder="Invoice #, customer, contact, model, barcode, short code..."
+                  placeholder="Customer name, model, or mobile number..."
                   onChange={(e) => handleListSearchChange(e.target.value)}
                   className="pl-10"
                 />

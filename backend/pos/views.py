@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, Exists, OuterRef, IntegerField
+from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, IntegerField
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -419,27 +419,17 @@ def repair_invoices_list(request):
     if repair_barcode:
         queryset = queryset.filter(repair__barcode__icontains=repair_barcode)
     
-    # Search by invoice/customer/repair fields and sold item barcode short code.
+    # Search repair registration fields only: customer name and model.
+    # Numeric queries also match customer/repair mobile numbers.
     search = request.query_params.get('search', None)
     invoice_number = request.query_params.get('invoice_number', None)
     if search:
-        item_barcode_match = InvoiceItem.objects.filter(
-            invoice_id=OuterRef('pk')
-        ).filter(
-            Q(barcode__short_code__icontains=search)
-            | Q(barcode__barcode__icontains=search)
-            | Q(sold_barcode_value__icontains=search)
-        )
-        queryset = queryset.annotate(
-            has_item_barcode_match=Exists(item_barcode_match)
-        ).filter(
-            Q(invoice_number__icontains=search)
-            | Q(customer__name__icontains=search)
-            | Q(repair__contact_no__icontains=search)
-            | Q(repair__model_name__icontains=search)
-            | Q(repair__barcode__icontains=search)
-            | Q(has_item_barcode_match=True)
-        )
+        search = search.strip()
+        search_q = Q(customer__name__icontains=search) | Q(repair__model_name__icontains=search)
+        phone_digits = ''.join(ch for ch in search if ch.isdigit())
+        if phone_digits and all(ch.isdigit() or ch in ' +-' for ch in search):
+            search_q |= Q(customer__phone__icontains=phone_digits) | Q(repair__contact_no__icontains=phone_digits)
+        queryset = queryset.filter(search_q)
     elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
 
