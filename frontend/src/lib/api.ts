@@ -71,6 +71,10 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+      return Promise.reject(error);
+    }
+
     const originalRequest = error.config;
 
     // Handle 401 Unauthorized - try to refresh token for that scope only
@@ -135,7 +139,8 @@ export const authApi = {
 
 // Products API
 export const productsApi = {
-  list: (params?: any) => api.get('/products/', { params }),
+  list: (params?: any, config?: { signal?: AbortSignal }) =>
+    api.get('/products/', { params, signal: config?.signal }),
   get: (id: number) => api.get(`/products/${id}/`),
   create: (data: any) => {
     if (data instanceof FormData) {
@@ -469,15 +474,16 @@ export const catalogApi = {
   defectiveProducts: {
     moveOut: (data: any) => api.post('/defective-products/move-out/', data),
     moveOuts: {
-      list: (params?: any) => api.get('/defective-products/move-outs/', { params }),
+      list: (params?: any, config?: { signal?: AbortSignal }) =>
+        api.get('/defective-products/move-outs/', { params, signal: config?.signal }),
       get: (id: number) => api.get(`/defective-products/move-outs/${id}/`),
       delete: (id: number) => api.delete(`/defective-products/move-outs/${id}/`),
       updateAdjustment: (id: number, data: { total_adjustment?: number; notes?: string; sent_date?: string | null }) =>
         api.patch(`/defective-products/move-outs/${id}/`, data),
       addItems: (id: number, data: any) => api.post(`/defective-products/move-outs/${id}/add-items/`, data),
     },
-    selectableBarcodes: (params?: { product_ids: string; supplier?: string }) =>
-      api.get('/defective-products/selectable-barcodes/', { params }),
+    selectableBarcodes: (params?: { product_ids: string; supplier?: string }, config?: { signal?: AbortSignal }) =>
+      api.get('/defective-products/selectable-barcodes/', { params, signal: config?.signal }),
   },
 };
 

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
@@ -69,6 +69,10 @@ export default function Products() {
     searchParams.get('brand') || persistedFilters?.brand || ''
   );
   const [supplierFilter, setSupplierFilter] = useState(
+    searchParams.get('supplier') || persistedFilters?.supplier || ''
+  );
+  const [defectiveScopeReady, setDefectiveScopeReady] = useState(false);
+  const [pendingDefectiveSupplier, setPendingDefectiveSupplier] = useState(
     searchParams.get('supplier') || persistedFilters?.supplier || ''
   );
   const [stockStatusFilter, setStockStatusFilter] = useState(searchParams.get('stock_status') || '');
@@ -150,6 +154,27 @@ export default function Products() {
     gcTime: PRODUCTS_REF_STALE_MS,
   });
 
+  const supplierOptions = useMemo(() => {
+    const list = suppliersData?.results || suppliersData?.data || suppliersData || [];
+    return Array.isArray(list) ? list : [];
+  }, [suppliersData]);
+
+  const defectiveReady = tagFilter !== 'defective' || (defectiveScopeReady && Boolean(supplierFilter));
+
+  useEffect(() => {
+    if (tagFilter !== 'defective') {
+      setDefectiveScopeReady(false);
+      return;
+    }
+    setDefectiveScopeReady(false);
+    setPendingDefectiveSupplier(supplierFilter || '');
+    setLoadedProducts([]);
+    setSelectedDefectiveProducts(new Set());
+    setSelectedDefectiveProductsData(new Map());
+    // Only re-prompt when entering the Defective tab, not when the supplier value changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagFilter]);
+
   // Sync URL params with state on mount.
   // Category/brand/supplier only apply when present in the URL so a bare /products
   // visit (or reload without those params) can restore persisted filters.
@@ -227,12 +252,16 @@ export default function Products() {
   // Fetch products
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: ['products', 'lite', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
-    queryFn: async () => {
-      const response = await productsApi.list(buildQueryParams());
+    queryFn: async ({ signal }) => {
+      const response = await productsApi.list(buildQueryParams(), { signal });
       return response.data;
     },
+    enabled: defectiveReady,
     retry: false,
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData) => {
+      if (tagFilter === 'defective' && !defectiveReady) return undefined;
+      return previousData;
+    },
     staleTime: PRODUCTS_LIST_STALE_MS,
     gcTime: PRODUCTS_REF_STALE_MS,
   });
@@ -250,6 +279,10 @@ export default function Products() {
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
 
   useEffect(() => {
+    if (tagFilter === 'defective' && !defectiveReady) {
+      setLoadedProducts([]);
+      return;
+    }
     if (!data) return;
     const page = Number((data as any).page || 1);
     const pageRows: any[] = Array.isArray((data as any).results)
@@ -277,14 +310,14 @@ export default function Products() {
 
   const { data: defectiveBarcodesResponse, isFetching: isFetchingDefectiveBarcodes } = useQuery({
     queryKey: ['defective-selectable-barcodes', loadedProductIdsKey, supplierFilter],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const response = await catalogApi.defectiveProducts.selectableBarcodes({
         product_ids: loadedProductIdsKey,
         supplier: supplierFilter || undefined,
-      });
+      }, { signal });
       return response.data;
     },
-    enabled: tagFilter === 'defective' && loadedProductIdsKey.length > 0,
+    enabled: tagFilter === 'defective' && defectiveReady && loadedProductIdsKey.length > 0,
     staleTime: PRODUCTS_LIST_STALE_MS,
     gcTime: PRODUCTS_REF_STALE_MS,
   });
@@ -1209,7 +1242,7 @@ export default function Products() {
   // Fetch existing move-outs when modal is open
   const { data: existingMoveOutsData } = useQuery({
     queryKey: ['existing-move-outs'],
-    queryFn: () => catalogApi.defectiveProducts.moveOuts.list(),
+    queryFn: ({ signal }) => catalogApi.defectiveProducts.moveOuts.list(undefined, { signal }),
     enabled: showMoveOutModal,
   });
 
@@ -1510,8 +1543,8 @@ export default function Products() {
   // Fetch move-outs for defective metrics
   const { data: moveOutsData } = useQuery({
     queryKey: ['defective-move-outs-for-metrics'],
-    queryFn: () => catalogApi.defectiveProducts.moveOuts.list(),
-    enabled: tagFilter === 'defective',
+    queryFn: ({ signal }) => catalogApi.defectiveProducts.moveOuts.list(undefined, { signal }),
+    enabled: tagFilter === 'defective' && defectiveReady,
     retry: false,
   });
 
@@ -1733,7 +1766,7 @@ export default function Products() {
       </div>
 
       {/* Defective Products Summary Cards */}
-      {tagFilter === 'defective' && (
+      {tagFilter === 'defective' && defectiveReady && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
             <div className="flex items-center justify-between">
@@ -1791,7 +1824,7 @@ export default function Products() {
       )}
 
       {/* Barcode Input and Move Out Section for Defective Products */}
-      {tagFilter === 'defective' && (
+      {tagFilter === 'defective' && defectiveReady && (
         <div className="space-y-3">
           {/* Barcode Input Field - for physical scanner (machine gun input) */}
           <Card>
@@ -1883,7 +1916,7 @@ export default function Products() {
                 className="flex items-center gap-2"
               >
                 <Eye className="h-4 w-4" />
-                View All Move-Outs
+                View Move-Outs
               </Button>
               {selectedDefectiveProducts.size > 0 && (
                 <Button
@@ -2010,23 +2043,34 @@ export default function Products() {
           </Select>
           <Select
             value={supplierFilter}
-            onChange={(e) => setSupplierFilter(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSupplierFilter(value);
+              if (tagFilter === 'defective' && !value) {
+                setDefectiveScopeReady(false);
+              }
+            }}
             icon={<Filter className="h-4 w-4" />}
           >
-            <option value="">All Suppliers</option>
-            {(() => {
-              const suppliers = suppliersData?.results || suppliersData?.data || suppliersData || [];
-              return Array.isArray(suppliers) ? suppliers.map((supplier: any) => (
-                <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
-              )) : null;
-            })()}
+            {tagFilter === 'defective'
+              ? (!supplierFilter && <option value="">Select a supplier</option>)
+              : <option value="">All Suppliers</option>}
+            {supplierOptions.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
           </Select>
         </div>
       </Card>
 
       {/* Desktop Table View */}
       <div className="hidden md:block">
-        {tagFilter === 'defective' ? (
+        {tagFilter === 'defective' && !defectiveReady ? (
+          <Card>
+            <div className="py-12 text-center text-gray-500">
+              Select a supplier to view defective products.
+            </div>
+          </Card>
+        ) : tagFilter === 'defective' ? (
           <div className="flex flex-col gap-4">
             {/* Selected Barcodes panel - sticky at top */}
             <div className="sticky top-0 z-10 bg-white border border-gray-200 rounded-lg shadow-sm">
@@ -2589,7 +2633,7 @@ export default function Products() {
       {/* Mobile Card View */}
       <div className="md:hidden space-y-3">
         {/* Barcode Input for Defective Products - Mobile */}
-        {tagFilter === 'defective' && (
+        {tagFilter === 'defective' && defectiveReady && (
           <div className="mb-4 space-y-3">
             <Card>
               <div className="space-y-2">
@@ -2649,7 +2693,11 @@ export default function Products() {
             </div>
           </div>
         )}
-        {filteredProducts.length > 0 ? filteredProducts.map((product: any, productIndex: number) => {
+        {tagFilter === 'defective' && !defectiveReady ? (
+          <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500">
+            Select a supplier to view defective products.
+          </div>
+        ) : filteredProducts.length > 0 ? filteredProducts.map((product: any, productIndex: number) => {
           // Determine status - only show stock status for fresh (new) products
           // Determine status - show stock/tag status as clickable badge to change barcode tags (mobile view)
           let statusBadge;
@@ -3384,6 +3432,55 @@ export default function Products() {
               className="bg-blue-600 hover:bg-blue-700"
             >
               {bulkStatusUpdateMutation.isPending ? 'Updating...' : 'Apply Status'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={tagFilter === 'defective' && !defectiveScopeReady}
+        onClose={() => {}}
+        title="Filter defective products?"
+        size="md"
+        closeOnBackdropClick={false}
+        hideCloseButton
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Select a supplier to view defective products. This keeps the list small and fast.
+          </p>
+          <Select
+            value={pendingDefectiveSupplier}
+            onChange={(e) => setPendingDefectiveSupplier(e.target.value)}
+            icon={<Filter className="h-4 w-4" />}
+          >
+            <option value="">Select a supplier</option>
+            {supplierOptions.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
+          </Select>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/defective-move-outs')}
+              className="flex items-center justify-center gap-2"
+            >
+              <FileText className="h-4 w-4" />
+              Go to Move-Outs
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!pendingDefectiveSupplier) return;
+                setSupplierFilter(pendingDefectiveSupplier);
+                setDefectiveScopeReady(true);
+                setCurrentPage(1);
+                setLoadedProducts([]);
+              }}
+              disabled={!pendingDefectiveSupplier}
+            >
+              View this supplier
             </Button>
           </div>
         </div>
