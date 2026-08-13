@@ -50,6 +50,7 @@ import VendorPurchaseDetail from './pages/purchases/VendorPurchaseDetail';
 import Vendors from './pages/vendors/Vendors';
 import CategoriesBrands from './pages/catalog/CategoriesBrands';
 import DefectiveMoveOuts from './pages/defective/DefectiveMoveOuts';
+import DefectiveAdjustedInvoices from './pages/defective/DefectiveAdjustedInvoices';
 import PaymentReminders from './pages/payment-reminders/PaymentReminders';
 import Expenses from './pages/expenses/Expenses';
 import Payments from './pages/payments/Payments';
@@ -294,6 +295,7 @@ function App() {
                 <Route path="vendors" element={<FullAppOnly><Vendors /></FullAppOnly>} />
                 <Route path="categories-brands" element={<FullAppOnly><CategoriesBrands /></FullAppOnly>} />
                 <Route path="defective-move-outs" element={<FullAppOnly><DefectiveMoveOuts /></FullAppOnly>} />
+                <Route path="defective-move-outs/adjusted" element={<FullAppOnly><DefectiveAdjustedInvoices /></FullAppOnly>} />
               </Route>
             </Routes>
           </BrowserRouter>

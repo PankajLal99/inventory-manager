@@ -2695,6 +2695,12 @@ def defective_product_move_out_list(request):
         ).values_list('product_id', flat=True).distinct()
         # Filter move-outs that have items with products from this supplier
         move_outs = move_outs.filter(items__product_id__in=supplier_product_ids).distinct()
+
+    has_adjustment = str(request.query_params.get('has_adjustment', '')).lower()
+    if has_adjustment in ('1', 'true', 'yes'):
+        move_outs = move_outs.filter(total_adjustment__gt=0, invoice__isnull=False)
+    elif has_adjustment in ('0', 'false', 'no'):
+        move_outs = move_outs.exclude(total_adjustment__gt=0)
     
     move_outs = move_outs.order_by('-created_at')
     

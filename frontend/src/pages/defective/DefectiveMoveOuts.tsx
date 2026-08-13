@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { formatAppDate } from '../../lib/utils';
@@ -26,9 +26,13 @@ import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Button from '../../components/ui/Button';
-import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { Filter } from 'lucide-react';
+import {
+  parseMoveOutAmount,
+  readPersistedMoveOutFilters,
+  writePersistedMoveOutFilters,
+} from './moveOutFilters';
 
 const REF_STALE_MS = 5 * 60_000;
 const MOVE_OUTS_STALE_MS = 30_000;
@@ -57,13 +61,17 @@ interface DefectiveMoveOut {
 
 export default function DefectiveMoveOuts() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [brandFilter, setBrandFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [supplierFilter, setSupplierFilter] = useState('');
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+  const persistedFilters = useRef(readPersistedMoveOutFilters()).current;
+  const [search, setSearch] = useState(persistedFilters?.search || '');
+  const [dateFrom, setDateFrom] = useState(persistedFilters?.dateFrom || '');
+  const [dateTo, setDateTo] = useState(persistedFilters?.dateTo || '');
+  const [brandFilter, setBrandFilter] = useState(persistedFilters?.brand || '');
+  const [categoryFilter, setCategoryFilter] = useState(persistedFilters?.category || '');
+  const [supplierFilter, setSupplierFilter] = useState(persistedFilters?.supplier || '');
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(persistedFilters?.storeId ?? null);
+  const [viewAll, setViewAll] = useState(Boolean(persistedFilters?.viewAll));
+  const [scopeChosen, setScopeChosen] = useState(Boolean(persistedFilters?.scopeChosen));
+  const [pendingSupplier, setPendingSupplier] = useState(persistedFilters?.supplier || '');
   const [user, setUser] = useState<any>(() => auth.getUser());
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [selectedMoveOut, setSelectedMoveOut] = useState<DefectiveMoveOut | null>(null);
@@ -151,20 +159,49 @@ export default function DefectiveMoveOuts() {
 
   // Update selectedStoreId when stores load and Admin hasn't selected one yet
   useEffect(() => {
-    if (isAdmin && !selectedStoreId && stores.length > 0) {
-      const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
+    if (isAdmin && selectedStoreId == null && stores.length > 0) {
+      const persistedStore = persistedFilters?.storeId
+        ? stores.find((s: any) => s.id === persistedFilters.storeId)
+        : null;
+      const firstActiveStore = persistedStore || stores.find((s: any) => s.is_active) || stores[0];
       if (firstActiveStore) {
         setSelectedStoreId(firstActiveStore.id);
       }
     }
-  }, [isAdmin, selectedStoreId, stores]);
+  }, [isAdmin, selectedStoreId, stores, persistedFilters?.storeId]);
 
-  const moveOutsQueryEnabled = Boolean(user) && (!isAdmin || selectedStoreId != null);
+  useEffect(() => {
+    if (!scopeChosen) return;
+    writePersistedMoveOutFilters({
+      search,
+      dateFrom,
+      dateTo,
+      brand: brandFilter,
+      category: categoryFilter,
+      supplier: supplierFilter,
+      storeId: selectedStoreId,
+      viewAll,
+      scopeChosen,
+    });
+  }, [
+    search,
+    dateFrom,
+    dateTo,
+    brandFilter,
+    categoryFilter,
+    supplierFilter,
+    selectedStoreId,
+    viewAll,
+    scopeChosen,
+  ]);
 
-  // Fetch move-outs
+  const moveOutsQueryEnabled = Boolean(user) && scopeChosen && (!isAdmin || selectedStoreId != null);
+
+  // Fetch move-outs without adjustment amounts
   const { data, isLoading, isPending, error } = useQuery({
-    queryKey: ['defective-move-outs', dateFrom, dateTo, selectedStoreId, brandFilter, categoryFilter, supplierFilter],
+    queryKey: ['defective-move-outs', 'unadjusted', dateFrom, dateTo, selectedStoreId, brandFilter, categoryFilter, supplierFilter],
     queryFn: () => catalogApi.defectiveProducts.moveOuts.list({
+      has_adjustment: false,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       store: selectedStoreId || undefined,
@@ -179,6 +216,23 @@ export default function DefectiveMoveOuts() {
     placeholderData: keepPreviousData,
   });
 
+  const { data: adjustedData } = useQuery({
+    queryKey: ['defective-move-outs-adjusted', dateFrom, dateTo, selectedStoreId, brandFilter, categoryFilter, supplierFilter],
+    queryFn: () => catalogApi.defectiveProducts.moveOuts.list({
+      has_adjustment: true,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      store: selectedStoreId || undefined,
+      brand: brandFilter || undefined,
+      category: categoryFilter || undefined,
+      supplier: supplierFilter || undefined,
+    }),
+    retry: false,
+    enabled: moveOutsQueryEnabled,
+    staleTime: MOVE_OUTS_STALE_MS,
+    gcTime: REF_STALE_MS,
+  });
+
   const moveOuts: DefectiveMoveOut[] = (() => {
     if (!data) return [];
     const response = data.data || data;
@@ -188,9 +242,19 @@ export default function DefectiveMoveOuts() {
     return [];
   })();
 
+  const adjustedMoveOuts: DefectiveMoveOut[] = (() => {
+    if (!adjustedData) return [];
+    const response = adjustedData.data || adjustedData;
+    if (Array.isArray(response)) return response;
+    if (Array.isArray(response?.results)) return response.results;
+    if (Array.isArray(response?.data)) return response.data;
+    return [];
+  })();
+
   // Filter move-outs by search
   const filteredMoveOuts = useMemo(() => {
     return moveOuts.filter((moveOut) => {
+      if (parseMoveOutAmount(moveOut.total_adjustment) > 0) return false;
       if (!search) return true;
       const searchLower = search.toLowerCase();
       return (
@@ -208,23 +272,28 @@ export default function DefectiveMoveOuts() {
   // Calculate summary metrics
   const summaryMetrics = useMemo(() => {
     const totalMoveOuts = filteredMoveOuts.length;
-    const totalLoss = filteredMoveOuts.reduce((sum, moveOut) => {
-      const loss = typeof moveOut.total_loss === 'number' 
-        ? moveOut.total_loss 
-        : parseFloat(moveOut.total_loss) || 0;
-      const adjustment = typeof moveOut.total_adjustment === 'number'
-        ? moveOut.total_adjustment
-        : parseFloat(moveOut.total_adjustment || '0') || 0;
-      return sum + (loss - adjustment);
-    }, 0);
-    const totalItems = filteredMoveOuts.reduce((sum, moveOut) => sum + (moveOut.total_items || 0), 0);
+    let totalLoss = 0;
+    let totalItems = 0;
+
+    filteredMoveOuts.forEach((moveOut) => {
+      totalLoss += parseMoveOutAmount(moveOut.total_loss);
+      totalItems += moveOut.total_items || 0;
+    });
+
+    const adjustedCount = adjustedMoveOuts.length;
+    const totalAdjustment = adjustedMoveOuts.reduce(
+      (sum, moveOut) => sum + parseMoveOutAmount(moveOut.total_adjustment),
+      0,
+    );
 
     return {
       totalMoveOuts,
       totalLoss,
       totalItems,
+      adjustedCount,
+      totalAdjustment,
     };
-  }, [filteredMoveOuts]);
+  }, [filteredMoveOuts, adjustedMoveOuts]);
 
   const formatDate = (dateString: string) =>
     formatAppDate(dateString, { empty: '' });
@@ -242,6 +311,7 @@ export default function DefectiveMoveOuts() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-adjusted'] });
       setShowAdjustmentModal(false);
       setSelectedMoveOut(null);
       setAdjustmentValue('');
@@ -283,6 +353,7 @@ export default function DefectiveMoveOuts() {
     mutationFn: (id: number) => catalogApi.defectiveProducts.moveOuts.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-adjusted'] });
       queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
       queryClient.invalidateQueries({ queryKey: ['existing-move-outs'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -308,31 +379,24 @@ export default function DefectiveMoveOuts() {
     });
   };
 
-  const getReasonBadge = (reason: string) => {
-    const reasonMap: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' }> = {
-      'defective': { label: 'Defective', variant: 'danger' },
-      'damaged': { label: 'Damaged', variant: 'warning' },
-      'expired': { label: 'Expired', variant: 'warning' },
-      'return_to_supplier': { label: 'Return to Supplier', variant: 'info' },
-      'disposal': { label: 'Disposal', variant: 'danger' },
-      'other': { label: 'Other', variant: 'info' },
-    };
-    const reasonInfo = reasonMap[reason] || { label: reason, variant: 'info' as const };
-    return <Badge variant={reasonInfo.variant}>{reasonInfo.label}</Badge>;
+  const suppliers = (() => {
+    const list = suppliersData?.results || suppliersData?.data || suppliersData || [];
+    return Array.isArray(list) ? list : [];
+  })();
+
+  const applySupplierScope = (supplierId: string) => {
+    setSupplierFilter(supplierId);
+    setViewAll(false);
+    setScopeChosen(true);
   };
 
-  if (isLoading || isPending) {
-    return <LoadingState message="Loading move-outs..." />;
-  }
+  const applyViewAllScope = () => {
+    setSupplierFilter('');
+    setViewAll(true);
+    setScopeChosen(true);
+  };
 
-  if (error) {
-    return (
-      <ErrorState
-        message="Error loading move-outs. Please try again."
-        onRetry={() => window.location.reload()}
-      />
-    );
-  }
+  const showTableLoading = moveOutsQueryEnabled && (isLoading || (isPending && !data));
 
   return (
     <div className="space-y-6">
@@ -389,7 +453,7 @@ export default function DefectiveMoveOuts() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <div className="flex items-center justify-between">
             <div>
@@ -426,6 +490,25 @@ export default function DefectiveMoveOuts() {
             </div>
             <div className="p-3 bg-gray-100 rounded-lg">
               <FileText className="h-6 w-6 text-gray-600" />
+            </div>
+          </div>
+        </Card>
+        <Card
+          className="cursor-pointer hover:shadow-md transition-shadow"
+          onClick={() => navigate('/defective-move-outs/adjusted')}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Adjusted</p>
+              <p className="text-2xl font-bold text-blue-700 mt-1">
+                {summaryMetrics.adjustedCount}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {formatCurrency(summaryMetrics.totalAdjustment)}
+              </p>
+            </div>
+            <div className="p-3 bg-blue-100 rounded-lg">
+              <Edit className="h-6 w-6 text-blue-600" />
             </div>
           </div>
         </Card>
@@ -484,22 +567,39 @@ export default function DefectiveMoveOuts() {
           </Select>
           <Select
             value={supplierFilter}
-            onChange={(e) => setSupplierFilter(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSupplierFilter(value);
+              setViewAll(!value);
+              if (!scopeChosen) setScopeChosen(true);
+            }}
             icon={<Filter className="h-4 w-4" />}
           >
             <option value="">All Suppliers</option>
-            {(() => {
-              const suppliers = suppliersData?.results || suppliersData?.data || suppliersData || [];
-              return Array.isArray(suppliers) ? suppliers.map((supplier: any) => (
-                <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
-              )) : null;
-            })()}
+            {suppliers.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
           </Select>
         </div>
       </Card>
 
       {/* Move-Outs Table */}
-      {filteredMoveOuts.length === 0 ? (
+      {!scopeChosen ? (
+        <Card>
+          <EmptyState
+            icon={Filter}
+            title="Choose how to view move-outs"
+            message="Filter by a supplier to keep this page fast, or view all records."
+          />
+        </Card>
+      ) : showTableLoading ? (
+        <LoadingState message="Loading move-outs..." />
+      ) : error ? (
+        <ErrorState
+          message="Error loading move-outs. Please try again."
+          onRetry={() => window.location.reload()}
+        />
+      ) : filteredMoveOuts.length === 0 ? (
         <Card>
           <EmptyState
             icon={FileText}
@@ -515,9 +615,6 @@ export default function DefectiveMoveOuts() {
               { label: 'ID', align: 'left' },
               { label: 'Sent Date', align: 'left' },
               { label: 'Customer', align: 'left' },
-              { label: 'Store', align: 'left' },
-              { label: 'Invoice', align: 'left' },
-              { label: 'Reason', align: 'left' },
               { label: 'Notes', align: 'left' },
               { label: 'Items', align: 'right' },
               { label: 'Total Loss', align: 'right' },
@@ -555,26 +652,6 @@ export default function DefectiveMoveOuts() {
                       <span className="text-gray-900 font-medium">
                         {moveOut.customer_name || '—'}
                       </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Store className="h-4 w-4 text-gray-400" />
-                        <span className="text-gray-900">
-                          {moveOut.store_name || 'N/A'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {moveOut.invoice_number ? (
-                        <span className="font-mono text-blue-600 hover:text-blue-800">
-                          {moveOut.invoice_number}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">No invoice</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {getReasonBadge(moveOut.reason)}
                     </TableCell>
                     <TableCell>
                       <button
@@ -699,15 +776,6 @@ export default function DefectiveMoveOuts() {
                       <div className="text-sm text-gray-600 mb-1">
                         Sent: {moveOut.sent_date ? formatDate(moveOut.sent_date) : 'Not set'}
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                        <Store className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="truncate">
-                          {moveOut.store_name || 'N/A'}
-                        </span>
-                      </div>
-                      <div className="mt-1">
-                        {getReasonBadge(moveOut.reason)}
-                      </div>
                     </div>
                     <div className="pt-3 border-t border-gray-100">
                       <div className="grid grid-cols-2 gap-4">
@@ -736,13 +804,21 @@ export default function DefectiveMoveOuts() {
                           <div className="text-sm text-gray-700 whitespace-pre-wrap">{moveOut.notes}</div>
                         </div>
                       )}
-                      {moveOut.invoice_number && (
-                        <div className="mt-3 pt-3 border-t border-gray-100">
-                          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Invoice</div>
-                          <div className="font-mono text-blue-600">{moveOut.invoice_number}</div>
-                        </div>
-                      )}
-                      <div className="mt-3 pt-3 border-t border-gray-100 flex gap-2">
+                      <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-2">
+                        {moveOut.invoice && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/invoices/${moveOut.invoice}`);
+                            }}
+                            className="flex-1 gap-1.5"
+                          >
+                            <Eye className="h-4 w-4 flex-shrink-0" />
+                            <span>View Invoice</span>
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -958,6 +1034,47 @@ export default function DefectiveMoveOuts() {
           </form>
         </Modal>
       )}
+
+      <Modal
+        isOpen={!scopeChosen}
+        onClose={() => {}}
+        title="Filter move-outs?"
+        size="md"
+        closeOnBackdropClick={false}
+        hideCloseButton
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Do you want to filter by supplier or view all? Starting with one supplier keeps this page faster.
+          </p>
+          <Select
+            value={pendingSupplier}
+            onChange={(e) => setPendingSupplier(e.target.value)}
+            icon={<Filter className="h-4 w-4" />}
+          >
+            <option value="">Select a supplier</option>
+            {suppliers.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
+          </Select>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={applyViewAllScope}
+            >
+              View all
+            </Button>
+            <Button
+              type="button"
+              onClick={() => applySupplierScope(pendingSupplier)}
+              disabled={!pendingSupplier}
+            >
+              Filter by supplier
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

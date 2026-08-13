@@ -804,6 +804,46 @@ class DefectiveMoveOutListTests(TransactionTestCase):
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(detail.data.get('items') or []), 1)
 
+    def test_list_has_adjustment_returns_only_adjusted_invoices(self):
+        """has_adjustment=true should return only move-outs with an invoice and adjustment > 0."""
+        from backend.catalog.models import DefectiveProductMoveOut
+
+        b1 = self._make_defective_barcode()
+        b2 = self._make_defective_barcode()
+        self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [b1.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+        self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [b2.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+
+        first, second = list(DefectiveProductMoveOut.objects.order_by('id'))
+        first.total_adjustment = Decimal('25.00')
+        first.save(update_fields=['total_adjustment'])
+
+        response = self.client.get('/api/v1/defective-products/move-outs/', {'has_adjustment': 'true'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data if isinstance(response.data, list) else response.data.get('results', response.data)
+        ids = {row['id'] for row in results}
+        self.assertIn(first.id, ids)
+        self.assertNotIn(second.id, ids)
+        self.assertEqual(len(results), 1)
+
+        unadjusted = self.client.get('/api/v1/defective-products/move-outs/', {'has_adjustment': 'false'})
+        self.assertEqual(unadjusted.status_code, status.HTTP_200_OK)
+        unadjusted_results = unadjusted.data if isinstance(unadjusted.data, list) else unadjusted.data.get('results', unadjusted.data)
+        unadjusted_ids = {row['id'] for row in unadjusted_results}
+        self.assertNotIn(first.id, unadjusted_ids)
+        self.assertIn(second.id, unadjusted_ids)
+
     def test_products_defective_list_excludes_already_moved_out_barcodes(self):
         """Defective products list should not include barcodes already linked to move-out items."""
         b1 = self._make_defective_barcode()
