@@ -185,7 +185,9 @@ export default function Products() {
     if (supplierFilter) params.set('supplier', supplierFilter);
     if (stockStatusFilter) params.set('stock_status', stockStatusFilter);
     if (tagFilter) params.set('tag', tagFilter);
-    setSearchParams(params, { replace: true });
+    if (params.toString() !== searchParams.toString()) {
+      setSearchParams(params, { replace: true });
+    }
     writePersistedProductFilters({
       category: categoryFilter,
       brand: brandFilter,
@@ -224,7 +226,7 @@ export default function Products() {
 
   // Fetch products
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['products', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
+    queryKey: ['products', 'lite', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
     queryFn: async () => {
       const response = await productsApi.list(buildQueryParams());
       return response.data;
@@ -235,8 +237,14 @@ export default function Products() {
     gcTime: PRODUCTS_REF_STALE_MS,
   });
 
-  // Reset to page 1 when filters change
+  // Reset to page 1 when filters change (skip the initial mount so we don't
+  // clear in-flight first-load results).
+  const hasMountedFilters = useRef(false);
   useEffect(() => {
+    if (!hasMountedFilters.current) {
+      hasMountedFilters.current = true;
+      return;
+    }
     setCurrentPage(1);
     setLoadedProducts([]);
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
@@ -261,6 +269,25 @@ export default function Products() {
       return merged;
     });
   }, [data]);
+
+  const loadedProductIdsKey = useMemo(
+    () => loadedProducts.map((product: any) => product.id).filter(Boolean).join(','),
+    [loadedProducts],
+  );
+
+  const { data: defectiveBarcodesResponse, isFetching: isFetchingDefectiveBarcodes } = useQuery({
+    queryKey: ['defective-selectable-barcodes', loadedProductIdsKey, supplierFilter],
+    queryFn: async () => {
+      const response = await catalogApi.defectiveProducts.selectableBarcodes({
+        product_ids: loadedProductIdsKey,
+        supplier: supplierFilter || undefined,
+      });
+      return response.data;
+    },
+    enabled: tagFilter === 'defective' && loadedProductIdsKey.length > 0,
+    staleTime: PRODUCTS_LIST_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
+  });
 
   const { data: storesResponse } = useQuery({
     queryKey: ['stores'],
@@ -312,6 +339,23 @@ export default function Products() {
     });
   }, [allProducts]);
 
+  const defectiveBarcodesByProduct = useMemo(() => {
+    const map = new Map<number, any[]>();
+    const rows = Array.isArray(defectiveBarcodesResponse)
+      ? defectiveBarcodesResponse
+      : Array.isArray((defectiveBarcodesResponse as any)?.results)
+        ? (defectiveBarcodesResponse as any).results
+        : [];
+    rows.forEach((row: any) => {
+      const productId = row?.product_id;
+      if (!productId) return;
+      const list = map.get(productId) || [];
+      list.push(row);
+      map.set(productId, list);
+    });
+    return map;
+  }, [defectiveBarcodesResponse]);
+
   // With new model: ONE Product per name, barcodes are individual items
   // No need to group - show Products directly with their barcodes
   const productsList = useMemo(() => {
@@ -329,9 +373,12 @@ export default function Products() {
         barcodeCount, // Quantity to display in the badge
         isLowStock: stock.isLowStock,
         isOutOfStock: stock.isOutOfStock,
+        barcodes: tagFilter === 'defective'
+          ? (defectiveBarcodesByProduct.get(product.id) || [])
+          : product.barcodes,
       };
     });
-  }, [productsWithStock, tagFilter]);
+  }, [productsWithStock, tagFilter, defectiveBarcodesByProduct]);
 
   const stores = (() => {
     if (!storesResponse) return [];
@@ -1518,10 +1565,6 @@ export default function Products() {
     };
   }, [tagFilter, productsList, moveOutsData]);
 
-  if (isLoading) {
-    return <div className="flex items-center justify-center h-64">Loading...</div>;
-  }
-
   if (error) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -1578,6 +1621,12 @@ export default function Products() {
 
     adjustmentMutation.mutate(submitData);
   };
+
+  const listEmptyMessage = isLoading
+    ? 'Loading products...'
+    : (tagFilter === 'defective' && isFetchingDefectiveBarcodes)
+      ? 'Loading defective barcodes...'
+      : 'No products found. Add products first.';
 
   return (
     <div className="space-y-6">
@@ -2123,7 +2172,7 @@ export default function Products() {
                   <tr>
                     <td colSpan={getTableHeaders('defective').length} className="px-6 py-8 text-center text-gray-500">
                       {productsList.length === 0
-                        ? 'No products found. Add products first.'
+                        ? listEmptyMessage
                         : 'No defective products found.'}
                     </td>
                   </tr>
@@ -2213,7 +2262,7 @@ export default function Products() {
                 <tr>
                   <td colSpan={getTableHeaders(tagFilter).length} className="px-6 py-8 text-center text-gray-500">
                     {productsList.length === 0
-                      ? 'No products found. Add products first.'
+                      ? listEmptyMessage
                       : tagFilter === 'sold'
                         ? 'No sold products found.'
                         : tagFilter === 'unknown'
@@ -2517,7 +2566,7 @@ export default function Products() {
                 <tr>
                   <td colSpan={getTableHeaders(tagFilter).length} className="px-6 py-8 text-center text-gray-500">
                     {productsList.length === 0
-                      ? 'No products found. Add products first.'
+                      ? listEmptyMessage
                       : tagFilter === 'new' && (activeStockTab === 'low' || stockStatusFilter === 'low_stock')
                         ? 'No products match the "Low Stock" filter.'
                         : tagFilter === 'new' && (activeStockTab === 'out' || stockStatusFilter === 'out_of_stock')
@@ -2910,7 +2959,7 @@ export default function Products() {
         }) : (
           <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500">
             {productsList.length === 0
-              ? 'No products found. Add products first.'
+              ? listEmptyMessage
               : tagFilter === 'new' && (activeStockTab === 'low' || stockStatusFilter === 'low_stock')
                 ? 'No products match the "Low Stock" filter.'
                 : tagFilter === 'new' && (activeStockTab === 'out' || stockStatusFilter === 'out_of_stock')

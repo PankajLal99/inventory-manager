@@ -13,7 +13,7 @@ from .views import (
     update_barcode_tag, bulk_update_barcode_tags,
     data_validation_check,
     defective_product_move_out, defective_product_move_out_list, defective_product_move_out_detail,
-    defective_product_move_out_add_items
+    defective_product_move_out_add_items, defective_selectable_barcodes
 )
 from .views_optimized import _optimized_product_list_internal
 from rest_framework.decorators import api_view, permission_classes
@@ -75,6 +75,7 @@ urlpatterns = [
     # Defective product move-out endpoints
     path('defective-products/move-out/', defective_product_move_out, name='defective-product-move-out'),
     path('defective-products/move-outs/', defective_product_move_out_list, name='defective-product-move-out-list'),
+    path('defective-products/selectable-barcodes/', defective_selectable_barcodes, name='defective-selectable-barcodes'),
     path('defective-products/move-outs/<int:pk>/', defective_product_move_out_detail, name='defective-product-move-out-detail'),
     path('defective-products/move-outs/<int:pk>/add-items/', defective_product_move_out_add_items, name='defective-product-move-out-add-items'),
 ]

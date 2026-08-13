@@ -871,6 +871,39 @@ class DefectiveMoveOutListTests(TransactionTestCase):
         self.assertNotIn(b1.id, barcode_ids)
         self.assertIn(b2.id, barcode_ids)
 
+    def test_lite_defective_list_returns_quickly_without_barcode_rows(self):
+        """lite=true defective product list should 200 without embedding barcode rows."""
+        b1 = self._make_defective_barcode()
+        self.client.post('/api/v1/defective-products/move-out/', {
+            'store': self.store.id,
+            'product_ids': [self.product.id],
+            'barcode_ids': [b1.id],
+            'reason': 'defective',
+            'notes': '',
+        }, format='json')
+        b2 = self._make_defective_barcode()
+
+        response = self.client.get('/api/v1/products/', {
+            'tag': 'defective',
+            'lite': 'true',
+            'exclude_other_custom': 'true',
+            'page': 1,
+            'limit': 50,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get('results', [])
+        product_data = next((p for p in results if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+        self.assertEqual(product_data.get('barcodes') or [], [])
+
+        barcodes_response = self.client.get('/api/v1/defective-products/selectable-barcodes/', {
+            'product_ids': str(self.product.id),
+        })
+        self.assertEqual(barcodes_response.status_code, status.HTTP_200_OK)
+        barcode_ids = {row['id'] for row in barcodes_response.data}
+        self.assertNotIn(b1.id, barcode_ids)
+        self.assertIn(b2.id, barcode_ids)
+
 
 class DefectiveMoveOutDeleteTests(TransactionTestCase):
     """Deleting a move-out (or its invoice) must free barcodes for another move-out."""

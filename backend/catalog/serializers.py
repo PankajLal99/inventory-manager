@@ -522,12 +522,15 @@ class ProductListSerializer(serializers.ModelSerializer):
         - GET /products/ → No barcodes (fast, minimal payload)
         - GET /products/?include_barcodes=true → With barcodes (when needed)
         """
-        # Get tag filter from request context
         request = self.context.get('request')
         tag_filter = request.query_params.get('tag', None) if request else None
-        
-        # Check if we should force include barcodes based on tag
-        # 'sold' excluded: list only needs aggregate count, View SKU modal fetches details
+
+        if self._is_lite():
+            lite_map = self.context.get('lite_barcodes_by_product')
+            if isinstance(lite_map, dict):
+                return lite_map.get(obj.id, [])
+            return []
+
         force_include = self._needs_barcode_details()
         
         # OPTIMIZATION: Check if barcodes should be included in response

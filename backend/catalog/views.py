@@ -2708,6 +2708,68 @@ def defective_product_move_out_list(request):
     return Response(serializer.data)
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def defective_selectable_barcodes(request):
+    """Compact defective barcodes for products already shown on the Products page.
+
+    Kept separate from GET /products/?tag=defective so that list can return in
+    milliseconds instead of serializing every barcode in the same request.
+    """
+    raw_ids = request.query_params.get('product_ids') or ''
+    product_ids = []
+    for part in raw_ids.split(','):
+        part = part.strip()
+        if part.isdigit():
+            product_ids.append(int(part))
+        if len(product_ids) >= 50:
+            break
+    if not product_ids:
+        return Response([])
+
+    moved_out_ids = set(
+        DefectiveProductItem.objects.filter(
+            barcode__product_id__in=product_ids,
+        ).values_list('barcode_id', flat=True)
+    )
+    barcodes = Barcode.objects.filter(
+        product_id__in=product_ids,
+        tag='defective',
+    )
+    if moved_out_ids:
+        barcodes = barcodes.exclude(id__in=moved_out_ids)
+
+    supplier_id = request.query_params.get('supplier')
+    if supplier_id:
+        barcodes = barcodes.filter(purchase__supplier_id=supplier_id)
+
+    rows = barcodes.values(
+        'id',
+        'barcode',
+        'short_code',
+        'tag',
+        'product_id',
+        'purchase__supplier_id',
+        'purchase__supplier__name',
+        'purchase__supplier__code',
+    )
+    payload = []
+    for row in rows:
+        supplier_id_value = row.get('purchase__supplier_id')
+        supplier_name = row.get('purchase__supplier__code') or row.get('purchase__supplier__name')
+        payload.append({
+            'id': row['id'],
+            'barcode': row['barcode'],
+            'short_code': row['short_code'],
+            'tag': row['tag'],
+            'product_id': row['product_id'],
+            'supplier_id': supplier_id_value,
+            'supplier_name': supplier_name,
+            'defective_move_out_info': None,
+        })
+    return Response(payload)
+
+
 @api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_detail(request, pk):

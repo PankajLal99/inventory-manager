@@ -531,8 +531,10 @@ class ProductFilter(django_filters.FilterSet):
                 Q(Exists(has_normal_barcode)) | ~Q(Exists(has_any_barcode))
             ).distinct()
         else:
-            # For other tags: filter by barcode tag using Q object (more efficient)
-            return queryset.filter(barcodes__tag=value).distinct()
+            # EXISTS avoids JOIN + DISTINCT across the whole barcodes table, which is
+            # what made /products/?tag=defective hang for 15+ seconds.
+            has_tag = Barcode.objects.filter(product_id=OuterRef('pk'), tag=value)
+            return queryset.filter(Exists(has_tag))
     
     def _is_likely_sku(self, search_term):
         """Detect if search term is likely a SKU/barcode vs product name

@@ -476,6 +476,8 @@ export const catalogApi = {
         api.patch(`/defective-products/move-outs/${id}/`, data),
       addItems: (id: number, data: any) => api.post(`/defective-products/move-outs/${id}/add-items/`, data),
     },
+    selectableBarcodes: (params?: { product_ids: string; supplier?: string }) =>
+      api.get('/defective-products/selectable-barcodes/', { params }),
   },
 };
 

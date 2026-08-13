@@ -8,7 +8,7 @@ Key optimizations:
 4. Batch processing where possible
 5. Early filtering to reduce dataset size
 """
-from django.db.models import Q, Count, Prefetch, Sum
+from django.db.models import Count, Prefetch, Sum
 from django.core.cache import cache
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -27,6 +27,36 @@ from backend.pos.models import CartItem, InvoiceItem
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _attach_page_barcode_counts(page_results, barcode_tags):
+    """Count barcodes only for the current page.
+
+    Annotating Count(distinct barcodes) on the full product queryset forces a
+    GROUP BY across every matching product before LIMIT, which is what made the
+    Products page feel stuck on first load.
+    """
+    if not page_results:
+        return
+    page_ids = [product.id for product in page_results if getattr(product, 'id', None)]
+    if not page_ids:
+        return
+    counts = {
+        row['product_id']: row['c']
+        for row in Barcode.objects.filter(
+            product_id__in=page_ids,
+            tag__in=barcode_tags,
+        ).exclude(
+            purchase__status='draft'
+        ).filter(
+            purchase__deleted_at__isnull=True
+        ).values('product_id').annotate(c=Count('id'))
+    }
+    for product in page_results:
+        product.annotated_barcode_count = counts.get(product.id, 0)
+
+
+# Public API with decorators for backwards compatibility
 
 
 # Public API with decorators for backwards compatibility
@@ -120,19 +150,10 @@ def _optimized_product_list_internal(request):
         tag in ['defective', 'returned', 'in-cart', 'unknown'] or
         include_barcodes.lower() == 'true'
     )
-    needs_barcode_prefetch = needs_barcode_details or (not is_lite and tag in ['new', None, ''])
-
-    # Always annotate the count (cheap aggregate, used for Quantity columns)
-    queryset = queryset.annotate(
-        annotated_barcode_count=Count(
-            'barcodes',
-            filter=(
-                Q(barcodes__tag__in=barcode_tags)
-                & ~Q(barcodes__purchase__status='draft')
-                & Q(barcodes__purchase__deleted_at__isnull=True)
-            ),
-            distinct=True
-        )
+    # Lite lists never prefetch barcodes on the full queryset. Defective/returned
+    # rows are attached after pagination as compact dicts.
+    needs_barcode_prefetch = (not is_lite) and (
+        needs_barcode_details or tag in ['new', None, '']
     )
 
     if needs_barcode_prefetch:
@@ -151,7 +172,7 @@ def _optimized_product_list_internal(request):
         )
         logger.info(f"Fetching barcodes with tags {barcode_tags} (tag filter requires them)")
     else:
-        logger.info(f"Using annotate-only for tag '{tag}' (no barcode prefetch needed)")
+        logger.info(f"Skipping barcode prefetch for tag '{tag}'")
     
     # OPTIMIZATION 3: Apply filters using django-filter early to reduce dataset
     filterset = ProductFilter(request.query_params, queryset=queryset)
@@ -322,8 +343,10 @@ def _optimized_product_list_internal(request):
         else:
             estimated_count = offset + len(page_results)
 
+    _attach_page_barcode_counts(page_results, barcode_tags)
+
     moved_out_barcode_ids = set()
-    if tag == 'defective' and page_results:
+    if tag == 'defective' and page_results and not is_lite:
         page_product_ids = [p.id for p in page_results if getattr(p, 'id', None)]
         if page_product_ids:
             moved_out_barcode_ids = set(
@@ -333,7 +356,8 @@ def _optimized_product_list_internal(request):
             )
 
     warehouse_qty_by_product = {}
-    if is_lite and page_results:
+    lite_barcodes_by_product = {}
+    if is_lite and page_results and tag in (None, '', 'new'):
         from backend.purchasing.models import PurchaseItem
         page_product_ids = [p.id for p in page_results if getattr(p, 'id', None)]
         if page_product_ids:
@@ -352,6 +376,7 @@ def _optimized_product_list_internal(request):
         'active_cart_product_quantities': active_cart_product_quantities,
         'moved_out_barcode_ids': moved_out_barcode_ids,
         'warehouse_qty_by_product': warehouse_qty_by_product,
+        'lite_barcodes_by_product': lite_barcodes_by_product,
     }
 
     # Serialize only the current page
