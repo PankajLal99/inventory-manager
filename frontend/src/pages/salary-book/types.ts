@@ -12,6 +12,13 @@ export interface Employee {
   monthly_salary: string;
   salary_calculation_method: string;
   fixed_working_days: number | null;
+  expected_check_in: string | null;
+  expected_check_out: string | null;
+  effective_check_in: string | null;
+  effective_check_out: string | null;
+  scheduled_hours: string;
+  daily_rate_preview: string;
+  hourly_rate_preview: string;
   profile_photo_url: string | null;
   status: 'ACTIVE' | 'INACTIVE';
   notes: string;
@@ -33,6 +40,25 @@ export interface Attendance {
   location_accuracy: string;
   location_captured_at: string;
   remarks: string;
+  minutes_late: number;
+  is_late: boolean;
+  worked_minutes: number;
+  payable_minutes: number;
+  worked_hours: string;
+  payable_hours: string;
+  rule_penalty_applied: boolean;
+  rule_remarks: string;
+  expected_check_in: string | null;
+  expected_check_out: string | null;
+}
+
+export interface AttendanceRule {
+  id: number;
+  employee: number;
+  rule_type: 'CONSECUTIVE_LATE';
+  is_active: boolean;
+  late_threshold_minutes: number;
+  consecutive_late_days: number;
 }
 
 export interface LeaveRecord {
@@ -84,6 +110,9 @@ export interface SalaryRecord {
   calculation_method: string;
   divisor_days: number;
   daily_salary: string;
+  hourly_rate?: string;
+  earned_salary?: string;
+  scheduled_hours?: string;
   status: 'DRAFT' | 'FINALIZED';
   payment_status: string;
   breakdown: Record<string, unknown>;
@@ -116,6 +145,8 @@ export interface SalaryBookSettings {
   require_gps: boolean;
   require_photo: boolean;
   require_checkout_gps_photo: boolean;
+  default_check_in: string;
+  default_check_out: string;
 }
 
 export interface GpsFix {
@@ -138,6 +169,9 @@ export interface CalendarDayCell {
   status: string | null;
   check_in_time?: string | null;
   check_out_time?: string | null;
+  minutes_late?: number;
+  is_late?: boolean;
+  rule_penalty_applied?: boolean;
 }
 
 export interface CalendarEmployee {
@@ -176,4 +210,37 @@ export interface CalendarResponse {
   view: 'admin' | 'employee';
   kpis: CalendarKpis;
   employees: CalendarEmployee[];
+}
+
+export interface DashboardLiveUnmarked {
+  id: number;
+  name: string;
+  employee_id: string;
+}
+
+export interface DashboardResponse {
+  greeting: string;
+  today: string;
+  today_attendance: {
+    present: number;
+    absent: number;
+    paid_leave: number;
+    unpaid_leave: number;
+    half_day: number;
+    holiday: number;
+    unmarked: number;
+  };
+  live: {
+    updated_at: string;
+    marked: Attendance[];
+    unmarked: DashboardLiveUnmarked[];
+  };
+  month: {
+    year: number;
+    month: number;
+    total_employees: number;
+    monthly_payroll: string;
+    advances: string;
+    salary_pending: string;
+  };
 }

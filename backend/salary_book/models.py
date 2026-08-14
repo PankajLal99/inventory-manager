@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+from datetime import time
 from decimal import Decimal
 
 from django.conf import settings
@@ -54,6 +55,8 @@ class SalaryBookSettings(models.Model):
     require_gps = models.BooleanField(default=True)
     require_photo = models.BooleanField(default=True)
     require_checkout_gps_photo = models.BooleanField(default=True)
+    default_check_in = models.TimeField(default=time(9, 0))
+    default_check_out = models.TimeField(default=time(18, 0))
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -71,6 +74,11 @@ class SalaryBookSettings(models.Model):
             raise ValidationError({'max_gps_accuracy_meters': 'Must be at least 1 meter.'})
         if self.geofence_radius_meters < 1:
             raise ValidationError({'geofence_radius_meters': 'Must be at least 1 meter.'})
+        if self.default_check_in and self.default_check_out:
+            if self.default_check_out <= self.default_check_in:
+                raise ValidationError(
+                    {'default_check_out': 'Default check-out must be after default check-in.'}
+                )
 
     def save(self, *args, **kwargs):
         self.require_gps = True
@@ -127,6 +135,8 @@ class Employee(models.Model):
         max_length=32, choices=METHOD_CHOICES, default=METHOD_INHERIT
     )
     fixed_working_days = models.PositiveSmallIntegerField(null=True, blank=True)
+    expected_check_in = models.TimeField(null=True, blank=True)
+    expected_check_out = models.TimeField(null=True, blank=True)
     profile_photo = models.ImageField(
         storage=SalaryBookImageStorage(),
         upload_to=employee_photo_upload,
@@ -161,6 +171,15 @@ class Employee(models.Model):
             raise ValidationError(
                 {'fixed_working_days': 'Required when using fixed working days.'}
             )
+        if self.expected_check_in and self.expected_check_out:
+            if self.expected_check_out <= self.expected_check_in:
+                raise ValidationError(
+                    {'expected_check_out': 'Check-out time must be after check-in time.'}
+                )
+        elif self.expected_check_in or self.expected_check_out:
+            raise ValidationError(
+                'Set both expected check-in and check-out, or leave both blank to use company defaults.'
+            )
 
     def save(self, *args, **kwargs):
         if not self.employee_id:
@@ -179,6 +198,48 @@ class Employee(models.Model):
             except (ValueError, IndexError):
                 continue
         return f'EMP-{max_n + 1:03d}'
+
+
+class EmployeeAttendanceRule(models.Model):
+    TYPE_CONSECUTIVE_LATE = 'CONSECUTIVE_LATE'
+    TYPE_CHOICES = [
+        (TYPE_CONSECUTIVE_LATE, 'Consecutive late days'),
+    ]
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name='attendance_rules'
+    )
+    rule_type = models.CharField(
+        max_length=32, choices=TYPE_CHOICES, default=TYPE_CONSECUTIVE_LATE
+    )
+    is_active = models.BooleanField(default=True)
+    late_threshold_minutes = models.PositiveSmallIntegerField(default=30)
+    consecutive_late_days = models.PositiveSmallIntegerField(default=3)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'salary_book_attendance_rules'
+        ordering = ['-is_active', '-id']
+        indexes = [
+            models.Index(fields=['employee', 'is_active']),
+        ]
+
+    def __str__(self):
+        return (
+            f'{self.employee} {self.rule_type} '
+            f'{self.consecutive_late_days}×{self.late_threshold_minutes}m'
+        )
+
+    def clean(self):
+        if self.late_threshold_minutes < 1:
+            raise ValidationError(
+                {'late_threshold_minutes': 'Late threshold must be at least 1 minute.'}
+            )
+        if self.consecutive_late_days < 1:
+            raise ValidationError(
+                {'consecutive_late_days': 'Consecutive late days must be at least 1.'}
+            )
 
 
 class LeaveRecord(models.Model):
@@ -303,6 +364,12 @@ class Attendance(models.Model):
     )
     face_match_id = models.CharField(max_length=64, blank=True)
     remarks = models.TextField(blank=True)
+    minutes_late = models.PositiveIntegerField(default=0)
+    is_late = models.BooleanField(default=False)
+    worked_minutes = models.PositiveIntegerField(default=0)
+    payable_minutes = models.PositiveIntegerField(default=0)
+    rule_penalty_applied = models.BooleanField(default=False)
+    rule_remarks = models.CharField(max_length=255, blank=True)
     leave = models.ForeignKey(
         LeaveRecord,
         on_delete=models.SET_NULL,

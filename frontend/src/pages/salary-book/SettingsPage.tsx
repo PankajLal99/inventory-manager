@@ -34,6 +34,8 @@ export default function SettingsPage() {
         geofence_radius_meters: Number(form?.geofence_radius_meters),
         require_photo: form?.require_photo,
         require_checkout_gps_photo: form?.require_checkout_gps_photo,
+        default_check_in: form?.default_check_in,
+        default_check_out: form?.default_check_out,
       }),
     onSuccess: async () => {
       toast('Settings saved', 'success');
@@ -94,6 +96,18 @@ export default function SettingsPage() {
           onChange={(e) => setForm({ ...form, fixed_working_days: Number(e.target.value) })}
         />
       )}
+      <Input
+        label="Default check-in"
+        type="time"
+        value={String(form.default_check_in || '').slice(0, 5)}
+        onChange={(e) => setForm({ ...form, default_check_in: e.target.value })}
+      />
+      <Input
+        label="Default check-out"
+        type="time"
+        value={String(form.default_check_out || '').slice(0, 5)}
+        onChange={(e) => setForm({ ...form, default_check_out: e.target.value })}
+      />
       <Input
         label="Maximum GPS Accuracy (meters)"
         inputMode="numeric"

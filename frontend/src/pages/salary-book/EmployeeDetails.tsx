@@ -3,8 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { formatINR, formatDate, statusLabel } from './utils';
-import type { CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
+import { formatINR, formatDate, statusLabel, toTimeInput } from './utils';
+import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 import { useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
 
@@ -72,10 +72,16 @@ export default function EmployeeDetails() {
           <Field label="Designation" value={data.designation || '—'} />
           <Field label="Department" value={data.department || '—'} />
           <Field label="Monthly Salary" value={formatINR(data.monthly_salary)} />
+          <Field label="Check-in" value={toTimeInput(data.effective_check_in) || '—'} />
+          <Field label="Check-out" value={toTimeInput(data.effective_check_out) || '—'} />
+          <Field label="Scheduled hours" value={data.scheduled_hours ? `${data.scheduled_hours} h` : '—'} />
+          <Field label="Per-day rate" value={formatINR(data.daily_rate_preview)} />
+          <Field label="Per-hour rate" value={formatINR(data.hourly_rate_preview)} />
           <Field label="Joined" value={formatDate(data.date_of_joining)} />
           <Field label="Address" value={data.address || '—'} />
         </div>
       )}
+      {tab === 'profile' && <EmployeeRules employeeId={empId} />}
       {tab === 'attendance' && <AttendanceHistory employeeId={empId} />}
       {tab === 'leaves' && <LeaveHistory employeeId={empId} />}
       {tab === 'advances' && <AdvanceHistory employeeId={empId} />}
@@ -89,6 +95,28 @@ function Field({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-gray-500">{label}</div>
       <div className="font-medium text-gray-900">{value}</div>
+    </div>
+  );
+}
+
+function EmployeeRules({ employeeId }: { employeeId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['salary-book', 'rules', employeeId],
+    queryFn: async () =>
+      (await salaryBookApi.employees.attendanceRules.list(employeeId)).data as AttendanceRule[],
+  });
+  if (isLoading) return null;
+  if (!data?.length) return null;
+  return (
+    <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2">
+      <h2 className="font-semibold text-gray-900">Attendance rules</h2>
+      {data.map((rule) => (
+        <div key={rule.id} className="text-sm">
+          Late ≥ {rule.late_threshold_minutes} min for {rule.consecutive_late_days} consecutive days
+          {' · '}
+          {rule.is_active ? 'Active' : 'Inactive'}
+        </div>
+      ))}
     </div>
   );
 }

@@ -81,6 +81,8 @@ export function CalendarLegend() {
         <span className="h-3 w-3 rounded-sm bg-gray-200" />
         Unmarked
       </span>
+      <span className="inline-flex items-center gap-1.5">L = Late</span>
+      <span className="inline-flex items-center gap-1.5">P = Late penalty</span>
     </div>
   );
 }
@@ -131,7 +133,7 @@ export function EmployeeMonthGrid({
           const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           const cell = employee.days[String(day)];
           const title = cell?.status && cell.status !== 'BEFORE_JOINING'
-            ? `${statusLabel(cell.status)}${cell.check_in_time ? ` · ${formatTime(cell.check_in_time)}` : ''}`
+            ? `${statusLabel(cell.status)}${cell.check_in_time ? ` · ${formatTime(cell.check_in_time)}` : ''}${cell.is_late && cell.minutes_late ? ` · Late ${cell.minutes_late}m` : ''}${cell.rule_penalty_applied ? ' · Penalty' : ''}`
             : iso;
           return (
             <div
@@ -141,6 +143,8 @@ export function EmployeeMonthGrid({
             >
               <span className="font-semibold">{day}</span>
               <span className="text-[10px] leading-none mt-0.5">{cellLabel(cell)}</span>
+              {cell?.is_late && !cell?.rule_penalty_applied && <span className="text-[9px] leading-none">L</span>}
+              {cell?.rule_penalty_applied && <span className="text-[9px] leading-none">P</span>}
             </div>
           );
         })}
@@ -238,7 +242,11 @@ export function AdminMonthGrid({
                     return (
                       <td key={day} className="px-0.5 py-1">
                         <div
-                          title={cell?.status ? statusLabel(cell.status) : 'Unmarked'}
+                          title={
+                            cell?.status
+                              ? `${statusLabel(cell.status)}${cell.is_late && cell.minutes_late ? ` · Late ${cell.minutes_late}m` : ''}${cell.rule_penalty_applied ? ' · Penalty' : ''}`
+                              : 'Unmarked'
+                          }
                           className={`h-7 w-7 mx-auto rounded flex items-center justify-center ${cellClass(cell, iso === today)}`}
                         >
                           {cellLabel(cell)}

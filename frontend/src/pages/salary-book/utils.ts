@@ -16,6 +16,19 @@ export function formatTime(iso: string | null) {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 }
 
+export function toTimeInput(value: string | null | undefined) {
+  if (!value) return '';
+  return String(value).slice(0, 5);
+}
+
+export function scheduledHoursFromTimes(checkIn: string, checkOut: string) {
+  if (!checkIn || !checkOut) return 0;
+  const [h1, m1] = toTimeInput(checkIn).split(':').map(Number);
+  const [h2, m2] = toTimeInput(checkOut).split(':').map(Number);
+  const mins = h2 * 60 + m2 - (h1 * 60 + m1);
+  return mins > 0 ? mins / 60 : 0;
+}
+
 export function formatDate(iso: string | null) {
   if (!iso) return '';
   const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);

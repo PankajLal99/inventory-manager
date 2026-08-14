@@ -162,8 +162,13 @@ export default function AttendancePage() {
       }
       return salaryBookApi.attendance.create(form);
     },
-    onSuccess: async () => {
-      toast('Attendance saved', 'success');
+    onSuccess: async (res) => {
+      const saved = res.data as Attendance;
+      if (saved.rule_penalty_applied) {
+        toast(saved.rule_remarks || 'Marked absent due to consecutive late arrivals.', 'error');
+      } else {
+        toast('Attendance saved', 'success');
+      }
       setSelected(null);
       setPhoto(null);
       setPhotoPreview(null);
@@ -308,6 +313,8 @@ export default function AttendancePage() {
                   {statusLabel(row.status)}
                   {row.check_in_time ? ` · ${formatTime(row.check_in_time)}` : ''}
                   {row.check_out_time ? ' · Out' : ''}
+                  {row.is_late && row.minutes_late ? ` · Late ${row.minutes_late}m` : ''}
+                  {row.rule_penalty_applied ? ' · Penalty absent' : ''}
                 </div>
               ) : (
                 <div className="text-sm text-gray-400">Not marked</div>

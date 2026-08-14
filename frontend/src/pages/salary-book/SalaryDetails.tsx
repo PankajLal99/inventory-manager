@@ -86,7 +86,10 @@ export default function SalaryDetails() {
 
       <Section title="Salary">
         <Row label="Gross Salary" value={formatINR(data.gross_salary)} />
+        <Row label="Scheduled Hours" value={data.scheduled_hours ? `${data.scheduled_hours} h` : '—'} />
         <Row label="Daily Salary" value={formatINR(data.daily_salary)} />
+        <Row label="Hourly Rate" value={formatINR(data.hourly_rate)} />
+        <Row label="Earned Salary" value={formatINR(data.earned_salary)} />
         <Row label="Leave Deduction" value={formatINR(data.leave_deduction)} />
         <Row label="Other Deduction" value={formatINR(data.other_deductions)} />
         <Row label="Allowances" value={formatINR(data.allowances)} />
@@ -123,6 +126,8 @@ export default function SalaryDetails() {
       </Section>
 
       </div>
+
+      <DailyBreakdown breakdown={data.breakdown} />
 
       <div className="flex flex-col lg:flex-row gap-3">
       <Button className="w-full lg:w-auto min-h-12 px-6 bg-emerald-600 hover:bg-emerald-700" onClick={() => setPayOpen(true)}>
@@ -193,6 +198,57 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between">
       <span className="text-gray-500">{label}</span>
       <span className="font-medium">{value}</span>
+    </div>
+  );
+}
+
+function DailyBreakdown({ breakdown }: { breakdown: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  const rows = (breakdown?.daily_breakdown || []) as Array<{
+    date: string;
+    status: string | null;
+    worked_hours: string;
+    payable_hours: string;
+    day_credit: string;
+    minutes_late: number;
+    rule_penalty_applied: boolean;
+  }>;
+  if (!rows.length) return null;
+  return (
+    <div className="bg-white rounded-xl border border-emerald-100 p-4">
+      <button type="button" className="font-semibold w-full text-left" onClick={() => setOpen((v) => !v)}>
+        Daily breakdown {open ? '▾' : '▸'}
+      </button>
+      {open && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500">
+                <th className="py-1 pr-3">Date</th>
+                <th className="py-1 pr-3">Status</th>
+                <th className="py-1 pr-3">Worked</th>
+                <th className="py-1 pr-3">Payable</th>
+                <th className="py-1 pr-3">Credit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.date} className="border-t border-emerald-50">
+                  <td className="py-1 pr-3">{formatDate(row.date)}</td>
+                  <td className="py-1 pr-3">
+                    {row.status ? statusLabel(row.status) : 'Unmarked'}
+                    {row.rule_penalty_applied ? ' · Penalty' : ''}
+                    {row.minutes_late ? ` · Late ${row.minutes_late}m` : ''}
+                  </td>
+                  <td className="py-1 pr-3">{row.worked_hours}h</td>
+                  <td className="py-1 pr-3">{row.payable_hours}h</td>
+                  <td className="py-1 pr-3">{formatINR(row.day_credit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -755,6 +755,16 @@ export const salaryBookApi = {
       api.get(`/salary-book/employees/${id}/advances/`, { params, ...sb } as any),
     salaries: (id: number, params?: any) =>
       api.get(`/salary-book/employees/${id}/salaries/`, { params, ...sb } as any),
+    attendanceRules: {
+      list: (id: number) =>
+        api.get(`/salary-book/employees/${id}/attendance-rules/`, sb as any),
+      create: (id: number, data: any) =>
+        api.post(`/salary-book/employees/${id}/attendance-rules/`, data, sb as any),
+      update: (id: number, ruleId: number, data: any) =>
+        api.patch(`/salary-book/employees/${id}/attendance-rules/${ruleId}/`, data, sb as any),
+      remove: (id: number, ruleId: number) =>
+        api.delete(`/salary-book/employees/${id}/attendance-rules/${ruleId}/`, sb as any),
+    },
   },
   attendance: {
     list: (params?: any) => api.get('/salary-book/attendance/', { params, ...sb } as any),

@@ -1,11 +1,13 @@
-from datetime import date, datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
@@ -14,12 +16,14 @@ from PIL import Image
 from backend.salary_book.models import (
     Attendance,
     Employee,
+    EmployeeAttendanceRule,
     LeaveRecord,
     SalaryAdvance,
     SalaryBookSettings,
     SalaryRecord,
 )
 from backend.salary_book.permissions import SALARY_BOOK_GROUP
+from backend.salary_book.services.attendance_evaluator import evaluate_check_in
 from backend.salary_book.services.salary_calculator import calculate_employee_month
 
 User = get_user_model()
@@ -144,6 +148,8 @@ class AuthTests(SalaryBookMixin, APITestCase):
 
     def test_dashboard_and_reports(self):
         emp = self.make_employee()
+        other = self.make_employee(name='Sita Devi', employee_id='EMP-088')
+        today = timezone.localdate()
         Attendance.objects.create(
             employee=emp,
             date=date(2026, 8, 1),
@@ -153,11 +159,29 @@ class AuthTests(SalaryBookMixin, APITestCase):
             location_accuracy=18,
             location_captured_at=datetime(2026, 8, 1, 9, 0, tzinfo=dt_timezone.utc),
         )
+        Attendance.objects.create(
+            employee=emp,
+            date=today,
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=timezone.now(),
+            latitude=Decimal('23.259900'),
+            longitude=Decimal('77.412600'),
+            location_accuracy=18,
+            location_captured_at=timezone.now(),
+        )
         self.client.force_authenticate(user=self.allowed)
         dash = self.client.get(reverse('salary-book-dashboard'))
         self.assertEqual(dash.status_code, status.HTTP_200_OK)
         self.assertIn('today_attendance', dash.data)
         self.assertIn('month', dash.data)
+        self.assertIn('live', dash.data)
+        marked_ids = [row['employee'] for row in dash.data['live']['marked']]
+        unmarked_ids = [row['id'] for row in dash.data['live']['unmarked']]
+        self.assertIn(emp.id, marked_ids)
+        self.assertIn(other.id, unmarked_ids)
+        self.assertEqual(dash.data['live']['marked'][0]['status'], Attendance.STATUS_PRESENT)
+        self.assertTrue(dash.data['live']['marked'][0]['check_in_time'])
+        self.assertGreaterEqual(dash.data['today_attendance']['unmarked'], 1)
         att = self.client.get(reverse('salary-book-report-attendance'), {'year': 2026, 'month': 8})
         self.assertEqual(att.status_code, status.HTTP_200_OK)
         leaves = self.client.get(reverse('salary-book-report-leaves'), {'year': 2026, 'month': 8})
@@ -500,3 +524,184 @@ class LeaveAdvanceTests(SalaryBookMixin, APITestCase):
             3,
         )
         self.assertEqual(LeaveRecord.objects.filter(employee=self.emp).count(), 1)
+
+
+def _local_dt(day, hour, minute):
+    return timezone.make_aware(
+        datetime(day.year, day.month, day.day, hour, minute),
+        timezone.get_current_timezone(),
+    )
+
+
+class ScheduleAndHourlyPayTests(SalaryBookMixin, APITestCase):
+    def setUp(self):
+        self.user = self.make_user('owner')
+        self.client.force_authenticate(user=self.user)
+        self.emp = self.make_employee(
+            monthly_salary=Decimal('24000.00'),
+            salary_calculation_method=Employee.METHOD_FIXED,
+            fixed_working_days=30,
+            expected_check_in=time(9, 0),
+            expected_check_out=time(17, 0),
+        )
+
+    def _att(self, day, status_value, check_in=None, check_out=None, **kwargs):
+        defaults = dict(
+            employee=self.emp,
+            date=date(2026, 4, day),
+            status=status_value,
+            check_in_time=check_in,
+            check_out_time=check_out,
+            latitude=Decimal('23.259900'),
+            longitude=Decimal('77.412600'),
+            location_accuracy=Decimal('18.00'),
+            location_captured_at=datetime(2026, 4, 1, 9, 0, tzinfo=dt_timezone.utc),
+            attendance_method=Attendance.METHOD_MANUAL,
+        )
+        defaults.update(kwargs)
+        return Attendance(**defaults)
+
+    def test_schedule_validation(self):
+        self.emp.expected_check_in = time(18, 0)
+        self.emp.expected_check_out = time(9, 0)
+        with self.assertRaises(DjangoValidationError):
+            self.emp.full_clean()
+        res = self.client.patch(
+            reverse('salary-book-employee-detail', args=[self.emp.id]),
+            {'expected_check_in': '18:00', 'expected_check_out': '09:00'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_hourly_no_overtime(self):
+        day = date(2026, 4, 1)
+        Attendance.objects.bulk_create([
+            self._att(1, Attendance.STATUS_PRESENT, _local_dt(day, 8, 0), _local_dt(day, 17, 0)),
+            *[self._att(d, Attendance.STATUS_ABSENT) for d in range(2, 31)],
+        ])
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['daily_salary'], Decimal('800.0000'))
+        self.assertEqual(calc['breakdown']['hourly_rate'], '100.0000')
+        self.assertEqual(calc['breakdown']['scheduled_hours'], '8.00')
+        self.assertEqual(calc['leave_deduction'], Decimal('23200.00'))
+        self.assertEqual(calc['net_salary'], Decimal('800.00'))
+        self.assertEqual(calc['breakdown']['daily_breakdown'][0]['worked_hours'], '9.00')
+        self.assertEqual(calc['breakdown']['daily_breakdown'][0]['payable_hours'], '8.00')
+
+    def test_proportional_under_time(self):
+        day = date(2026, 4, 1)
+        Attendance.objects.bulk_create([
+            self._att(1, Attendance.STATUS_PRESENT, _local_dt(day, 9, 0), _local_dt(day, 15, 0)),
+            *[self._att(d, Attendance.STATUS_ABSENT) for d in range(2, 31)],
+        ])
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['net_salary'], Decimal('600.00'))
+        self.assertEqual(calc['breakdown']['daily_breakdown'][0]['payable_hours'], '6.00')
+
+    def test_manual_present_no_times(self):
+        Attendance.objects.bulk_create([
+            self._att(1, Attendance.STATUS_PRESENT),
+            *[self._att(d, Attendance.STATUS_ABSENT) for d in range(2, 31)],
+        ])
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['net_salary'], Decimal('800.00'))
+
+    def test_paid_leave_full_credit(self):
+        Attendance.objects.bulk_create([
+            self._att(1, Attendance.STATUS_PAID_LEAVE),
+            *[self._att(d, Attendance.STATUS_ABSENT) for d in range(2, 31)],
+        ])
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['net_salary'], Decimal('800.00'))
+        self.assertEqual(calc['paid_leave_days'], Decimal('1.0'))
+
+
+class ConsecutiveLateRuleTests(SalaryBookMixin, APITestCase):
+    def setUp(self):
+        self.user = self.make_user('owner')
+        self.client.force_authenticate(user=self.user)
+        self.emp = self.make_employee(
+            expected_check_in=time(9, 0),
+            expected_check_out=time(17, 0),
+        )
+        EmployeeAttendanceRule.objects.create(
+            employee=self.emp,
+            rule_type=EmployeeAttendanceRule.TYPE_CONSECUTIVE_LATE,
+            late_threshold_minutes=30,
+            consecutive_late_days=3,
+        )
+
+    def _seed_day(self, day, hour, minute, minutes_late):
+        check_in = _local_dt(date(2026, 4, day), hour, minute)
+        return Attendance.objects.create(
+            employee=self.emp,
+            date=date(2026, 4, day),
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=check_in,
+            minutes_late=minutes_late,
+            is_late=minutes_late >= 30,
+            latitude=Decimal('23.259900'),
+            longitude=Decimal('77.412600'),
+            location_accuracy=Decimal('18.00'),
+            location_captured_at=check_in,
+            attendance_method=Attendance.METHOD_CAMERA,
+        )
+
+    def test_consecutive_late_penalty(self):
+        self._seed_day(1, 9, 40, 40)
+        self._seed_day(2, 9, 45, 45)
+        self._seed_day(3, 9, 35, 35)
+        on_time = _local_dt(date(2026, 4, 4), 9, 0)
+        result = evaluate_check_in(self.emp, date(2026, 4, 4), Attendance.STATUS_PRESENT, on_time)
+        self.assertEqual(result.status, Attendance.STATUS_ABSENT)
+        self.assertTrue(result.rule_penalty_applied)
+        self.assertIn('Consecutive late penalty', result.rule_remarks)
+
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.office_latitude = Decimal('23.259900')
+        settings_obj.office_longitude = Decimal('77.412600')
+        settings_obj.geofence_radius_meters = 150
+        settings_obj.save()
+        res = self.client.post(reverse('salary-book-attendance-list-create'), {
+            'employee': self.emp.id,
+            'date': '2026-04-04',
+            'status': 'PRESENT',
+            **self.gps,
+            'photo': jpeg_file(),
+        }, format='multipart')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['status'], Attendance.STATUS_ABSENT)
+        self.assertTrue(res.data['rule_penalty_applied'])
+
+    def test_streak_resets_on_time(self):
+        self._seed_day(1, 9, 40, 40)
+        self._seed_day(2, 9, 45, 45)
+        self._seed_day(3, 9, 0, 0)
+        late = _local_dt(date(2026, 4, 4), 9, 40)
+        result = evaluate_check_in(self.emp, date(2026, 4, 4), Attendance.STATUS_PRESENT, late)
+        self.assertEqual(result.status, Attendance.STATUS_PRESENT)
+        self.assertFalse(result.rule_penalty_applied)
+
+    def test_rule_api_crud(self):
+        url = reverse('salary-book-employee-attendance-rules', args=[self.emp.id])
+        listed = self.client.get(url)
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(listed.data), 1)
+        created = self.client.post(url, {
+            'late_threshold_minutes': 15,
+            'consecutive_late_days': 2,
+        }, format='json')
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        rule_id = created.data['id']
+        patched = self.client.patch(
+            reverse('salary-book-employee-attendance-rule-detail', args=[self.emp.id, rule_id]),
+            {'is_active': False},
+            format='json',
+        )
+        self.assertEqual(patched.status_code, status.HTTP_200_OK)
+        self.assertFalse(patched.data['is_active'])
+        deleted = self.client.delete(
+            reverse('salary-book-employee-attendance-rule-detail', args=[self.emp.id, rule_id])
+        )
+        self.assertEqual(deleted.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(len(self.client.get(url).data), 1)

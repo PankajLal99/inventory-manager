@@ -13,15 +13,19 @@ from backend.salary_book.models import (
     SalaryPayment,
     SalaryRecord,
 )
+from backend.salary_book.services.schedule_utils import (
+    FOUR,
+    TWO,
+    ZERO,
+    _q,
+    hours_from_minutes,
+    payable_minutes,
+    scheduled_hours,
+    scheduled_minutes,
+    worked_minutes,
+)
 
-TWO = Decimal('0.01')
-FOUR = Decimal('0.0001')
-ZERO = Decimal('0')
 HALF = Decimal('0.5')
-
-
-def _q(value, places=TWO):
-    return Decimal(value).quantize(places, rounding=ROUND_HALF_UP)
 
 
 def month_range(year, month):
@@ -102,6 +106,28 @@ def _status_counts(statuses):
     }
 
 
+def _day_credit(row: Attendance | None, employee: Employee, daily: Decimal, scheduled_mins: int) -> Decimal:
+    if row is None:
+        return ZERO
+    if row.status in (Attendance.STATUS_PAID_LEAVE, Attendance.STATUS_HOLIDAY):
+        return daily
+    if row.status in (Attendance.STATUS_ABSENT, Attendance.STATUS_UNPAID_LEAVE):
+        return ZERO
+    if row.status not in Attendance.PHOTO_STATUSES:
+        return ZERO
+    if scheduled_mins <= 0:
+        return ZERO
+    if row.payable_minutes:
+        payable = min(row.payable_minutes, scheduled_mins)
+    else:
+        payable = payable_minutes(worked_minutes(row, employee), employee)
+    credit = daily * Decimal(payable) / Decimal(scheduled_mins)
+    cap = daily if row.status == Attendance.STATUS_PRESENT else _q(daily * HALF, FOUR)
+    if credit > cap:
+        credit = cap
+    return _q(credit, FOUR)
+
+
 def calculate_employee_month(employee: Employee, year: int, month: int, today=None):
     """Return a transparent salary breakdown. Never called from the frontend."""
     settings_obj = SalaryBookSettings.get_solo()
@@ -109,16 +135,53 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
     divisor = divisor_for(year, month, method, fixed_days)
     gross = _q(employee.monthly_salary)
     daily = _q(gross / Decimal(divisor), FOUR) if divisor else ZERO
+    sched_mins = scheduled_minutes(employee, settings_obj)
+    sched_hours = scheduled_hours(employee, settings_obj)
+    hourly = _q(daily / sched_hours, FOUR) if sched_hours else ZERO
 
     start, end = month_range(year, month)
     rows = {
-        row.date: row.status
+        row.date: row
         for row in Attendance.objects.filter(employee=employee, date__gte=start, date__lte=end)
     }
-    statuses = [rows.get(d) for d in iter_expected_dates(employee, year, month, today)]
+    expected = list(iter_expected_dates(employee, year, month, today))
+    statuses = [rows.get(d).status if rows.get(d) else None for d in expected]
     counts = _status_counts(statuses)
 
-    leave_deduction = _q(daily * counts['deduction_days'])
+    daily_breakdown = []
+    credits_sum = ZERO
+    shortfall = ZERO
+    for day in expected:
+        row = rows.get(day)
+        credit = _day_credit(row, employee, daily, sched_mins)
+        credits_sum += credit
+        shortfall += max(ZERO, daily - credit)
+        status = row.status if row else None
+        worked = 0
+        payable = 0
+        late = 0
+        penalty = False
+        if row:
+            if row.status in Attendance.PHOTO_STATUSES:
+                worked = row.worked_minutes or worked_minutes(row, employee)
+                payable = row.payable_minutes or payable_minutes(worked, employee)
+                if row.check_in_time is None and row.check_out_time is None and not row.worked_minutes:
+                    worked = sched_mins
+                    payable = sched_mins
+            late = row.minutes_late or 0
+            penalty = row.rule_penalty_applied
+        daily_breakdown.append({
+            'date': day.isoformat(),
+            'status': status,
+            'worked_hours': str(hours_from_minutes(worked)),
+            'payable_hours': str(hours_from_minutes(payable)),
+            'day_credit': str(_q(credit)),
+            'minutes_late': late,
+            'rule_penalty_applied': penalty,
+        })
+
+    leave_deduction = _q(shortfall)
+    earned_salary = _q(gross - leave_deduction)
     other_deductions = ZERO
     allowances = ZERO
     advances = SalaryAdvance.objects.filter(
@@ -128,7 +191,7 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         date__lte=end,
     ).aggregate(total=Sum('amount'))['total'] or ZERO
     total_advances = _q(advances)
-    net = _q(gross - leave_deduction - other_deductions - total_advances + allowances)
+    net = _q(earned_salary - other_deductions - total_advances + allowances)
 
     breakdown = {
         'employee_id': employee.employee_id,
@@ -139,6 +202,9 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'calculation_method': method,
         'divisor_days': divisor,
         'daily_salary': str(daily),
+        'hourly_rate': str(hourly),
+        'scheduled_hours': str(sched_hours),
+        'earned_salary': str(earned_salary),
         'present_days': str(counts['present_days']),
         'absent_days': str(counts['absent_days']),
         'paid_leave_days': str(counts['paid_leave_days']),
@@ -152,11 +218,12 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'allowances': str(allowances),
         'total_advances': str(total_advances),
         'net_salary': str(net),
+        'daily_breakdown': daily_breakdown,
         'notes': [
-            'Paid leave does not reduce salary.',
-            'Unpaid leave, absent, and unmarked days reduce salary.',
-            'Half day deducts half of daily salary.',
-            'Holiday does not reduce salary.',
+            'Pay is proportional to hours worked, capped at the scheduled shift (no overtime).',
+            'Paid leave and holidays count as a full day.',
+            'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
+            'Half day is capped at half of daily salary.',
             'Active salary advances in this month reduce net payable.',
         ],
     }

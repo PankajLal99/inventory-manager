@@ -28,6 +28,7 @@ User = get_user_model()
 from .models import (
     Attendance,
     Employee,
+    EmployeeAttendanceRule,
     LeaveRecord,
     SalaryAdvance,
     SalaryBookSettings,
@@ -37,6 +38,7 @@ from .models import (
 from .permissions import IsSalaryBookUser, user_can_access_salary_book
 from .serializers import (
     AttendanceSerializer,
+    EmployeeAttendanceRuleSerializer,
     EmployeeSerializer,
     LeaveRecordSerializer,
     SalaryAdvanceSerializer,
@@ -48,6 +50,7 @@ from .services.attendance_gps import (
     validate_checkout_gps_and_photo,
     validate_create_gps_and_photo,
 )
+from .services.attendance_evaluator import evaluate_check_in, refresh_worked_minutes
 from .services.image_utils import maybe_compress, validate_and_compress_image
 from .services.salary_calculator import (
     apply_calculation_to_record,
@@ -295,6 +298,38 @@ def employee_detail(request, pk):
     return Response(EmployeeSerializer(employee, context={'request': request}).data)
 
 
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def employee_attendance_rule_list(request, pk):
+    employee = get_object_or_404(Employee, pk=pk)
+    if request.method == 'GET':
+        qs = employee.attendance_rules.all()
+        return Response(EmployeeAttendanceRuleSerializer(qs, many=True).data)
+
+    serializer = EmployeeAttendanceRuleSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    rule = serializer.save(employee=employee)
+    return Response(EmployeeAttendanceRuleSerializer(rule).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def employee_attendance_rule_detail(request, pk, rule_id):
+    employee = get_object_or_404(Employee, pk=pk)
+    rule = get_object_or_404(EmployeeAttendanceRule, pk=rule_id, employee=employee)
+    if request.method == 'GET':
+        return Response(EmployeeAttendanceRuleSerializer(rule).data)
+    if request.method == 'DELETE':
+        rule.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    serializer = EmployeeAttendanceRuleSerializer(rule, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    serializer.save()
+    return Response(serializer.data)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 def employee_photo(request, pk):
@@ -426,10 +461,16 @@ def attendance_list_create(request):
     if att_status in Attendance.PHOTO_STATUSES:
         check_in = timezone.now()
 
+    evaluated = evaluate_check_in(employee, att_date, att_status, check_in)
+    remarks = data.get('remarks') or ''
+    if evaluated.rule_penalty_applied:
+        extra = evaluated.rule_remarks
+        remarks = f'{remarks} {extra}'.strip() if remarks else extra
+
     attendance = Attendance.objects.create(
         employee=employee,
         date=att_date,
-        status=att_status,
+        status=evaluated.status,
         check_in_time=check_in,
         photo=photo,
         latitude=gps['latitude'],
@@ -437,7 +478,13 @@ def attendance_list_create(request):
         location_accuracy=gps['location_accuracy'],
         location_captured_at=_captured_at(data),
         attendance_method=method,
-        remarks=data.get('remarks') or '',
+        remarks=remarks,
+        minutes_late=evaluated.minutes_late,
+        is_late=evaluated.is_late,
+        worked_minutes=evaluated.worked_minutes,
+        payable_minutes=evaluated.payable_minutes,
+        rule_penalty_applied=evaluated.rule_penalty_applied,
+        rule_remarks=evaluated.rule_remarks,
         created_by=request.user,
     )
     return Response(
@@ -486,6 +533,7 @@ def attendance_detail(request, pk):
         attendance.check_out_captured_at = _captured_at(data, 'check_out_captured_at')
         if photo:
             attendance.check_out_photo = photo
+        refresh_worked_minutes(attendance)
         attendance.save()
         return Response(AttendanceSerializer(attendance, context={'request': request}).data)
 
@@ -955,7 +1003,17 @@ def attendance_calendar(request):
         employee_id__in=[emp.id for emp in employees],
         date__gte=start,
         date__lte=end,
-    ).values('id', 'employee_id', 'date', 'status', 'check_in_time', 'check_out_time')
+    ).values(
+        'id',
+        'employee_id',
+        'date',
+        'status',
+        'check_in_time',
+        'check_out_time',
+        'minutes_late',
+        'is_late',
+        'rule_penalty_applied',
+    )
 
     by_emp = {}
     for row in rows:
@@ -964,6 +1022,9 @@ def attendance_calendar(request):
             'status': row['status'],
             'check_in_time': _dt_iso(row['check_in_time']),
             'check_out_time': _dt_iso(row['check_out_time']),
+            'minutes_late': row['minutes_late'],
+            'is_late': row['is_late'],
+            'rule_penalty_applied': row['rule_penalty_applied'],
         }
 
     team = _status_counts()
@@ -1048,12 +1109,24 @@ def dashboard(request):
     except (TypeError, ValueError):
         year, month = today.year, today.month
 
-    today_rows = Attendance.objects.filter(date=today)
+    today_rows = Attendance.objects.filter(date=today).select_related('employee')
     counts = {key: 0 for key, _ in Attendance.STATUS_CHOICES}
     for row in today_rows.values('status').annotate(n=Count('id')):
         counts[row['status']] = row['n']
 
     employees = Employee.objects.filter(status=Employee.STATUS_ACTIVE)
+    marked_ids = set(today_rows.values_list('employee_id', flat=True))
+    unmarked_employees = list(
+        employees.exclude(id__in=marked_ids).order_by('name').values('id', 'name', 'employee_id')
+    )
+    live_marked = sorted(
+        today_rows,
+        key=lambda row: (
+            0 if row.check_in_time else 1,
+            -(row.check_in_time.timestamp() if row.check_in_time else 0),
+            -(row.updated_at.timestamp() if row.updated_at else 0),
+        ),
+    )
     payroll = Decimal('0')
     advances = Decimal('0')
     pending = Decimal('0')
@@ -1087,6 +1160,12 @@ def dashboard(request):
             'unpaid_leave': counts.get(Attendance.STATUS_UNPAID_LEAVE, 0),
             'half_day': counts.get(Attendance.STATUS_HALF_DAY, 0),
             'holiday': counts.get(Attendance.STATUS_HOLIDAY, 0),
+            'unmarked': len(unmarked_employees),
+        },
+        'live': {
+            'updated_at': timezone.localtime().isoformat(),
+            'marked': AttendanceSerializer(live_marked, many=True, context={'request': request}).data,
+            'unmarked': unmarked_employees,
         },
         'month': {
             'year': year,
