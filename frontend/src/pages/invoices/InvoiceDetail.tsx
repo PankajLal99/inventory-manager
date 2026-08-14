@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber, formatAmountINR, formatAppDate, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatAmountINR, formatAppDate, getProductNameColor, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -40,6 +40,7 @@ import {
   AlertTriangle,
   Package,
   BookOpen,
+  Calendar,
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
@@ -77,6 +78,20 @@ const INV_THEME = {
   rowAlt: '#fff7ed',
   tableHead: '#fef3c7',
 };
+
+/** Allowed checkout delivery dates: repair registration day through today (local). */
+function getRepairDeliveryDateBounds(repair?: {
+  created_at?: string;
+  delivery_date?: string | null;
+} | null) {
+  const today = getTodayDateString();
+  const created = toLocalDateString(repair?.created_at) || today;
+  const minDate = created <= today ? created : today;
+  const existing = toLocalDateString(repair?.delivery_date);
+  const defaultDate =
+    existing && existing >= minDate && existing <= today ? existing : today;
+  return { minDate, maxDate: today, defaultDate, today, createdDate: minDate };
+}
 
 function invoiceCaptureScale(): number {
   return Math.min(4, Math.max(3, window.devicePixelRatio));
@@ -281,6 +296,8 @@ export default function InvoiceDetail() {
   const [checkoutRepairStatus, setCheckoutRepairStatus] = useState<string>('');
   // Repair delivery date in checkout modal (from repair model, editable)
   const [checkoutDeliveryDate, setCheckoutDeliveryDate] = useState<string>('');
+  const checkoutDeliveryDateSectionRef = useRef<HTMLDivElement>(null);
+  const checkoutDeliveryDateInputRef = useRef<HTMLInputElement>(null);
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   // Replacement-return finalize modal state
@@ -997,18 +1014,19 @@ export default function InvoiceDetail() {
       const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
       const pendingAllowed = new Set(['received', 'not_repaired']);
       const currentPending = (checkoutRepairStatus || inv.repair.status || '').trim();
+      // Non-pending checkout types only allow Delivered — do not reset to the stored repair status.
       const initialStatus = checkoutInvoiceType === 'pending'
         ? (hasProducts ? 'work_in_progress' : (pendingAllowed.has(currentPending) ? currentPending : 'received'))
-        : inv.repair.status;
+        : 'delivered';
       setCheckoutRepairStatus(initialStatus);
     }
   }, [showCheckoutModal, checkoutInvoiceType, checkoutRepairStatus, invoice?.data?.repair?.status, invoice?.data?.items?.length]);
 
-  // Prefill repair delivery date from existing value (do not auto-set to today)
+  // Prefill repair delivery date from existing value when the modal opens.
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
-      const existing = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
+      const existing = toLocalDateString(inv.repair.delivery_date);
       setCheckoutDeliveryDate(existing);
     }
   }, [showCheckoutModal, invoice?.data?.repair?.id]);
@@ -1182,6 +1200,47 @@ export default function InvoiceDetail() {
     effectiveCheckoutRepairStatus === 'done' ||
     effectiveCheckoutRepairStatus === 'delivered'
   );
+  const checkoutDeliveryDateBounds = getRepairDeliveryDateBounds(inv?.repair);
+  const displayedCheckoutDeliveryDate = checkoutDeliveryDate || inv?.repair?.delivery_date || '';
+
+  const scrollCheckoutDeliveryDateIntoView = () => {
+    window.setTimeout(() => {
+      checkoutDeliveryDateSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      checkoutDeliveryDateInputRef.current?.focus();
+    }, 50);
+  };
+
+  const applyDefaultCheckoutDeliveryDate = (repair: any) => {
+    const bounds = getRepairDeliveryDateBounds(repair);
+    setCheckoutDeliveryDate(bounds.defaultDate);
+    scrollCheckoutDeliveryDateIntoView();
+  };
+
+  const assertCheckoutDeliveryDate = (repair: any, isRequired: boolean): boolean => {
+    if (!repair || !isRequired) return true;
+    const { minDate, maxDate, today } = getRepairDeliveryDateBounds(repair);
+    const selected = (checkoutDeliveryDate || '').trim();
+    if (!selected) {
+      alert('Please select a delivery date.');
+      scrollCheckoutDeliveryDateIntoView();
+      return false;
+    }
+    if (selected < minDate || selected > maxDate) {
+      alert(
+        `Delivery date must be on or after the repair registration date (${formatDateForInvoice(minDate)}) and on or before today (${formatDateForInvoice(maxDate)}).`
+      );
+      scrollCheckoutDeliveryDateIntoView();
+      return false;
+    }
+    if (selected === today) {
+      const confirmed = window.confirm('Delivery date has been set for today. Continue?');
+      if (!confirmed) {
+        scrollCheckoutDeliveryDateIntoView();
+        return false;
+      }
+    }
+    return true;
+  };
 
   // Group items by product only (not by barcode)
   const groupItemsByProduct = (items: any[]) => {
@@ -1594,10 +1653,11 @@ export default function InvoiceDetail() {
     const canSubmitDeliveryDate =
       submitRepairStatus === 'done' ||
       submitRepairStatus === 'delivered';
+    if (!assertCheckoutDeliveryDate(freshInv?.repair, !!freshInv?.repair && canSubmitDeliveryDate)) {
+      return;
+    }
     if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate.trim()) {
       checkoutData.delivery_date = checkoutDeliveryDate.trim();
-    } else if (freshInv?.repair && canSubmitDeliveryDate && (checkoutDeliveryDate === '' || checkoutDeliveryDate === null)) {
-      checkoutData.delivery_date = null;
     }
 
     // Only persist "clear delivery date" when user confirms submit (not while toggling controls).
@@ -4767,12 +4827,9 @@ export default function InvoiceDetail() {
                   // Auto-update repair status to 'delivered' when changing to a checkout type.
                   // (pending is handled in the early-return block above)
                   if (inv?.repair) {
-                    const statusToSet = 'delivered';
-                    setCheckoutRepairStatus(statusToSet);
-                    // Prefill delivery date to today (UI only). Do NOT auto-save because user may switch back to pending.
-                    const existingDeliveryDate = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
-                    const today = new Date().toISOString().slice(0, 10);
-                    setCheckoutDeliveryDate(existingDeliveryDate || today);
+                    setCheckoutRepairStatus('delivered');
+                    // Prefill within [registration date, today]. Do NOT auto-save; user may switch back to pending.
+                    applyDefaultCheckoutDeliveryDate(inv.repair);
                   }
                 }}
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
@@ -4891,7 +4948,7 @@ export default function InvoiceDetail() {
                       {repairStatusOptions.find((o) => o.value === inv.repair.status)?.label ?? inv.repair.status}
                     </Badge>
                     <p className="text-xs text-gray-500 mt-1">
-                      Delivery: {inv.repair.delivery_date ? formatDate(inv.repair.delivery_date) : '—'}
+                      Delivery: {displayedCheckoutDeliveryDate ? formatDateForInvoice(displayedCheckoutDeliveryDate) : '—'}
                     </p>
                   </div>
                   <div className="flex-1 min-w-[160px]">
@@ -4909,6 +4966,8 @@ export default function InvoiceDetail() {
                         setCheckoutRepairStatus(newStatus);
                         if (newStatus !== 'done' && newStatus !== 'delivered') {
                           setCheckoutDeliveryDate('');
+                        } else if (inv?.repair) {
+                          applyDefaultCheckoutDeliveryDate(inv.repair);
                         }
                       }}
                       className="w-full"
@@ -4932,25 +4991,45 @@ export default function InvoiceDetail() {
                         ))}
                     </Select>
                   </div>
-                  {shouldShowCheckoutDeliveryDate && (
-                    <div className="flex-1 min-w-[160px]">
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Delivery date</label>
+                </div>
+                {shouldShowCheckoutDeliveryDate && (
+                  <div
+                    ref={checkoutDeliveryDateSectionRef}
+                    className="rounded-lg border-2 border-amber-400 bg-white p-3"
+                  >
+                    <label className="flex items-center gap-2 text-sm font-semibold text-gray-900 mb-2">
+                      <Calendar className="h-4 w-4 text-amber-600" />
+                      Delivery date
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                       <Input
+                        ref={checkoutDeliveryDateInputRef}
                         type="date"
                         value={checkoutDeliveryDate}
+                        min={checkoutDeliveryDateBounds.minDate}
+                        max={checkoutDeliveryDateBounds.maxDate}
                         onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
-                        className="w-full"
+                        className="w-full sm:max-w-[220px] font-semibold"
                         disabled={isDraftPendingCheckout}
                       />
-                      {isDraftPendingCheckout && (
-                        <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
-                      )}
-                      {inv.repair.delivery_date && (
-                        <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
-                      )}
+                      <p className="text-sm font-semibold text-gray-900">
+                        {checkoutDeliveryDate
+                          ? formatDateForInvoice(checkoutDeliveryDate)
+                          : 'Not selected'}
+                      </p>
                     </div>
-                  )}
-                </div>
+                    {isDraftPendingCheckout && (
+                      <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
+                    )}
+                    <p className="text-xs text-gray-600 mt-2">
+                      Repair registered {formatDateForInvoice(checkoutDeliveryDateBounds.createdDate) || '—'}.
+                      {checkoutDeliveryDateBounds.minDate === checkoutDeliveryDateBounds.maxDate
+                        ? ' Delivery date is today.'
+                        : ` Choose a date from ${formatDateForInvoice(checkoutDeliveryDateBounds.minDate)} to ${formatDateForInvoice(checkoutDeliveryDateBounds.maxDate)}.`}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -5072,6 +5151,9 @@ export default function InvoiceDetail() {
                     submitRepairStatus === 'delivered';
                   if (freshInv?.repair && submitRepairStatus) {
                     payload.repair_status = submitRepairStatus;
+                  }
+                  if (!assertCheckoutDeliveryDate(freshInv?.repair, !!freshInv?.repair && canSubmitDeliveryDate)) {
+                    return;
                   }
                   if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate?.trim()) {
                     payload.delivery_date = checkoutDeliveryDate.trim();
