@@ -79,7 +79,7 @@ const INV_THEME = {
   tableHead: '#fef3c7',
 };
 
-/** Allowed checkout delivery dates: repair registration day through today (local). */
+/** Allowed checkout delivery dates: on or after the repair registration day (local). Future dates are allowed. */
 function getRepairDeliveryDateBounds(repair?: {
   created_at?: string;
   delivery_date?: string | null;
@@ -89,8 +89,8 @@ function getRepairDeliveryDateBounds(repair?: {
   const minDate = created <= today ? created : today;
   const existing = toLocalDateString(repair?.delivery_date);
   const defaultDate =
-    existing && existing >= minDate && existing <= today ? existing : today;
-  return { minDate, maxDate: today, defaultDate, today, createdDate: minDate };
+    existing && existing >= minDate ? existing : today;
+  return { minDate, defaultDate, today, createdDate: minDate };
 }
 
 function invoiceCaptureScale(): number {
@@ -1218,16 +1218,16 @@ export default function InvoiceDetail() {
 
   const assertCheckoutDeliveryDate = (repair: any, isRequired: boolean): boolean => {
     if (!repair || !isRequired) return true;
-    const { minDate, maxDate, today } = getRepairDeliveryDateBounds(repair);
+    const { minDate, today } = getRepairDeliveryDateBounds(repair);
     const selected = (checkoutDeliveryDate || '').trim();
     if (!selected) {
       alert('Please select a delivery date.');
       scrollCheckoutDeliveryDateIntoView();
       return false;
     }
-    if (selected < minDate || selected > maxDate) {
+    if (selected < minDate) {
       alert(
-        `Delivery date must be on or after the repair registration date (${formatDateForInvoice(minDate)}) and on or before today (${formatDateForInvoice(maxDate)}).`
+        `Delivery date must be on or after the repair registration date (${formatDateForInvoice(minDate)}).`
       );
       scrollCheckoutDeliveryDateIntoView();
       return false;
@@ -5008,7 +5008,6 @@ export default function InvoiceDetail() {
                         type="date"
                         value={checkoutDeliveryDate}
                         min={checkoutDeliveryDateBounds.minDate}
-                        max={checkoutDeliveryDateBounds.maxDate}
                         onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
                         className="w-full sm:max-w-[220px] font-semibold"
                         disabled={isDraftPendingCheckout}
@@ -5024,9 +5023,7 @@ export default function InvoiceDetail() {
                     )}
                     <p className="text-xs text-gray-600 mt-2">
                       Repair registered {formatDateForInvoice(checkoutDeliveryDateBounds.createdDate) || '—'}.
-                      {checkoutDeliveryDateBounds.minDate === checkoutDeliveryDateBounds.maxDate
-                        ? ' Delivery date is today.'
-                        : ` Choose a date from ${formatDateForInvoice(checkoutDeliveryDateBounds.minDate)} to ${formatDateForInvoice(checkoutDeliveryDateBounds.maxDate)}.`}
+                      {` Choose a date on or after ${formatDateForInvoice(checkoutDeliveryDateBounds.minDate)}.`}
                     </p>
                   </div>
                 )}

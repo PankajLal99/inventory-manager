@@ -98,6 +98,7 @@ def _optimized_product_list_internal(request):
         'limit': request.query_params.get('limit', 50),
         'lite': request.query_params.get('lite', ''),
         'include_barcodes': request.query_params.get('include_barcodes', ''),
+        'include_prices': request.query_params.get('include_prices', ''),
     }
     
     # Try cache first (skip if Redis not available)

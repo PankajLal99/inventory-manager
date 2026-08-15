@@ -282,6 +282,29 @@ class ProductListStockFromPurchaseTests(TransactionTestCase):
         self.assertIsNone(product_data.get('purchase_price'))
         self.assertEqual(product_data.get('barcodes'), [])
 
+    def test_lite_list_include_prices_returns_purchase_and_breakdown(self):
+        """PDF export sends include_prices=true so lite lists still include prices."""
+        purchase = TestDataFactory.create_purchase(user=self.user, status='finalized')
+        TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product,
+            quantity=Decimal('10'), shop_quantity=Decimal('7'), warehouse_quantity=Decimal('3'),
+            unit_price=Decimal('665.00'),
+        )
+        for _ in range(5):
+            TestDataFactory.create_barcode_with_purchase(self.user, self.product, tag='new')
+        response = self.client.get('/api/v1/products/', {
+            'lite': 'true',
+            'tag': 'new',
+            'include_prices': 'true',
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        product_data = next((p for p in response.data.get('results', []) if p['id'] == self.product.id), None)
+        self.assertIsNotNone(product_data)
+        self.assertEqual(product_data.get('purchase_price'), 665.0)
+        self.assertIsInstance(product_data.get('supplier_breakdown'), list)
+        self.assertGreater(len(product_data.get('supplier_breakdown') or []), 0)
+        self.assertEqual(product_data.get('barcodes'), [])
+
     def test_lite_does_not_change_full_list_shape(self):
         """Default list (no lite) still includes supplier breakdown for other screens."""
         purchase = TestDataFactory.create_purchase(user=self.user, status='finalized')

@@ -493,6 +493,13 @@ class ProductListSerializer(serializers.ModelSerializer):
             return False
         return str(request.query_params.get('lite', '')).lower() in ('true', '1', 'yes')
 
+    def _include_prices(self):
+        """PDF export needs prices/breakdown even when the list is in lite mode."""
+        request = self.context.get('request')
+        if not request:
+            return False
+        return str(request.query_params.get('include_prices', '')).lower() in ('true', '1', 'yes')
+
     def _needs_barcode_details(self):
         """Whether this tag filter requires individual barcode objects in the list.
         'sold' only needs an aggregate count; individual barcodes are fetched
@@ -667,14 +674,14 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_shop_stock(self, obj):
         """Shop available = sum of shop_barcode_count from supplier breakdown (accounts for sales)."""
-        if self._is_lite():
+        if self._is_lite() and not self._include_prices():
             return 0.0
         breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
         return float(sum(b['shop_barcode_count'] for b in breakdown))
 
     def get_warehouse_stock(self, obj):
         """Warehouse available = sum of warehouse_available from supplier breakdown (accounts for sales)."""
-        if self._is_lite():
+        if self._is_lite() and not self._include_prices():
             warehouse_map = self.context.get('warehouse_qty_by_product') or {}
             return float(warehouse_map.get(obj.id, 0) or 0)
         breakdown = self._get_supplier_breakdown_cached(obj, exclude_fully_zero_rows=False)
@@ -734,7 +741,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_purchase_price(self, obj):
         """Get purchase price from product's primary barcode or first barcode"""
-        if self._is_lite() or self._get_tag_filter() == 'sold':
+        if not self._include_prices() and (self._is_lite() or self._get_tag_filter() == 'sold'):
             return None
         from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
 
@@ -758,7 +765,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_selling_price(self, obj):
         """Get selling price from product's primary barcode or first barcode.
         Returns None if selling_price is 0 or null, indicating fallback to purchase price."""
-        if self._is_lite() or self._get_tag_filter() == 'sold':
+        if not self._include_prices() and (self._is_lite() or self._get_tag_filter() == 'sold'):
             return None
         from backend.catalog.barcode_resolution import single_barcode_for_untracked_product
 
@@ -787,7 +794,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_stock_bifurcation(self, obj):
         """Stock breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT counted."""
-        if self._is_lite() or self._get_tag_filter() not in (None, 'new'):
+        if not self._include_prices() and (self._is_lite() or self._get_tag_filter() not in (None, 'new')):
             return ""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
@@ -810,7 +817,7 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def get_price_bifurcation(self, obj):
         """Price breakdown by supplier - AVAILABLE only (new+returned). Unknown/defective NOT included."""
-        if self._is_lite() or self._get_tag_filter() not in (None, 'new'):
+        if not self._include_prices() and (self._is_lite() or self._get_tag_filter() not in (None, 'new')):
             return ""
         if hasattr(obj, 'annotated_barcode_count') and obj.annotated_barcode_count == 0:
             return ""
@@ -845,7 +852,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ", ".join(parts)
 
     def get_supplier_breakdown(self, obj):
-        if self._is_lite() or self._get_tag_filter() not in (None, 'new'):
+        if not self._include_prices() and (self._is_lite() or self._get_tag_filter() not in (None, 'new')):
             return []
         request = self.context.get('request')
         include_zero = False

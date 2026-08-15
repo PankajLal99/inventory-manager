@@ -17,36 +17,60 @@ import ProductForm from './ProductForm';
 import ProductExportModal from './ProductExportModal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 
-const PRODUCTS_FILTERS_STORAGE_KEY = 'products:filters:v1';
+const PRODUCTS_FILTERS_STORAGE_KEY = 'products:filters:v2';
 const PRODUCTS_LIST_STALE_MS = 30_000;
 const PRODUCTS_REF_STALE_MS = 5 * 60_000;
 
-type PersistedProductFilters = {
+type TabFilterState = {
   category: string;
   brand: string;
   supplier: string;
 };
 
-function readPersistedProductFilters(): PersistedProductFilters | null {
-  if (typeof window === 'undefined') return null;
+type PersistedProductFilters = Record<string, TabFilterState>;
+
+const EMPTY_TAB_FILTERS: TabFilterState = {
+  category: '',
+  brand: '',
+  supplier: '',
+};
+
+function sanitizeTabFilters(value: unknown): TabFilterState {
+  if (!value || typeof value !== 'object') return { ...EMPTY_TAB_FILTERS };
+  const parsed = value as Partial<TabFilterState>;
+  return {
+    category: typeof parsed.category === 'string' ? parsed.category : '',
+    brand: typeof parsed.brand === 'string' ? parsed.brand : '',
+    supplier: typeof parsed.supplier === 'string' ? parsed.supplier : '',
+  };
+}
+
+function readPersistedProductFilters(): PersistedProductFilters {
+  if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(PRODUCTS_FILTERS_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<PersistedProductFilters>;
-    return {
-      category: typeof parsed.category === 'string' ? parsed.category : '',
-      brand: typeof parsed.brand === 'string' ? parsed.brand : '',
-      supplier: typeof parsed.supplier === 'string' ? parsed.supplier : '',
-    };
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([tab, filters]) => [tab, sanitizeTabFilters(filters)])
+    );
   } catch {
-    return null;
+    return {};
   }
 }
 
-function writePersistedProductFilters(filters: PersistedProductFilters): void {
+function getPersistedFiltersForTab(tab: string, all?: PersistedProductFilters): TabFilterState {
+  const stored = all ?? readPersistedProductFilters();
+  return stored[tab] ? { ...stored[tab] } : { ...EMPTY_TAB_FILTERS };
+}
+
+function writePersistedFiltersForTab(tab: string, filters: TabFilterState): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(PRODUCTS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
+    const all = readPersistedProductFilters();
+    all[tab] = filters;
+    window.localStorage.setItem(PRODUCTS_FILTERS_STORAGE_KEY, JSON.stringify(all));
   } catch {
     // quota / private mode
   }
@@ -58,25 +82,28 @@ export default function Products() {
   const userGroups = user?.groups || [];
   const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
   const [searchParams, setSearchParams] = useSearchParams();
+  const initialTag = searchParams.get('tag') || 'new';
   const persistedFilters = useRef(readPersistedProductFilters()).current;
+  const initialTabFilters = getPersistedFiltersForTab(initialTag, persistedFilters);
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<number | undefined>();
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [categoryFilter, setCategoryFilter] = useState(
-    searchParams.get('category') || persistedFilters?.category || ''
+    searchParams.get('category') || initialTabFilters.category
   );
   const [brandFilter, setBrandFilter] = useState(
-    searchParams.get('brand') || persistedFilters?.brand || ''
+    searchParams.get('brand') || initialTabFilters.brand
   );
   const [supplierFilter, setSupplierFilter] = useState(
-    searchParams.get('supplier') || persistedFilters?.supplier || ''
+    searchParams.get('supplier') || initialTabFilters.supplier
   );
   const [defectiveScopeReady, setDefectiveScopeReady] = useState(false);
   const [pendingDefectiveSupplier, setPendingDefectiveSupplier] = useState(
-    searchParams.get('supplier') || persistedFilters?.supplier || ''
+    (searchParams.get('tag') === 'defective' ? searchParams.get('supplier') : null)
+      || getPersistedFiltersForTab('defective', persistedFilters).supplier
   );
   const [stockStatusFilter, setStockStatusFilter] = useState(searchParams.get('stock_status') || '');
-  const [tagFilter, setTagFilter] = useState(searchParams.get('tag') || 'new'); // Default to 'new' (fresh)
+  const [tagFilter, setTagFilter] = useState(initialTag); // Default to 'new' (fresh)
   const [activeStockTab, setActiveStockTab] = useState<'stock' | 'low' | 'out'>('stock');
   const [showAdjustmentForm, setShowAdjustmentForm] = useState(false);
   const [adjustingProduct, setAdjustingProduct] = useState<number | undefined>();
@@ -201,7 +228,7 @@ export default function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update URL params when filters change, and persist category/brand/supplier.
+  // Update URL params when filters change, and persist category/brand/supplier per tab.
   useEffect(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
@@ -213,13 +240,28 @@ export default function Products() {
     if (params.toString() !== searchParams.toString()) {
       setSearchParams(params, { replace: true });
     }
-    writePersistedProductFilters({
+    writePersistedFiltersForTab(tagFilter, {
       category: categoryFilter,
       brand: brandFilter,
       supplier: supplierFilter,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
+
+  const applyProductTab = (nextTag: string) => {
+    if (nextTag === tagFilter) return;
+    writePersistedFiltersForTab(tagFilter, {
+      category: categoryFilter,
+      brand: brandFilter,
+      supplier: supplierFilter,
+    });
+    const nextFilters = getPersistedFiltersForTab(nextTag);
+    setTagFilter(nextTag);
+    setCategoryFilter(nextFilters.category);
+    setBrandFilter(nextFilters.brand);
+    setSupplierFilter(nextFilters.supplier);
+    setStockStatusFilter('');
+  };
 
   // Build query params for API
   const buildQueryParams = () => {
@@ -1485,7 +1527,9 @@ export default function Products() {
     let hasMore = true;
 
     while (hasMore) {
-      const params = { ...buildQueryParams(), page, limit: 100 };
+      // List view uses lite=true (no prices). Export needs include_prices so PDF
+      // purchase/selling columns are populated instead of dashes.
+      const params = { ...buildQueryParams(), page, limit: 100, include_prices: 'true' };
       const response = await productsApi.list(params);
       const data = response.data;
       const pageRows: any[] = Array.isArray(data?.results)
@@ -1691,10 +1735,7 @@ export default function Products() {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-2">
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => {
-              setTagFilter('new');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('new')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium text-sm ${tagFilter === 'new'
               ? 'bg-green-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1703,10 +1744,7 @@ export default function Products() {
             All Products
           </button>
           <button
-            onClick={() => {
-              setTagFilter('sold');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('sold')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'sold'
               ? 'bg-blue-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1715,10 +1753,7 @@ export default function Products() {
             Sold
           </button>
           <button
-            onClick={() => {
-              setTagFilter('unknown');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('unknown')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'unknown'
               ? 'bg-yellow-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1727,10 +1762,7 @@ export default function Products() {
             Unknown
           </button>
           <button
-            onClick={() => {
-              setTagFilter('returned');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('returned')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'returned'
               ? 'bg-purple-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1739,10 +1771,7 @@ export default function Products() {
             Returned
           </button>
           <button
-            onClick={() => {
-              setTagFilter('defective');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('defective')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'defective'
               ? 'bg-red-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1751,10 +1780,7 @@ export default function Products() {
             Defective
           </button>
           <button
-            onClick={() => {
-              setTagFilter('in-cart');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('in-cart')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'in-cart'
               ? 'bg-orange-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
