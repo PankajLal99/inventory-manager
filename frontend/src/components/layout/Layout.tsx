@@ -315,7 +315,7 @@ export default function Layout() {
         { path: '/history', icon: History, label: 'History', showFor: 'admin' },
         { path: '/pos-credit', icon: Coins, label: 'POS Credit', showFor: ['Admin'] },
         { path: '/credit-invoices', icon: FileText, label: 'Credit Invoices', showFor: ['Admin'] },
-        { path: '/categories-brands', icon: Tags, label: 'Categories & Brands', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/categories-brands', icon: Tags, label: 'Categories, Brands & Groups', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
       ],
     },
   ];

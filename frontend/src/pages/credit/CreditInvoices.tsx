@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Coins,
@@ -24,7 +24,6 @@ import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
 import DateRangeSelector from '../../components/ui/DateRangeSelector';
 import Button from '../../components/ui/Button';
-import Pagination from '../../components/ui/Pagination';
 import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -34,6 +33,8 @@ import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 import { canEditCreditRecords, canManageCreditRecords, isAccountsOnlyUser } from './creditLedgerUtils';
 
 type ListMode = 'sale' | 'return';
+
+const PAGE_SIZE = 25;
 
 type VoidTarget = {
   id: number;
@@ -52,7 +53,6 @@ export default function CreditInvoices() {
 
   const [search, setSearch] = useState('');
   const [customerGroup, setCustomerGroup] = useState('');
-  const [page, setPage] = useState(1);
   const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -67,7 +67,6 @@ export default function CreditInvoices() {
     if (next === 'return') params.set('mode', 'return');
     else params.delete('mode');
     setSearchParams(params, { replace: true });
-    setPage(1);
   };
 
   const { data: customerGroups = [] } = useQuery({
@@ -79,14 +78,14 @@ export default function CreditInvoices() {
   });
 
   const filterParams = useMemo(() => {
-    const params: Record<string, string | number> = { page, page_size: 25 };
+    const params: Record<string, string | number> = { page_size: PAGE_SIZE };
     if (search.trim()) params.search = search.trim();
     params.status = isReturn ? 'completed' : 'open';
     if (customerGroup) params.customer_group = customerGroup;
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     return params;
-  }, [search, customerGroup, dateFrom, dateTo, page, isReturn]);
+  }, [search, customerGroup, dateFrom, dateTo, isReturn]);
 
   const summaryParams = useMemo(() => {
     const params: Record<string, string> = {};
@@ -105,31 +104,41 @@ export default function CreditInvoices() {
     },
   });
 
-  const invoicesQuery = useQuery({
+  const getNextPageParam = (lastPage: { page?: number; page_size?: number; count?: number }) => {
+    const currentPage = lastPage?.page || 1;
+    const pageSize = lastPage?.page_size || PAGE_SIZE;
+    const total = lastPage?.count || 0;
+    if (currentPage * pageSize < total) return currentPage + 1;
+    return undefined;
+  };
+
+  const invoicesQuery = useInfiniteQuery({
     queryKey: ['credit-invoices', filterParams],
-    queryFn: async () => {
-      const res = await creditApi.invoices.list(filterParams);
+    queryFn: async ({ pageParam }) => {
+      const res = await creditApi.invoices.list({ ...filterParams, page: pageParam });
       return res.data;
     },
+    initialPageParam: 1,
+    getNextPageParam,
     enabled: !isReturn,
   });
 
-  const returnsQuery = useQuery({
+  const returnsQuery = useInfiniteQuery({
     queryKey: ['credit-returns', filterParams],
-    queryFn: async () => {
-      const res = await creditApi.returns.list(filterParams);
+    queryFn: async ({ pageParam }) => {
+      const res = await creditApi.returns.list({ ...filterParams, page: pageParam });
       return res.data;
     },
+    initialPageParam: 1,
+    getNextPageParam,
     enabled: isReturn,
   });
 
   const listQuery = isReturn ? returnsQuery : invoicesQuery;
-  const { data, isLoading, error, refetch } = listQuery;
+  const { data, isLoading, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = listQuery;
 
-  const results = data?.results || [];
-  const count = data?.count || 0;
-  const pageSize = data?.page_size || 25;
-  const totalPages = Math.max(1, Math.ceil(count / pageSize));
+  const results = data?.pages.flatMap((page) => page.results || []) || [];
+  const count = data?.pages[0]?.count || 0;
 
   const totalSales = parseFloat(String(summary?.total_sales || 0));
   const totalReturns = parseFloat(String(summary?.total_returns || 0));
@@ -170,7 +179,6 @@ export default function CreditInvoices() {
     setDateFrom('');
     setDateTo('');
     setDatePreset('custom');
-    setPage(1);
   };
 
   return (
@@ -305,7 +313,6 @@ export default function CreditInvoices() {
                   value={search}
                   onChange={(e) => {
                     setSearch(e.target.value);
-                    setPage(1);
                   }}
                   className="pl-10 h-10"
                 />
@@ -316,7 +323,6 @@ export default function CreditInvoices() {
                   value={customerGroup}
                   onChange={(e) => {
                     setCustomerGroup(e.target.value);
-                    setPage(1);
                   }}
                   className="h-10 py-2 text-sm"
                 >
@@ -337,7 +343,6 @@ export default function CreditInvoices() {
                     setDatePreset(preset);
                     setDateFrom(range.startDate);
                     setDateTo(range.endDate);
-                    setPage(1);
                   }}
                 />
               </div>
@@ -438,15 +443,14 @@ export default function CreditInvoices() {
                 </TableRow>
               ))}
             </Table>
-            <div className="p-4">
-              <Pagination
-                currentPage={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                totalItems={count}
-                pageSize={pageSize}
-              />
-            </div>
+            <LoadMoreFooter
+              shown={results.length}
+              total={count}
+              noun={count === 1 ? 'return' : 'returns'}
+              hasNextPage={!!hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={() => fetchNextPage()}
+            />
           </>
         ) : (
           <>
@@ -511,15 +515,14 @@ export default function CreditInvoices() {
                 </TableRow>
               ))}
             </Table>
-            <div className="p-4">
-              <Pagination
-                currentPage={page}
-                totalPages={totalPages}
-                onPageChange={setPage}
-                totalItems={count}
-                pageSize={pageSize}
-              />
-            </div>
+            <LoadMoreFooter
+              shown={results.length}
+              total={count}
+              noun={count === 1 ? 'invoice' : 'invoices'}
+              hasNextPage={!!hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={() => fetchNextPage()}
+            />
           </>
         )}
       </Card>
@@ -557,6 +560,45 @@ export default function CreditInvoices() {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+function LoadMoreFooter({
+  shown,
+  total,
+  noun,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
+}: {
+  shown: number;
+  total: number;
+  noun: string;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onLoadMore: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2 py-4 border-t border-gray-100">
+      {hasNextPage ? (
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onLoadMore}
+          loading={isFetchingNextPage}
+          disabled={isFetchingNextPage}
+          className="min-w-[140px]"
+        >
+          {isFetchingNextPage ? 'Loading…' : 'Load more'}
+        </Button>
+      ) : null}
+      {shown > 0 ? (
+        <p className="text-xs text-gray-500">
+          Showing {shown}
+          {total ? ` of ${total} ${noun}` : ` ${noun}`}
+        </p>
+      ) : null}
     </div>
   );
 }

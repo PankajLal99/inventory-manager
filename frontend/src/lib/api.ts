@@ -372,6 +372,8 @@ export const customersApi = {
     list: () => api.get('/customer-groups/'),
     get: (id: number) => api.get(`/customer-groups/${id}/`),
     create: (data: any) => api.post('/customer-groups/', data),
+    update: (id: number, data: any) => api.patch(`/customer-groups/${id}/`, data),
+    delete: (id: number) => api.delete(`/customer-groups/${id}/`),
   },
   ledger: {
     entries: {

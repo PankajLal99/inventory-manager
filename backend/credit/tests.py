@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
@@ -7,6 +7,7 @@ from rest_framework import status
 
 from backend.core.test_utils import AuthenticatedAPIClient, TestDataFactory
 from backend.credit.customer_sync import sync_linked_credit_customers_from_party
+from backend.credit.ledger_sync import sync_main_ledger_payment
 from backend.credit.models import (
     CreditCustomer,
     CreditInvoice,
@@ -14,7 +15,7 @@ from backend.credit.models import (
     CreditPayment,
     CreditReturn,
 )
-from backend.parties.models import Customer, CustomerGroup
+from backend.parties.models import Customer, CustomerGroup, LedgerEntry
 
 
 class PartyCreditCustomerSyncTest(TestCase):
@@ -194,3 +195,65 @@ class CreditLedgerStatementOrderTests(TestCase):
         self.assertEqual(response.data['rows'][3]['txn_type'], 'sale')
         self.assertEqual(response.data['rows'][4]['txn_type'], 'payment')
         self.assertEqual(response.data['rows'][-1]['id'], mistake.id)
+
+
+class MainLedgerSentSyncTimestampTests(TestCase):
+    """Payments-page Sent should post credit at 12:00 AM on the click day."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.party = Customer.objects.create(name='VIJAY ❤', phone='9000007777')
+        CreditCustomer.objects.create(
+            name='VIJAY ❤',
+            phone='9000007777',
+            linked_customer=self.party,
+            is_active=True,
+        )
+
+    def _midnight_today(self):
+        now = timezone.localtime(timezone.now())
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def test_sent_payment_is_stamped_at_local_midnight_today(self):
+        yesterday_afternoon = timezone.localtime(timezone.now()).replace(
+            hour=15, minute=30, second=0, microsecond=0
+        ) - timedelta(days=1)
+        entry = LedgerEntry.objects.create(
+            customer=self.party,
+            entry_type='credit',
+            payment_mode='cash',
+            amount=Decimal('500.00'),
+            description='Manual payment',
+            is_sent=True,
+            created_by=self.user,
+            created_at=yesterday_afternoon,
+        )
+
+        sync_main_ledger_payment(entry, self.user)
+
+        payment = CreditPayment.objects.get(source_ledger_entry_id=entry.id)
+        ledger_row = CreditLedgerEntry.objects.get(payment=payment)
+        expected = self._midnight_today()
+        self.assertEqual(timezone.localtime(payment.paid_at), expected)
+        self.assertEqual(timezone.localtime(ledger_row.created_at), expected)
+        self.assertNotEqual(timezone.localtime(payment.paid_at), yesterday_afternoon)
+
+    def test_rebuild_keeps_original_sent_midnight(self):
+        entry = LedgerEntry.objects.create(
+            customer=self.party,
+            entry_type='credit',
+            payment_mode='cash',
+            amount=Decimal('200.00'),
+            is_sent=True,
+            created_by=self.user,
+        )
+        sync_main_ledger_payment(entry, self.user)
+        original_paid_at = CreditPayment.objects.get(source_ledger_entry_id=entry.id).paid_at
+
+        entry.amount = Decimal('250.00')
+        entry.save(update_fields=['amount'])
+        sync_main_ledger_payment(entry, self.user)
+
+        payment = CreditPayment.objects.get(source_ledger_entry_id=entry.id)
+        self.assertEqual(payment.paid_at, original_paid_at)
+        self.assertEqual(payment.amount, Decimal('250.00'))
