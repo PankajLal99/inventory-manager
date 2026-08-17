@@ -104,7 +104,12 @@ export default function CreditInvoices() {
     },
   });
 
-  const getNextPageParam = (lastPage: { page?: number; page_size?: number; count?: number }) => {
+  const getNextPageParam = (lastPage: {
+    page?: number;
+    page_size?: number;
+    count?: number;
+    results?: unknown[];
+  }) => {
     const currentPage = lastPage?.page || 1;
     const pageSize = lastPage?.page_size || PAGE_SIZE;
     const total = lastPage?.count || 0;
