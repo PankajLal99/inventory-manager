@@ -3,6 +3,9 @@ Lightweight stock-alert helpers with Redis caching.
 
 counts_only path avoids loading full product ID lists and only joins thresholds
 for products that still have available stock (low-stock candidates).
+
+Out of stock includes purchased products with no remaining units AND catalog
+products that have never been purchased (available quantity is 0).
 """
 from __future__ import annotations
 
@@ -22,11 +25,11 @@ STOCK_ALERTS_LIST_TTL = 60
 
 
 def _counts_cache_key(store_id: Optional[str] = None) -> str:
-    return f'stock_alerts:v2:counts:{store_id or "all"}'
+    return f'stock_alerts:v3:counts:{store_id or "all"}'
 
 
 def _list_cache_key(store_id: Optional[str] = None) -> str:
-    return f'stock_alerts:v2:list:{store_id or "all"}'
+    return f'stock_alerts:v3:list:{store_id or "all"}'
 
 
 def invalidate_stock_alerts_cache() -> None:
@@ -34,7 +37,7 @@ def invalidate_stock_alerts_cache() -> None:
     try:
         from django_redis import get_redis_connection
         con = get_redis_connection('default')
-        keys = con.keys('*stock_alerts:v2:*')
+        keys = con.keys('*stock_alerts:v3:*')
         if keys:
             con.delete(*keys)
             logger.debug('Invalidated %s stock alert cache keys', len(keys))
@@ -97,16 +100,35 @@ def _purchased_product_ids_qs(store_id: Optional[str] = None):
     return qs.distinct()
 
 
+def _never_purchased_product_ids_qs():
+    """Active tracked products with no barcode/purchase history (available qty is 0)."""
+    return Product.objects.filter(
+        is_active=True,
+        track_inventory=True,
+        barcodes__isnull=True,
+    )
+
+
+def _out_of_stock_product_ids(store_id: Optional[str] = None, available_ids: Optional[List[int]] = None) -> List[int]:
+    available_ids = available_ids or [-1]
+    purchased_out = _purchased_product_ids_qs(store_id).exclude(id__in=available_ids)
+    return list(purchased_out.values_list('id', flat=True)) + list(
+        _never_purchased_product_ids_qs().values_list('id', flat=True)
+    )
+
+
 def compute_stock_alert_counts(store_id: Optional[str] = None) -> Dict[str, int]:
     """
     Ultra-light counts:
-    - out_of_stock = purchased products - products with available > 0
+    - out_of_stock = purchased products with available == 0, plus never-purchased products
     - low_stock = available > 0 and available <= threshold (threshold > 0)
     """
     available_map = _available_qty_by_product(store_id)
-    total_purchased = _purchased_product_ids_qs(store_id).count()
-    with_stock = len(available_map)
-    out_count = max(0, total_purchased - with_stock)
+    available_ids = list(available_map.keys()) or [-1]
+    out_count = (
+        _purchased_product_ids_qs(store_id).exclude(id__in=available_ids).count()
+        + _never_purchased_product_ids_qs().count()
+    )
 
     low_count = 0
     if available_map:
@@ -163,12 +185,8 @@ def compute_stock_alert_list(store_id: Optional[str] = None) -> Dict[str, List[D
     available_map = _available_qty_by_product(store_id)
     available_ids = list(available_map.keys())
 
-    # Out of stock: purchased, but no available barcodes
-    out_ids = list(
-        _purchased_product_ids_qs(store_id)
-        .exclude(id__in=available_ids or [-1])
-        .values_list('id', flat=True)
-    )
+    # Out of stock: purchased with no remaining units, plus never-purchased catalog products
+    out_ids = _out_of_stock_product_ids(store_id, available_ids)
 
     low_ids: List[int] = []
     if available_map:
