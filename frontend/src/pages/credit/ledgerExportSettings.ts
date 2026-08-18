@@ -1,4 +1,8 @@
+import { useEffect, useState } from 'react';
+import api from '../../lib/api';
+
 const STORAGE_KEY = 'credit-ledger-export-split-v1';
+const CHANGE_EVENT = 'credit-ledger-export-split-changed';
 
 export type LedgerExportSplit = {
   useRows: boolean;
@@ -64,6 +68,32 @@ export function normalizeLedgerExportSplit(
   return next;
 }
 
+function persistLocal(next: LedgerExportSplit) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function notify() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(CHANGE_EVENT));
+  }
+}
+
+function isServerSplitPayload(data: unknown): data is Partial<LedgerExportSplit> {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    'useRows' in d ||
+    'useDays' in d ||
+    'rowsPerPage' in d ||
+    'daysPerPage' in d ||
+    'mode' in d
+  );
+}
+
 export function loadLedgerExportSplit(): LedgerExportSplit {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -74,14 +104,78 @@ export function loadLedgerExportSplit(): LedgerExportSplit {
   }
 }
 
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let hydratePromise: Promise<void> | null = null;
+let localDirty = false;
+
+async function pushSplitToServer(split: LedgerExportSplit) {
+  try {
+    await api.put('/ledger-export-settings/', split);
+  } catch {
+    /* offline / permission — local cache still applies on this device */
+  }
+}
+
+function scheduleServerSync(split: LedgerExportSplit) {
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    void pushSplitToServer(split);
+  }, 400);
+}
+
 export function saveLedgerExportSplit(value: Partial<LedgerExportSplit>): LedgerExportSplit {
   const next = normalizeLedgerExportSplit(value);
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    /* ignore quota / private mode */
-  }
+  localDirty = true;
+  persistLocal(next);
+  notify();
+  scheduleServerSync(next);
   return next;
+}
+
+/** Load shop-wide copy settings from the API so all users share the same split. */
+export function hydrateLedgerExportSplitFromServer(): Promise<void> {
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = (async () => {
+    try {
+      const { data } = await api.get<Partial<LedgerExportSplit> | Record<string, never>>(
+        '/ledger-export-settings/'
+      );
+      if (isServerSplitPayload(data)) {
+        if (!localDirty) {
+          const next = normalizeLedgerExportSplit(data);
+          persistLocal(next);
+          notify();
+        }
+      } else {
+        const local = loadLedgerExportSplit();
+        await pushSplitToServer(local);
+      }
+    } catch {
+      /* keep local */
+    } finally {
+      hydratePromise = null;
+    }
+  })();
+  return hydratePromise;
+}
+
+export function subscribeLedgerExportSplit(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  window.addEventListener(CHANGE_EVENT, listener);
+  window.addEventListener('storage', listener);
+  return () => {
+    window.removeEventListener(CHANGE_EVENT, listener);
+    window.removeEventListener('storage', listener);
+  };
+}
+
+export function useLedgerExportSplit(): LedgerExportSplit {
+  const [split, setSplit] = useState<LedgerExportSplit>(loadLedgerExportSplit);
+  useEffect(() => subscribeLedgerExportSplit(() => setSplit(loadLedgerExportSplit())), []);
+  useEffect(() => {
+    void hydrateLedgerExportSplitFromServer();
+  }, []);
+  return split;
 }
 
 export function ledgerExportSplitBadge(split: LedgerExportSplit): string {

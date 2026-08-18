@@ -74,8 +74,8 @@ import {
   LEDGER_EXPORT_DAY_PRESETS,
   LEDGER_EXPORT_ROW_PRESETS,
   ledgerExportSplitBadge,
-  loadLedgerExportSplit,
   saveLedgerExportSplit,
+  useLedgerExportSplit,
   type LedgerExportSplit,
 } from './ledgerExportSettings';
 import {
@@ -238,13 +238,9 @@ export default function CreditLedgerDetail() {
     useState<Record<LedgerColumnId, boolean>>(loadColumnVisibility);
   const [search, setSearch] = useState('');
   const { ledger: ledgerTheme } = useCreditDocThemes();
-  const [exportSplit, setExportSplit] = useState<LedgerExportSplit>(loadLedgerExportSplit);
-  const [rowsPerPageDraft, setRowsPerPageDraft] = useState(() =>
-    String(loadLedgerExportSplit().rowsPerPage)
-  );
-  const [daysPerPageDraft, setDaysPerPageDraft] = useState(() =>
-    String(loadLedgerExportSplit().daysPerPage)
-  );
+  const exportSplit = useLedgerExportSplit();
+  const [rowsPerPageDraft, setRowsPerPageDraft] = useState(() => String(exportSplit.rowsPerPage));
+  const [daysPerPageDraft, setDaysPerPageDraft] = useState(() => String(exportSplit.daysPerPage));
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showDebitModal, setShowDebitModal] = useState(false);
@@ -337,7 +333,6 @@ export default function CreditLedgerDetail() {
 
   const persistExportSplit = (patch: Partial<LedgerExportSplit>) => {
     const next = saveLedgerExportSplit({ ...exportSplit, ...patch });
-    setExportSplit(next);
     setRowsPerPageDraft(String(next.rowsPerPage));
     setDaysPerPageDraft(String(next.daysPerPage));
     return next;
@@ -371,17 +366,19 @@ export default function CreditLedgerDetail() {
         return Number.isFinite(parsed) ? parsed : exportSplit.daysPerPage;
       })(),
     });
-    setExportSplit(withRows);
     setRowsPerPageDraft(String(withRows.rowsPerPage));
     setDaysPerPageDraft(String(withRows.daysPerPage));
     return withRows;
   };
 
+  useEffect(() => {
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+    setDaysPerPageDraft(String(exportSplit.daysPerPage));
+  }, [exportSplit]);
+
   const openCopySettings = () => {
-    const loaded = loadLedgerExportSplit();
-    setExportSplit(loaded);
-    setRowsPerPageDraft(String(loaded.rowsPerPage));
-    setDaysPerPageDraft(String(loaded.daysPerPage));
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+    setDaysPerPageDraft(String(exportSplit.daysPerPage));
     setShowColumnSettings(false);
     setShowCopySettings(true);
   };
@@ -1537,8 +1534,8 @@ export default function CreditLedgerDetail() {
                     </button>
                   </div>
                   <p className="text-xs text-stone-500 mb-2">
-                    Saved on this device. When both are on, Split by rows takes priority.
-                    Split by days is used only when rows is off.
+                    Saved for the whole shop (all users and devices). When both are on, Split by
+                    rows takes priority. Split by days is used only when rows is off.
                   </p>
                   <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer">
                     <input
