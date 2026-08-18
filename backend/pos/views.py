@@ -18,6 +18,7 @@ import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses, InvoiceTag
 from backend.catalog.barcode_resolution import (
     get_catalog_barcode_by_printed_value,
+    get_barcode_matching_printed_value,
     single_barcode_for_untracked_product,
     clean_scanned_barcode,
 )
@@ -1858,14 +1859,7 @@ def cart_items(request, pk):
     # Check if this barcode is already sold (assigned to an invoice item)
     # Allow 'new' and 'returned' tags to be added to cart - they are available for sale
     if scanned_value_str:
-        barcode_obj = None
-        try:
-            try:
-                barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
-            except Barcode.DoesNotExist:
-                barcode_obj = Barcode.objects.get(short_code=scanned_value_str)
-        except Barcode.DoesNotExist:
-            pass
+        barcode_obj = get_barcode_matching_printed_value(scanned_value_str)
         if barcode_obj:
             # Allow 'new' and 'returned' tags - they are available for sale
             if barcode_obj.tag in ['new', 'returned']:
@@ -1918,12 +1912,11 @@ def cart_items(request, pk):
     barcode_value_to_use = None
     
     if scanned_value_str:
-        # Exact match only: try barcode then short_code (scanned_value_str already .upper())
+        # Exact match, then space-stripped compare on stored barcode/short_code
         try:
-            try:
-                barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
-            except Barcode.DoesNotExist:
-                barcode_obj = Barcode.objects.get(short_code=scanned_value_str)
+            barcode_obj = get_barcode_matching_printed_value(scanned_value_str)
+            if not barcode_obj:
+                raise Barcode.DoesNotExist
 
             # Verify this barcode belongs to the product being added
             if barcode_obj.product_id != product_id:

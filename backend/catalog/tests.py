@@ -1246,6 +1246,25 @@ class BarcodeLookupSlashAndSpaceTests(TransactionTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["id"], self.product.id)
 
+    def test_lookup_strips_spaces_stored_in_db(self):
+        spaced = TestDataFactory.create_barcode_with_purchase(
+            user=self.user,
+            product=self.product,
+            barcode="DD -0002",
+            tag='new',
+        )
+        spaced.short_code = "DD -0002"
+        spaced.save(update_fields=['short_code'])
+
+        for query in ("DD-0002", "DD -0002", "dd -0002"):
+            response = self.client.get(
+                "/api/v1/barcodes/by-barcode/",
+                {"barcode": query, "barcode_only": "true", "pos_scan": "true", "no_cache": "true"},
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK, msg=query)
+            self.assertEqual(response.data["id"], self.product.id)
+            self.assertEqual(response.data.get("canonical_barcode"), "DD -0002")
+
 
 class BarcodeTagTransitionTests(TransactionTestCase):
     """Tag update rules for catalog barcode status changes."""

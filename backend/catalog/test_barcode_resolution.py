@@ -4,6 +4,7 @@ from django.test import TestCase
 
 from backend.catalog.barcode_resolution import (
     get_catalog_barcode_by_printed_value,
+    get_barcode_matching_printed_value,
     single_barcode_for_untracked_product,
     clean_scanned_barcode,
 )
@@ -50,6 +51,15 @@ class GetCatalogBarcodeByPrintedValueTests(TestCase):
         p = TestDataFactory.create_product(track_inventory=True)
         b = TestDataFactory.create_barcode(p, barcode='ON/-0185', tag='new')
         self.assertEqual(get_catalog_barcode_by_printed_value('ON/ -0185').pk, b.pk)
+
+    def test_strips_spaces_from_stored_barcode(self):
+        p = TestDataFactory.create_product(track_inventory=True)
+        b = TestDataFactory.create_barcode(p, barcode='DD -0002', tag='new')
+        b.short_code = 'DD -0002'
+        b.save(update_fields=['short_code'])
+        self.assertEqual(get_catalog_barcode_by_printed_value('DD-0002').pk, b.pk)
+        self.assertEqual(get_catalog_barcode_by_printed_value('DD -0002').pk, b.pk)
+        self.assertEqual(get_barcode_matching_printed_value('dd-0002').pk, b.pk)
 
 
 class SingleBarcodeForUntrackedProductTests(TestCase):
