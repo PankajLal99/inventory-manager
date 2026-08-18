@@ -98,6 +98,45 @@ function hasLowStockLimit(product: StockAlertProduct) {
   return productThreshold(product) > 0;
 }
 
+const STOCK_ALERTS_FILTERS_STORAGE_KEY = 'stock-alerts:filters:v1';
+
+type PersistedStockAlertFilters = {
+  onlyWithLimit: boolean;
+};
+
+const DEFAULT_STOCK_ALERT_FILTERS: PersistedStockAlertFilters = {
+  onlyWithLimit: true,
+};
+
+function readPersistedStockAlertFilters(): PersistedStockAlertFilters {
+  if (typeof window === 'undefined') return { ...DEFAULT_STOCK_ALERT_FILTERS };
+  try {
+    const raw = window.localStorage.getItem(STOCK_ALERTS_FILTERS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_STOCK_ALERT_FILTERS };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...DEFAULT_STOCK_ALERT_FILTERS };
+    }
+    return {
+      onlyWithLimit:
+        typeof parsed.onlyWithLimit === 'boolean'
+          ? parsed.onlyWithLimit
+          : DEFAULT_STOCK_ALERT_FILTERS.onlyWithLimit,
+    };
+  } catch {
+    return { ...DEFAULT_STOCK_ALERT_FILTERS };
+  }
+}
+
+function writePersistedStockAlertFilters(filters: PersistedStockAlertFilters): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STOCK_ALERTS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
+  } catch {
+    // quota / private mode
+  }
+}
+
 export default function StockAlerts() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -109,7 +148,9 @@ export default function StockAlerts() {
   const [thresholdMin, setThresholdMin] = useState(0);
   const [thresholdMax, setThresholdMax] = useState(0);
   const [thresholdInitialized, setThresholdInitialized] = useState(false);
-  const [onlyWithLimit, setOnlyWithLimit] = useState(true);
+  const [onlyWithLimit, setOnlyWithLimit] = useState(
+    () => readPersistedStockAlertFilters().onlyWithLimit,
+  );
   const [showExportModal, setShowExportModal] = useState(false);
 
   const { data, isLoading, error, isFetching } = useQuery({
@@ -188,6 +229,10 @@ export default function StockAlerts() {
       max: Math.max(...values),
     };
   }, [alertsForThreshold]);
+
+  useEffect(() => {
+    writePersistedStockAlertFilters({ onlyWithLimit });
+  }, [onlyWithLimit]);
 
   useEffect(() => {
     if (!thresholdInitialized && alerts.length > 0) {
