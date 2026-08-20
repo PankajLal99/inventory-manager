@@ -41,8 +41,9 @@ import { useCreditDocThemes, getInvoiceTheme } from './creditDocTheme';
 import {
   buildCreditDocumentSnapshotBlobs,
   copyPngBlobToClipboard,
-  SNAPSHOT_ROWS_PER_PAGE,
+  creditDocumentRowsPerPage,
 } from './creditDocumentClipboard';
+import { useLedgerExportSplit } from './ledgerExportSettings';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -94,6 +95,8 @@ export default function CreditInvoiceDetail() {
     total: number;
     nextPart: number;
   } | null>(null);
+  const exportSplit = useLedgerExportSplit();
+  const photoRowsPerPage = creditDocumentRowsPerPage(exportSplit);
   const pdfFrameRef = useRef<HTMLIFrameElement>(null);
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
   const photoPartsQueueRef = useRef<Blob[]>([]);
@@ -410,10 +413,10 @@ export default function CreditInvoiceDetail() {
   const photoExpectedParts = useMemo(() => {
     const itemCount = (invoice?.items || []).length;
     if (itemCount === 0) return 1;
-    return Math.ceil(itemCount / SNAPSHOT_ROWS_PER_PAGE);
-  }, [invoice?.items]);
+    return Math.ceil(itemCount / photoRowsPerPage);
+  }, [invoice?.items, photoRowsPerPage]);
 
-  // Reset multi-page photo queue when invoice / line items change
+  // Reset multi-page photo queue when invoice / line items / split change
   useEffect(() => {
     photoPartsQueueRef.current = [];
     photoPartsTotalRef.current = 0;
@@ -422,7 +425,7 @@ export default function CreditInvoiceDetail() {
     } else {
       setPhotoPageProgress(null);
     }
-  }, [invoiceId, photoExpectedParts, invoice?.updated_at]);
+  }, [invoiceId, photoExpectedParts, invoice?.updated_at, photoRowsPerPage]);
 
   const handleCapturePhoto = useCallback(async () => {
     if (!invoice) return;
@@ -462,18 +465,22 @@ export default function CreditInvoiceDetail() {
         return;
       }
 
-      const blobs = await buildCreditDocumentSnapshotBlobs(iframe, {
-        invoice_number: invoice.invoice_number,
-        customer_name: invoice.customer_name,
-        customer_phone: invoice.customer_phone,
-        created_at: invoice.created_at,
-        subtotal: invoice.subtotal,
-        total: invoice.total,
-        notes: invoice.notes,
-        status: invoice.status,
-        customer_balance: invoice.customer_balance,
-        items: invoice.items || [],
-      });
+      const blobs = await buildCreditDocumentSnapshotBlobs(
+        iframe,
+        {
+          invoice_number: invoice.invoice_number,
+          customer_name: invoice.customer_name,
+          customer_phone: invoice.customer_phone,
+          created_at: invoice.created_at,
+          subtotal: invoice.subtotal,
+          total: invoice.total,
+          notes: invoice.notes,
+          status: invoice.status,
+          customer_balance: invoice.customer_balance,
+          items: invoice.items || [],
+        },
+        exportSplit
+      );
       if (!blobs.length) {
         showToast('Failed to create image', 'error');
         return;
@@ -503,7 +510,7 @@ export default function CreditInvoiceDetail() {
     } finally {
       setExporting(false);
     }
-  }, [invoice, photoExpectedParts]);
+  }, [invoice, photoExpectedParts, exportSplit]);
 
   const photoButtonLabel = useMemo(() => {
     if (!photoPageProgress || photoPageProgress.total <= 1) return 'Photo';
@@ -552,12 +559,12 @@ export default function CreditInvoiceDetail() {
             is on your clipboard. Paste it in WhatsApp, then tap{' '}
             <span className="font-semibold">Photo</span> again for page{' '}
             {photoPageProgress.nextPart} of {photoPageProgress.total} (
-            {SNAPSHOT_ROWS_PER_PAGE} lines each).
+            {photoRowsPerPage} lines each).
           </div>
         ) : photoPageProgress && photoPageProgress.total > 1 ? (
           <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700">
             This invoice has {photoPageProgress.total} photo pages (
-            {SNAPSHOT_ROWS_PER_PAGE} lines each). Tap Photo to copy page 1, paste, then tap
+            {photoRowsPerPage} lines each). Tap Photo to copy page 1, paste, then tap
             again for the next page.
           </div>
         ) : null}
@@ -622,7 +629,7 @@ export default function CreditInvoiceDetail() {
                     className="flex-1 sm:flex-none"
                     title={
                       photoPageProgress && photoPageProgress.total > 1
-                        ? `Copy invoice image page ${photoPageProgress.nextPart} of ${photoPageProgress.total} (${SNAPSHOT_ROWS_PER_PAGE} lines each)`
+                        ? `Copy invoice image page ${photoPageProgress.nextPart} of ${photoPageProgress.total} (${photoRowsPerPage} lines each)`
                         : 'Copy invoice image to clipboard'
                     }
                   >
@@ -818,7 +825,7 @@ export default function CreditInvoiceDetail() {
               className="flex-1 sm:flex-none"
               title={
                 photoPageProgress && photoPageProgress.total > 1
-                  ? `Copy invoice image page ${photoPageProgress.nextPart} of ${photoPageProgress.total} (${SNAPSHOT_ROWS_PER_PAGE} lines each)`
+                  ? `Copy invoice image page ${photoPageProgress.nextPart} of ${photoPageProgress.total} (${photoRowsPerPage} lines each)`
                   : 'Copy invoice image to clipboard'
               }
             >

@@ -50,6 +50,11 @@ import {
   THERMAL_ITEMS_TABLE_HEAD_HTML,
 } from '../../utils/thermalPrintStyles';
 import { useSubmitLock, isSubmitBlocked } from '../../hooks/useSubmitLock';
+import {
+  chunkInvoiceRowsForExport,
+  invoiceSnapshotPageCount,
+  useInvoiceExportSplit,
+} from '../invoices/invoiceExportSettings';
 
 function escapeHtml(s: unknown): string {
   return String(s ?? '')
@@ -59,8 +64,6 @@ function escapeHtml(s: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Max cart lines per snapshot image (taller captures fade with html2canvas). */
-const SNAPSHOT_ROWS_PER_PAGE = 25;
 const POS_SNAPSHOT_SHOP_NAME = 'MANISH TRADERS';
 const POS_SNAPSHOT_WIDTH = 794;
 const POS_SNAPSHOT_HEIGHT = 1123;
@@ -86,15 +89,6 @@ type CartSnapshotRow = {
   unitPrice: number;
   lineTotal: number;
 };
-
-function chunkSnapshotRows<T>(rows: T[], size: number): T[][] {
-  if (size <= 0) return [rows];
-  const chunks: T[][] = [];
-  for (let i = 0; i < rows.length; i += size) {
-    chunks.push(rows.slice(i, i + size));
-  }
-  return chunks.length > 0 ? chunks : [[]];
-}
 
 function fmtSnapQty(qty: number): string {
   return Number.isInteger(qty) ? String(qty) : formatNumber(qty, 3);
@@ -385,6 +379,8 @@ async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
 }
 
 export default function POS() {
+  const exportSplit = useInvoiceExportSplit();
+  const snapshotRowsPerPage = exportSplit.rowsPerPage;
   const [username, setUsername] = useState<string | null>(null);
   const [cartTabs, setCartTabs] = useState<CartTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
@@ -3219,9 +3215,8 @@ export default function POS() {
 
   const snapshotExpectedParts = useMemo(() => {
     const itemCount = cart?.data?.items?.length ?? 0;
-    if (itemCount === 0) return 1;
-    return Math.ceil(itemCount / SNAPSHOT_ROWS_PER_PAGE);
-  }, [cart?.data?.items?.length]);
+    return invoiceSnapshotPageCount(itemCount, snapshotRowsPerPage);
+  }, [cart?.data?.items?.length, snapshotRowsPerPage]);
 
   useEffect(() => {
     snapshotPartsQueueRef.current = [];
@@ -3240,9 +3235,9 @@ export default function POS() {
 
   const snapshotButtonTitle = snapshotClipboardProgress
     ? snapshotClipboardProgress.total > 1
-      ? `Copy cart snapshot — image ${snapshotClipboardProgress.nextPart} of ${snapshotClipboardProgress.total} (${SNAPSHOT_ROWS_PER_PAGE} lines per image)`
-      : `Copy cart snapshot (${SNAPSHOT_ROWS_PER_PAGE} lines per image)`
-    : `Copy cart snapshot (${SNAPSHOT_ROWS_PER_PAGE} lines per image)`;
+      ? `Copy cart snapshot — image ${snapshotClipboardProgress.nextPart} of ${snapshotClipboardProgress.total} (${snapshotRowsPerPage} lines per image)`
+      : `Copy cart snapshot (${snapshotRowsPerPage} lines per image)`
+    : `Copy cart snapshot (${snapshotRowsPerPage} lines per image)`;
 
   const copyDraftSnapshotToClipboard = useCallback(async () => {
     const cartData = cart?.data;
@@ -3316,7 +3311,7 @@ export default function POS() {
       const customerName = selectedCustomer?.name || cartData?.customer_name || 'Walk-in Customer';
       const cartLabel = cartData?.cart_number || (cartId ? `CART-${cartId}` : 'Cart');
 
-      const rowChunks = chunkSnapshotRows(draftItems, SNAPSHOT_ROWS_PER_PAGE);
+      const rowChunks = chunkInvoiceRowsForExport(draftItems, snapshotRowsPerPage);
       const partCount = rowChunks.length;
       const blobs: Blob[] = [];
 
@@ -3354,7 +3349,7 @@ export default function POS() {
         snapshotPartsTotalRef.current = blobs.length;
         setSnapshotClipboardProgress({ total: blobs.length, nextPart: 2 });
         showToast(
-          `Image 1 of ${blobs.length} copied. Tap Cart Snapshot again for image 2 of ${blobs.length} (${SNAPSHOT_ROWS_PER_PAGE} lines per image).`,
+          `Image 1 of ${blobs.length} copied. Tap Cart Snapshot again for image 2 of ${blobs.length} (${snapshotRowsPerPage} lines per image).`,
           'success',
           5000
         );
@@ -3382,6 +3377,7 @@ export default function POS() {
     selectedCustomer?.name,
     showToast,
     snapshotExpectedParts,
+    snapshotRowsPerPage,
     tradeInCredit,
   ]);
 

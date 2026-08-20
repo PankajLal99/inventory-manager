@@ -12,10 +12,19 @@ import {
 } from './creditLedgerSnapshot';
 import {
   loadLedgerExportSplit,
+  normalizeLedgerExportSplit,
   type LedgerExportSplit,
 } from './ledgerExportSettings';
 import { setPendingLedgerClipboardImage } from './pendingLedgerClipboard';
 
+/** Current shop-wide credit document rows-per-image (from Credit Ledger copy settings). */
+export function creditDocumentRowsPerPage(
+  split: LedgerExportSplit = loadLedgerExportSplit()
+): number {
+  return normalizeLedgerExportSplit(split).rowsPerPage;
+}
+
+/** @deprecated Prefer creditDocumentRowsPerPage() / useLedgerExportSplit().rowsPerPage */
 export const SNAPSHOT_ROWS_PER_PAGE = 25;
 
 type CartSnapshotRow = {
@@ -116,7 +125,8 @@ export type CreditDocumentClipboardInput = {
 
 export async function buildCreditDocumentSnapshotBlobs(
   iframe: HTMLIFrameElement,
-  input: CreditDocumentClipboardInput
+  input: CreditDocumentClipboardInput,
+  split: LedgerExportSplit = loadLedgerExportSplit()
 ): Promise<Blob[]> {
   const items = input.items || [];
   const rows: CartSnapshotRow[] = items.map((item, idx) => {
@@ -140,7 +150,7 @@ export async function buildCreditDocumentSnapshotBlobs(
     parseFloat(String(input.total ?? 0)) ||
     rows.reduce((sum, row) => sum + row.lineTotal, 0);
   const totalAmt = input.variant === 'return' ? Math.abs(totalAmtRaw) : totalAmtRaw;
-  const rowChunks = chunkSnapshotRows(rows, SNAPSHOT_ROWS_PER_PAGE);
+  const rowChunks = chunkSnapshotRows(rows, creditDocumentRowsPerPage(split));
   const blobs: Blob[] = [];
   let lineOffset = 0;
 

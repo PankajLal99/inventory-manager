@@ -3618,8 +3618,8 @@ export default function InvoiceDetail() {
                     </button>
                   </div>
                   <p className="text-xs text-stone-500 mb-2">
-                    Saved for the whole shop (all users and devices). Invoices longer than this
-                    many lines are copied as separate images (Copy 1 / Copy 2 / Copy 3).
+                    For invoices &amp; POS only (shop-wide). Separate from Credit Ledger copy
+                    settings. Invoices longer than this many lines become Copy 1 / Copy 2 / Copy 3.
                   </p>
                   <label className="block text-sm text-stone-800 mb-1.5">Rows per image</label>
                   <Input
