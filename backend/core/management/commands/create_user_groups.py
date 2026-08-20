@@ -59,6 +59,11 @@ class Command(BaseCommand):
                     ('*', 'All permissions'),  # Will be handled specially
                 ]
             },
+            {
+                'name': 'Admin2',
+                'description': 'Personal Ledger access (can be combined with other groups)',
+                'permissions': [],
+            },
         ]
 
         created_count = 0

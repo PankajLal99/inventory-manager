@@ -303,7 +303,7 @@ export default function Layout() {
       items: [
         // { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/credit-ledger', icon: BookOpen, label: 'Credit Ledger', showFor: ['Admin',] },
-        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
+        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: ['Admin', 'Admin2'] },
         { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/expenses', icon: Coins, label: 'Expenses', showFor: ['Admin', 'Super', 'RetailAdmin', 'WholesaleAdmin', 'Temp', 'Retail', 'Wholesale'] },

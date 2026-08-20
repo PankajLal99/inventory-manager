@@ -54,7 +54,7 @@ export default function PersonalLedgerDetail() {
     const loadUser = async () => { try { await auth.loadUser(); setUser(auth.getUser()); } catch (e) {} };
     loadUser();
   }, []);
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && (user.groups.includes('Admin') || user.groups.includes('Admin2')));
 
   const { data: customerData } = useQuery({
     queryKey: ['personal-customer', customerId],
