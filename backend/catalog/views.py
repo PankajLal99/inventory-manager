@@ -1048,12 +1048,13 @@ def product_generate_labels(request, pk):
         safe_name = escape_zpl(truncated_name)
         safe_barcode = escape_zpl(barcode_obj.barcode)
         
-        # Get vendor name and purchase date
+        # Get vendor code (fallback name) and purchase date
         vendor_name = ""
         purchase_date = ""
         if barcode_obj.purchase:
             if barcode_obj.purchase.supplier:
-                vendor_name = barcode_obj.purchase.supplier.name[:20] if len(barcode_obj.purchase.supplier.name) > 20 else barcode_obj.purchase.supplier.name
+                vendor_label = barcode_obj.purchase.supplier.qr_label_vendor()
+                vendor_name = vendor_label[:20] if len(vendor_label) > 20 else vendor_label
             purchase_date = barcode_obj.purchase.purchase_date.strftime('%Y-%m-%d')
         
         safe_vendor = escape_zpl(vendor_name)
@@ -1106,7 +1107,7 @@ def product_generate_labels(request, pk):
         purchase_date = None
         if barcode.purchase:
             if barcode.purchase.supplier:
-                vendor_name = barcode.purchase.supplier.name
+                vendor_name = barcode.purchase.supplier.qr_label_vendor()
             purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
         
         # Extract serial number from barcode
@@ -1490,7 +1491,7 @@ def product_regenerate_labels(request, pk):
         purchase_date = None
         if barcode.purchase:
             if barcode.purchase.supplier:
-                vendor_name = barcode.purchase.supplier.name
+                vendor_name = barcode.purchase.supplier.qr_label_vendor()
             purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
         
         # Extract serial number from barcode

@@ -300,7 +300,7 @@ def queue_bulk_label_generation_via_azure(barcodes_data: list) -> Dict[int, Opti
             - barcode_value: str
             - short_code: Optional[str] (short barcode code without date)
             - barcode_id: int
-            - vendor_name: Optional[str]
+            - vendor_name: Optional[str] (vendor code preferred; Azure Function field name unchanged)
             - purchase_date: Optional[str] (will be formatted to dd-mm-yyyy)
             - serial_number: Optional[str]
     

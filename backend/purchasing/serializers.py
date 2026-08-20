@@ -221,7 +221,7 @@ def auto_generate_labels_for_barcodes(barcodes, product_name):
                                 barcode_with_purchase = Barcode.objects.select_related('purchase', 'purchase__supplier').get(pk=barcode.pk)
                                 if barcode_with_purchase.purchase:
                                     if barcode_with_purchase.purchase.supplier:
-                                        vendor_name = barcode_with_purchase.purchase.supplier.name
+                                        vendor_name = barcode_with_purchase.purchase.supplier.qr_label_vendor()
                                     purchase_date = barcode_with_purchase.purchase.purchase_date.strftime('%d-%m-%Y')
                             except Exception:
                                 pass

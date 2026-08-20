@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   CheckCircle,
   XCircle,
+  X,
   Clock,
   User,
   Store,
@@ -27,6 +28,7 @@ import {
   Printer,
   Download,
   Camera,
+  SlidersHorizontal,
   ShoppingCart,
   Plus,
   Minus,
@@ -59,6 +61,16 @@ import {
 } from '../../utils/thermalPrintStyles';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import { isSubmitBlocked } from '../../hooks/useSubmitLock';
+import {
+  chunkInvoiceRowsForExport,
+  INVOICE_EXPORT_ROW_PRESETS,
+  invoiceExportSplitBadge,
+  invoiceExportSplitExplain,
+  invoiceSnapshotPageCount,
+  saveInvoiceExportSplit,
+  useInvoiceExportSplit,
+  type InvoiceExportSplit,
+} from './invoiceExportSettings';
 
 /** A4 width at 96dpi — fixed capture size for sharp images regardless of on-screen preview scale */
 const INVOICE_CAPTURE_WIDTH_PX = 794;
@@ -161,6 +173,46 @@ function formatTradeInReturnTag(tag: unknown): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
   return String(tag);
+}
+
+type InvoicePrintGroup = {
+  name: string;
+  brand: string;
+  totalQuantity: number;
+  totalAmount: number;
+  items: any[];
+};
+
+function buildInvoicePrintGroups(items: any[]): InvoicePrintGroup[] {
+  const groupedItems: Record<string, InvoicePrintGroup> = {};
+  items.forEach((item: any) => {
+    const name = item.product_name || '-';
+    const brand = item.product_brand_name || item.brand_name || '';
+    const groupKey = brand ? `${name}::${brand}` : name;
+    if (!groupedItems[groupKey]) {
+      groupedItems[groupKey] = { name, brand, totalQuantity: 0, totalAmount: 0, items: [] };
+    }
+    const quantity = parseInt(item.quantity || '0') || 0;
+    const amount = parseFloat(item.line_total || '0');
+    groupedItems[groupKey].totalQuantity += quantity;
+    groupedItems[groupKey].totalAmount += amount;
+    groupedItems[groupKey].items.push(item);
+  });
+  return Object.values(groupedItems);
+}
+
+async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
+  try {
+    if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
+      return false;
+    }
+    await navigator.clipboard.write([
+      new (window as any).ClipboardItem({ 'image/png': blob }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function getInvoiceAdjustedTotalValue(invoice: any): number {
@@ -290,6 +342,13 @@ export default function InvoiceDetail() {
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
   const invoiceCaptureFrameRef = useRef<HTMLIFrameElement>(null);
+  const pictureBlobsRef = useRef<Blob[]>([]);
+  const [pictureCopied, setPictureCopied] = useState<boolean[]>([]);
+  const [copyingPhoto, setCopyingPhoto] = useState(false);
+  const [preparingPictures, setPreparingPictures] = useState(false);
+  const [showCopySettings, setShowCopySettings] = useState(false);
+  const exportSplit = useInvoiceExportSplit();
+  const [rowsPerPageDraft, setRowsPerPageDraft] = useState(() => String(exportSplit.rowsPerPage));
   // Toggle to show/hide purchase price in checkout modal (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Repair status in checkout modal (when invoice is repair)
@@ -344,6 +403,61 @@ export default function InvoiceDetail() {
     () => (Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : []),
     [inv?.items]
   );
+
+  const invoicePrintGroups = useMemo(
+    () => buildInvoicePrintGroups(visibleInvoiceItems),
+    [visibleInvoiceItems]
+  );
+
+  useEffect(() => {
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+  }, [exportSplit]);
+
+  useEffect(() => {
+    pictureBlobsRef.current = [];
+    setPictureCopied([]);
+    setPreparingPictures(false);
+  }, [invoiceId, inv?.updated_at, invoicePrintGroups.length, exportSplit.rowsPerPage]);
+
+  const persistExportSplit = (patch: Partial<InvoiceExportSplit>) => {
+    const next = saveInvoiceExportSplit({ ...exportSplit, ...patch });
+    setRowsPerPageDraft(String(next.rowsPerPage));
+    return next;
+  };
+
+  const commitRowsPerPageDraft = () => {
+    const parsed = parseInt(rowsPerPageDraft, 10);
+    return persistExportSplit({
+      rowsPerPage: Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage,
+    });
+  };
+
+  const flushCopySettings = () => {
+    const parsed = parseInt(rowsPerPageDraft, 10);
+    const next = saveInvoiceExportSplit({
+      rowsPerPage: Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage,
+    });
+    setRowsPerPageDraft(String(next.rowsPerPage));
+    return next;
+  };
+
+  const openCopySettings = () => {
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+    setShowCopySettings(true);
+  };
+
+  const closeCopySettings = () => {
+    flushCopySettings();
+    setShowCopySettings(false);
+  };
+
+  const toggleCopySettings = () => {
+    if (showCopySettings) {
+      closeCopySettings();
+      return;
+    }
+    openCopySettings();
+  };
 
   const getEffectiveInvoiceTypeFromPayments = (payments: any[]): 'cash' | 'upi' | 'mixed' | null => {
     if (!Array.isArray(payments) || payments.length === 0) return null;
@@ -1742,11 +1856,17 @@ export default function InvoiceDetail() {
   };
 
   // Shared function to generate invoice HTML for both print and download
-  const generateInvoiceHTML = () => {
+  const generateInvoiceHTML = (opts?: {
+    pageGroups?: InvoicePrintGroup[];
+    partIndex?: number;
+    partCount?: number;
+    showTotals?: boolean;
+    lineOffset?: number;
+  }) => {
     const T = INV_THEME;
     const isRepairInvoice = !!inv?.repair;
     const printableInvoiceTitle = isRepairInvoice ? 'Repair Invoice' : 'Sale Invoice';
-    const printableItems = Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : [];
+    const printableItems = visibleInvoiceItems;
 
     const totalPcs = printableItems.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0);
     const totalAmount = getInvoiceAdjustedTotalValue(inv);
@@ -1760,34 +1880,16 @@ export default function InvoiceDetail() {
     const statusLabel = String(inv.status || '').toUpperCase();
     const typeLabel = String(inv.invoice_type || 'sale').toUpperCase();
 
-    // Group items by product name AND brand
-    const groupedItems: Record<string, {
-      name: string;
-      brand: string;
-      totalQuantity: number;
-      totalAmount: number;
-      items: any[];
-    }> = {};
-
-    printableItems.forEach((item: any) => {
-      const name = item.product_name || '-';
-      const brand = item.product_brand_name || item.brand_name || '';
-      const groupKey = brand ? `${name}::${brand}` : name;
-      if (!groupedItems[groupKey]) {
-        groupedItems[groupKey] = { name, brand, totalQuantity: 0, totalAmount: 0, items: [] };
-      }
-      const quantity = parseInt(item.quantity || '0') || 0;
-      const amount = parseFloat(item.line_total || '0');
-      groupedItems[groupKey].totalQuantity += quantity;
-      groupedItems[groupKey].totalAmount += amount;
-      groupedItems[groupKey].items.push(item);
-    });
-
-    const groupedList = Object.values(groupedItems);
+    const groupedList = invoicePrintGroups;
+    const pageGroups = opts?.pageGroups ?? groupedList;
+    const partIndex = opts?.partIndex ?? 1;
+    const partCount = opts?.partCount ?? 1;
+    const showTotals = opts?.showTotals !== false;
+    const lineOffset = opts?.lineOffset ?? 0;
     const lineCount = groupedList.length;
     const subtotalBeforeTradeIn = groupedList.reduce((s, g) => s + g.totalAmount, 0);
 
-    const bodyRows = groupedList
+    const bodyRows = pageGroups
       .map((group, i) => {
         const avgUnitPrice = group.totalQuantity > 0 ? group.totalAmount / group.totalQuantity : 0;
         const productDisplay = group.brand ? `${group.name} (${group.brand})` : group.name;
@@ -1797,7 +1899,7 @@ export default function InvoiceDetail() {
           .map((item: any) => formatExchangeSnapshotPrintHtml(exchangeSnapshotForItem(inv, item.id)))
           .join('');
         return `<tr style="background:${i % 2 === 1 ? T.rowAlt : T.white};">
-      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${i + 1}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${lineOffset + i + 1}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:left;font-size:12px;font-weight:600;color:${nameColor};">${escapeHtml(productDisplay)}${exchangeHtml}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:64px;font-size:12px;font-weight:600;">${escapeHtml(formatNumber(group.totalQuantity, 3))}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:52px;font-size:12px;color:${T.textMuted};">Pcs.</td>
@@ -1811,17 +1913,19 @@ export default function InvoiceDetail() {
       <td colspan="6" style="border:1px solid ${T.primaryBorder};padding:28px;text-align:center;font-size:12px;color:#a8a29e;">No line items</td>
     </tr>`;
 
-    const qtyFooterRow = `<tr>
+    const qtyFooterRow = showTotals
+      ? `<tr>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};font-size:12px;font-weight:700;color:${T.secondary};">Total Quantity</td>
       <td colspan="2" style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};text-align:right;font-size:12px;font-weight:700;color:${T.secondary};">${escapeHtml(formatNumber(totalPcs, 3))} Pcs.</td>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
-    </tr>`;
+    </tr>`
+      : '';
 
-    const summaryRow = (label: string, value: string, opts?: { muted?: boolean }) => `
+    const summaryRow = (label: string, value: string, optsRow?: { muted?: boolean }) => `
       <tr>
-        <td style="padding:8px 14px;font-size:12px;color:${opts?.muted ? T.textMuted : T.textMuted};font-weight:600;border-bottom:1px solid ${T.primaryBorder};">${label}</td>
+        <td style="padding:8px 14px;font-size:12px;color:${optsRow?.muted ? T.textMuted : T.textMuted};font-weight:600;border-bottom:1px solid ${T.primaryBorder};">${label}</td>
         <td style="padding:8px 14px;font-size:12px;text-align:right;font-weight:700;color:${T.text};border-bottom:1px solid ${T.primaryBorder};">${value}</td>
       </tr>`;
 
@@ -1877,6 +1981,38 @@ export default function InvoiceDetail() {
         ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b91c1c;background:#fee2e2;color:#b91c1c;">Void</div>`
         : '';
 
+    const partNote =
+      partCount > 1
+        ? `<div style="font-size:11px;margin-top:8px;color:${T.textMuted};font-weight:600;">Part ${partIndex} of ${partCount}${
+            pageGroups.length
+              ? ` · Lines ${lineOffset + 1}–${lineOffset + pageGroups.length}`
+              : ''
+          }</div>`
+        : '';
+
+    const totalsFooter = `<div style="position:relative;overflow:hidden;padding:16px 24px 20px;border-top:3px solid ${T.primary};background:${T.primaryPale};">
+      ${invoiceFooterShapes()}
+      ${summaryBlock}
+      <table style="position:relative;width:100%;border-collapse:collapse;font-size:12px;margin-top:18px;">
+        <tr>
+          <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
+            <div style="font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:11px;">Declaration</div>
+            <div style="font-size:12px;color:${T.textMuted};margin-top:5px;line-height:1.45;">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</div>
+          </td>
+          <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
+            <div style="font-size:12px;font-weight:700;color:${T.secondary};margin-bottom:28px;">for ${escapeHtml(shopName)}</div>
+            <div style="display:inline-block;border-top:2px solid ${T.secondaryMuted};padding:5px 18px 0;font-size:12px;font-weight:700;color:${T.secondary};">Authorised Signatory</div>
+          </td>
+        </tr>
+      </table>
+      <div style="position:relative;margin-top:14px;text-align:center;font-size:11px;color:${T.textMuted};">This is a Computer Generated Invoice · ${escapeHtml(shopName)}</div>
+    </div>`;
+
+    const continuedFooter =
+      partCount > 1
+        ? `<div style="border-top:2px dashed ${T.primaryBorder};padding:12px 24px;font-size:12px;text-align:right;color:${T.secondaryMuted};font-weight:600;background:${T.primaryPale};">Continued on next page…</div>`
+        : '';
+
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -1916,6 +2052,7 @@ export default function InvoiceDetail() {
           <div style="font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:0.2px;color:${T.text};line-height:1.25;">${escapeHtml(customerName)}</div>
           ${storeName ? `<div style="font-size:12px;color:${T.textMuted};margin-top:4px;font-weight:600;">Store: ${escapeHtml(storeName)}</div>` : ''}
           ${voidBadge}
+          ${partNote}
         </td>
         <td style="width:42%;vertical-align:top;padding:14px 20px;">
           <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -1959,23 +2096,7 @@ export default function InvoiceDetail() {
 
     <div style="flex:1;min-height:20px;"></div>
 
-    <div style="position:relative;overflow:hidden;padding:16px 24px 20px;border-top:3px solid ${T.primary};background:${T.primaryPale};">
-      ${invoiceFooterShapes()}
-      ${summaryBlock}
-      <table style="position:relative;width:100%;border-collapse:collapse;font-size:12px;margin-top:18px;">
-        <tr>
-          <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
-            <div style="font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:11px;">Declaration</div>
-            <div style="font-size:12px;color:${T.textMuted};margin-top:5px;line-height:1.45;">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</div>
-          </td>
-          <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
-            <div style="font-size:12px;font-weight:700;color:${T.secondary};margin-bottom:28px;">for ${escapeHtml(shopName)}</div>
-            <div style="display:inline-block;border-top:2px solid ${T.secondaryMuted};padding:5px 18px 0;font-size:12px;font-weight:700;color:${T.secondary};">Authorised Signatory</div>
-          </td>
-        </tr>
-      </table>
-      <div style="position:relative;margin-top:14px;text-align:center;font-size:11px;color:${T.textMuted};">This is a Computer Generated Invoice · ${escapeHtml(shopName)}</div>
-    </div>
+    ${showTotals ? totalsFooter : continuedFooter}
   </div>
 </body>
 </html>`;
@@ -2016,56 +2137,211 @@ export default function InvoiceDetail() {
     };
   };
 
-  const handleCapturePhoto = async () => {
+  const renderInvoiceHtmlToBlob = async (html: string): Promise<Blob | null> => {
     const iframe = invoiceCaptureFrameRef.current;
     const doc = iframe?.contentDocument;
-    if (!iframe || !doc) {
+    if (!iframe || !doc) return null;
+    doc.open();
+    doc.write(html);
+    doc.close();
+    await new Promise((r) => window.setTimeout(r, 150));
+
+    const root =
+      (doc.getElementById('invoice-print-root') as HTMLElement | null) || doc.body;
+    const w = INVOICE_CAPTURE_WIDTH_PX;
+    const h = Math.max(
+      INVOICE_CAPTURE_HEIGHT_PX,
+      Math.ceil(root.scrollHeight || root.offsetHeight || 1)
+    );
+    iframe.style.height = `${h + 8}px`;
+
+    const canvas = await html2canvas(root, {
+      scale: invoiceCaptureScale(),
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      windowWidth: w,
+      windowHeight: h,
+      width: w,
+      height: h,
+    });
+    return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
+  };
+
+  const markPictureCopied = (index: number) => {
+    setPictureCopied((prev) => {
+      const next = prev.slice();
+      next[index] = true;
+      return next;
+    });
+  };
+
+  const copyPreparedPicturePage = async (index: number) => {
+    const blob = pictureBlobsRef.current[index];
+    const total = pictureBlobsRef.current.length;
+    if (!blob) {
+      toast('That image is not ready yet', 'error');
+      return;
+    }
+    setCopyingPhoto(true);
+    try {
+      window.getSelection()?.removeAllRanges();
+      if (!(await copyPngBlobToClipboard(blob))) {
+        toast('Could not copy picture. Check clipboard permissions.', 'error');
+        return;
+      }
+      markPictureCopied(index);
+      toast(
+        total > 1
+          ? `Image ${index + 1} of ${total} copied — paste in WhatsApp, then copy the next page`
+          : 'Invoice image copied — paste in WhatsApp',
+        'success'
+      );
+    } finally {
+      setCopyingPhoto(false);
+    }
+  };
+
+  /** Next page to copy: page 1 first, then 2, 3… */
+  const nextUncopiedPictureIndex = () => {
+    for (let i = 0; i < pictureCopied.length; i++) {
+      if (!pictureCopied[i]) return i;
+    }
+    return -1;
+  };
+
+  const handleCapturePhoto = async (split: InvoiceExportSplit = flushCopySettings()) => {
+    const iframe = invoiceCaptureFrameRef.current;
+    if (!iframe) {
       toast('Invoice preview is not ready. Please wait a moment and try again.', 'error');
       return;
     }
+
+    const readyNext = nextUncopiedPictureIndex();
+    if (pictureBlobsRef.current.length > 0 && readyNext >= 0) {
+      await copyPreparedPicturePage(readyNext);
+      return;
+    }
+    if (pictureBlobsRef.current.length > 0 && readyNext < 0) {
+      await copyPreparedPicturePage(0);
+      return;
+    }
+
+    setCopyingPhoto(true);
+    setPreparingPictures(true);
     try {
-      doc.open();
-      doc.write(generateInvoiceHTML());
-      doc.close();
-      await new Promise((r) => window.setTimeout(r, 150));
+      window.getSelection()?.removeAllRanges();
+      const rowChunks = chunkInvoiceRowsForExport(invoicePrintGroups, split.rowsPerPage);
+      const partCount = rowChunks.length;
+      const blobs: Blob[] = [];
+      let lineOffset = 0;
 
-      const root =
-        (doc.getElementById('invoice-print-root') as HTMLElement | null) || doc.body;
-      const w = INVOICE_CAPTURE_WIDTH_PX;
-      const h = Math.max(
-        INVOICE_CAPTURE_HEIGHT_PX,
-        Math.ceil(root.scrollHeight || root.offsetHeight || 1)
-      );
-      iframe.style.height = `${h + 8}px`;
+      for (let i = 0; i < rowChunks.length; i++) {
+        const html = generateInvoiceHTML({
+          pageGroups: rowChunks[i],
+          partIndex: i + 1,
+          partCount,
+          showTotals: i === partCount - 1,
+          lineOffset,
+        });
+        lineOffset += rowChunks[i].length;
+        const blob = await renderInvoiceHtmlToBlob(html);
+        if (!blob) {
+          toast(`Failed to create image (part ${i + 1}).`, 'error');
+          return;
+        }
+        blobs.push(blob);
+      }
 
-      const canvas = await html2canvas(root, {
-        scale: invoiceCaptureScale(),
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: w,
-        windowHeight: h,
-        width: w,
-        height: h,
-      });
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            toast('Failed to create image.', 'error');
-            return;
-          }
-          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
-            () => toast('Invoice image copied to clipboard.', 'success'),
-            () => toast('Failed to copy to clipboard. Please check permissions.', 'error')
-          );
-        },
-        'image/png',
-        1
+      if (!blobs.length) {
+        toast('Could not create invoice picture', 'error');
+        return;
+      }
+
+      pictureBlobsRef.current = blobs;
+      setPictureCopied(blobs.map((_, i) => i === 0));
+
+      if (!(await copyPngBlobToClipboard(blobs[0]))) {
+        setPictureCopied(blobs.map(() => false));
+        toast('Could not copy picture. Check clipboard permissions.', 'error');
+        return;
+      }
+
+      toast(
+        blobs.length > 1
+          ? `Image 1 of ${blobs.length} copied. Use Copy 2 … Copy ${blobs.length} for the rest (${split.rowsPerPage} lines per image).`
+          : 'Invoice image copied to clipboard.',
+        'success'
       );
-    } catch (e) {
-      toast('Failed to capture invoice preview.', 'error');
+    } catch (e: any) {
+      pictureBlobsRef.current = [];
+      setPictureCopied([]);
+      toast(e?.message || 'Failed to capture invoice preview.', 'error');
+    } finally {
+      setPreparingPictures(false);
+      setCopyingPhoto(false);
     }
   };
+
+  const copiedPictureCount = pictureCopied.filter(Boolean).length;
+  const nextPicturePart = nextUncopiedPictureIndex();
+  const expectedPhotoParts = invoiceSnapshotPageCount(
+    invoicePrintGroups.length,
+    exportSplit.rowsPerPage
+  );
+  const copySplitExplain = invoiceExportSplitExplain(
+    invoicePrintGroups.length,
+    exportSplit.rowsPerPage
+  );
+  const picturePageButtons =
+    pictureCopied.length > 1 ? (
+      <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="text-sm text-amber-950 font-medium">
+            {copiedPictureCount}/{pictureCopied.length} images copied. Each button copies a new
+            WhatsApp image ({exportSplit.rowsPerPage} lines each).
+          </div>
+          <button
+            type="button"
+            className="shrink-0 text-xs font-semibold text-amber-900 underline"
+            onClick={() => openCopySettings()}
+          >
+            Change split
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {pictureCopied.map((done, i) => (
+            <button
+              key={i}
+              type="button"
+              disabled={copyingPhoto}
+              onClick={() => void copyPreparedPicturePage(i)}
+              className={`min-w-[2.75rem] rounded-md border px-2 py-1.5 text-xs font-semibold ${
+                done
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                  : 'border-amber-800 bg-amber-800 text-white hover:bg-amber-900'
+              }`}
+              title={
+                done
+                  ? `Copy image ${i + 1} again`
+                  : `Copy image ${i + 1} of ${pictureCopied.length}`
+              }
+            >
+              {done ? `✓ ${i + 1}` : `Copy ${i + 1}`}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
+  const pictureButtonLabel = copyingPhoto
+    ? preparingPictures
+      ? `Preparing ${Math.max(pictureCopied.length, expectedPhotoParts)} images…`
+      : 'Copying…'
+    : pictureCopied.length > 1 && nextPicturePart >= 0
+      ? `Copy ${nextPicturePart + 1}/${pictureCopied.length}`
+      : pictureCopied.length > 1
+        ? 'Copy again'
+        : 'Photo';
 
   const generateThermalInvoiceHTML = (invoice: any) => {
     const thermalSettings = loadThermalPrintSettings();
@@ -3293,7 +3569,7 @@ export default function InvoiceDetail() {
             <Printer className="h-5 w-5 text-gray-400" />
             A4 Print Preview
           </h3>
-          <div className="flex gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
             <Button
               variant="outline"
               size="sm"
@@ -3306,12 +3582,84 @@ export default function InvoiceDetail() {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleCapturePhoto}
+              onClick={() => void handleCapturePhoto()}
+              disabled={copyingPhoto}
               className="flex-1 sm:flex-none"
+              title="Copy invoice picture to clipboard for WhatsApp"
             >
               <Camera className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">Photo</span>
+              <span className="hidden sm:inline">{pictureButtonLabel}</span>
+              <span className="sm:hidden">{pictureCopied.length > 1 ? pictureButtonLabel : 'Photo'}</span>
             </Button>
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => toggleCopySettings()}
+                className="flex items-center gap-2"
+                title="Photo page split"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                <span className="hidden sm:inline">Copy settings</span>
+                <span className="bg-amber-800 text-white rounded-full min-w-[1.25rem] h-5 px-1.5 flex items-center justify-center text-xs">
+                  {invoiceExportSplitBadge(exportSplit)}
+                </span>
+              </Button>
+              {showCopySettings ? (
+                <div className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-stone-200 bg-white shadow-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-stone-800">Photo pages</div>
+                    <button
+                      type="button"
+                      className="text-stone-400 hover:text-stone-600"
+                      onClick={() => closeCopySettings()}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-stone-500 mb-2">
+                    Saved for the whole shop (all users and devices). Invoices longer than this
+                    many lines are copied as separate images (Copy 1 / Copy 2 / Copy 3).
+                  </p>
+                  <label className="block text-sm text-stone-800 mb-1.5">Rows per image</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={rowsPerPageDraft}
+                    onChange={(e) => setRowsPerPageDraft(e.target.value)}
+                    onBlur={() => commitRowsPerPageDraft()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitRowsPerPageDraft();
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="h-8 py-1 text-sm"
+                  />
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {INVOICE_EXPORT_ROW_PRESETS.map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => persistExportSplit({ rowsPerPage: n })}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                          exportSplit.rowsPerPage === n
+                            ? 'border-amber-800 bg-amber-800 text-white'
+                            : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600 leading-snug">
+                    {copySplitExplain}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -3323,6 +3671,7 @@ export default function InvoiceDetail() {
             </Button>
           </div>
         </div>
+        {picturePageButtons ? <div className="mb-3">{picturePageButtons}</div> : null}
         <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-100 shadow-lg">
           <div className="bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between">
             <span className="text-xs font-semibold text-gray-700">

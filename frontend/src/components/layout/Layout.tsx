@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { auth } from '../../lib/auth';
 import { clearPersonalLedgerUnlockIfLeaving } from '../../lib/personalLedgerUnlock';
+import { hydrateInvoiceExportSplitFromServer } from '../../pages/invoices/invoiceExportSettings';
 import { productsApi, reportsApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
@@ -71,6 +72,10 @@ export default function Layout() {
   useEffect(() => {
     clearPersonalLedgerUnlockIfLeaving(location.pathname);
   }, [location.pathname]);
+
+  useEffect(() => {
+    void hydrateInvoiceExportSplitFromServer();
+  }, []);
 
   const { data: stockAlertsData } = useQuery({
     queryKey: ['stock-alerts', 'counts'],

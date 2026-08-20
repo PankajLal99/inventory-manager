@@ -335,3 +335,44 @@ class LedgerExportSettingsTests(APITestCase):
         self.assertTrue(response.data['useRows'])
         self.assertEqual(response.data['rowsPerPage'], 200)
         self.assertEqual(response.data['daysPerPage'], 1)
+
+
+class InvoiceExportSettingsTests(APITestCase):
+    """Shop-wide invoice photo split is stored as JSON on core.Setting, not per user."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='invoice-a', password='password')
+        self.user_b = User.objects.create_user(username='invoice-b', password='password')
+        self.url = reverse('invoice-export-settings')
+
+    def test_get_empty_when_unset(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {})
+
+    def test_put_is_shared_across_users(self):
+        self.client.force_authenticate(user=self.user_a)
+        put_response = self.client.put(
+            self.url,
+            {'rowsPerPage': 20},
+            format='json',
+        )
+        self.assertEqual(put_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(put_response.data, {'rowsPerPage': 20})
+
+        self.client.force_authenticate(user=self.user_b)
+        get_response = self.client.get(self.url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data['rowsPerPage'], 20)
+        self.assertEqual(Setting.objects.filter(key='invoice_photo_export_split').count(), 1)
+
+    def test_put_clamps_rows_per_page(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.put(
+            self.url,
+            {'rowsPerPage': 999},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['rowsPerPage'], 200)
