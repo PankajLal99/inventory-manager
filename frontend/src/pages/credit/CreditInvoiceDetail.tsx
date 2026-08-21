@@ -43,7 +43,7 @@ import {
   copyPngBlobToClipboard,
   creditDocumentRowsPerPage,
 } from './creditDocumentClipboard';
-import { useLedgerExportSplit } from './ledgerExportSettings';
+import { useInvoiceExportSplit } from '../invoices/invoiceExportSettings';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
 
 type EditLine = {
@@ -95,7 +95,7 @@ export default function CreditInvoiceDetail() {
     total: number;
     nextPart: number;
   } | null>(null);
-  const exportSplit = useLedgerExportSplit();
+  const exportSplit = useInvoiceExportSplit();
   const photoRowsPerPage = creditDocumentRowsPerPage(exportSplit);
   const pdfFrameRef = useRef<HTMLIFrameElement>(null);
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);

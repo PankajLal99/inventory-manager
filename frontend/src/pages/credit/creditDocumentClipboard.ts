@@ -12,20 +12,21 @@ import {
 } from './creditLedgerSnapshot';
 import {
   loadLedgerExportSplit,
-  normalizeLedgerExportSplit,
   type LedgerExportSplit,
 } from './ledgerExportSettings';
+import {
+  loadInvoiceExportSplit,
+  normalizeInvoiceExportSplit,
+  type InvoiceExportSplit,
+} from '../invoices/invoiceExportSettings';
 import { setPendingLedgerClipboardImage } from './pendingLedgerClipboard';
 
-/** Current shop-wide credit document rows-per-image (from Credit Ledger copy settings). */
+/** Rows per image for credit invoice/return photos — same shop setting as Invoice Detail / POS. */
 export function creditDocumentRowsPerPage(
-  split: LedgerExportSplit = loadLedgerExportSplit()
+  split: InvoiceExportSplit = loadInvoiceExportSplit()
 ): number {
-  return normalizeLedgerExportSplit(split).rowsPerPage;
+  return normalizeInvoiceExportSplit(split).rowsPerPage;
 }
-
-/** @deprecated Prefer creditDocumentRowsPerPage() / useLedgerExportSplit().rowsPerPage */
-export const SNAPSHOT_ROWS_PER_PAGE = 25;
 
 type CartSnapshotRow = {
   idx: number;
@@ -126,7 +127,7 @@ export type CreditDocumentClipboardInput = {
 export async function buildCreditDocumentSnapshotBlobs(
   iframe: HTMLIFrameElement,
   input: CreditDocumentClipboardInput,
-  split: LedgerExportSplit = loadLedgerExportSplit()
+  split: InvoiceExportSplit = loadInvoiceExportSplit()
 ): Promise<Blob[]> {
   const items = input.items || [];
   const rows: CartSnapshotRow[] = items.map((item, idx) => {

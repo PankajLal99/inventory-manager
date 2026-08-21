@@ -41,7 +41,7 @@ import {
   finishDocumentPartsAndQueueLedger,
   creditDocumentRowsPerPage,
 } from './creditDocumentClipboard';
-import { useLedgerExportSplit } from './ledgerExportSettings';
+import { useInvoiceExportSplit } from '../invoices/invoiceExportSettings';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
@@ -206,7 +206,7 @@ function effectiveLineTotal(
 }
 
 export default function POSCredit() {
-  const exportSplit = useLedgerExportSplit();
+  const exportSplit = useInvoiceExportSplit();
   const photoRowsPerPage = creditDocumentRowsPerPage(exportSplit);
   const navigate = useNavigate();
   const queryClient = useQueryClient();

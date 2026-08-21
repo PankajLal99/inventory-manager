@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import CreditDocColorPicker from '../CreditDocColorPicker';
 import { hydrateLedgerExportSplitFromServer } from '../../pages/credit/ledgerExportSettings';
+import { hydrateInvoiceExportSplitFromServer } from '../../pages/invoices/invoiceExportSettings';
 
 const NAV: Array<{
   path: string;
@@ -45,6 +46,7 @@ export default function CreditLayout() {
 
   useEffect(() => {
     void hydrateLedgerExportSplitFromServer();
+    void hydrateInvoiceExportSplitFromServer();
   }, []);
 
   useEffect(() => {
