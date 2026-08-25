@@ -792,6 +792,10 @@ export default function InvoiceDetail() {
       // Invalidate and refetch to get updated invoice without deleted items
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-adjusted'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || 'Failed to delete item');
@@ -3117,7 +3121,8 @@ export default function InvoiceDetail() {
         <Card className="no-print">
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Add defective barcode</h3>
           <p className="text-sm text-gray-600 mb-3">
-            Only barcodes already marked defective can be added to this move-out invoice.
+            Only barcodes already marked defective can be added. Removing a barcode from this
+            invoice leaves it defective so it can stay in inventory or go on another move-out.
           </p>
           <div className="flex gap-2">
             <div className="flex-1">
@@ -3222,8 +3227,11 @@ export default function InvoiceDetail() {
                 );
               } else {
                 // For other invoices, show full details with prices
+                const tableHeaders = isDefectiveInvoice
+                  ? ['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total', '']
+                  : ['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total'];
                 return (
-                  <Table headers={['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total']}>
+                  <Table headers={tableHeaders}>
                     {groupedItems.map((group, groupIndex) => {
                       const groupKey = `invoice_group_${group.productId}_${groupIndex} `;
                       const isExpanded = expandedInvoiceItems[groupKey] || false;
@@ -3270,6 +3278,27 @@ export default function InvoiceDetail() {
                             <TableCell align="right">
                               <span className="font-semibold text-gray-900">₹{formatNumber(totalLineTotal)}</span>
                             </TableCell>
+                            {isDefectiveInvoice && (
+                              <TableCell>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (window.confirm(
+                                      `Remove all barcodes of "${group.productName}" from this move-out invoice? They will stay marked defective.`
+                                    )) {
+                                      group.items.forEach((item) => {
+                                        deleteItemMutation.mutate(item.id);
+                                      });
+                                    }
+                                  }}
+                                  disabled={deleteItemMutation.isPending}
+                                  className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50 no-print"
+                                  title="Remove from move-out (stays defective)"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </TableCell>
+                            )}
                           </TableRow>
                           {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
                             const item = barcodeItem.item;
@@ -3312,6 +3341,25 @@ export default function InvoiceDetail() {
                                 <TableCell align="right">
                                   <span className="text-xs font-semibold text-gray-900">₹{formatNumber(item.line_total || '0')}</span>
                                 </TableCell>
+                                {isDefectiveInvoice && (
+                                  <TableCell>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(
+                                          `Remove barcode ${barcodeItem.barcode} from this move-out invoice? It will stay marked defective.`
+                                        )) {
+                                          deleteItemMutation.mutate(item.id);
+                                        }
+                                      }}
+                                      disabled={deleteItemMutation.isPending}
+                                      className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50 no-print"
+                                      title="Remove barcode (stays defective)"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </TableCell>
+                                )}
                               </TableRow>
                             );
                           })}
@@ -3361,12 +3409,33 @@ export default function InvoiceDetail() {
                             <span>Quantity: <span className="font-semibold text-gray-900">{totalQuantity}</span></span>
                           </div>
                         </div>
-                        {!isPending && (
-                          <div className="text-right flex-shrink-0">
-                            <div className="text-lg font-bold text-gray-900">₹{formatNumber(totalLineTotal)}</div>
-                            <div className="text-xs text-gray-500 mt-0.5">Total</div>
-                          </div>
-                        )}
+                        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                          {!isPending && (
+                            <div className="text-right">
+                              <div className="text-lg font-bold text-gray-900">₹{formatNumber(totalLineTotal)}</div>
+                              <div className="text-xs text-gray-500 mt-0.5">Total</div>
+                            </div>
+                          )}
+                          {isDefectiveInvoice && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm(
+                                  `Remove all barcodes of "${group.productName}" from this move-out invoice? They will stay marked defective.`
+                                )) {
+                                  group.items.forEach((item) => {
+                                    deleteItemMutation.mutate(item.id);
+                                  });
+                                }
+                              }}
+                              disabled={deleteItemMutation.isPending}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 disabled:opacity-50 no-print"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Remove
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {!isPending && (
                         <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-100 mt-3">
@@ -3400,7 +3469,26 @@ export default function InvoiceDetail() {
                                     <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
                                     <CartLineScannedTime item={item} variant="row" />
                                   </div>
-                                  <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
+                                    {isDefectiveInvoice && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (window.confirm(
+                                            `Remove barcode ${barcodeItem.barcode} from this move-out invoice? It will stay marked defective.`
+                                          )) {
+                                            deleteItemMutation.mutate(item.id);
+                                          }
+                                        }}
+                                        disabled={deleteItemMutation.isPending}
+                                        className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 disabled:opacity-50 no-print"
+                                        title="Remove barcode (stays defective)"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                                 {!isPending && (
                                   <div className="grid grid-cols-2 gap-2 text-xs">

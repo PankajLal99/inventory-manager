@@ -5290,6 +5290,31 @@ def _link_defective_barcode_to_move_out(invoice, item):
     move_out.save(update_fields=['total_loss', 'total_items'])
 
 
+def _unlink_defective_barcode_from_move_out(invoice, item):
+    """Unlink a barcode from its move-out when removed from the supplier invoice.
+
+    Barcode tag stays 'defective' — removing from the written-to-supplier invoice
+    does not change inventory condition; the item is simply no longer on this
+    move-out and can be added to another (or the same) move-out later.
+    """
+    barcode_obj = item.barcode
+    move_out = DefectiveProductMoveOut.objects.filter(invoice=invoice).first()
+    if not move_out:
+        return
+
+    dpi = None
+    if barcode_obj:
+        dpi = DefectiveProductItem.objects.filter(move_out=move_out, barcode=barcode_obj).first()
+    if not dpi:
+        return
+
+    price = dpi.purchase_price or Decimal('0.00')
+    dpi.delete()
+    move_out.total_loss = max(Decimal('0.00'), (move_out.total_loss or Decimal('0.00')) - price)
+    move_out.total_items = max(0, (move_out.total_items or 0) - 1)
+    move_out.save(update_fields=['total_loss', 'total_items'])
+
+
 def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
     """Validate barcode can be added to invoice. Returns error Response or None if OK."""
     dup_q = Q(barcode=barcode_obj)
@@ -5607,11 +5632,23 @@ def invoice_items(request, pk):
 def invoice_item_detail(request, pk, item_id):
     """Update or delete invoice item"""
     invoice = get_object_or_404(Invoice, pk=pk)
-    
-    # Only allow editing items in draft invoices (credit or pending)
-    if invoice.status != 'draft' or invoice.invoice_type not in ['pending', 'credit']:
+
+    is_defective_invoice = invoice.invoice_type == 'defective'
+    is_editable_draft = (
+        invoice.status == 'draft' and invoice.invoice_type in ['pending', 'credit']
+    )
+
+    # Draft credit/pending: add/update/remove. Defective move-out invoices (void):
+    # allow remove only — barcodes stay defective and are unlinked from the move-out.
+    if not is_defective_invoice and not is_editable_draft:
         return Response(
             {'error': 'Items can only be edited in draft credit or pending invoices'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if is_defective_invoice and request.method != 'DELETE':
+        return Response(
+            {'error': 'Defective move-out invoice items can only be removed, not updated.'},
             status=status.HTTP_400_BAD_REQUEST
         )
     
@@ -5623,7 +5660,49 @@ def invoice_item_detail(request, pk, item_id):
     old_quantity = item.quantity
     
     if request.method == 'DELETE':
-        # Mark barcode as 'new' when item is removed from invoice
+        if is_defective_invoice:
+            with transaction.atomic():
+                barcode_obj = item.barcode
+                barcode_value = barcode_obj.barcode if barcode_obj else None
+                barcode_tag_before = barcode_obj.tag if barcode_obj else None
+                product_name = item.product.name if item.product else ''
+                product_id = item.product_id
+
+                # Unlink from move-out; do NOT change barcode tag (stays defective).
+                _unlink_defective_barcode_from_move_out(invoice, item)
+
+                create_audit_log(
+                    request=request,
+                    action='update',
+                    model_name='InvoiceItem',
+                    object_id=str(item.id),
+                    object_name=product_name,
+                    object_reference=invoice.invoice_number,
+                    barcode=barcode_value,
+                    changes={
+                        'barcode': barcode_value,
+                        'barcode_tag': barcode_tag_before,
+                        'product_id': product_id,
+                        'product_name': product_name,
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'context': 'defective_move_out_item_removed',
+                        'barcode_status_unchanged': True,
+                    }
+                )
+
+                item.delete()
+                update_invoice_totals(invoice)
+                invoice.is_edited = True
+                invoice.edited_on = timezone.now()
+                invoice.save(update_fields=['is_edited', 'edited_on'])
+
+                from backend.core.cache_signals import invalidate_products_cache_manual
+                transaction.on_commit(invalidate_products_cache_manual)
+
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # Mark barcode as 'new' when item is removed from draft invoice
         # This allows the barcode to be available for sale again
         if item.barcode:
             old_tag = item.barcode.tag

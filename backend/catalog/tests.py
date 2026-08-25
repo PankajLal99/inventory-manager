@@ -1133,6 +1133,104 @@ class DefectiveMoveOutDetailsAndInvoiceAddTests(TransactionTestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('already', str(response.data).lower())
 
+    def test_remove_barcode_from_move_out_invoice_keeps_defective_tag(self):
+        """Removing a line from the supplier invoice must leave the barcode defective."""
+        from backend.catalog.models import DefectiveProductItem, DefectiveProductMoveOut
+        from backend.pos.models import Invoice, InvoiceItem
+
+        first = self._make_barcode()
+        second = self._make_barcode()
+        move_out_data = self._create_move_out(first)
+        invoice_id = move_out_data['invoice']
+        move_out_id = move_out_data['id']
+
+        # Add second barcode so we can remove one without emptying the invoice
+        add_resp = self.client.post(f'/api/v1/pos/invoices/{invoice_id}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': second.id,
+        }, format='json')
+        self.assertEqual(add_resp.status_code, status.HTTP_201_CREATED)
+
+        item_to_remove = InvoiceItem.objects.get(invoice_id=invoice_id, barcode=second)
+        response = self.client.delete(
+            f'/api/v1/pos/invoices/{invoice_id}/items/{item_to_remove.id}/'
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        second.refresh_from_db()
+        self.assertEqual(second.tag, 'defective')
+        self.assertFalse(
+            DefectiveProductItem.objects.filter(barcode=second, move_out_id=move_out_id).exists()
+        )
+        self.assertTrue(
+            DefectiveProductItem.objects.filter(barcode=first, move_out_id=move_out_id).exists()
+        )
+
+        move_out = DefectiveProductMoveOut.objects.get(pk=move_out_id)
+        self.assertEqual(move_out.total_items, 1)
+        self.assertEqual(move_out.total_loss, Decimal('50.00'))
+
+        invoice = Invoice.objects.get(pk=invoice_id)
+        self.assertEqual(invoice.items.count(), 1)
+        self.assertEqual(invoice.total, Decimal('50.00'))
+        self.assertEqual(invoice.paid_amount, invoice.total)
+        self.assertEqual(invoice.due_amount, Decimal('0.00'))
+
+    def test_removed_defective_barcode_can_be_re_added(self):
+        """After remove, the still-defective barcode can be added back to the move-out."""
+        from backend.catalog.models import DefectiveProductItem
+        from backend.pos.models import InvoiceItem
+
+        first = self._make_barcode()
+        second = self._make_barcode()
+        move_out_data = self._create_move_out(first)
+        invoice_id = move_out_data['invoice']
+
+        self.client.post(f'/api/v1/pos/invoices/{invoice_id}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': second.id,
+        }, format='json')
+
+        item_to_remove = InvoiceItem.objects.get(invoice_id=invoice_id, barcode=second)
+        self.client.delete(f'/api/v1/pos/invoices/{invoice_id}/items/{item_to_remove.id}/')
+
+        re_add = self.client.post(f'/api/v1/pos/invoices/{invoice_id}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': second.id,
+        }, format='json')
+        self.assertEqual(re_add.status_code, status.HTTP_201_CREATED)
+        second.refresh_from_db()
+        self.assertEqual(second.tag, 'defective')
+        self.assertTrue(
+            DefectiveProductItem.objects.filter(
+                barcode=second, move_out_id=move_out_data['id']
+            ).exists()
+        )
+
+    def test_patch_defective_invoice_item_rejected(self):
+        """Defective move-out lines can be removed but not quantity/price patched."""
+        from backend.pos.models import InvoiceItem
+
+        barcode = self._make_barcode()
+        move_out = self._create_move_out(barcode)
+        item = InvoiceItem.objects.get(invoice_id=move_out['invoice'], barcode=barcode)
+        response = self.client.patch(
+            f'/api/v1/pos/invoices/{move_out["invoice"]}/items/{item.id}/',
+            {'quantity': '2'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('removed', str(response.data).lower())
+
 
 class BarcodeLookupPosScanTests(TransactionTestCase):
     """Validate POS-specific lightweight barcode lookup behavior."""
