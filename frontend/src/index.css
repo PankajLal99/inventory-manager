@@ -9,6 +9,17 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html.salary-book,
+html.salary-book body {
+  background: #ecfdf5;
+  overscroll-behavior-y: none;
+}
+
+html.salary-book body {
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+}
+
 /* Scale down on mobile devices for better fit */
 @media (max-width: 768px) {
   html {

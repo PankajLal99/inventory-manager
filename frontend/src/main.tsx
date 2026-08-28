@@ -4,11 +4,14 @@ import './index.css';
 import App from './App';
 import { auth } from './lib/auth';
 
-// Unregister any existing service workers (PWA cleanup)
+// Unregister stale workers, but keep the Salary Book installable PWA worker.
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then((registrations) => {
     for (const registration of registrations) {
-      registration.unregister();
+      const script = registration.active?.scriptURL || registration.installing?.scriptURL || '';
+      if (!script.includes('sw-salary-book')) {
+        registration.unregister();
+      }
     }
   });
 }
