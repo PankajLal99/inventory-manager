@@ -1,6 +1,5 @@
 import axios from 'axios';
 import { getAuthScopeForPath, isCreditAppPath, isSalaryBookPath, type AuthScope } from './authPaths';
-import { getAuthScopeForPath, isCreditAppPath, type AuthScope } from './authPaths';
 import { sanitizeScannedBarcode } from './scanningQueue';
 
 // Get API URL from runtime config (for production) or build-time env (for development)

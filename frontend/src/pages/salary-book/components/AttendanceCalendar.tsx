@@ -182,7 +182,7 @@ export function AdminMonthGrid({
                 <div className="font-semibold text-gray-900">{emp.name}</div>
                 <div className="text-xs text-gray-500">{emp.employee_id}</div>
               </div>
-              <div className="text-xs text-emerald-800">{emp.counts.present}P</div>
+              <div className="text-xs text-emerald-800">{emp.counts.PRESENT}P</div>
             </div>
             <div className="flex flex-wrap gap-1">
               {days.map((day) => {
