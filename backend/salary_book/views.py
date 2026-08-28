@@ -35,7 +35,7 @@ from .models import (
     SalaryPayment,
     SalaryRecord,
 )
-from .permissions import IsSalaryBookUser, user_can_access_salary_book
+from .permissions import IsSalaryBookUser, user_can_access_salary_book, user_is_salary_book_admin
 from .serializers import (
     AttendanceSerializer,
     EmployeeAttendanceRuleSerializer,
@@ -50,7 +50,11 @@ from .services.attendance_gps import (
     validate_checkout_gps_and_photo,
     validate_create_gps_and_photo,
 )
-from .services.attendance_evaluator import evaluate_check_in, refresh_worked_minutes
+from .services.attendance_evaluator import (
+    evaluate_check_in,
+    evaluate_manual_attendance,
+    refresh_worked_minutes,
+)
 from .services.image_utils import maybe_compress, validate_and_compress_image
 from .services.salary_calculator import (
     apply_calculation_to_record,
@@ -225,9 +229,8 @@ def settings_view(request):
     if request.method == 'GET':
         return Response(SalaryBookSettingsSerializer(obj).data)
     data = request.data.copy()
-    if data.get('require_gps') in (False, 'false', 'False', '0', 0):
-        return _err('GPS is mandatory and cannot be disabled.')
-    data['require_gps'] = True
+    if 'require_gps' in data and not user_is_salary_book_admin(request.user):
+        return _err('Only admins can change location-based attendance.', status.HTTP_403_FORBIDDEN)
     serializer = SalaryBookSettingsSerializer(obj, data=data, partial=True)
     if serializer.is_valid():
         serializer.save()
@@ -456,16 +459,24 @@ def attendance_list_create(request):
                 msg = msg[0]
             return _err(str(msg))
 
-    method = Attendance.METHOD_CAMERA if photo else Attendance.METHOD_MANUAL
+    is_manual = bool(gps.get('manual'))
+    method = Attendance.METHOD_MANUAL if is_manual else (
+        Attendance.METHOD_CAMERA if photo else Attendance.METHOD_MANUAL
+    )
     check_in = None
-    if att_status in Attendance.PHOTO_STATUSES:
+    if not is_manual and att_status in Attendance.PHOTO_STATUSES:
         check_in = timezone.now()
 
-    evaluated = evaluate_check_in(employee, att_date, att_status, check_in)
+    if is_manual:
+        evaluated = evaluate_manual_attendance(employee, att_date, att_status)
+    else:
+        evaluated = evaluate_check_in(employee, att_date, att_status, check_in)
     remarks = data.get('remarks') or ''
     if evaluated.rule_penalty_applied:
         extra = evaluated.rule_remarks
         remarks = f'{remarks} {extra}'.strip() if remarks else extra
+
+    captured_at = _captured_at(data) if gps.get('latitude') is not None else None
 
     attendance = Attendance.objects.create(
         employee=employee,
@@ -473,10 +484,10 @@ def attendance_list_create(request):
         status=evaluated.status,
         check_in_time=check_in,
         photo=photo,
-        latitude=gps['latitude'],
-        longitude=gps['longitude'],
-        location_accuracy=gps['location_accuracy'],
-        location_captured_at=_captured_at(data),
+        latitude=gps.get('latitude'),
+        longitude=gps.get('longitude'),
+        location_accuracy=gps.get('location_accuracy'),
+        location_captured_at=captured_at,
         attendance_method=method,
         remarks=remarks,
         minutes_late=evaluated.minutes_late,
@@ -527,10 +538,11 @@ def attendance_detail(request, pk):
         if photo:
             photo = validate_and_compress_image(photo, 'check_out_photo')
         attendance.check_out_time = timezone.now()
-        attendance.check_out_latitude = lat
-        attendance.check_out_longitude = lng
-        attendance.check_out_accuracy = accuracy
-        attendance.check_out_captured_at = _captured_at(data, 'check_out_captured_at')
+        if lat is not None:
+            attendance.check_out_latitude = lat
+            attendance.check_out_longitude = lng
+            attendance.check_out_accuracy = accuracy
+            attendance.check_out_captured_at = _captured_at(data, 'check_out_captured_at')
         if photo:
             attendance.check_out_photo = photo
         refresh_worked_minutes(attendance)
@@ -543,8 +555,18 @@ def attendance_detail(request, pk):
         if new_status not in dict(Attendance.STATUS_CHOICES):
             return _err('Invalid attendance status.')
         attendance.status = new_status
+        if (
+            new_status in Attendance.PHOTO_STATUSES
+            and not attendance.check_in_time
+            and attendance.attendance_method != Attendance.METHOD_MANUAL
+        ):
+            attendance.check_in_time = timezone.now()
+        elif new_status not in Attendance.PHOTO_STATUSES:
+            attendance.check_in_time = None
+            attendance.check_out_time = None
     if 'remarks' in data:
         attendance.remarks = data.get('remarks') or ''
+    refresh_worked_minutes(attendance)
     attendance.save()
     return Response(AttendanceSerializer(attendance, context={'request': request}).data)
 
@@ -667,10 +689,10 @@ def leave_list_create(request):
                 employee=employee,
                 date=day,
                 status=att_status,
-                latitude=gps['latitude'],
-                longitude=gps['longitude'],
-                location_accuracy=gps['location_accuracy'],
-                location_captured_at=captured,
+                latitude=gps.get('latitude'),
+                longitude=gps.get('longitude'),
+                location_accuracy=gps.get('location_accuracy'),
+                location_captured_at=captured if gps.get('latitude') is not None else None,
                 attendance_method=Attendance.METHOD_MANUAL,
                 leave=leave,
                 remarks=data.get('reason') or '',

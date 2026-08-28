@@ -66,8 +66,6 @@ class SalaryBookSettings(models.Model):
         return 'Salary Book Settings'
 
     def clean(self):
-        if not self.require_gps:
-            raise ValidationError({'require_gps': 'GPS is mandatory and cannot be disabled.'})
         if self.fixed_working_days < 1:
             raise ValidationError({'fixed_working_days': 'Must be at least 1.'})
         if self.max_gps_accuracy_meters < 1:
@@ -81,7 +79,6 @@ class SalaryBookSettings(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-        self.require_gps = True
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -341,10 +338,10 @@ class Attendance(models.Model):
         blank=True,
         null=True,
     )
-    latitude = models.DecimalField(max_digits=9, decimal_places=6)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6)
-    location_accuracy = models.DecimalField(max_digits=8, decimal_places=2)
-    location_captured_at = models.DateTimeField()
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    location_accuracy = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    location_captured_at = models.DateTimeField(null=True, blank=True)
     check_out_latitude = models.DecimalField(
         max_digits=9, decimal_places=6, null=True, blank=True
     )

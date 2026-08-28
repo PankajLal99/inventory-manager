@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { Download } from 'lucide-react';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import Select from '../../components/ui/Select';
-import { formatDate, formatINR, monthLabel, statusLabel } from './utils';
+import Button from '../../components/ui/Button';
+import { downloadCsv, formatDate, formatINR, formatTime, monthLabel, statusLabel } from './utils';
 import type { Attendance, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 
 const KINDS = [
@@ -20,6 +22,7 @@ export default function ReportsPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [employee, setEmployee] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   const employeesQuery = useQuery({
     queryKey: ['salary-book', 'employees', 'all'],
@@ -37,6 +40,80 @@ export default function ReportsPage() {
       return (await salaryBookApi.reports.salaries(params)).data;
     },
   });
+
+  const exportReport = async () => {
+    if (!kind) return;
+    setExporting(true);
+    try {
+      const params = { year, month, employee: employee || undefined, page_size: 500 };
+      let data: Paginated<unknown>;
+      if (kind === 'attendance') data = (await salaryBookApi.reports.attendance(params)).data;
+      else if (kind === 'leaves') data = (await salaryBookApi.reports.leaves(params)).data;
+      else if (kind === 'advances') data = (await salaryBookApi.reports.advances(params)).data;
+      else data = (await salaryBookApi.reports.salaries(params)).data;
+      const rows = data.results || [];
+      const label = KINDS.find((k) => k.id === kind)?.label.replace(/\s+/g, '-').toLowerCase() ?? kind;
+      const filename = `salary-book-${label}-${year}-${String(month).padStart(2, '0')}.csv`;
+
+      if (kind === 'attendance') {
+        downloadCsv(
+          filename,
+          ['Employee', 'Date', 'Status', 'Check In', 'Check Out', 'Late (min)', 'Worked (hrs)', 'Payable (hrs)', 'Penalty'],
+          (rows as Attendance[]).map((row) => [
+            row.employee_name,
+            row.date,
+            statusLabel(row.status),
+            row.check_in_time ? formatTime(row.check_in_time) : '',
+            row.check_out_time ? formatTime(row.check_out_time) : '',
+            row.is_late ? row.minutes_late : '',
+            row.worked_hours || '',
+            row.payable_hours || '',
+            row.rule_penalty_applied ? 'Yes' : '',
+          ]),
+        );
+      } else if (kind === 'leaves') {
+        downloadCsv(
+          filename,
+          ['Employee', 'Type', 'From', 'To', 'Days', 'Reason'],
+          (rows as LeaveRecord[]).map((row) => [
+            row.employee_name,
+            row.leave_type,
+            row.start_date,
+            row.end_date,
+            row.days,
+            row.reason,
+          ]),
+        );
+      } else if (kind === 'advances') {
+        downloadCsv(
+          filename,
+          ['Employee', 'Date', 'Amount', 'Reason', 'Status'],
+          (rows as SalaryAdvance[]).map((row) => [
+            row.employee_name,
+            row.date,
+            row.amount,
+            row.reason,
+            row.status,
+          ]),
+        );
+      } else {
+        downloadCsv(
+          filename,
+          ['Employee', 'Gross', 'Deductions', 'Advances', 'Net', 'Status'],
+          (rows as SalaryRecord[]).map((row) => [
+            row.employee_name,
+            row.gross_salary,
+            row.leave_deduction,
+            row.total_advances,
+            row.net_salary,
+            statusLabel(row.payment_status),
+          ]),
+        );
+      }
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -82,6 +159,17 @@ export default function ReportsPage() {
               <option key={emp.id} value={emp.id}>{emp.name}</option>
             ))}
           </Select>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={exporting || reportQuery.isLoading || !reportQuery.data?.results?.length}
+              onClick={() => void exportReport()}
+            >
+              <Download className="h-4 w-4" />
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </Button>
+          </div>
           {reportQuery.isLoading && <LoadingState message="Loading report..." />}
           {reportQuery.data && <ReportBody kind={kind} data={reportQuery.data} />}
         </div>
@@ -104,12 +192,19 @@ function ReportBody({ kind, data }: { kind: string; data: Paginated<unknown> }) 
             </div>
           ))}
         </div>
-        <ReportTable headers={['Employee', 'Date', 'Status']}>
+        <ReportTable headers={['Employee', 'Date', 'Status', 'Late', 'Hours', 'Penalty']}>
           {(rows as Attendance[]).map((row) => (
             <tr key={row.id} className="border-t border-emerald-50">
               <td className="px-4 py-3 font-medium">{row.employee_name}</td>
               <td className="px-4 py-3">{formatDate(row.date)}</td>
               <td className="px-4 py-3">{statusLabel(row.status)}</td>
+              <td className="px-4 py-3">{row.is_late ? `${row.minutes_late}m` : '—'}</td>
+              <td className="px-4 py-3">
+                {row.worked_hours && row.payable_hours
+                  ? `${row.payable_hours} / ${row.worked_hours}`
+                  : '—'}
+              </td>
+              <td className="px-4 py-3">{row.rule_penalty_applied ? 'Yes' : '—'}</td>
             </tr>
           ))}
         </ReportTable>

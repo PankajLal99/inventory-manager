@@ -58,6 +58,32 @@ def consecutive_late_streak(
     return streak
 
 
+def evaluate_manual_attendance(
+    employee: Employee,
+    att_date: date,
+    requested_status: str,
+) -> CheckInEvaluation:
+    """Admin backfill: no late rules, no automatic check-in times."""
+    stub = Attendance(
+        employee=employee,
+        date=att_date,
+        status=requested_status,
+        check_in_time=None,
+        check_out_time=None,
+    )
+    worked = worked_minutes(stub, employee) if requested_status in Attendance.PHOTO_STATUSES else 0
+    payable = payable_minutes(worked, employee) if requested_status in Attendance.PHOTO_STATUSES else 0
+    return CheckInEvaluation(
+        status=requested_status,
+        minutes_late=0,
+        is_late=False,
+        worked_minutes=worked,
+        payable_minutes=payable,
+        rule_penalty_applied=False,
+        rule_remarks='',
+    )
+
+
 def evaluate_check_in(
     employee: Employee,
     att_date: date,

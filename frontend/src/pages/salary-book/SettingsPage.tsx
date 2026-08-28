@@ -9,15 +9,26 @@ import Button from '../../components/ui/Button';
 import { toast } from '../../lib/toast';
 import { apiError, getCurrentGps, gpsUserMessage } from './utils';
 import type { SalaryBookSettings } from './types';
+import { auth } from '../../lib/auth';
+
+function isAdminUser(user: { is_superuser?: boolean; groups?: string[] } | null) {
+  if (!user) return false;
+  return Boolean(user.is_superuser || user.groups?.includes('Admin'));
+}
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
+  const [user, setUser] = useState(auth.getUser('salary_book'));
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'settings'],
     queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
   });
   const [form, setForm] = useState<SalaryBookSettings | null>(null);
   const [locating, setLocating] = useState(false);
+
+  useEffect(() => {
+    auth.loadUser('salary_book').then(setUser).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (data) setForm(data);
@@ -36,6 +47,7 @@ export default function SettingsPage() {
         require_checkout_gps_photo: form?.require_checkout_gps_photo,
         default_check_in: form?.default_check_in,
         default_check_out: form?.default_check_out,
+        ...(isAdminUser(user) ? { require_gps: form?.require_gps } : {}),
       }),
     onSuccess: async () => {
       toast('Settings saved', 'success');
@@ -67,6 +79,8 @@ export default function SettingsPage() {
 
   if (isLoading || !form) return <LoadingState message="Loading settings..." />;
   if (isError) return <ErrorState onRetry={() => refetch()} />;
+
+  const admin = isAdminUser(user);
 
   return (
     <form
@@ -119,7 +133,7 @@ export default function SettingsPage() {
       <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 lg:col-span-2">
         <h2 className="font-semibold">Workplace geofence</h2>
         <p className="text-xs text-gray-500">
-          No attendance of any kind can be marked outside this radius. Present also requires a live selfie.
+          When location-based attendance is on, attendance can only be marked inside this radius.
         </p>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <Input
@@ -144,16 +158,47 @@ export default function SettingsPage() {
         </Button>
       </div>
 
-      <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2 text-sm">
-        <div className="flex justify-between">
-          <span>Require selfie</span>
-          <span className="font-medium">{form.require_photo ? 'ON' : 'OFF'}</span>
-        </div>
-        <div className="flex justify-between">
-          <span>Require GPS</span>
-          <span className="font-medium">ALWAYS ON</span>
-        </div>
-        <p className="text-xs text-gray-500">GPS cannot be turned off for attendance.</p>
+      <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 text-sm">
+        <h2 className="font-semibold text-gray-900">Attendance capture</h2>
+        {admin ? (
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <div>
+              <div className="font-medium text-gray-900">Location-based attendance</div>
+              <div className="text-xs text-gray-500 mt-0.5">
+                When off, admins can manually mark attendance without GPS or geofence.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-5 w-5 rounded border-gray-300 text-emerald-600"
+              checked={form.require_gps}
+              onChange={(e) => setForm({ ...form, require_gps: e.target.checked })}
+            />
+          </label>
+        ) : (
+          <div className="flex justify-between">
+            <span>Location-based attendance</span>
+            <span className="font-medium">{form.require_gps ? 'ON' : 'OFF'}</span>
+          </div>
+        )}
+        <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <span>Require selfie for present / half day</span>
+          <input
+            type="checkbox"
+            className="h-5 w-5 rounded border-gray-300 text-emerald-600"
+            checked={form.require_photo}
+            onChange={(e) => setForm({ ...form, require_photo: e.target.checked })}
+          />
+        </label>
+        <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <span>Require selfie for check-out</span>
+          <input
+            type="checkbox"
+            className="h-5 w-5 rounded border-gray-300 text-emerald-600"
+            checked={form.require_checkout_gps_photo}
+            onChange={(e) => setForm({ ...form, require_checkout_gps_photo: e.target.checked })}
+          />
+        </label>
       </div>
       <Button type="submit" className="w-full lg:w-auto min-h-12 px-8 bg-emerald-600 hover:bg-emerald-700" loading={mutation.isPending}>
         Save Settings

@@ -19,6 +19,11 @@ def haversine_meters(lat1, lon1, lat2, lon2) -> float:
     return 2 * radius * atan2(sqrt(a), sqrt(1 - a))
 
 
+def location_required(settings_obj=None) -> bool:
+    settings_obj = settings_obj or SalaryBookSettings.get_solo()
+    return bool(settings_obj.require_gps)
+
+
 def _as_decimal(value, field_name):
     if value is None or value == '':
         raise ValidationError({field_name: 'Location is required. Attendance cannot be saved without GPS.'})
@@ -116,11 +121,25 @@ def assert_inside_geofence(lat, lng, settings_obj=None, for_status=None):
     return distance
 
 
+def _manual_create_payload(settings_obj, files, status):
+    photo = files.get('photo') if files is not None else None
+    return {
+        'latitude': None,
+        'longitude': None,
+        'location_accuracy': None,
+        'photo': photo,
+        'photo_required': False,
+        'settings': settings_obj,
+        'distance_meters': None,
+        'manual': True,
+    }
+
+
 def validate_create_gps_and_photo(data, files, status):
-    """NO LOCATION = NO ATTENDANCE. Present requires geofence + selfie."""
+    """Validate GPS/geofence when enabled; otherwise allow manual attendance."""
     settings_obj = SalaryBookSettings.get_solo()
     if not settings_obj.require_gps:
-        raise ValidationError({'require_gps': 'GPS is mandatory and cannot be disabled.'})
+        return _manual_create_payload(settings_obj, files, status)
 
     lat, lng, accuracy = parse_gps(data)
     assert_accuracy_acceptable(accuracy, settings_obj)
@@ -141,18 +160,26 @@ def validate_create_gps_and_photo(data, files, status):
         'photo_required': photo_required,
         'settings': settings_obj,
         'distance_meters': distance,
+        'manual': False,
     }
 
 
 def validate_checkout_gps_and_photo(data, files):
     settings_obj = SalaryBookSettings.get_solo()
+    photo = None
+    if files is not None:
+        photo = files.get('check_out_photo') or files.get('photo')
+    if not settings_obj.require_gps:
+        if settings_obj.require_checkout_gps_photo and not photo:
+            raise ValidationError({
+                'check_out_photo': 'A selfie is required to check out.'
+            })
+        return None, None, None, photo
+
     lat, lng, accuracy = parse_gps(data, prefix='check_out_')
     assert_accuracy_acceptable(accuracy, settings_obj)
     assert_location_fresh(data.get('check_out_captured_at') or data.get('location_captured_at'))
     assert_inside_geofence(lat, lng, settings_obj, for_status=Attendance.STATUS_PRESENT)
-    photo = None
-    if files is not None:
-        photo = files.get('check_out_photo') or files.get('photo')
     if settings_obj.require_checkout_gps_photo and not photo:
         raise ValidationError({
             'check_out_photo': 'A selfie is required to check out.'

@@ -13,7 +13,7 @@ import { toast } from '../../lib/toast';
 import { apiError, formatDate, getCurrentGps, gpsUserMessage, todayISO } from './utils';
 import ConfirmDialog from './components/ConfirmDialog';
 import SalaryBookSheet from './components/SalaryBookSheet';
-import type { Employee, LeaveRecord, Paginated } from './types';
+import type { Employee, LeaveRecord, Paginated, SalaryBookSettings } from './types';
 
 export default function LeaveList() {
   const queryClient = useQueryClient();
@@ -28,6 +28,10 @@ export default function LeaveList() {
     queryKey: ['salary-book', 'employees', 'ACTIVE'],
     queryFn: async () =>
       (await salaryBookApi.employees.list({ status: 'ACTIVE', page_size: 100 })).data as Paginated<Employee>,
+  });
+  const settingsQuery = useQuery({
+    queryKey: ['salary-book', 'settings'],
+    queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
   });
 
   const createMutation = useMutation({
@@ -120,6 +124,7 @@ export default function LeaveList() {
       {open && (
         <LeaveForm
           employees={employeesQuery.data?.results || []}
+          locationRequired={settingsQuery.data?.require_gps ?? true}
           loading={createMutation.isPending}
           onClose={() => setOpen(false)}
           onSave={(payload) => createMutation.mutate(payload)}
@@ -141,11 +146,13 @@ export default function LeaveList() {
 
 function LeaveForm({
   employees,
+  locationRequired,
   loading,
   onClose,
   onSave,
 }: {
   employees: Employee[];
+  locationRequired: boolean;
   loading: boolean;
   onClose: () => void;
   onSave: (payload: Record<string, unknown>) => void;
@@ -159,15 +166,22 @@ function LeaveForm({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const payload: Record<string, unknown> = {
+      employee: Number(employee),
+      leave_type: leaveType,
+      start_date: start,
+      end_date: end,
+      reason,
+    };
+    if (!locationRequired) {
+      onSave(payload);
+      return;
+    }
     setLocating(true);
     try {
       const gps = await getCurrentGps();
       onSave({
-        employee: Number(employee),
-        leave_type: leaveType,
-        start_date: start,
-        end_date: end,
-        reason,
+        ...payload,
         latitude: gps.latitude,
         longitude: gps.longitude,
         location_accuracy: Math.round(gps.accuracy),
@@ -199,7 +213,11 @@ function LeaveForm({
         <Input label="Start Date" type="date" value={start} onChange={(e) => setStart(e.target.value)} />
         <Input label="End Date" type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
         <Textarea label="Reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} />
-        <p className="text-xs text-gray-500">Location is required. We will capture GPS when you save.</p>
+        <p className="text-xs text-gray-500">
+          {locationRequired
+            ? 'Location is required. We will capture GPS when you save.'
+            : 'Manual mode is on — location is not required for leave.'}
+        </p>
         <div className="grid grid-cols-2 gap-3 pt-2">
           <Button type="button" variant="outline" className="min-h-12" onClick={onClose}>
             Cancel

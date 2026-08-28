@@ -5,6 +5,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Button from '../../components/ui/Button';
+import Input from '../../components/ui/Input';
 import { toast } from '../../lib/toast';
 import {
   apiError,
@@ -45,12 +46,15 @@ export default function AttendancePage() {
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const date = todayISO();
+  const [attendanceDate, setAttendanceDate] = useState(todayISO());
+  const date = attendanceDate;
 
   const settingsQuery = useQuery({
     queryKey: ['salary-book', 'settings'],
     queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
   });
+
+  const locationRequired = settingsQuery.data?.require_gps ?? true;
 
   const requestGps = async (opts?: { silent?: boolean }) => {
     if (syncingRef.current) return;
@@ -74,6 +78,10 @@ export default function AttendancePage() {
   };
 
   useEffect(() => {
+    if (!locationRequired) {
+      setGpsLoading(false);
+      return;
+    }
     requestGps();
     const poll = window.setInterval(() => requestGps({ silent: true }), GPS_POLL_MS);
     const tick = window.setInterval(() => setClock(Date.now()), 500);
@@ -98,31 +106,33 @@ export default function AttendancePage() {
       window.clearInterval(tick);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     };
-  }, []);
+  }, [locationRequired]);
 
   const maxAccuracy = settingsQuery.data?.max_gps_accuracy_meters ?? 100;
-  const accuracyTooLow = Boolean(gps && gps.accuracy > maxAccuracy);
-  const fence = gps && settingsQuery.data ? geofenceStatus(gps, settingsQuery.data) : null;
-  const stale = gpsAgeMs(gps, clock) > GPS_STALE_MS;
-  const locationBlocked = Boolean(!gps || stale || (fence && !fence.inside));
+  const accuracyTooLow = Boolean(locationRequired && gps && gps.accuracy > maxAccuracy);
+  const fence = locationRequired && gps && settingsQuery.data ? geofenceStatus(gps, settingsQuery.data) : null;
+  const stale = locationRequired && gpsAgeMs(gps, clock) > GPS_STALE_MS;
+  const locationBlocked = locationRequired && Boolean(!gps || stale || (fence && !fence.inside));
   const blockedReason = !gps
     ? 'Location required. Sync GPS to continue.'
     : stale
       ? 'Location is stale. Sync GPS to continue.'
       : `You are outside the workplace. Attendance can only be marked within ${fence?.radius ?? 150}m.`;
 
+  const listReady = !locationRequired || (Boolean(gps) && !accuracyTooLow);
+
   const employeesQuery = useQuery({
     queryKey: ['salary-book', 'employees', 'ACTIVE'],
     queryFn: async () =>
       (await salaryBookApi.employees.list({ status: 'ACTIVE', page_size: 100 })).data as Paginated<Employee>,
-    enabled: Boolean(gps) && !accuracyTooLow,
+    enabled: listReady,
   });
 
   const todayQuery = useQuery({
     queryKey: ['salary-book', 'attendance', date],
     queryFn: async () =>
       (await salaryBookApi.attendance.list({ date, page_size: 100 })).data as Paginated<Attendance>,
-    enabled: Boolean(gps) && !accuracyTooLow,
+    enabled: listReady,
   });
 
   const byEmployee = useMemo(() => {
@@ -139,12 +149,16 @@ export default function AttendancePage() {
     return c;
   }, [todayQuery.data]);
 
-  const needsPhoto = STATUSES.find((s) => s.value === status)?.photo;
+  const needsPhoto = locationRequired && STATUSES.find((s) => s.value === status)?.photo;
 
   const onPickPhoto = async (file: File) => {
     const blob = await compressImage(file);
     setPhoto(blob);
     setPhotoPreview(URL.createObjectURL(blob));
+  };
+
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
   };
 
   const mutation = useMutation({
@@ -173,7 +187,7 @@ export default function AttendancePage() {
       setPhoto(null);
       setPhotoPreview(null);
       setStatus('PRESENT');
-      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+      await invalidate();
     },
     onError: (err) => {
       const code = (err as Error).message;
@@ -185,32 +199,59 @@ export default function AttendancePage() {
     },
   });
 
+  const manualMutation = useMutation({
+    mutationFn: async ({ employee, attStatus, existing }: { employee: Employee; attStatus: string; existing?: Attendance }) => {
+      if (existing) {
+        return salaryBookApi.attendance.update(existing.id, { status: attStatus });
+      }
+      return salaryBookApi.attendance.create({
+        employee: employee.id,
+        date,
+        status: attStatus,
+      });
+    },
+    onSuccess: async () => {
+      toast('Attendance saved', 'success');
+      setSelected(null);
+      setStatus('PRESENT');
+      await invalidate();
+    },
+    onError: (err) => toast(apiError(err, 'Unable to save attendance.'), 'error'),
+  });
+
   const checkoutMutation = useMutation({
     mutationFn: async (row: Attendance) => {
-      if (!gps || !photo) throw new Error('GPS and photo required');
-      if (gpsAgeMs(gps) > GPS_STALE_MS) throw new Error('STALE_GPS');
-      if (locationBlocked) throw new Error('OUTSIDE_GEOFENCE');
-      const form = new FormData();
-      form.append('action', 'checkout');
-      appendGps(form, gps, 'check_out_');
-      form.append('check_out_photo', photo, 'checkout.jpg');
-      return salaryBookApi.attendance.update(row.id, form);
+      if (locationRequired) {
+        if (!gps || !photo) throw new Error('GPS and photo required');
+        if (gpsAgeMs(gps) > GPS_STALE_MS) throw new Error('STALE_GPS');
+        if (locationBlocked) throw new Error('OUTSIDE_GEOFENCE');
+        const form = new FormData();
+        form.append('action', 'checkout');
+        appendGps(form, gps, 'check_out_');
+        form.append('check_out_photo', photo, 'checkout.jpg');
+        return salaryBookApi.attendance.update(row.id, form);
+      }
+      return salaryBookApi.attendance.update(row.id, { action: 'checkout' });
     },
     onSuccess: async () => {
       toast('Check-out saved', 'success');
       setSelected(null);
       setPhoto(null);
       setPhotoPreview(null);
-      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+      await invalidate();
     },
     onError: (err) => toast(apiError(err, 'Unable to save check-out.'), 'error'),
   });
 
-  if (gpsLoading || settingsQuery.isLoading) {
+  if (settingsQuery.isLoading) {
+    return <LoadingState message="Loading attendance settings..." />;
+  }
+
+  if (locationRequired && gpsLoading) {
     return <LoadingState message="Getting your location..." />;
   }
 
-  if (gpsError || !gps) {
+  if (locationRequired && (gpsError || !gps)) {
     return (
       <div className="bg-white rounded-xl border border-red-100 p-6 text-center space-y-4">
         <MapPin className="h-10 w-10 text-red-400 mx-auto" />
@@ -224,7 +265,7 @@ export default function AttendancePage() {
     );
   }
 
-  if (accuracyTooLow) {
+  if (locationRequired && accuracyTooLow && gps) {
     return (
       <div className="bg-white rounded-xl border border-amber-100 p-6 text-center space-y-4">
         <MapPin className="h-10 w-10 text-amber-500 mx-auto" />
@@ -238,30 +279,46 @@ export default function AttendancePage() {
     );
   }
 
-  const ageSec = Math.round(gpsAgeMs(gps, clock) / 1000);
+  const ageSec = gps ? Math.round(gpsAgeMs(gps, clock) / 1000) : 0;
 
   return (
     <div className="space-y-4">
       <div>
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-xl font-bold text-gray-900">Attendance</h1>
-          <SyncGpsButton compact syncing={gpsSyncing} onClick={() => requestGps()} />
+          {locationRequired && <SyncGpsButton compact syncing={gpsSyncing} onClick={() => requestGps()} />}
         </div>
-        <p className={`text-sm mt-1 flex items-center gap-1 ${stale ? 'text-red-600' : 'text-emerald-700'}`}>
-          <MapPin className="h-4 w-4" />
-          {stale ? 'Stale location' : 'Live location'} · Accuracy {Math.round(gps.accuracy)}m · synced {ageSec}s ago
-        </p>
-        {fence && (
-          <p className={`text-sm mt-1 ${fence.inside && !stale ? 'text-emerald-700' : 'text-red-600'}`}>
-            {fence.inside
-              ? `Inside workplace (${Math.round(fence.distance ?? 0)}m of ${fence.radius}m allowed)`
-              : `Outside workplace — ${Math.round(fence.distance ?? 0)}m away. No attendance until you are inside ${fence.radius}m.`}
-          </p>
-        )}
-        {locationBlocked && (
-          <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            {blockedReason}
+        {!locationRequired ? (
+          <div className="mt-2 space-y-2">
+            <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+              Manual attendance mode is on. Location is not required — pick a date, employee, and status to mark attendance.
+            </p>
+            <Input
+              label="Attendance date"
+              type="date"
+              value={attendanceDate}
+              onChange={(e) => setAttendanceDate(e.target.value)}
+            />
           </div>
+        ) : (
+          <>
+            <p className={`text-sm mt-1 flex items-center gap-1 ${stale ? 'text-red-600' : 'text-emerald-700'}`}>
+              <MapPin className="h-4 w-4" />
+              {stale ? 'Stale location' : 'Live location'} · Accuracy {Math.round(gps!.accuracy)}m · synced {ageSec}s ago
+            </p>
+            {fence && (
+              <p className={`text-sm mt-1 ${fence.inside && !stale ? 'text-emerald-700' : 'text-red-600'}`}>
+                {fence.inside
+                  ? `Inside workplace (${Math.round(fence.distance ?? 0)}m of ${fence.radius}m allowed)`
+                  : `Outside workplace — ${Math.round(fence.distance ?? 0)}m away. No attendance until you are inside ${fence.radius}m.`}
+              </p>
+            )}
+            {locationBlocked && (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {blockedReason}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -299,7 +356,7 @@ export default function AttendancePage() {
                   return;
                 }
                 setSelected(emp);
-                setStatus('PRESENT');
+                setStatus((row?.status as (typeof STATUSES)[number]['value']) || 'PRESENT');
                 setPhoto(null);
                 setPhotoPreview(null);
               }}
@@ -330,6 +387,7 @@ export default function AttendancePage() {
           existing={byEmployee.get(selected.id)}
           status={status}
           setStatus={setStatus}
+          manualMode={!locationRequired}
           locationBlocked={locationBlocked}
           blockedReason={blockedReason}
           fence={fence}
@@ -339,7 +397,7 @@ export default function AttendancePage() {
           photoPreview={photoPreview}
           fileRef={fileRef}
           onPickPhoto={onPickPhoto}
-          loading={mutation.isPending || checkoutMutation.isPending}
+          loading={mutation.isPending || checkoutMutation.isPending || manualMutation.isPending}
           onClose={() => {
             setSelected(null);
             setPhoto(null);
@@ -347,12 +405,16 @@ export default function AttendancePage() {
           }}
           onSave={() => {
             const existing = byEmployee.get(selected.id);
+            if (!locationRequired) {
+              manualMutation.mutate({ employee: selected, attStatus: status, existing });
+              return;
+            }
             if (locationBlocked) {
               toast(blockedReason, 'error');
               return;
             }
             if (existing && ['PRESENT', 'HALF_DAY'].includes(existing.status) && !existing.check_out_time) {
-              if (!photo) {
+              if (settingsQuery.data?.require_checkout_gps_photo && !photo) {
                 toast('A selfie is required to check out.', 'error');
                 return;
               }
@@ -403,6 +465,7 @@ function MarkSheet(props: {
   existing?: Attendance;
   status: string;
   setStatus: (s: (typeof STATUSES)[number]['value']) => void;
+  manualMode: boolean;
   locationBlocked: boolean;
   blockedReason: string;
   fence: { inside: boolean; distance: number | null; radius: number } | null;
@@ -417,9 +480,12 @@ function MarkSheet(props: {
   onSave: () => void;
 }) {
   const checkoutMode = Boolean(
-    props.existing && ['PRESENT', 'HALF_DAY'].includes(props.existing.status) && !props.existing.check_out_time
+    !props.manualMode
+    && props.existing
+    && ['PRESENT', 'HALF_DAY'].includes(props.existing.status)
+    && !props.existing.check_out_time
   );
-  const photoNeeded = checkoutMode || STATUSES.find((s) => s.value === props.status)?.photo;
+  const photoNeeded = !props.manualMode && (checkoutMode || STATUSES.find((s) => s.value === props.status)?.photo);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -430,23 +496,29 @@ function MarkSheet(props: {
 
         {checkoutMode ? (
           <p className="mt-3 text-sm text-gray-700">Record check-out with GPS and photograph.</p>
-        ) : props.existing ? (
-          <p className="mt-3 text-sm text-gray-600">Already marked {statusLabel(props.existing.status)}.</p>
         ) : (
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            {STATUSES.map((s) => (
-              <button
-                key={s.value}
-                type="button"
-                onClick={() => props.setStatus(s.value)}
-                className={`min-h-12 rounded-xl border text-sm ${
-                  props.status === s.value ? 'bg-emerald-600 text-white border-emerald-600' : 'border-gray-200'
-                }`}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          <>
+            {props.existing && (
+              <p className="mt-3 text-sm text-gray-600">
+                Currently {statusLabel(props.existing.status)}
+                {props.manualMode ? ' — choose a new status to update.' : '.'}
+              </p>
+            )}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {STATUSES.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  onClick={() => props.setStatus(s.value)}
+                  className={`min-h-12 rounded-xl border text-sm ${
+                    props.status === s.value ? 'bg-emerald-600 text-white border-emerald-600' : 'border-gray-200'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </>
         )}
 
         {photoNeeded && !props.existing?.check_out_time && (
@@ -483,9 +555,11 @@ function MarkSheet(props: {
           </div>
         )}
 
-        <div className="mt-4">
-          <SyncGpsButton syncing={props.gpsSyncing} onClick={props.onSyncGps} />
-        </div>
+        {!props.manualMode && (
+          <div className="mt-4">
+            <SyncGpsButton syncing={props.gpsSyncing} onClick={props.onSyncGps} />
+          </div>
+        )}
         <div className="mt-3 grid grid-cols-2 gap-3">
           <Button type="button" variant="outline" className="min-h-12" onClick={props.onClose}>
             Cancel
@@ -494,11 +568,11 @@ function MarkSheet(props: {
             type="button"
             className="min-h-12 bg-emerald-600 hover:bg-emerald-700"
             loading={props.loading}
-            disabled={props.locationBlocked || (Boolean(props.existing) && !checkoutMode)}
+            disabled={!props.manualMode && (props.locationBlocked || (Boolean(props.existing) && !checkoutMode))}
             onClick={props.onSave}
           >
             <ClipboardCheck className="h-4 w-4" />
-            {checkoutMode ? 'Confirm Check-out' : 'Confirm Attendance'}
+            {checkoutMode ? 'Confirm Check-out' : props.existing && props.manualMode ? 'Update Attendance' : 'Confirm Attendance'}
           </Button>
         </div>
       </div>

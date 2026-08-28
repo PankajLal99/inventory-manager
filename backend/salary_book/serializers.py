@@ -41,12 +41,7 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
             'default_check_out',
             'updated_at',
         ]
-        read_only_fields = ['id', 'require_gps', 'updated_at']
-
-    def validate_require_gps(self, value):
-        if value is False:
-            raise serializers.ValidationError('GPS is mandatory and cannot be disabled.')
-        return True
+        read_only_fields = ['id', 'updated_at']
 
     def validate(self, attrs):
         cin = attrs.get('default_check_in', getattr(self.instance, 'default_check_in', None))

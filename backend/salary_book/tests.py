@@ -379,11 +379,36 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('away from the office', res.data.get('error', '').lower())
 
-    def test_cannot_disable_gps(self):
+    def test_admin_can_disable_location_attendance(self):
+        self.user.is_superuser = True
+        self.user.save()
         url = reverse('salary-book-settings')
         res = self.client.patch(url, {'require_gps': False}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(SalaryBookSettings.get_solo().require_gps)
+
+    def test_non_admin_cannot_disable_location_attendance(self):
+        url = reverse('salary-book-settings')
+        res = self.client.patch(url, {'require_gps': False}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(SalaryBookSettings.get_solo().require_gps)
+
+    def test_manual_attendance_without_gps(self):
+        self.user.is_superuser = True
+        self.user.save()
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.require_gps = False
+        settings_obj.save()
+        url = reverse('salary-book-attendance-list-create')
+        res = self.client.post(url, {
+            'employee': self.emp.id,
+            'date': '2026-04-10',
+            'status': 'ABSENT',
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        att = Attendance.objects.get(employee=self.emp, date='2026-04-10')
+        self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
+        self.assertIsNone(att.latitude)
 
 
 class SalaryRuleTests(SalaryBookMixin, APITestCase):
@@ -705,3 +730,110 @@ class ConsecutiveLateRuleTests(SalaryBookMixin, APITestCase):
         )
         self.assertEqual(deleted.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(len(self.client.get(url).data), 1)
+
+
+class SalaryBookIntegrationTests(SalaryBookMixin, APITestCase):
+    """End-to-end flow: manual attendance, leaves, salary, and reports."""
+
+    def setUp(self):
+        self.user = self.make_user('owner', admin=True)
+        self.client.force_authenticate(user=self.user)
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.require_gps = False
+        settings_obj.save()
+        self.emp = self.make_employee(monthly_salary=Decimal('30000.00'))
+        self.att_url = reverse('salary-book-attendance-list-create')
+
+    def _manual(self, day, status_value):
+        return self.client.post(self.att_url, {
+            'employee': self.emp.id,
+            'date': f'2026-04-{day:02d}',
+            'status': status_value,
+        }, format='json')
+
+    def test_manual_month_salary_and_reports(self):
+        for day in range(1, 29):
+            res = self._manual(day, 'PRESENT')
+            self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        leave = self.client.post(reverse('salary-book-leave-list-create'), {
+            'employee': self.emp.id,
+            'leave_type': 'UNPAID',
+            'start_date': '2026-04-29',
+            'end_date': '2026-04-30',
+            'reason': 'Personal',
+        }, format='json')
+        self.assertEqual(leave.status_code, status.HTTP_201_CREATED)
+        self.client.post(reverse('salary-book-advance-list-create'), {
+            'employee': self.emp.id,
+            'date': '2026-04-10',
+            'amount': '2000.00',
+            'reason': 'Loan',
+        }, format='json')
+        gen = self.client.post(reverse('salary-book-salary-generate'), {'year': 2026, 'month': 4}, format='json')
+        self.assertEqual(gen.status_code, status.HTTP_200_OK)
+        sal = self.client.get(reverse('salary-book-salary-list'), {'year': 2026, 'month': 4})
+        self.assertEqual(sal.status_code, status.HTTP_200_OK)
+        record = next(r for r in sal.data['results'] if r['employee'] == self.emp.id)
+        self.assertEqual(Decimal(record['gross_salary']), Decimal('30000.00'))
+        self.assertEqual(Decimal(record['leave_deduction']), Decimal('2000.00'))
+        self.assertEqual(Decimal(record['total_advances']), Decimal('2000.00'))
+        self.assertEqual(Decimal(record['net_salary']), Decimal('26000.00'))
+
+        att_report = self.client.get(reverse('salary-book-report-attendance'), {
+            'year': 2026, 'month': 4, 'employee': self.emp.id,
+        })
+        self.assertEqual(att_report.status_code, status.HTTP_200_OK)
+        self.assertEqual(att_report.data['count'], 30)
+
+        leave_report = self.client.get(reverse('salary-book-report-leaves'), {
+            'year': 2026, 'month': 4, 'employee': self.emp.id,
+        })
+        self.assertEqual(leave_report.status_code, status.HTTP_200_OK)
+        self.assertEqual(leave_report.data['count'], 1)
+
+        adv_report = self.client.get(reverse('salary-book-report-advances'), {
+            'year': 2026, 'month': 4, 'employee': self.emp.id,
+        })
+        self.assertEqual(adv_report.status_code, status.HTTP_200_OK)
+        self.assertEqual(adv_report.data['count'], 1)
+
+        sal_report = self.client.get(reverse('salary-book-report-salaries'), {
+            'year': 2026, 'month': 4, 'employee': self.emp.id,
+        })
+        self.assertEqual(sal_report.status_code, status.HTTP_200_OK)
+        self.assertEqual(sal_report.data['count'], 1)
+
+    def test_manual_present_skips_late_penalty_and_check_in(self):
+        emp = self.make_employee(
+            name='Late Test',
+            mobile='9876500001',
+            expected_check_in=time(9, 0),
+            expected_check_out=time(17, 0),
+        )
+        EmployeeAttendanceRule.objects.create(
+            employee=emp,
+            rule_type=EmployeeAttendanceRule.TYPE_CONSECUTIVE_LATE,
+            late_threshold_minutes=30,
+            consecutive_late_days=3,
+        )
+        for day in (1, 2, 3):
+            Attendance.objects.create(
+                employee=emp,
+                date=date(2026, 4, day),
+                status=Attendance.STATUS_PRESENT,
+                check_in_time=_local_dt(date(2026, 4, day), 9, 45),
+                minutes_late=45,
+                is_late=True,
+                attendance_method=Attendance.METHOD_CAMERA,
+            )
+        res = self.client.post(self.att_url, {
+            'employee': emp.id,
+            'date': '2026-04-04',
+            'status': 'PRESENT',
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['status'], Attendance.STATUS_PRESENT)
+        self.assertFalse(res.data['rule_penalty_applied'])
+        self.assertIsNone(res.data['check_in_time'])
+        att = Attendance.objects.get(employee=emp, date='2026-04-04')
+        self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
