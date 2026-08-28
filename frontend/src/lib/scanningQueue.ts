@@ -115,11 +115,31 @@ export type BarcodeLookupProduct = {
   matched_barcode?: string | null;
   defective_moved_out?: boolean;
   defective_move_out_number?: string;
+  supplier_id?: number | null;
+  supplier_name?: string | null;
 };
 
 export type AddScannedBarcodeToInvoiceResult =
   | { ok: true }
   | { ok: false; message: string; duplicate?: boolean; silent?: boolean };
+
+function normalizeSupplierName(name?: string | null): string {
+  const cleaned = (name || '').trim().toLowerCase();
+  return cleaned || 'no supplier';
+}
+
+function defectiveSuppliersMatch(params: {
+  invoiceSupplierId?: number | null;
+  invoiceSupplierName?: string | null;
+  barcodeSupplierId?: number | null;
+  barcodeSupplierName?: string | null;
+}): boolean {
+  const { invoiceSupplierId, invoiceSupplierName, barcodeSupplierId, barcodeSupplierName } = params;
+  if (invoiceSupplierId != null && barcodeSupplierId != null) {
+    return invoiceSupplierId === barcodeSupplierId;
+  }
+  return normalizeSupplierName(invoiceSupplierName) === normalizeSupplierName(barcodeSupplierName);
+}
 
 /**
  * Single entry point for scanning a barcode onto a draft invoice (checkout modal, edit modal, etc.).
@@ -130,6 +150,9 @@ export async function addScannedBarcodeToInvoice(params: {
   items: InvoiceLineBarcodeFields[] | null | undefined;
   invoiceStatus?: string;
   invoiceType?: string;
+  /** Supplier this defective move-out invoice is written to (customer/supplier name). */
+  invoiceSupplierId?: number | null;
+  invoiceSupplierName?: string | null;
   lookupBarcode: (barcode: string) => Promise<BarcodeLookupProduct | null | undefined>;
   addItem: (payload: Record<string, unknown>) => Promise<unknown>;
 }): Promise<AddScannedBarcodeToInvoiceResult> {
@@ -198,6 +221,19 @@ export async function addScannedBarcodeToInvoice(params: {
         return {
           ok: false,
           message: `This defective barcode is already on a move-out${moveOutNum}.`,
+        };
+      }
+      const expectedName = params.invoiceSupplierName?.trim() || 'No Supplier';
+      if (!defectiveSuppliersMatch({
+        invoiceSupplierId: params.invoiceSupplierId,
+        invoiceSupplierName: expectedName,
+        barcodeSupplierId: product.supplier_id,
+        barcodeSupplierName: product.supplier_name || 'No Supplier',
+      })) {
+        const barcodeSupplier = (product.supplier_name || '').trim() || 'No Supplier';
+        return {
+          ok: false,
+          message: `This barcode belongs to ${barcodeSupplier}, but this move-out invoice is for ${expectedName}. Only barcodes from ${expectedName} can be added.`,
         };
       }
     } else if (product.barcode_available === false) {

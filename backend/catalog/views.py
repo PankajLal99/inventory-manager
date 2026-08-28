@@ -2911,8 +2911,48 @@ def defective_product_move_out_add_items(request, pk):
                 return Response({'error': 'All selected barcodes are already in a move-out'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
-            added_loss = Decimal('0.00')
+            # Only allow barcodes from the same supplier as this move-out invoice
+            from backend.catalog.defective_supplier import (
+                barcode_supplier,
+                defective_invoice_supplier,
+                defective_suppliers_match,
+            )
             invoice = move_out.invoice
+            expected_id, expected_name = (None, 'No Supplier')
+            if invoice:
+                expected_id, expected_name = defective_invoice_supplier(invoice)
+            else:
+                # No invoice: derive from existing move-out items
+                existing = (
+                    DefectiveProductItem.objects.filter(move_out=move_out, barcode_id__isnull=False)
+                    .select_related(
+                        'barcode__purchase__supplier',
+                        'barcode__purchase_item__purchase__supplier',
+                    )
+                    .first()
+                )
+                if existing and existing.barcode:
+                    expected_id, expected_name = barcode_supplier(existing.barcode)
+
+            same_supplier = []
+            for barcode in new_barcodes:
+                bid, bname = barcode_supplier(barcode)
+                if defective_suppliers_match(expected_id, expected_name, bid, bname):
+                    same_supplier.append(barcode)
+
+            if not same_supplier:
+                return Response(
+                    {
+                        'error': (
+                            f'None of the selected barcodes belong to {expected_name}. '
+                            f'Only barcodes from {expected_name} can be added to this move-out.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            new_barcodes = same_supplier
+            added_loss = Decimal('0.00')
 
             for barcode in new_barcodes:
                 # Determine purchase price

@@ -1815,6 +1815,9 @@ export default function InvoiceDetail() {
       items: currentItems,
       invoiceStatus: inv?.status,
       invoiceType: inv?.invoice_type,
+      invoiceSupplierName: inv?.invoice_type === 'defective'
+        ? (inv?.customer_name || 'No Supplier')
+        : undefined,
       lookupBarcode: async (value) => {
         const response = await productsApi.byBarcode(value, true, true);
         return response.data;
@@ -3121,8 +3124,8 @@ export default function InvoiceDetail() {
         <Card className="no-print">
           <h3 className="text-lg font-semibold text-gray-900 mb-1">Add defective barcode</h3>
           <p className="text-sm text-gray-600 mb-3">
-            Only barcodes already marked defective can be added. Removing a barcode from this
-            invoice leaves it defective so it can stay in inventory or go on another move-out.
+            Only defective barcodes from {inv?.customer_name || 'No Supplier'} can be added.
+            Removing a barcode leaves it defective so it can stay in inventory or go on another move-out.
           </p>
           <div className="flex gap-2">
             <div className="flex-1">

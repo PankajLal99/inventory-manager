@@ -5317,6 +5317,12 @@ def _unlink_defective_barcode_from_move_out(invoice, item):
 
 def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
     """Validate barcode can be added to invoice. Returns error Response or None if OK."""
+    from backend.catalog.defective_supplier import (
+        barcode_supplier,
+        defective_invoice_supplier,
+        defective_suppliers_match,
+    )
+
     dup_q = Q(barcode=barcode_obj)
     if raw_clean:
         dup_q |= (
@@ -5339,6 +5345,18 @@ def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
         if DefectiveProductItem.objects.filter(barcode=barcode_obj).exists():
             return Response(
                 {'error': 'This defective barcode is already on a move-out.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        expected_id, expected_name = defective_invoice_supplier(invoice)
+        barcode_id, barcode_name = barcode_supplier(barcode_obj)
+        if not defective_suppliers_match(expected_id, expected_name, barcode_id, barcode_name):
+            return Response(
+                {
+                    'error': (
+                        f'This barcode belongs to {barcode_name}, but this move-out invoice '
+                        f'is for {expected_name}. Only barcodes from {expected_name} can be added.'
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return None

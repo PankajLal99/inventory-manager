@@ -192,12 +192,15 @@ describe('addScannedBarcodeToInvoice for defective move-out invoices', () => {
       items: [],
       invoiceStatus: 'void',
       invoiceType: 'defective',
+      invoiceSupplierName: 'KS',
       lookupBarcode: async () => ({
         id: 7,
         barcode_id: 13,
         barcode_tag: 'defective',
         barcode_available: false,
         canonical_barcode: 'DEF-3',
+        supplier_id: 1,
+        supplier_name: 'KS',
       }),
       addItem: async (payload) => {
         added.push(payload)
@@ -206,6 +209,32 @@ describe('addScannedBarcodeToInvoice for defective move-out invoices', () => {
     expect(result.ok).toBe(true)
     expect(added).toHaveLength(1)
     expect((added[0] as { barcode_id: number }).barcode_id).toBe(13)
+  })
+
+  it('rejects defective barcodes from a different supplier', async () => {
+    const result = await addScannedBarcodeToInvoice({
+      barcode: 'DEF-OTHER',
+      items: [],
+      invoiceStatus: 'void',
+      invoiceType: 'defective',
+      invoiceSupplierName: 'KS',
+      lookupBarcode: async () => ({
+        id: 8,
+        barcode_id: 14,
+        barcode_tag: 'defective',
+        barcode_available: false,
+        supplier_id: 99,
+        supplier_name: 'OtherVendor',
+      }),
+      addItem: async () => {
+        throw new Error('should not add')
+      },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message.toLowerCase()).toContain('ks')
+      expect(result.message.toLowerCase()).toContain('othervendor')
+    }
   })
 
   it('still blocks adding to regular paid invoices', async () => {

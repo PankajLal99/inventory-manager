@@ -1133,6 +1133,54 @@ class DefectiveMoveOutDetailsAndInvoiceAddTests(TransactionTestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('already', str(response.data).lower())
 
+    def test_reject_barcode_from_different_supplier(self):
+        """KS move-out invoice must not accept a barcode purchased from another supplier."""
+        other_supplier = TestDataFactory.create_supplier(name='OtherVendor')
+        first = self._make_barcode()  # DetailsSupplier
+        purchase = TestDataFactory.create_purchase(
+            user=self.user, supplier=other_supplier, store=self.store
+        )
+        purchase_item = TestDataFactory.create_purchase_item(
+            purchase=purchase, product=self.product, quantity=Decimal('1'), unit_price=Decimal('50.00')
+        )
+        other = TestDataFactory.create_barcode(
+            product=self.product, tag='defective', purchase_item=purchase_item
+        )
+
+        move_out = self._create_move_out(first)
+        response = self.client.post(f'/api/v1/pos/invoices/{move_out["invoice"]}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': other.id,
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('belong', str(response.data).lower())
+        other.refresh_from_db()
+        self.assertEqual(other.tag, 'defective')
+
+    def test_add_same_supplier_barcode_allowed(self):
+        """Barcode from the same supplier as the invoice can be added."""
+        from backend.catalog.models import DefectiveProductItem
+
+        first = self._make_barcode()
+        same_supplier = self._make_barcode()
+        move_out = self._create_move_out(first)
+        response = self.client.post(f'/api/v1/pos/invoices/{move_out["invoice"]}/items/', {
+            'product': self.product.id,
+            'quantity': '1',
+            'unit_price': '0',
+            'line_total': '0',
+            'barcode_id': same_supplier.id,
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            DefectiveProductItem.objects.filter(
+                barcode=same_supplier, move_out_id=move_out['id']
+            ).exists()
+        )
+
     def test_remove_barcode_from_move_out_invoice_keeps_defective_tag(self):
         """Removing a line from the supplier invoice must leave the barcode defective."""
         from backend.catalog.models import DefectiveProductItem, DefectiveProductMoveOut
