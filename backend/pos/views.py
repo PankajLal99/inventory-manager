@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, Exists, OuterRef, IntegerField
+from django.db.models import F, Q, Sum, Count, Case, When, Value, DecimalField, ExpressionWrapper, Prefetch, IntegerField
 from django.db.models.functions import TruncDate, Coalesce
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -18,9 +18,11 @@ import uuid
 from .models import POSSession, Cart, CartItem, Invoice, InvoiceItem, Payment, Return, ReturnItem, CreditNote, Repair, Expenses, InvoiceTag
 from backend.catalog.barcode_resolution import (
     get_catalog_barcode_by_printed_value,
+    get_barcode_matching_printed_value,
     single_barcode_for_untracked_product,
+    clean_scanned_barcode,
 )
-from backend.catalog.models import Barcode, Product, ProductVariant
+from backend.catalog.models import Barcode, Product, ProductVariant, DefectiveProductMoveOut, DefectiveProductItem
 from backend.catalog.barcode_cache import invalidate_barcode_cache
 from backend.inventory.models import Stock
 from backend.locations.models import Store
@@ -418,27 +420,17 @@ def repair_invoices_list(request):
     if repair_barcode:
         queryset = queryset.filter(repair__barcode__icontains=repair_barcode)
     
-    # Search by invoice/customer/repair fields and sold item barcode short code.
+    # Search repair registration fields only: customer name and model.
+    # Numeric queries also match customer/repair mobile numbers.
     search = request.query_params.get('search', None)
     invoice_number = request.query_params.get('invoice_number', None)
     if search:
-        item_barcode_match = InvoiceItem.objects.filter(
-            invoice_id=OuterRef('pk')
-        ).filter(
-            Q(barcode__short_code__icontains=search)
-            | Q(barcode__barcode__icontains=search)
-            | Q(sold_barcode_value__icontains=search)
-        )
-        queryset = queryset.annotate(
-            has_item_barcode_match=Exists(item_barcode_match)
-        ).filter(
-            Q(invoice_number__icontains=search)
-            | Q(customer__name__icontains=search)
-            | Q(repair__contact_no__icontains=search)
-            | Q(repair__model_name__icontains=search)
-            | Q(repair__barcode__icontains=search)
-            | Q(has_item_barcode_match=True)
-        )
+        search = search.strip()
+        search_q = Q(customer__name__icontains=search) | Q(repair__model_name__icontains=search)
+        phone_digits = ''.join(ch for ch in search if ch.isdigit())
+        if phone_digits and all(ch.isdigit() or ch in ' +-' for ch in search):
+            search_q |= Q(customer__phone__icontains=phone_digits) | Q(repair__contact_no__icontains=phone_digits)
+        queryset = queryset.filter(search_q)
     elif invoice_number:
         queryset = queryset.filter(invoice_number__icontains=invoice_number)
 
@@ -1862,19 +1854,12 @@ def cart_items(request, pk):
     barcode_value = request.data.get('barcode') or request.data.get('barcode_value')
     sku_value = request.data.get('sku')
     scanned_value = barcode_value or sku_value
-    scanned_value_str = str(scanned_value).strip().upper() if scanned_value else None
+    scanned_value_str = clean_scanned_barcode(scanned_value) if scanned_value else None
     
     # Check if this barcode is already sold (assigned to an invoice item)
     # Allow 'new' and 'returned' tags to be added to cart - they are available for sale
     if scanned_value_str:
-        barcode_obj = None
-        try:
-            try:
-                barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
-            except Barcode.DoesNotExist:
-                barcode_obj = Barcode.objects.get(short_code=scanned_value_str)
-        except Barcode.DoesNotExist:
-            pass
+        barcode_obj = get_barcode_matching_printed_value(scanned_value_str)
         if barcode_obj:
             # Allow 'new' and 'returned' tags - they are available for sale
             if barcode_obj.tag in ['new', 'returned']:
@@ -1927,12 +1912,11 @@ def cart_items(request, pk):
     barcode_value_to_use = None
     
     if scanned_value_str:
-        # Exact match only: try barcode then short_code (scanned_value_str already .upper())
+        # Exact match, then space-stripped compare on stored barcode/short_code
         try:
-            try:
-                barcode_obj = Barcode.objects.get(barcode=scanned_value_str)
-            except Barcode.DoesNotExist:
-                barcode_obj = Barcode.objects.get(short_code=scanned_value_str)
+            barcode_obj = get_barcode_matching_printed_value(scanned_value_str)
+            if not barcode_obj:
+                raise Barcode.DoesNotExist
 
             # Verify this barcode belongs to the product being added
             if barcode_obj.product_id != product_id:
@@ -3855,6 +3839,7 @@ def invoice_detail(request, pk):
                 )
         
         # Wrap all mutations in a single atomic transaction to prevent partial state
+        deleted_defective_move_outs = False
         with transaction.atomic():
             # Re-fetch invoice with lock to prevent concurrent modifications
             invoice = Invoice.objects.select_for_update().get(pk=invoice.pk)
@@ -3963,7 +3948,29 @@ def invoice_detail(request, pk):
             invoice_number = invoice.invoice_number
             invoice_id = str(invoice.id)
             items_summary = [f"{item.product.name} x{item.quantity}" for item in invoice.items.all()]
-            
+
+            # Remove linked defective move-outs (and their items) so barcodes
+            # are no longer treated as already moved out.
+            related_move_outs = list(DefectiveProductMoveOut.objects.filter(invoice=invoice))
+            deleted_defective_move_outs = bool(related_move_outs)
+            for move_out in related_move_outs:
+                create_audit_log(
+                    request=request,
+                    action='delete',
+                    model_name='DefectiveProductMoveOut',
+                    object_id=str(move_out.id),
+                    object_name=f"Move Out {move_out.move_out_number}",
+                    object_reference=move_out.move_out_number,
+                    barcode=None,
+                    changes={
+                        'move_out_number': move_out.move_out_number,
+                        'invoice_number': invoice_number,
+                        'context': 'invoice_deleted',
+                        'total_items': move_out.total_items,
+                    },
+                )
+                move_out.delete()
+
             # Delete the invoice (this will cascade delete invoice items and payments)
             invoice.delete()
             
@@ -3984,6 +3991,9 @@ def invoice_detail(request, pk):
                 }
             )
         
+        if deleted_defective_move_outs:
+            from backend.core.cache_signals import invalidate_products_cache_manual
+            invalidate_products_cache_manual()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -5241,8 +5251,78 @@ def invoice_exchange(request, pk):
     return Response({'message': 'Exchange functionality to be implemented'})
 
 
+def _barcode_purchase_price(barcode_obj):
+    if not barcode_obj:
+        return Decimal('0.00')
+    purchase_item = getattr(barcode_obj, 'purchase_item', None)
+    if purchase_item is None:
+        barcode_obj = Barcode.objects.select_related('purchase_item').filter(pk=barcode_obj.pk).first() or barcode_obj
+        purchase_item = getattr(barcode_obj, 'purchase_item', None)
+    if purchase_item and purchase_item.unit_price:
+        return purchase_item.unit_price or Decimal('0.00')
+    return Decimal('0.00')
+
+
+def _link_defective_barcode_to_move_out(invoice, item):
+    """Keep move-out items in sync when a defective barcode is added to its invoice."""
+    barcode_obj = item.barcode
+    if not barcode_obj:
+        return
+    price = _barcode_purchase_price(barcode_obj)
+    item.unit_price = price
+    item.manual_unit_price = price
+    item.line_total = price * (item.quantity or Decimal('1.000'))
+    item.save(update_fields=['unit_price', 'manual_unit_price', 'line_total'])
+
+    move_out = DefectiveProductMoveOut.objects.filter(invoice=invoice).first()
+    if not move_out:
+        return
+    if DefectiveProductItem.objects.filter(barcode=barcode_obj).exists():
+        return
+    DefectiveProductItem.objects.create(
+        move_out=move_out,
+        product=item.product,
+        barcode=barcode_obj,
+        purchase_price=price,
+    )
+    move_out.total_loss = (move_out.total_loss or Decimal('0.00')) + price
+    move_out.total_items = (move_out.total_items or 0) + 1
+    move_out.save(update_fields=['total_loss', 'total_items'])
+
+
+def _unlink_defective_barcode_from_move_out(invoice, item):
+    """Unlink a barcode from its move-out when removed from the supplier invoice.
+
+    Barcode tag stays 'defective' — removing from the written-to-supplier invoice
+    does not change inventory condition; the item is simply no longer on this
+    move-out and can be added to another (or the same) move-out later.
+    """
+    barcode_obj = item.barcode
+    move_out = DefectiveProductMoveOut.objects.filter(invoice=invoice).first()
+    if not move_out:
+        return
+
+    dpi = None
+    if barcode_obj:
+        dpi = DefectiveProductItem.objects.filter(move_out=move_out, barcode=barcode_obj).first()
+    if not dpi:
+        return
+
+    price = dpi.purchase_price or Decimal('0.00')
+    dpi.delete()
+    move_out.total_loss = max(Decimal('0.00'), (move_out.total_loss or Decimal('0.00')) - price)
+    move_out.total_items = max(0, (move_out.total_items or 0) - 1)
+    move_out.save(update_fields=['total_loss', 'total_items'])
+
+
 def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
     """Validate barcode can be added to invoice. Returns error Response or None if OK."""
+    from backend.catalog.defective_supplier import (
+        barcode_supplier,
+        defective_invoice_supplier,
+        defective_suppliers_match,
+    )
+
     dup_q = Q(barcode=barcode_obj)
     if raw_clean:
         dup_q |= (
@@ -5255,6 +5335,31 @@ def _validate_invoice_barcode_add(invoice, barcode_obj, raw_clean=None):
             {'error': 'This barcode is already on this invoice.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    if invoice.invoice_type == 'defective':
+        if barcode_obj.tag != 'defective':
+            return Response(
+                {'error': 'Only defective barcodes can be added to a move-out invoice.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if DefectiveProductItem.objects.filter(barcode=barcode_obj).exists():
+            return Response(
+                {'error': 'This defective barcode is already on a move-out.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        expected_id, expected_name = defective_invoice_supplier(invoice)
+        barcode_id, barcode_name = barcode_supplier(barcode_obj)
+        if not defective_suppliers_match(expected_id, expected_name, barcode_id, barcode_name):
+            return Response(
+                {
+                    'error': (
+                        f'This barcode belongs to {barcode_name}, but this move-out invoice '
+                        f'is for {expected_name}. Only barcodes from {expected_name} can be added.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return None
 
     if barcode_obj.tag == 'in-cart':
         if invoice.items.filter(barcode=barcode_obj).exists():
@@ -5291,7 +5396,9 @@ def invoice_items(request, pk):
     
     # Only restrict for void invoices - allow adding items to non-void
     # (pending/credit/other) invoices so they can be edited.
-    if invoice.status == 'void':
+    # Defective move-out invoices are stored as void; they may still receive
+    # additional defective barcodes.
+    if invoice.status == 'void' and invoice.invoice_type != 'defective':
         return Response(
             {'error': 'Items cannot be added to void invoices'},
             status=status.HTTP_400_BAD_REQUEST
@@ -5350,7 +5457,7 @@ def invoice_items(request, pk):
             pass
 
     if not resolved_barcode_obj and raw_barcode_value:
-        barcode_clean = str(raw_barcode_value).strip().upper()
+        barcode_clean = clean_scanned_barcode(raw_barcode_value)
         try:
             resolved_barcode_obj = Barcode.objects.get(barcode=barcode_clean)
         except Barcode.DoesNotExist:
@@ -5364,7 +5471,7 @@ def invoice_items(request, pk):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-    barcode_clean = str(raw_barcode_value).strip().upper() if raw_barcode_value else None
+    barcode_clean = clean_scanned_barcode(raw_barcode_value) if raw_barcode_value else None
 
     serializer = InvoiceItemSerializer(data=item_data)
     if not serializer.is_valid():
@@ -5404,7 +5511,17 @@ def invoice_items(request, pk):
         item.save()
 
         # Find and assign barcode for this item (if quantity is 1)
-        if item.quantity == Decimal('1.000') and not item.barcode:
+        if invoice.invoice_type == 'defective':
+            if not item.barcode:
+                item.delete()
+                return Response(
+                    {'error': 'Scan a defective barcode to add it to this move-out invoice.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            _link_defective_barcode_to_move_out(invoice, item)
+            from backend.core.cache_signals import invalidate_products_cache_manual
+            transaction.on_commit(invalidate_products_cache_manual)
+        elif item.quantity == Decimal('1.000') and not item.barcode:
             # Get all barcodes already in this invoice (to avoid duplicates)
             invoice_barcodes = set()
             for inv_item in invoice.items.exclude(id=item.id):
@@ -5533,11 +5650,23 @@ def invoice_items(request, pk):
 def invoice_item_detail(request, pk, item_id):
     """Update or delete invoice item"""
     invoice = get_object_or_404(Invoice, pk=pk)
-    
-    # Only allow editing items in draft invoices (credit or pending)
-    if invoice.status != 'draft' or invoice.invoice_type not in ['pending', 'credit']:
+
+    is_defective_invoice = invoice.invoice_type == 'defective'
+    is_editable_draft = (
+        invoice.status == 'draft' and invoice.invoice_type in ['pending', 'credit']
+    )
+
+    # Draft credit/pending: add/update/remove. Defective move-out invoices (void):
+    # allow remove only — barcodes stay defective and are unlinked from the move-out.
+    if not is_defective_invoice and not is_editable_draft:
         return Response(
             {'error': 'Items can only be edited in draft credit or pending invoices'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    if is_defective_invoice and request.method != 'DELETE':
+        return Response(
+            {'error': 'Defective move-out invoice items can only be removed, not updated.'},
             status=status.HTTP_400_BAD_REQUEST
         )
     
@@ -5549,7 +5678,49 @@ def invoice_item_detail(request, pk, item_id):
     old_quantity = item.quantity
     
     if request.method == 'DELETE':
-        # Mark barcode as 'new' when item is removed from invoice
+        if is_defective_invoice:
+            with transaction.atomic():
+                barcode_obj = item.barcode
+                barcode_value = barcode_obj.barcode if barcode_obj else None
+                barcode_tag_before = barcode_obj.tag if barcode_obj else None
+                product_name = item.product.name if item.product else ''
+                product_id = item.product_id
+
+                # Unlink from move-out; do NOT change barcode tag (stays defective).
+                _unlink_defective_barcode_from_move_out(invoice, item)
+
+                create_audit_log(
+                    request=request,
+                    action='update',
+                    model_name='InvoiceItem',
+                    object_id=str(item.id),
+                    object_name=product_name,
+                    object_reference=invoice.invoice_number,
+                    barcode=barcode_value,
+                    changes={
+                        'barcode': barcode_value,
+                        'barcode_tag': barcode_tag_before,
+                        'product_id': product_id,
+                        'product_name': product_name,
+                        'invoice_id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'context': 'defective_move_out_item_removed',
+                        'barcode_status_unchanged': True,
+                    }
+                )
+
+                item.delete()
+                update_invoice_totals(invoice)
+                invoice.is_edited = True
+                invoice.edited_on = timezone.now()
+                invoice.save(update_fields=['is_edited', 'edited_on'])
+
+                from backend.core.cache_signals import invalidate_products_cache_manual
+                transaction.on_commit(invalidate_products_cache_manual)
+
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # Mark barcode as 'new' when item is removed from draft invoice
         # This allows the barcode to be available for sale again
         if item.barcode:
             old_tag = item.barcode.tag
@@ -5648,7 +5819,13 @@ def update_invoice_totals(invoice):
     subtotal = sum(item.line_total for item in items)
     invoice.subtotal = subtotal
     invoice.total = subtotal - invoice.discount_amount + invoice.tax_amount
-    invoice.due_amount = invoice.total - invoice.paid_amount
+    if invoice.invoice_type == 'defective':
+        # Move-out invoices are not sales. Keep paid in sync with total so a
+        # newly added barcode increases the total instead of creating a due.
+        invoice.paid_amount = invoice.total
+        invoice.due_amount = Decimal('0.00')
+    else:
+        invoice.due_amount = invoice.total - invoice.paid_amount
     
     invoice.save()
 
@@ -6000,7 +6177,7 @@ def replacement_check(request):
         barcode_obj = None
         
         if barcode_value:
-            barcode_clean = str(barcode_value).strip().upper()
+            barcode_clean = clean_scanned_barcode(barcode_value)
             barcode_obj = None
             try:
                 barcode_obj = Barcode.objects.select_related('product').get(barcode=barcode_clean)
@@ -6215,7 +6392,7 @@ def replacement_create(request):
         return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Standardize and exact match: try barcode then short_code (never .first())
-    barcode_clean = str(barcode_value).strip().upper()
+    barcode_clean = clean_scanned_barcode(barcode_value)
     barcode_obj = None
     try:
         barcode_obj = Barcode.objects.get(barcode=barcode_clean)

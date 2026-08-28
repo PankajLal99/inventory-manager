@@ -2,6 +2,7 @@ import django_filters
 import re
 from django.db.models import Q, Count, Exists, OuterRef
 from .models import Product, Barcode
+from .barcode_resolution import clean_scanned_barcode, get_barcode_matching_printed_value
 from backend.pos.models import InvoiceItem, CartItem
 from backend.purchasing.models import PurchaseItem
 
@@ -54,15 +55,18 @@ def normalize_barcode_for_search(barcode_str: str) -> str:
 
 def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=False):
     """
-    Find a Barcode by search value. EXACT match only — no .first(), no prefix/icontains/iexact.
-    Priority: cache by id (unless skip_cache=True), then exact short_code (get), then exact barcode (get).
+    Find a Barcode by search value. Exact match on barcode/short_code, then the same
+    comparison after stripping spaces from stored values (e.g. DB "DD -0002" vs search "DD-0002").
+    Priority: cache by id (unless skip_cache=True), then DB lookup. Use get(), never first().
     Returns Barcode or None.
     skip_cache: if True, do not read from or write to barcode cache (use for invoice add to avoid stale matches).
     """
     if not search_value or not search_value.strip():
         return None
     
-    barcode_clean = search_value.strip().upper()
+    barcode_clean = clean_scanned_barcode(search_value)
+    if not barcode_clean:
+        return None
     
     # Cache: exact id lookup (use get, not first) — skip when skip_cache=True (e.g. invoice creation)
     if not skip_cache:
@@ -98,36 +102,22 @@ def find_barcode_by_search_value(search_value: str, logger=None, skip_cache=Fals
             if logger:
                 logger.warning(f"Cache lookup failed for '{barcode_clean}': {str(e)}")
 
-    # EXACT match only: short_code then barcode. Use get(), never first().
+    related_qs = Barcode.objects.select_related(
+        'product', 'product__category', 'product__brand'
+    )
     try:
-        barcode_obj = Barcode.objects.filter(short_code=barcode_clean).select_related(
-            'product', 'product__category', 'product__brand'
-        ).get()
-        if barcode_obj.product and barcode_obj.product.is_active:
-            if not skip_cache:
-                try:
-                    from .barcode_cache import cache_barcode_data
-                    cache_barcode_data(barcode_obj)
-                except Exception:
-                    pass
-            return barcode_obj
-    except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
-        pass
+        barcode_obj = get_barcode_matching_printed_value(barcode_clean, queryset=related_qs)
+    except Barcode.MultipleObjectsReturned:
+        barcode_obj = None
 
-    try:
-        barcode_obj = Barcode.objects.filter(barcode=barcode_clean).select_related(
-            'product', 'product__category', 'product__brand'
-        ).get()
-        if barcode_obj.product and barcode_obj.product.is_active:
-            if not skip_cache:
-                try:
-                    from .barcode_cache import cache_barcode_data
-                    cache_barcode_data(barcode_obj)
-                except Exception:
-                    pass
-            return barcode_obj
-    except (Barcode.DoesNotExist, Barcode.MultipleObjectsReturned):
-        pass
+    if barcode_obj and barcode_obj.product and barcode_obj.product.is_active:
+        if not skip_cache:
+            try:
+                from .barcode_cache import cache_barcode_data
+                cache_barcode_data(barcode_obj)
+            except Exception:
+                pass
+        return barcode_obj
 
     return None
 
@@ -214,11 +204,25 @@ class ProductFilter(django_filters.FilterSet):
         else:
             # Search across all fields (default behavior)
             # Always search product names, SKUs, descriptions, brands, and categories
-            # For barcodes: use exact matching (normalized to upper)
+            # For barcodes: exact match, then space-stripped compare (DB "DD -0002" vs "DD-0002")
             # For short_code: can use icontains for flexible matching
+            barcode_q = (
+                Q(barcode=search) |
+                Q(short_code=search) | Q(short_code__iexact=search) | Q(short_code__icontains=search)
+            )
+            search_compact = clean_scanned_barcode(search)
+            if search_compact and search_compact != search:
+                barcode_q = barcode_q | Q(barcode=search_compact) | Q(short_code=search_compact)
+            looks_like_code = '-' in search or '/' in search or '_' in search
+            if looks_like_code:
+                try:
+                    compact_match = get_barcode_matching_printed_value(search)
+                    if compact_match and compact_match.tag in ('new', 'returned') and compact_match.product_id:
+                        barcode_q = barcode_q | Q(id=compact_match.id)
+                except Barcode.MultipleObjectsReturned:
+                    pass
             barcode_matches = Barcode.objects.filter(
-                Q(barcode=search) |  # Exact match for barcode (normalized)
-                Q(short_code=search) | Q(short_code__iexact=search) | Q(short_code__icontains=search),
+                barcode_q,
                 tag__in=['new', 'returned']
             ).values_list('product_id', flat=True).distinct()
             
@@ -385,9 +389,14 @@ class ProductFilter(django_filters.FilterSet):
         if not value:
             return queryset
         value = str(value).strip().upper()
-        return queryset.filter(
-            Q(barcodes__barcode=value) | Q(barcodes__short_code=value)
-        ).distinct()
+        barcode_q = Q(barcodes__barcode=value) | Q(barcodes__short_code=value)
+        try:
+            compact_match = get_barcode_matching_printed_value(value)
+            if compact_match and compact_match.product_id:
+                barcode_q = barcode_q | Q(id=compact_match.product_id)
+        except Barcode.MultipleObjectsReturned:
+            pass
+        return queryset.filter(barcode_q).distinct()
     
     def filter_supplier(self, queryset, name, value):
         """Filter products by supplier through purchase items"""
@@ -530,8 +539,10 @@ class ProductFilter(django_filters.FilterSet):
                 Q(Exists(has_normal_barcode)) | ~Q(Exists(has_any_barcode))
             ).distinct()
         else:
-            # For other tags: filter by barcode tag using Q object (more efficient)
-            return queryset.filter(barcodes__tag=value).distinct()
+            # EXISTS avoids JOIN + DISTINCT across the whole barcodes table, which is
+            # what made /products/?tag=defective hang for 15+ seconds.
+            has_tag = Barcode.objects.filter(product_id=OuterRef('pk'), tag=value)
+            return queryset.filter(Exists(has_tag))
     
     def _is_likely_sku(self, search_term):
         """Detect if search term is likely a SKU/barcode vs product name

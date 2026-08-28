@@ -2,7 +2,8 @@ from django.urls import path
 from .views import (
     CustomTokenObtainPairView, CustomTokenRefreshView, register, user_me,
     user_list_create, user_detail,
-    setting_list_create, setting_detail, document_theme,
+    setting_list_create, setting_detail, document_theme, ledger_export_settings,
+    invoice_export_settings,
     audit_log_list, audit_log_detail,
     global_search
 )
@@ -22,6 +23,8 @@ urlpatterns = [
     path('settings/', setting_list_create, name='setting-list-create'),
     path('settings/<int:pk>/', setting_detail, name='setting-detail'),
     path('document-theme/', document_theme, name='document-theme'),
+    path('ledger-export-settings/', ledger_export_settings, name='ledger-export-settings'),
+    path('invoice-export-settings/', invoice_export_settings, name='invoice-export-settings'),
     
     # AuditLog endpoints
     path('audit-logs/', audit_log_list, name='audit-log-list'),

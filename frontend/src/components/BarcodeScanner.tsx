@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Camera, CameraOff } from 'lucide-react';
 import Button from './ui/Button';
+import { sanitizeScannedBarcode } from '../lib/scanningQueue';
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => Promise<void> | void;
@@ -60,7 +61,8 @@ export default function BarcodeScanner({
   }, [onScan]);
 
   // Handle barcode scan processing (shared between continuous and tap-to-scan)
-  const handleBarcodeScan = async (trimmedBarcode: string) => {
+  const handleBarcodeScan = async (rawBarcode: string) => {
+    const trimmedBarcode = sanitizeScannedBarcode(rawBarcode);
     // Skip empty barcodes
     if (!trimmedBarcode) {
       return;
@@ -177,7 +179,7 @@ export default function BarcodeScanner({
       try {
         const result = await scannerRef.current.scanFile(file, false);
         if (result) {
-          const trimmedBarcode = result.trim();
+          const trimmedBarcode = sanitizeScannedBarcode(result);
           if (trimmedBarcode) {
             // Process the scanned barcode
             await handleBarcodeScan(trimmedBarcode);
@@ -327,7 +329,7 @@ export default function BarcodeScanner({
         cameraConfig,
         scanConfig,
         async (decodedText) => {
-          await handleBarcodeScan(decodedText.trim());
+          await handleBarcodeScan(sanitizeScannedBarcode(decodedText));
         },
         (_errorMessage) => {
           // Scanning in progress, ignore minor errors
@@ -375,7 +377,7 @@ export default function BarcodeScanner({
               { facingMode: 'user' }, // Fallback to user camera
               createScanConfig(),
               async (decodedText) => {
-                await handleBarcodeScan(decodedText.trim());
+                await handleBarcodeScan(sanitizeScannedBarcode(decodedText));
               },
               () => {
                 // Scanning in progress, ignore errors

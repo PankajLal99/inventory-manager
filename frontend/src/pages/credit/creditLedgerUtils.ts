@@ -265,21 +265,58 @@ export function collectionEventStyle(eventType: string | undefined): {
   }
 }
 
-/** Chronological statement order: event_at / created_at ascending, then id. */
-export function compareLedgerStatementRows(
-  a: {
-    id?: number | string | null;
-    created_at?: string | null;
-    event_at?: string | null;
-  },
-  b: {
-    id?: number | string | null;
-    created_at?: string | null;
-    event_at?: string | null;
+type LedgerSortRow = {
+  id?: number | string | null;
+  event_at_ms?: number | string | null;
+  created_at?: string | Date | null;
+  event_at?: string | Date | null;
+};
+
+/** Parse statement event time to epoch ms. Never uses US MM/DD (10/06 = 10 June). */
+export function ledgerEventTimeMs(row: LedgerSortRow | string | Date | null | undefined): number {
+  if (row == null || row === '') return 0;
+  if (typeof row === 'number') return Number.isFinite(row) ? row : 0;
+  if (row instanceof Date) {
+    const t = row.getTime();
+    return Number.isFinite(t) ? t : 0;
   }
-): number {
-  const ta = new Date(a.event_at || a.created_at || 0).getTime();
-  const tb = new Date(b.event_at || b.created_at || 0).getTime();
+  if (typeof row === 'object') {
+    const ms = Number(row.event_at_ms);
+    if (Number.isFinite(ms) && ms > 0) return ms;
+    return ledgerEventTimeMs((row.event_at || row.created_at) as string | Date | null | undefined);
+  }
+
+  const s = String(row).trim();
+  if (!s) return 0;
+
+  const dmy = s.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?/i
+  );
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]) - 1;
+    const year = Number(dmy[3]);
+    let hour = dmy[4] != null ? Number(dmy[4]) : 0;
+    const minute = dmy[5] != null ? Number(dmy[5]) : 0;
+    const second = dmy[6] != null ? Number(dmy[6]) : 0;
+    const ap = (dmy[7] || '').toUpperCase();
+    if (ap === 'PM' && hour < 12) hour += 12;
+    if (ap === 'AM' && hour === 12) hour = 0;
+    const local = new Date(year, month, day, hour, minute, second);
+    const t = local.getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  // Django can send 6-digit microseconds; Date.parse wants 3-digit ms.
+  const iso = s.replace(/(\.\d{3})\d+/, '$1').replace(' ', 'T');
+  const isoMs = Date.parse(iso);
+  return Number.isFinite(isoMs) ? isoMs : 0;
+}
+
+/** Chronological statement order: event datetime ascending, then id. */
+export function compareLedgerStatementRows(a: LedgerSortRow, b: LedgerSortRow): number {
+  const ta = ledgerEventTimeMs(a);
+  const tb = ledgerEventTimeMs(b);
   if (ta !== tb) return ta - tb;
   return (Number(a.id) || 0) - (Number(b.id) || 0);
 }

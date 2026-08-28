@@ -62,6 +62,8 @@ class Command(BaseCommand):
             {
                 'name': 'SalaryBook',
                 'description': 'Salary Book portal — payroll, attendance, advances',
+                'name': 'Admin2',
+                'description': 'Personal Ledger access (can be combined with other groups)',
                 'permissions': [],
             },
         ]

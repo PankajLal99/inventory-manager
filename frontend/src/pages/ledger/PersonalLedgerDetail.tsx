@@ -54,7 +54,7 @@ export default function PersonalLedgerDetail() {
     const loadUser = async () => { try { await auth.loadUser(); setUser(auth.getUser()); } catch (e) {} };
     loadUser();
   }, []);
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && user.groups.includes('Admin'));
+  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || (user?.groups && (user.groups.includes('Admin') || user.groups.includes('Admin2')));
 
   const { data: customerData } = useQuery({
     queryKey: ['personal-customer', customerId],
@@ -314,13 +314,7 @@ export default function PersonalLedgerDetail() {
         <div className="flex items-center gap-4">
           <Button
             variant="outline"
-            onClick={() => {
-              if (window.history.length > 1) {
-                navigate(-1);
-                return;
-              }
-              navigate(personalLedgerListPath);
-            }}
+            onClick={() => navigate(personalLedgerListPath)}
             size="sm"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />

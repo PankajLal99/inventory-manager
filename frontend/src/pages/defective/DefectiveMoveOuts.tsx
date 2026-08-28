@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect, useMemo } from 'react';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { formatAppDate } from '../../lib/utils';
@@ -13,6 +13,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   Edit,
+  Trash2,
+  StickyNote,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import PageHeader from '../../components/ui/PageHeader';
@@ -24,9 +26,16 @@ import LoadingState from '../../components/ui/LoadingState';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import Button from '../../components/ui/Button';
-import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { Filter } from 'lucide-react';
+import {
+  parseMoveOutAmount,
+  readPersistedMoveOutFilters,
+  writePersistedMoveOutFilters,
+} from './moveOutFilters';
+
+const REF_STALE_MS = 5 * 60_000;
+const MOVE_OUTS_STALE_MS = 30_000;
 
 interface DefectiveMoveOut {
   id: number;
@@ -39,6 +48,7 @@ interface DefectiveMoveOut {
   reason: string;
   reason_display?: string;
   notes: string;
+  sent_date?: string | null;
   total_loss: string | number;
   total_adjustment?: string | number;
   total_items: number;
@@ -51,17 +61,25 @@ interface DefectiveMoveOut {
 
 export default function DefectiveMoveOuts() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [brandFilter, setBrandFilter] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [supplierFilter, setSupplierFilter] = useState('');
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
-  const [user, setUser] = useState<any>(null);
+  const persistedFilters = useRef(readPersistedMoveOutFilters()).current;
+  const [search, setSearch] = useState(persistedFilters?.search || '');
+  const [dateFrom, setDateFrom] = useState(persistedFilters?.dateFrom || '');
+  const [dateTo, setDateTo] = useState(persistedFilters?.dateTo || '');
+  const [brandFilter, setBrandFilter] = useState(persistedFilters?.brand || '');
+  const [categoryFilter, setCategoryFilter] = useState(persistedFilters?.category || '');
+  const [supplierFilter, setSupplierFilter] = useState(persistedFilters?.supplier || '');
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(persistedFilters?.storeId ?? null);
+  const [viewAll, setViewAll] = useState(Boolean(persistedFilters?.viewAll));
+  const [scopeChosen, setScopeChosen] = useState(Boolean(persistedFilters?.scopeChosen));
+  const [pendingSupplier, setPendingSupplier] = useState(persistedFilters?.supplier || '');
+  const [user, setUser] = useState<any>(() => auth.getUser());
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [selectedMoveOut, setSelectedMoveOut] = useState<DefectiveMoveOut | null>(null);
   const [adjustmentValue, setAdjustmentValue] = useState('');
+  const [moveOutToDelete, setMoveOutToDelete] = useState<DefectiveMoveOut | null>(null);
+  const [detailsMoveOut, setDetailsMoveOut] = useState<DefectiveMoveOut | null>(null);
+  const [detailsNotes, setDetailsNotes] = useState('');
+  const [detailsSentDate, setDetailsSentDate] = useState('');
   const queryClient = useQueryClient();
 
   // Load user on mount
@@ -77,6 +95,11 @@ export default function DefectiveMoveOuts() {
     loadUser();
   }, []);
 
+  const isAdmin = Boolean(
+    user?.is_admin || user?.is_superuser || user?.is_staff ||
+    (user?.groups && user.groups.includes('Admin'))
+  );
+
   // Fetch stores
   const { data: storesResponse } = useQuery({
     queryKey: ['stores'],
@@ -85,6 +108,9 @@ export default function DefectiveMoveOuts() {
       return response.data;
     },
     retry: false,
+    enabled: isAdmin,
+    staleTime: REF_STALE_MS,
+    gcTime: REF_STALE_MS,
   });
 
   const stores = (() => {
@@ -103,6 +129,8 @@ export default function DefectiveMoveOuts() {
       return response.data;
     },
     retry: false,
+    staleTime: REF_STALE_MS,
+    gcTime: REF_STALE_MS,
   });
 
   // Fetch brands for filter
@@ -113,6 +141,8 @@ export default function DefectiveMoveOuts() {
       return response.data;
     },
     retry: false,
+    staleTime: REF_STALE_MS,
+    gcTime: REF_STALE_MS,
   });
 
   // Fetch suppliers for filter
@@ -123,26 +153,55 @@ export default function DefectiveMoveOuts() {
       return response.data;
     },
     retry: false,
+    staleTime: REF_STALE_MS,
+    gcTime: REF_STALE_MS,
   });
-
-  // Check if user is Admin
-  const isAdmin = user?.is_admin || user?.is_superuser || user?.is_staff || 
-    (user?.groups && user.groups.includes('Admin'));
 
   // Update selectedStoreId when stores load and Admin hasn't selected one yet
   useEffect(() => {
-    if (isAdmin && !selectedStoreId && stores.length > 0) {
-      const firstActiveStore = stores.find((s: any) => s.is_active) || stores[0];
+    if (isAdmin && selectedStoreId == null && stores.length > 0) {
+      const persistedStore = persistedFilters?.storeId
+        ? stores.find((s: any) => s.id === persistedFilters.storeId)
+        : null;
+      const firstActiveStore = persistedStore || stores.find((s: any) => s.is_active) || stores[0];
       if (firstActiveStore) {
         setSelectedStoreId(firstActiveStore.id);
       }
     }
-  }, [isAdmin, selectedStoreId, stores]);
+  }, [isAdmin, selectedStoreId, stores, persistedFilters?.storeId]);
 
-  // Fetch move-outs
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['defective-move-outs', dateFrom, dateTo, selectedStoreId, brandFilter, categoryFilter, supplierFilter],
+  useEffect(() => {
+    if (!scopeChosen) return;
+    writePersistedMoveOutFilters({
+      search,
+      dateFrom,
+      dateTo,
+      brand: brandFilter,
+      category: categoryFilter,
+      supplier: supplierFilter,
+      storeId: selectedStoreId,
+      viewAll,
+      scopeChosen,
+    });
+  }, [
+    search,
+    dateFrom,
+    dateTo,
+    brandFilter,
+    categoryFilter,
+    supplierFilter,
+    selectedStoreId,
+    viewAll,
+    scopeChosen,
+  ]);
+
+  const moveOutsQueryEnabled = Boolean(user) && scopeChosen && (!isAdmin || selectedStoreId != null);
+
+  // Fetch move-outs without adjustment amounts
+  const { data, isLoading, isPending, error } = useQuery({
+    queryKey: ['defective-move-outs', 'unadjusted', dateFrom, dateTo, selectedStoreId, brandFilter, categoryFilter, supplierFilter],
     queryFn: () => catalogApi.defectiveProducts.moveOuts.list({
+      has_adjustment: false,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       store: selectedStoreId || undefined,
@@ -151,6 +210,27 @@ export default function DefectiveMoveOuts() {
       supplier: supplierFilter || undefined,
     }),
     retry: false,
+    enabled: moveOutsQueryEnabled,
+    staleTime: MOVE_OUTS_STALE_MS,
+    gcTime: REF_STALE_MS,
+    placeholderData: keepPreviousData,
+  });
+
+  const { data: adjustedData } = useQuery({
+    queryKey: ['defective-move-outs-adjusted', dateFrom, dateTo, selectedStoreId, brandFilter, categoryFilter, supplierFilter],
+    queryFn: () => catalogApi.defectiveProducts.moveOuts.list({
+      has_adjustment: true,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      store: selectedStoreId || undefined,
+      brand: brandFilter || undefined,
+      category: categoryFilter || undefined,
+      supplier: supplierFilter || undefined,
+    }),
+    retry: false,
+    enabled: moveOutsQueryEnabled,
+    staleTime: MOVE_OUTS_STALE_MS,
+    gcTime: REF_STALE_MS,
   });
 
   const moveOuts: DefectiveMoveOut[] = (() => {
@@ -162,16 +242,29 @@ export default function DefectiveMoveOuts() {
     return [];
   })();
 
+  const adjustedMoveOuts: DefectiveMoveOut[] = (() => {
+    if (!adjustedData) return [];
+    const response = adjustedData.data || adjustedData;
+    if (Array.isArray(response)) return response;
+    if (Array.isArray(response?.results)) return response.results;
+    if (Array.isArray(response?.data)) return response.data;
+    return [];
+  })();
+
   // Filter move-outs by search
   const filteredMoveOuts = useMemo(() => {
     return moveOuts.filter((moveOut) => {
+      if (parseMoveOutAmount(moveOut.total_adjustment) > 0) return false;
       if (!search) return true;
       const searchLower = search.toLowerCase();
       return (
+        String(moveOut.id).includes(searchLower) ||
         moveOut.move_out_number.toLowerCase().includes(searchLower) ||
         moveOut.invoice_number?.toLowerCase().includes(searchLower) ||
         moveOut.store_name?.toLowerCase().includes(searchLower) ||
-        moveOut.reason_display?.toLowerCase().includes(searchLower)
+        moveOut.reason_display?.toLowerCase().includes(searchLower) ||
+        (moveOut.notes || '').toLowerCase().includes(searchLower) ||
+        (moveOut.customer_name || '').toLowerCase().includes(searchLower)
       );
     });
   }, [moveOuts, search]);
@@ -179,23 +272,28 @@ export default function DefectiveMoveOuts() {
   // Calculate summary metrics
   const summaryMetrics = useMemo(() => {
     const totalMoveOuts = filteredMoveOuts.length;
-    const totalLoss = filteredMoveOuts.reduce((sum, moveOut) => {
-      const loss = typeof moveOut.total_loss === 'number' 
-        ? moveOut.total_loss 
-        : parseFloat(moveOut.total_loss) || 0;
-      const adjustment = typeof moveOut.total_adjustment === 'number'
-        ? moveOut.total_adjustment
-        : parseFloat(moveOut.total_adjustment || '0') || 0;
-      return sum + (loss - adjustment);
-    }, 0);
-    const totalItems = filteredMoveOuts.reduce((sum, moveOut) => sum + (moveOut.total_items || 0), 0);
+    let totalLoss = 0;
+    let totalItems = 0;
+
+    filteredMoveOuts.forEach((moveOut) => {
+      totalLoss += parseMoveOutAmount(moveOut.total_loss);
+      totalItems += moveOut.total_items || 0;
+    });
+
+    const adjustedCount = adjustedMoveOuts.length;
+    const totalAdjustment = adjustedMoveOuts.reduce(
+      (sum, moveOut) => sum + parseMoveOutAmount(moveOut.total_adjustment),
+      0,
+    );
 
     return {
       totalMoveOuts,
       totalLoss,
       totalItems,
+      adjustedCount,
+      totalAdjustment,
     };
-  }, [filteredMoveOuts]);
+  }, [filteredMoveOuts, adjustedMoveOuts]);
 
   const formatDate = (dateString: string) =>
     formatAppDate(dateString, { empty: '' });
@@ -207,22 +305,13 @@ export default function DefectiveMoveOuts() {
     }).format(parseFloat(String(amount || '0')));
   };
 
-  const getNetLoss = (moveOut: DefectiveMoveOut) => {
-    const loss = typeof moveOut.total_loss === 'number' 
-      ? moveOut.total_loss 
-      : parseFloat(moveOut.total_loss) || 0;
-    const adjustment = typeof moveOut.total_adjustment === 'number'
-      ? moveOut.total_adjustment
-      : parseFloat(moveOut.total_adjustment || '0') || 0;
-    return loss - adjustment;
-  };
-
   const updateAdjustmentMutation = useMutation({
     mutationFn: ({ id, total_adjustment }: { id: number; total_adjustment: number }) => {
       return catalogApi.defectiveProducts.moveOuts.updateAdjustment(id, { total_adjustment });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-adjusted'] });
       setShowAdjustmentModal(false);
       setSelectedMoveOut(null);
       setAdjustmentValue('');
@@ -239,6 +328,46 @@ export default function DefectiveMoveOuts() {
     setShowAdjustmentModal(true);
   };
 
+  const handleOpenDetails = (moveOut: DefectiveMoveOut) => {
+    setDetailsMoveOut(moveOut);
+    setDetailsNotes(moveOut.notes || '');
+    setDetailsSentDate(moveOut.sent_date ? String(moveOut.sent_date).slice(0, 10) : '');
+  };
+
+  const updateDetailsMutation = useMutation({
+    mutationFn: ({ id, notes, sent_date }: { id: number; notes: string; sent_date: string | null }) => {
+      return catalogApi.defectiveProducts.moveOuts.updateAdjustment(id, { notes, sent_date });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      setDetailsMoveOut(null);
+      setDetailsNotes('');
+      setDetailsSentDate('');
+    },
+    onError: (error: any) => {
+      alert(error?.response?.data?.error || 'Failed to update move-out details');
+    },
+  });
+
+  const deleteMoveOutMutation = useMutation({
+    mutationFn: (id: number) => catalogApi.defectiveProducts.moveOuts.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-adjusted'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['existing-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      setMoveOutToDelete(null);
+    },
+    onError: (error: any) => {
+      alert(error?.response?.data?.error || 'Failed to delete move-out');
+    },
+  });
+
+  const handleDeleteMoveOut = (moveOut: DefectiveMoveOut) => {
+    setMoveOutToDelete(moveOut);
+  };
+
   const handleAdjustmentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMoveOut) return;
@@ -250,31 +379,24 @@ export default function DefectiveMoveOuts() {
     });
   };
 
-  const getReasonBadge = (reason: string) => {
-    const reasonMap: Record<string, { label: string; variant: 'success' | 'warning' | 'danger' | 'info' }> = {
-      'defective': { label: 'Defective', variant: 'danger' },
-      'damaged': { label: 'Damaged', variant: 'warning' },
-      'expired': { label: 'Expired', variant: 'warning' },
-      'return_to_supplier': { label: 'Return to Supplier', variant: 'info' },
-      'disposal': { label: 'Disposal', variant: 'danger' },
-      'other': { label: 'Other', variant: 'info' },
-    };
-    const reasonInfo = reasonMap[reason] || { label: reason, variant: 'info' as const };
-    return <Badge variant={reasonInfo.variant}>{reasonInfo.label}</Badge>;
+  const suppliers = (() => {
+    const list = suppliersData?.results || suppliersData?.data || suppliersData || [];
+    return Array.isArray(list) ? list : [];
+  })();
+
+  const applySupplierScope = (supplierId: string) => {
+    setSupplierFilter(supplierId);
+    setViewAll(false);
+    setScopeChosen(true);
   };
 
-  if (isLoading) {
-    return <LoadingState message="Loading move-outs..." />;
-  }
+  const applyViewAllScope = () => {
+    setSupplierFilter('');
+    setViewAll(true);
+    setScopeChosen(true);
+  };
 
-  if (error) {
-    return (
-      <ErrorState
-        message="Error loading move-outs. Please try again."
-        onRetry={() => window.location.reload()}
-      />
-    );
-  }
+  const showTableLoading = moveOutsQueryEnabled && (isLoading || (isPending && !data));
 
   return (
     <div className="space-y-6">
@@ -331,7 +453,7 @@ export default function DefectiveMoveOuts() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <div className="flex items-center justify-between">
             <div>
@@ -368,6 +490,25 @@ export default function DefectiveMoveOuts() {
             </div>
             <div className="p-3 bg-gray-100 rounded-lg">
               <FileText className="h-6 w-6 text-gray-600" />
+            </div>
+          </div>
+        </Card>
+        <Card
+          className="cursor-pointer hover:shadow-md transition-shadow"
+          onClick={() => navigate('/defective-move-outs/adjusted')}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-600">Adjusted</p>
+              <p className="text-2xl font-bold text-blue-700 mt-1">
+                {summaryMetrics.adjustedCount}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {formatCurrency(summaryMetrics.totalAdjustment)}
+              </p>
+            </div>
+            <div className="p-3 bg-blue-100 rounded-lg">
+              <Edit className="h-6 w-6 text-blue-600" />
             </div>
           </div>
         </Card>
@@ -426,22 +567,39 @@ export default function DefectiveMoveOuts() {
           </Select>
           <Select
             value={supplierFilter}
-            onChange={(e) => setSupplierFilter(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSupplierFilter(value);
+              setViewAll(!value);
+              if (!scopeChosen) setScopeChosen(true);
+            }}
             icon={<Filter className="h-4 w-4" />}
           >
             <option value="">All Suppliers</option>
-            {(() => {
-              const suppliers = suppliersData?.results || suppliersData?.data || suppliersData || [];
-              return Array.isArray(suppliers) ? suppliers.map((supplier: any) => (
-                <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
-              )) : null;
-            })()}
+            {suppliers.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
           </Select>
         </div>
       </Card>
 
       {/* Move-Outs Table */}
-      {filteredMoveOuts.length === 0 ? (
+      {!scopeChosen ? (
+        <Card>
+          <EmptyState
+            icon={Filter}
+            title="Choose how to view move-outs"
+            message="Filter by a supplier to keep this page fast, or view all records."
+          />
+        </Card>
+      ) : showTableLoading ? (
+        <LoadingState message="Loading move-outs..." />
+      ) : error ? (
+        <ErrorState
+          message="Error loading move-outs. Please try again."
+          onRetry={() => window.location.reload()}
+        />
+      ) : filteredMoveOuts.length === 0 ? (
         <Card>
           <EmptyState
             icon={FileText}
@@ -454,14 +612,13 @@ export default function DefectiveMoveOuts() {
           {/* Desktop Table View */}
           <div className="hidden md:block">
             <Table headers={[
-              { label: 'Move-Out #', align: 'left' },
-              { label: 'Date', align: 'left' },
+              { label: 'ID', align: 'left' },
+              { label: 'Sent Date', align: 'left' },
               { label: 'Customer', align: 'left' },
-              { label: 'Store', align: 'left' },
-              { label: 'Invoice', align: 'left' },
-              { label: 'Reason', align: 'left' },
+              { label: 'Notes', align: 'left' },
               { label: 'Items', align: 'right' },
               { label: 'Total Loss', align: 'right' },
+              { label: 'Adjustment', align: 'right' },
               { label: '', align: 'right' },
             ]}>
               {filteredMoveOuts.map((moveOut) => {
@@ -473,13 +630,23 @@ export default function DefectiveMoveOuts() {
                   >
                     <TableCell>
                       <span className="font-mono font-semibold text-gray-900">
-                        {moveOut.move_out_number.split('-').pop()}
+                        {moveOut.id}
                       </span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-gray-600">
-                        {formatDate(moveOut.created_at)}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenDetails(moveOut);
+                        }}
+                        className="text-left text-gray-600 hover:text-blue-700"
+                        title="Set sent date"
+                      >
+                        {moveOut.sent_date ? formatDate(moveOut.sent_date) : (
+                          <span className="text-gray-400 italic">Not set</span>
+                        )}
+                      </button>
                     </TableCell>
                     <TableCell>
                       <span className="text-gray-900 font-medium">
@@ -487,24 +654,19 @@ export default function DefectiveMoveOuts() {
                       </span>
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Store className="h-4 w-4 text-gray-400" />
-                        <span className="text-gray-900">
-                          {moveOut.store_name || 'N/A'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {moveOut.invoice_number ? (
-                        <span className="font-mono text-blue-600 hover:text-blue-800">
-                          {moveOut.invoice_number}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">No invoice</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {getReasonBadge(moveOut.reason)}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenDetails(moveOut);
+                        }}
+                        className="max-w-[180px] text-left text-sm text-gray-700 hover:text-blue-700 truncate block"
+                        title={moveOut.notes || 'Add note'}
+                      >
+                        {moveOut.notes?.trim() ? moveOut.notes : (
+                          <span className="text-gray-400 italic">Add note</span>
+                        )}
+                      </button>
                     </TableCell>
                     <TableCell align="right">
                       <span className="font-medium text-gray-900">
@@ -512,19 +674,37 @@ export default function DefectiveMoveOuts() {
                       </span>
                     </TableCell>
                     <TableCell align="right">
-                      <div className="flex flex-col items-end">
-                        <span className="font-semibold text-red-600">
-                          {formatCurrency(getNetLoss(moveOut))}
-                        </span>
-                        {moveOut.total_adjustment && parseFloat(String(moveOut.total_adjustment)) > 0 && (
-                          <span className="text-xs text-gray-500">
-                            (Loss: {formatCurrency(moveOut.total_loss)}, Adj: {formatCurrency(moveOut.total_adjustment)})
-                          </span>
-                        )}
-                      </div>
+                      <span className="font-semibold text-red-600">
+                        {formatCurrency(moveOut.total_loss)}
+                      </span>
+                    </TableCell>
+                    <TableCell align="right">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleUpdateAdjustment(moveOut);
+                        }}
+                        className="font-medium text-gray-900 hover:text-blue-700"
+                        title="Edit adjustment"
+                      >
+                        {formatCurrency(moveOut.total_adjustment || 0)}
+                      </button>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenDetails(moveOut);
+                          }}
+                          className="gap-1.5"
+                        >
+                          <StickyNote className="h-4 w-4 flex-shrink-0" />
+                          <span>Note</span>
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
@@ -551,6 +731,19 @@ export default function DefectiveMoveOuts() {
                             <span>View Invoice</span>
                           </Button>
                         )}
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteMoveOut(moveOut);
+                          }}
+                          className="gap-1.5"
+                          disabled={deleteMoveOutMutation.isPending}
+                        >
+                          <Trash2 className="h-4 w-4 flex-shrink-0" />
+                          <span>Delete</span>
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -572,7 +765,7 @@ export default function DefectiveMoveOuts() {
                       <div className="flex items-center gap-2 mb-1">
                         <FileText className="h-4 w-4 text-red-600 flex-shrink-0" />
                         <span className="font-mono font-semibold text-gray-900 text-base">
-                          {moveOut.move_out_number.split('-').pop()}
+                          #{moveOut.id}
                         </span>
                       </div>
                       {moveOut.customer_name && (
@@ -581,16 +774,7 @@ export default function DefectiveMoveOuts() {
                         </div>
                       )}
                       <div className="text-sm text-gray-600 mb-1">
-                        {formatDate(moveOut.created_at)}
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                        <Store className="h-3.5 w-3.5 text-gray-400" />
-                        <span className="truncate">
-                          {moveOut.store_name || 'N/A'}
-                        </span>
-                      </div>
-                      <div className="mt-1">
-                        {getReasonBadge(moveOut.reason)}
+                        Sent: {moveOut.sent_date ? formatDate(moveOut.sent_date) : 'Not set'}
                       </div>
                     </div>
                     <div className="pt-3 border-t border-gray-100">
@@ -601,20 +785,66 @@ export default function DefectiveMoveOuts() {
                         </div>
                         <div>
                           <div className="text-xs font-medium text-red-600 uppercase tracking-wide mb-1">Total Loss</div>
-                          <div className="text-base font-bold text-red-600">{formatCurrency(getNetLoss(moveOut))}</div>
-                          {moveOut.total_adjustment && parseFloat(String(moveOut.total_adjustment)) > 0 && (
-                            <div className="text-xs text-gray-500 mt-0.5">
-                              Adj: {formatCurrency(moveOut.total_adjustment)}
-                            </div>
-                          )}
+                          <div className="text-base font-bold text-red-600">{formatCurrency(moveOut.total_loss)}</div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleUpdateAdjustment(moveOut);
+                            }}
+                            className="text-xs text-blue-600 mt-0.5"
+                          >
+                            Adj: {formatCurrency(moveOut.total_adjustment || 0)}
+                          </button>
                         </div>
                       </div>
-                      {moveOut.invoice_number && (
+                      {moveOut.notes?.trim() && (
                         <div className="mt-3 pt-3 border-t border-gray-100">
-                          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Invoice</div>
-                          <div className="font-mono text-blue-600">{moveOut.invoice_number}</div>
+                          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Notes</div>
+                          <div className="text-sm text-gray-700 whitespace-pre-wrap">{moveOut.notes}</div>
                         </div>
                       )}
+                      <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-2">
+                        {moveOut.invoice && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/invoices/${moveOut.invoice}`);
+                            }}
+                            className="flex-1 gap-1.5"
+                          >
+                            <Eye className="h-4 w-4 flex-shrink-0" />
+                            <span>View Invoice</span>
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenDetails(moveOut);
+                          }}
+                          className="flex-1 gap-1.5"
+                        >
+                          <StickyNote className="h-4 w-4 flex-shrink-0" />
+                          <span>Note / Date</span>
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteMoveOut(moveOut);
+                          }}
+                          className="flex-1 gap-1.5"
+                          disabled={deleteMoveOutMutation.isPending}
+                        >
+                          <Trash2 className="h-4 w-4 flex-shrink-0" />
+                          <span>Delete</span>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -642,7 +872,7 @@ export default function DefectiveMoveOuts() {
                 Move-Out Number
               </label>
               <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm font-mono">
-                {selectedMoveOut.move_out_number}
+                #{selectedMoveOut.id}
               </div>
             </div>
             <div>
@@ -693,6 +923,158 @@ export default function DefectiveMoveOuts() {
           </form>
         </Modal>
       )}
+
+      {moveOutToDelete && (
+        <Modal
+          isOpen={!!moveOutToDelete}
+          onClose={() => setMoveOutToDelete(null)}
+          title="Delete Move-Out"
+          size="md"
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              This will delete move-out{' '}
+              <span className="font-mono font-semibold">
+                #{moveOutToDelete.id}
+              </span>
+              {moveOutToDelete.invoice_number ? (
+                <>
+                  {' '}and its invoice{' '}
+                  <span className="font-mono font-semibold">{moveOutToDelete.invoice_number}</span>
+                </>
+              ) : null}
+              . Products in this move-out will be available to move out again.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setMoveOutToDelete(null)}
+                disabled={deleteMoveOutMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => deleteMoveOutMutation.mutate(moveOutToDelete.id)}
+                disabled={deleteMoveOutMutation.isPending}
+              >
+                {deleteMoveOutMutation.isPending ? 'Deleting...' : 'Delete Move-Out'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {detailsMoveOut && (
+        <Modal
+          isOpen={!!detailsMoveOut}
+          onClose={() => setDetailsMoveOut(null)}
+          title="Move-Out Notes & Sent Date"
+          size="md"
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              updateDetailsMutation.mutate({
+                id: detailsMoveOut.id,
+                notes: detailsNotes,
+                sent_date: detailsSentDate || null,
+              });
+            }}
+            className="space-y-4"
+          >
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                ID
+              </label>
+              <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm font-mono">
+                #{detailsMoveOut.id}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Sent Date
+              </label>
+              <Input
+                type="date"
+                value={detailsSentDate}
+                onChange={(e) => setDetailsSentDate(e.target.value)}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Date this was returned to the supplier. This can be different from the day the move-out was created.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Notes
+              </label>
+              <textarea
+                className="block w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                rows={4}
+                value={detailsNotes}
+                onChange={(e) => setDetailsNotes(e.target.value)}
+                placeholder="Keep a note of the items in this move-out..."
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setDetailsMoveOut(null)}
+                disabled={updateDetailsMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={updateDetailsMutation.isPending}>
+                {updateDetailsMutation.isPending ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      <Modal
+        isOpen={!scopeChosen}
+        onClose={() => {}}
+        title="Filter move-outs?"
+        size="md"
+        closeOnBackdropClick={false}
+        hideCloseButton
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Do you want to filter by supplier or view all? Starting with one supplier keeps this page faster.
+          </p>
+          <Select
+            value={pendingSupplier}
+            onChange={(e) => setPendingSupplier(e.target.value)}
+            icon={<Filter className="h-4 w-4" />}
+          >
+            <option value="">Select a supplier</option>
+            {suppliers.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
+          </Select>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={applyViewAllScope}
+            >
+              View all
+            </Button>
+            <Button
+              type="button"
+              onClick={() => applySupplierScope(pendingSupplier)}
+              disabled={!pendingSupplier}
+            >
+              Filter by supplier
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

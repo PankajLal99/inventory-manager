@@ -15,6 +15,7 @@ import {
   Plus,
   Printer,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
@@ -37,6 +38,7 @@ import {
   collectionStatusBadgeVariant,
   collectionStatusLabel,
   compareLedgerStatementRows,
+  ledgerEventTimeMs,
   formatCreditDate,
   formatCreditDateTime,
   formatCreditStatementDate,
@@ -64,7 +66,18 @@ import {
   copyPngBlobToClipboard,
   buildCreditLedgerSnapshotBlobs,
 } from './creditDocumentClipboard';
-import { LEDGER_SNAPSHOT_ROWS_PER_PAGE } from './creditLedgerSnapshot';
+import {
+  chunkLedgerRowsForExport,
+  ledgerExportSplitExplain,
+} from './creditLedgerSnapshot';
+import {
+  LEDGER_EXPORT_DAY_PRESETS,
+  LEDGER_EXPORT_ROW_PRESETS,
+  ledgerExportSplitBadge,
+  saveLedgerExportSplit,
+  useLedgerExportSplit,
+  type LedgerExportSplit,
+} from './ledgerExportSettings';
 import {
   peekPendingLedgerClipboardImage,
   setPendingLedgerClipboardImage,
@@ -76,6 +89,7 @@ type TxnType = '' | 'sale' | 'payment' | 'return';
 type LedgerColumnId =
   | 'sr'
   | 'date'
+  | 'time'
   | 'type'
   | 'vch'
   | 'particulars'
@@ -90,9 +104,12 @@ const LEDGER_COLUMN_DEFS: Array<{
   defaultOn: boolean;
   align?: 'left' | 'right' | 'center';
   pdfWidth?: number;
+  /** Shown in Columns settings only — not a table column. */
+  settingsOnly?: boolean;
 }> = [
   { id: 'sr', label: 'Sr', defaultOn: false, align: 'center', pdfWidth: 10 },
   { id: 'date', label: 'Date', defaultOn: true, align: 'left', pdfWidth: 18 },
+  { id: 'time', label: 'Time with date', defaultOn: false, settingsOnly: true },
   { id: 'type', label: 'Type', defaultOn: false, align: 'left', pdfWidth: 18 },
   { id: 'vch', label: 'Vch No.', defaultOn: false, align: 'left', pdfWidth: 26 },
   { id: 'particulars', label: 'Particulars', defaultOn: true, align: 'left' },
@@ -126,9 +143,9 @@ function formatPdfDate(value?: string | null) {
   return formatCreditDate(value);
 }
 
-/** Statement / table date columns: DD/MM/YYYY (+ time when present). */
-function formatPdfDateShort(value?: string | null) {
-  return formatCreditStatementDate(value);
+/** Statement / table date columns: DD/MM/YYYY, or DD/MM/YYYY h:mm AM/PM when time is on. */
+function formatPdfDateShort(value?: string | null, includeTime = false) {
+  return includeTime ? formatCreditDateTime(value) : formatCreditStatementDate(value);
 }
 
 /** jsPDF Helvetica can't render ₹ / emoji — keep printable Latin text only */
@@ -216,10 +233,14 @@ export default function CreditLedgerDetail() {
   const [datePreset, setDatePreset] = useState<DateRangePreset>('custom');
   const [showFilters, setShowFilters] = useState(false);
   const [showColumnSettings, setShowColumnSettings] = useState(false);
+  const [showCopySettings, setShowCopySettings] = useState(false);
   const [columnVisibility, setColumnVisibility] =
     useState<Record<LedgerColumnId, boolean>>(loadColumnVisibility);
   const [search, setSearch] = useState('');
   const { ledger: ledgerTheme } = useCreditDocThemes();
+  const exportSplit = useLedgerExportSplit();
+  const [rowsPerPageDraft, setRowsPerPageDraft] = useState(() => String(exportSplit.rowsPerPage));
+  const [daysPerPageDraft, setDaysPerPageDraft] = useState(() => String(exportSplit.daysPerPage));
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showDebitModal, setShowDebitModal] = useState(false);
@@ -242,14 +263,11 @@ export default function CreditLedgerDetail() {
   const [copyingPdf, setCopyingPdf] = useState(false);
   const [showLedgerImageBanner, setShowLedgerImageBanner] = useState(false);
   const [copyingLedgerImage, setCopyingLedgerImage] = useState(false);
-  const [picturePageProgress, setPicturePageProgress] = useState<{
-    total: number;
-    nextPart: number;
-  } | null>(null);
+  const [pictureCopied, setPictureCopied] = useState<boolean[]>([]);
+  const [preparingPictures, setPreparingPictures] = useState(false);
   const canManage = canManageCreditRecords();
   const pictureCopyFrameRef = useRef<HTMLIFrameElement>(null);
-  const picturePartsQueueRef = useRef<Blob[]>([]);
-  const picturePartsTotalRef = useRef(0);
+  const pictureBlobsRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     if (searchParams.get('copy_ledger') === '1' && peekPendingLedgerClipboardImage()) {
@@ -292,7 +310,7 @@ export default function CreditLedgerDetail() {
   const selectedCustomer = statement?.customer || customerMeta;
   const rows = useMemo(() => {
     const list = [...(statement?.rows || [])];
-    // Oldest datetime on top (ascending)
+    // Oldest datetime on top (ascending) — latest at the end
     list.sort(compareLedgerStatementRows);
     const q = search.trim().toLowerCase();
     if (!q) return list;
@@ -310,29 +328,92 @@ export default function CreditLedgerDetail() {
     });
   }, [statement?.rows, search]);
 
-  // Reset multi-page picture queue when statement / filters change
+  const oldestRow = rows.length ? rows[0] : undefined;
+  const copySplitExplain = ledgerExportSplitExplain(rows, exportSplit);
+
+  const persistExportSplit = (patch: Partial<LedgerExportSplit>) => {
+    const next = saveLedgerExportSplit({ ...exportSplit, ...patch });
+    setRowsPerPageDraft(String(next.rowsPerPage));
+    setDaysPerPageDraft(String(next.daysPerPage));
+    return next;
+  };
+
+  const commitRowsPerPageDraft = () => {
+    const parsed = parseInt(rowsPerPageDraft, 10);
+    const next = persistExportSplit({
+      rowsPerPage: Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage,
+    });
+    return next;
+  };
+
+  const commitDaysPerPageDraft = () => {
+    const parsed = parseInt(daysPerPageDraft, 10);
+    const next = persistExportSplit({
+      daysPerPage: Number.isFinite(parsed) ? parsed : exportSplit.daysPerPage,
+    });
+    return next;
+  };
+
+  const flushCopySettings = () => {
+    const withRows = saveLedgerExportSplit({
+      ...exportSplit,
+      rowsPerPage: (() => {
+        const parsed = parseInt(rowsPerPageDraft, 10);
+        return Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage;
+      })(),
+      daysPerPage: (() => {
+        const parsed = parseInt(daysPerPageDraft, 10);
+        return Number.isFinite(parsed) ? parsed : exportSplit.daysPerPage;
+      })(),
+    });
+    setRowsPerPageDraft(String(withRows.rowsPerPage));
+    setDaysPerPageDraft(String(withRows.daysPerPage));
+    return withRows;
+  };
+
   useEffect(() => {
-    picturePartsQueueRef.current = [];
-    picturePartsTotalRef.current = 0;
-    const entryCount = rows.length;
-    const pages =
-      entryCount === 0 ? 1 : Math.ceil(entryCount / LEDGER_SNAPSHOT_ROWS_PER_PAGE);
-    if (pages > 1) {
-      setPicturePageProgress({ total: pages, nextPart: 1 });
-    } else {
-      setPicturePageProgress(null);
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+    setDaysPerPageDraft(String(exportSplit.daysPerPage));
+  }, [exportSplit]);
+
+  const openCopySettings = () => {
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+    setDaysPerPageDraft(String(exportSplit.daysPerPage));
+    setShowColumnSettings(false);
+    setShowCopySettings(true);
+  };
+
+  const closeCopySettings = () => {
+    flushCopySettings();
+    setShowCopySettings(false);
+  };
+
+  const toggleCopySettings = () => {
+    if (showCopySettings) {
+      closeCopySettings();
+      return;
     }
-  }, [rows.length, customerId, dateFrom, dateTo, txnType]);
+    openCopySettings();
+  };
+
+  // Reset prepared images when statement / filters / split change
+  useEffect(() => {
+    pictureBlobsRef.current = [];
+    setPictureCopied([]);
+    setPreparingPictures(false);
+  }, [rows, customerId, dateFrom, dateTo, txnType, exportSplit]);
+
+  const showTime = !!columnVisibility.time;
 
   const visibleColumns = useMemo(
-    () => LEDGER_COLUMN_DEFS.filter((c) => columnVisibility[c.id]),
+    () => LEDGER_COLUMN_DEFS.filter((c) => !c.settingsOnly && columnVisibility[c.id]),
     [columnVisibility]
   );
 
   const toggleColumn = (id: LedgerColumnId) => {
     setColumnVisibility((prev) => {
       const next = { ...prev, [id]: !prev[id] };
-      const anyOn = LEDGER_COLUMN_DEFS.some((c) => next[c.id]);
+      const anyOn = LEDGER_COLUMN_DEFS.some((c) => !c.settingsOnly && next[c.id]);
       if (!anyOn) {
         toast('Keep at least one column visible', 'error');
         return prev;
@@ -357,10 +438,9 @@ export default function CreditLedgerDetail() {
   };
 
   const showAllColumns = () => {
-    const all = Object.fromEntries(LEDGER_COLUMN_DEFS.map((c) => [c.id, true])) as Record<
-      LedgerColumnId,
-      boolean
-    >;
+    const all = Object.fromEntries(
+      LEDGER_COLUMN_DEFS.map((c) => [c.id, c.settingsOnly ? !!columnVisibility[c.id] : true])
+    ) as Record<LedgerColumnId, boolean>;
     setColumnVisibility(all);
     try {
       localStorage.setItem(LEDGER_COLUMNS_STORAGE_KEY, JSON.stringify(all));
@@ -388,7 +468,7 @@ export default function CreditLedgerDetail() {
         credit_customer_id: Number(customerId),
         payment_method: paymentMethod,
         notes: paymentNotes.trim() || undefined,
-        paid_at: paymentDate ? `${paymentDate}T12:00:00` : undefined,
+        paid_at: paymentDate ? dateStringWithCurrentTimeISO(paymentDate) : undefined,
       };
       if (paymentMethod === 'mixed') {
         payload.cash_amount = parseFloat(cashAmount || '0');
@@ -528,8 +608,8 @@ export default function CreditLedgerDetail() {
     : `(${customerFirstName} will give)`;
   const openingOnLabel = dateFrom
     ? `on ${formatPdfDate(dateFrom)}`
-    : rows[0]?.created_at
-      ? `on ${formatPdfDate(rows[0].created_at)}`
+    : oldestRow?.created_at
+      ? `on ${formatPdfDate(oldestRow.created_at)}`
       : '';
   const entriesSuffix = dateFrom || dateTo ? '(Date Range)' : '(All)';
 
@@ -554,14 +634,15 @@ export default function CreditLedgerDetail() {
       entryType?: string;
       rawAmount?: string | number;
       rawDate?: string;
+      eventAtMs?: number;
       rawDescription?: string;
     }> = [];
 
     const openingDate = dateFrom
-      ? formatPdfDateShort(dateFrom)
-      : rows[0]?.created_at
-        ? formatPdfDateShort(rows[0].created_at)
-        : formatPdfDateShort(new Date().toISOString());
+      ? formatPdfDateShort(dateFrom, showTime)
+      : oldestRow?.created_at
+        ? formatPdfDateShort(oldestRow.created_at, showTime)
+        : formatPdfDateShort(new Date().toISOString(), showTime);
 
     // Brought-forward row only when filtering from a start date (avoids duplicating opening-balance entries on "All")
     if (dateFrom) {
@@ -584,7 +665,7 @@ export default function CreditLedgerDetail() {
       const credit = formatPdfMoney(row.credit);
       out.push({
         sr: String(idx + 1),
-        date: formatPdfDateShort(row.created_at),
+        date: formatPdfDateShort(row.event_at || row.created_at, showTime),
         type: sanitizePdfText(row.txn_type || '') || '',
         vch: sanitizePdfText(row.vch_no || '') || '',
         particulars: sanitizePdfText(row.particulars || '') || '',
@@ -598,7 +679,8 @@ export default function CreditLedgerDetail() {
         isManual: !!row.is_manual,
         entryType: row.entry_type,
         rawAmount: row.amount,
-        rawDate: row.created_at,
+        rawDate: row.event_at || row.created_at,
+        eventAtMs: ledgerEventTimeMs(row),
         rawDescription: row.description || row.narration || '',
       });
     });
@@ -619,7 +701,7 @@ export default function CreditLedgerDetail() {
     });
 
     return out;
-  }, [statement, rows, dateFrom]);
+  }, [statement, rows, dateFrom, oldestRow, showTime]);
 
   const cellValue = (r: (typeof statementRows)[number], id: LedgerColumnId) => {
     switch (id) {
@@ -627,6 +709,8 @@ export default function CreditLedgerDetail() {
         return r.sr;
       case 'date':
         return r.date;
+      case 'time':
+        return '';
       case 'type':
         return r.type;
       case 'vch':
@@ -648,7 +732,7 @@ export default function CreditLedgerDetail() {
 
   const buildStatementRows = () => statementRows;
 
-  const buildCreditLedgerPdf = () => {
+  const buildCreditLedgerPdf = (split: LedgerExportSplit = exportSplit) => {
     if (!selectedCustomer || !statement) return null;
 
     const theme = getLedgerTheme();
@@ -695,8 +779,8 @@ export default function CreditLedgerDetail() {
     const netHint = isCr ? `(${firstName} will get)` : `(${firstName} will give)`;
     const openOn = dateFrom
       ? `on ${formatPdfDate(dateFrom)}`
-      : rows[0]?.created_at
-        ? `on ${formatPdfDate(rows[0].created_at)}`
+      : oldestRow?.created_at
+        ? `on ${formatPdfDate(oldestRow.created_at)}`
         : '';
 
     // Top brand bar — ledger chrome color
@@ -788,131 +872,225 @@ export default function CreditLedgerDetail() {
     doc.text(`No. of Entries: ${rows.length} ${entriesSuffix}`, marginX, y);
     y += 1.5;
 
-    const tableRows = buildStatementRows();
-    const cols = visibleColumns.length ? visibleColumns : LEDGER_COLUMN_DEFS.filter((c) => c.defaultOn);
-    const body = tableRows.map((r) => cols.map((c) => cellValue(r, c.id)));
+    const allTableRows = buildStatementRows();
+    const openingRows = allTableRows.filter((r) => r.isOpening);
+    const totalRows = allTableRows.filter((r) => r.isTotal);
+    const bodyRows = allTableRows.filter((r) => !r.isOpening && !r.isTotal);
+    const rowChunks = chunkLedgerRowsForExport(
+      bodyRows.map((r) => ({
+        ...r,
+        created_at: r.rawDate,
+        event_at: r.rawDate,
+        event_at_ms: r.eventAtMs,
+      })),
+      split
+    );
+    const cols = visibleColumns.length
+      ? visibleColumns
+      : LEDGER_COLUMN_DEFS.filter((c) => !c.settingsOnly && c.defaultOn);
     const flexIds = new Set<LedgerColumnId>(['particulars', 'narration']);
-    const fixedW = cols.reduce((sum, c) => sum + (flexIds.has(c.id) ? 0 : c.pdfWidth || 20), 0);
+    const colPdfWidth = (c: (typeof LEDGER_COLUMN_DEFS)[number]) =>
+      c.id === 'date' && showTime ? 36 : c.pdfWidth || 20;
+    const fixedW = cols.reduce((sum, c) => sum + (flexIds.has(c.id) ? 0 : colPdfWidth(c)), 0);
     const flexCount = cols.filter((c) => flexIds.has(c.id)).length || 1;
     const flexEach = Math.max(24, (contentW - fixedW) / flexCount);
 
     const columnStyles: Record<number, any> = {};
     cols.forEach((c, i) => {
       columnStyles[i] = {
-        cellWidth: flexIds.has(c.id) ? flexEach : c.pdfWidth || 20,
+        cellWidth: flexIds.has(c.id) ? flexEach : colPdfWidth(c),
         halign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left',
       };
     });
 
-    autoTable(doc, {
-      startY: y,
-      head: [cols.map((c) => c.label)],
-      body,
-      styles: {
-        font: pdfFont,
-        fontSize: pdfBodySize,
-        cellPadding: { top: 1.2, right: 2, bottom: 1.2, left: 2 },
-        lineColor: PDF_BORDER,
-        lineWidth: 0.1,
-        textColor: PDF_INK,
-        valign: 'middle',
-        minCellHeight: 5,
-        fontStyle: pdfRowWeight,
-      },
-      headStyles: {
-        fillColor: PDF_HEAD,
-        textColor: PDF_INK,
-        fontStyle: pdfSubWeight,
-        fontSize: pdfSubSize,
-        cellPadding: { top: 1.4, right: 2, bottom: 1.4, left: 2 },
-      },
-      columnStyles,
-      didParseCell: (data: any) => {
-        const col = cols[data.column.index];
-        if (!col) return;
+    const paintTopBar = () => {
+      doc.setFillColor(...PDF_PRIMARY);
+      doc.rect(0, 0, pageWidth, 8, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont(pdfFont, pdfHeaderWeight);
+      doc.setFontSize(pdfHeaderSize);
+      doc.text('Manish Traders', marginX, 5.4);
+      doc.setFont(pdfFont, pdfSubWeight);
+      doc.setFontSize(pdfSubSize);
+      doc.text('Credit Ledger', pageWidth - marginX, 5.4, { align: 'right' });
+    };
 
-        if (data.section === 'head') {
-          data.cell.styles.fillColor = PDF_HEAD;
-          data.cell.styles.textColor = PDF_SECONDARY;
-          if (col.id === 'debit') data.cell.styles.fillColor = PDF_DEBIT_BG;
-          if (col.id === 'credit') data.cell.styles.fillColor = PDF_CREDIT_BG;
-          return;
-        }
-        const rowMeta = tableRows[data.row.index];
-        if (!rowMeta) return;
+    const paintBottomBar = () => {
+      doc.setFillColor(...PDF_PRIMARY);
+      doc.rect(0, pageHeight - 8, pageWidth, 8, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont(pdfFont, pdfFooterWeight);
+      doc.setFontSize(pdfFooterSize);
+      doc.text('Manish Traders', marginX, pageHeight - 3);
+      doc.text('Credit Ledger', pageWidth - marginX, pageHeight - 3, { align: 'right' });
+    };
 
-        let rowBg = themeColorToPdfRgb(docRowBackground(theme, data.row.index), PDF_PAGE);
-        if (rowMeta.isTotal) rowBg = PDF_HEAD;
-        data.cell.styles.fillColor = rowBg;
+    const chunkPeriod = (chunk: typeof bodyRows) => {
+      if (!chunk.length) return periodLabel;
+      const oldest = chunk[0].rawDate;
+      const newest = chunk[chunk.length - 1].rawDate;
+      const from = formatPdfDate(oldest);
+      const to = formatPdfDate(newest);
+      if (!from || from === to) return to || periodLabel;
+      return `${from} - ${to}`;
+    };
 
-        if (col.id === 'debit' && (rowMeta.hasDebit || rowMeta.isTotal)) {
-          data.cell.styles.fillColor = PDF_DEBIT_BG;
-        }
-        if (col.id === 'credit' && (rowMeta.hasCredit || rowMeta.isTotal)) {
-          data.cell.styles.fillColor = PDF_CREDIT_BG;
-        }
-        if (col.id === 'balance' && rowMeta.hasCredit && !rowMeta.isOpening) {
-          data.cell.styles.fillColor = PDF_CREDIT_BG;
-        }
+    rowChunks.forEach((chunk, chunkIdx) => {
+      const prevChunk = chunkIdx > 0 ? rowChunks[chunkIdx - 1] : null;
+      const lastPrev = prevChunk?.[prevChunk.length - 1];
+      const broughtForwardRow: (typeof statementRows)[number] | null =
+        lastPrev != null
+          ? {
+              sr: '',
+              date: '',
+              type: '',
+              vch: '',
+              particulars: 'Balance Carried Forward',
+              narration: '',
+              debit: '',
+              credit: '',
+              balance: lastPrev.balance,
+              isOpening: true,
+            }
+          : null;
 
-        if (rowMeta.isOpening) {
-          if (col.id === 'date' || col.id === 'particulars' || col.id === 'balance') {
+      const tableRows = [
+        ...(chunkIdx === 0 ? openingRows : broughtForwardRow ? [broughtForwardRow] : []),
+        ...chunk,
+        ...(chunkIdx === rowChunks.length - 1 ? totalRows : []),
+      ];
+      const body = tableRows.map((r) => cols.map((c) => cellValue(r, c.id)));
+
+      if (chunkIdx > 0) {
+        doc.addPage();
+        paintTopBar();
+        let continuedY = 14;
+        doc.setTextColor(...PDF_SECONDARY);
+        doc.setFont(pdfFont, pdfHeaderWeight);
+        doc.setFontSize(pdfHeaderSize);
+        doc.text(`${customerName} Statement`, pageWidth / 2, continuedY, { align: 'center' });
+        continuedY += 4.5;
+        doc.setFont(pdfFont, pdfSubWeight);
+        doc.setFontSize(pdfSubSize);
+        doc.setTextColor(...PDF_MUTED);
+        doc.text(`(${chunkPeriod(chunk)})`, pageWidth / 2, continuedY, { align: 'center' });
+        continuedY += 5;
+        doc.setTextColor(...PDF_INK);
+        doc.text('Entries continued…', marginX, continuedY);
+        y = continuedY + 1.5;
+      }
+
+      autoTable(doc, {
+        startY: y,
+        head: [cols.map((c) => c.label)],
+        body,
+        styles: {
+          font: pdfFont,
+          fontSize: pdfBodySize,
+          cellPadding: { top: 1.2, right: 2, bottom: 1.2, left: 2 },
+          lineColor: PDF_BORDER,
+          lineWidth: 0.1,
+          textColor: PDF_INK,
+          valign: 'middle',
+          minCellHeight: 5,
+          fontStyle: pdfRowWeight,
+        },
+        headStyles: {
+          fillColor: PDF_HEAD,
+          textColor: PDF_INK,
+          fontStyle: pdfSubWeight,
+          fontSize: pdfSubSize,
+          cellPadding: { top: 1.4, right: 2, bottom: 1.4, left: 2 },
+        },
+        columnStyles,
+        didParseCell: (data: any) => {
+          const col = cols[data.column.index];
+          if (!col) return;
+
+          if (data.section === 'head') {
+            data.cell.styles.fillColor = PDF_HEAD;
+            data.cell.styles.textColor = PDF_SECONDARY;
+            if (col.id === 'debit') data.cell.styles.fillColor = PDF_DEBIT_BG;
+            if (col.id === 'credit') data.cell.styles.fillColor = PDF_CREDIT_BG;
+            return;
+          }
+          const rowMeta = tableRows[data.row.index];
+          if (!rowMeta) return;
+
+          let rowBg = themeColorToPdfRgb(docRowBackground(theme, data.row.index), PDF_PAGE);
+          if (rowMeta.isTotal) rowBg = PDF_HEAD;
+          data.cell.styles.fillColor = rowBg;
+
+          if (col.id === 'debit' && (rowMeta.hasDebit || rowMeta.isTotal)) {
+            data.cell.styles.fillColor = PDF_DEBIT_BG;
+          }
+          if (col.id === 'credit' && (rowMeta.hasCredit || rowMeta.isTotal)) {
+            data.cell.styles.fillColor = PDF_CREDIT_BG;
+          }
+          if (col.id === 'balance' && rowMeta.hasCredit && !rowMeta.isOpening) {
+            data.cell.styles.fillColor = PDF_CREDIT_BG;
+          }
+
+          if (rowMeta.isOpening) {
+            if (col.id === 'date' || col.id === 'particulars' || col.id === 'balance') {
+              data.cell.styles.fontStyle = 'bold';
+            }
+            if (col.id === 'balance') data.cell.styles.textColor = PDF_MUTED;
+          } else if (rowMeta.isTotal) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.textColor = PDF_SECONDARY;
+          } else if (theme.rowFontBold) {
+            data.cell.styles.fontStyle = 'bold';
+          } else {
+            data.cell.styles.fontStyle = 'normal';
+          }
+          if (col.id === 'balance' && rowMeta.balance && !rowMeta.isOpening) {
+            const balCr = /cr/i.test(rowMeta.balance);
+            data.cell.styles.textColor = balCr ? PDF_GREEN : PDF_RED;
             data.cell.styles.fontStyle = 'bold';
           }
-          if (col.id === 'balance') data.cell.styles.textColor = PDF_MUTED;
-        } else if (rowMeta.isTotal) {
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.textColor = PDF_SECONDARY;
-        } else if (theme.rowFontBold) {
-          data.cell.styles.fontStyle = 'bold';
-        } else {
-          data.cell.styles.fontStyle = 'normal';
-        }
-        if (col.id === 'balance' && rowMeta.balance && !rowMeta.isOpening) {
-          const balCr = /cr/i.test(rowMeta.balance);
-          data.cell.styles.textColor = balCr ? PDF_GREEN : PDF_RED;
-          data.cell.styles.fontStyle = 'bold';
-        }
-        if (col.id === 'type' && rowMeta.type) {
-          if (rowMeta.type === 'sale') data.cell.styles.textColor = PDF_RED;
-          else if (rowMeta.type === 'payment') data.cell.styles.textColor = PDF_GREEN;
-        }
-      },
-      margin: { left: marginX, right: marginX, bottom: 16 },
-      theme: 'grid',
+          if (col.id === 'type' && rowMeta.type) {
+            if (rowMeta.type === 'sale') data.cell.styles.textColor = PDF_RED;
+            else if (rowMeta.type === 'payment') data.cell.styles.textColor = PDF_GREEN;
+          }
+        },
+        margin: { left: marginX, right: marginX, bottom: 16 },
+        theme: 'grid',
+      });
+
+      y = ((doc as any).lastAutoTable?.finalY || y) + 4;
     });
 
     const finalY = ((doc as any).lastAutoTable?.finalY || y) + 4;
-    doc.setFont(pdfFont, pdfFooterWeight);
-    doc.setFontSize(pdfFooterSize);
-    doc.setTextColor(...PDF_MUTED);
-    doc.text(
-      `Report Generated : ${formatCreditDateTime(new Date())}`,
-      marginX,
-      Math.min(finalY, pageHeight - 12)
-    );
     const pageCount = (doc as any).internal.getNumberOfPages?.() || 1;
-    doc.text(`Page 1 of ${pageCount}`, pageWidth - marginX, Math.min(finalY, pageHeight - 12), {
-      align: 'right',
-    });
-
-    // Bottom brand bar — ledger chrome color
-    doc.setFillColor(...PDF_PRIMARY);
-    doc.rect(0, pageHeight - 8, pageWidth, 8, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont(pdfFont, pdfFooterWeight);
-    doc.setFontSize(pdfFooterSize);
-    doc.text('Manish Traders', marginX, pageHeight - 3);
-    doc.setFont(pdfFont, pdfFooterWeight);
-    doc.text('Credit Ledger', pageWidth - marginX, pageHeight - 3, { align: 'right' });
+    for (let p = 1; p <= pageCount; p++) {
+      doc.setPage(p);
+      if (p === pageCount) {
+        doc.setFont(pdfFont, pdfFooterWeight);
+        doc.setFontSize(pdfFooterSize);
+        doc.setTextColor(...PDF_MUTED);
+        doc.text(
+          `Report Generated : ${formatCreditDateTime(new Date())}`,
+          marginX,
+          Math.min(finalY, pageHeight - 12)
+        );
+      }
+      doc.setFont(pdfFont, pdfFooterWeight);
+      doc.setFontSize(pdfFooterSize);
+      doc.setTextColor(...PDF_MUTED);
+      doc.text(`Page ${p} of ${pageCount}`, pageWidth - marginX, pageHeight - 12, {
+        align: 'right',
+      });
+      paintBottomBar();
+    }
 
     const safeName = customerName.replace(/[^\w\-]+/g, '_').replace(/_+/g, '_');
     const fileName = `credit_ledger_${safeName}_${getTodayDateString()}.pdf`;
     return { doc, fileName };
   };
 
-  const exportPDF = () => {
-    const built = buildCreditLedgerPdf();
+  const exportPDF = (split: LedgerExportSplit = flushCopySettings()) => {
+    const built = buildCreditLedgerPdf(split);
     if (!built) return;
     built.doc.save(built.fileName);
   };
@@ -950,7 +1128,49 @@ export default function CreditLedgerDetail() {
     }
   };
 
-  const copyLedgerPicture = async () => {
+  const markPictureCopied = (index: number) => {
+    setPictureCopied((prev) => {
+      const next = prev.slice();
+      next[index] = true;
+      return next;
+    });
+  };
+
+  const copyPreparedPicturePage = async (index: number) => {
+    const blob = pictureBlobsRef.current[index];
+    const total = pictureBlobsRef.current.length;
+    if (!blob) {
+      toast('That image is not ready yet', 'error');
+      return;
+    }
+    setCopyingLedgerImage(true);
+    try {
+      window.getSelection()?.removeAllRanges();
+      if (!(await copyPngBlobToClipboard(blob))) {
+        toast('Could not copy picture. Check clipboard permissions.', 'error');
+        return;
+      }
+      markPictureCopied(index);
+      toast(
+        total > 1
+          ? `Image ${index + 1} of ${total} copied — paste in WhatsApp, then copy the next (older) image`
+          : 'Ledger picture copied — paste in WhatsApp',
+        'success'
+      );
+    } finally {
+      setCopyingLedgerImage(false);
+    }
+  };
+
+  /** Next page to copy: latest (last page) first, then older pages in reverse. */
+  const nextUncopiedPictureIndex = () => {
+    for (let i = pictureCopied.length - 1; i >= 0; i--) {
+      if (!pictureCopied[i]) return i;
+    }
+    return -1;
+  };
+
+  const copyLedgerPicture = async (split: LedgerExportSplit = flushCopySettings()) => {
     if (!statement) {
       toast('Ledger not ready yet', 'error');
       return;
@@ -961,77 +1181,110 @@ export default function CreditLedgerDetail() {
       return;
     }
 
+    const readyNext = nextUncopiedPictureIndex();
+    if (pictureBlobsRef.current.length > 0 && readyNext >= 0) {
+      await copyPreparedPicturePage(readyNext);
+      return;
+    }
+    if (pictureBlobsRef.current.length > 0 && readyNext < 0) {
+      await copyPreparedPicturePage(pictureBlobsRef.current.length - 1);
+      return;
+    }
+
     setCopyingLedgerImage(true);
+    setPreparingPictures(true);
     try {
       window.getSelection()?.removeAllRanges();
-
-      const pending = picturePartsQueueRef.current;
-      if (pending.length > 0) {
-        const blob = pending.shift()!;
-        const totalParts = picturePartsTotalRef.current;
-        const partNum = totalParts - pending.length;
-        if (!(await copyPngBlobToClipboard(blob))) {
-          pending.unshift(blob);
-          toast('Could not copy picture. Check clipboard permissions.', 'error');
-          return;
-        }
-        if (pending.length > 0) {
-          setPicturePageProgress({ total: totalParts, nextPart: partNum + 1 });
-          toast(
-            `Ledger page ${partNum} of ${totalParts} copied. Tap Copy Picture again for page ${partNum + 1}.`,
-            'success'
-          );
-        } else {
-          picturePartsTotalRef.current = 0;
-          setPicturePageProgress(null);
-          toast(`Ledger page ${partNum} of ${totalParts} copied.`, 'success');
-        }
-        return;
-      }
-
-      const blobs = await buildCreditLedgerSnapshotBlobs(iframe, {
-        ...statement,
-        rows,
-      });
+      const blobs = await buildCreditLedgerSnapshotBlobs(
+        iframe,
+        {
+          ...statement,
+          rows,
+          includeTime: showTime,
+        },
+        split
+      );
       if (!blobs.length) {
         toast('Could not create ledger picture', 'error');
         return;
       }
 
-      if (!(await copyPngBlobToClipboard(blobs[0]))) {
+      pictureBlobsRef.current = blobs;
+      const lastIdx = blobs.length - 1;
+      setPictureCopied(blobs.map((_, i) => i === lastIdx));
+
+      if (!(await copyPngBlobToClipboard(blobs[lastIdx]))) {
+        setPictureCopied(blobs.map(() => false));
         toast('Could not copy picture. Check clipboard permissions.', 'error');
         return;
       }
 
-      if (blobs.length > 1) {
-        picturePartsQueueRef.current = blobs.slice(1);
-        picturePartsTotalRef.current = blobs.length;
-        setPicturePageProgress({ total: blobs.length, nextPart: 2 });
-        toast(
-          `Ledger page 1 of ${blobs.length} copied. Tap Copy Picture again for page 2.`,
-          'success'
-        );
-      } else {
-        setPicturePageProgress(null);
-        toast('Ledger picture copied — paste in WhatsApp', 'success');
-      }
+      toast(
+        blobs.length > 1
+          ? `Image ${blobs.length} of ${blobs.length} copied (latest first). Use Copy ${blobs.length - 1} … Copy 1 for earlier pages.`
+          : 'Ledger picture copied — paste in WhatsApp',
+        'success'
+      );
     } catch (e: any) {
-      picturePartsQueueRef.current = [];
-      picturePartsTotalRef.current = 0;
+      pictureBlobsRef.current = [];
+      setPictureCopied([]);
       toast(e?.message || 'Failed to copy picture', 'error');
     } finally {
+      setPreparingPictures(false);
       setCopyingLedgerImage(false);
     }
   };
 
+  const copiedPictureCount = pictureCopied.filter(Boolean).length;
+  const nextPicturePart = nextUncopiedPictureIndex();
+  const picturePageButtons =
+    pictureCopied.length > 1 ? (
+      <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="text-sm text-amber-950 font-medium">
+            {copiedPictureCount}/{pictureCopied.length} images copied. Each button copies a new
+            WhatsApp image.
+          </div>
+          <button
+            type="button"
+            className="shrink-0 text-xs font-semibold text-amber-900 underline"
+            onClick={() => openCopySettings()}
+          >
+            Change split
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {pictureCopied.map((done, i) => (
+            <button
+              key={i}
+              type="button"
+              disabled={copyingLedgerImage}
+              onClick={() => void copyPreparedPicturePage(i)}
+              className={`min-w-[2.75rem] rounded-md border px-2 py-1.5 text-xs font-semibold ${
+                done
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                  : 'border-amber-800 bg-amber-800 text-white hover:bg-amber-900'
+              }`}
+              title={done ? `Copy image ${i + 1} again` : `Copy image ${i + 1} of ${pictureCopied.length}`}
+            >
+              {done ? `✓ ${i + 1}` : `Copy ${i + 1}`}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
   const pictureButtonLabel = copyingLedgerImage
-    ? 'Copying…'
-    : picturePageProgress && picturePageProgress.total > 1
-      ? `Copy Picture (${picturePageProgress.nextPart}/${picturePageProgress.total})`
-      : 'Copy Picture';
+    ? preparingPictures
+      ? `Preparing ${Math.max(pictureCopied.length, 1)} images…`
+      : 'Copying…'
+    : pictureCopied.length > 1 && nextPicturePart >= 0
+      ? `Copy ${nextPicturePart + 1}/${pictureCopied.length}`
+      : pictureCopied.length > 1
+        ? 'Copy again'
+        : 'Copy Picture';
 
-  const copyPDF = async () => {
-    const built = buildCreditLedgerPdf();
+  const copyPDF = async (split: LedgerExportSplit = flushCopySettings()) => {
+    const built = buildCreditLedgerPdf(split);
     if (!built) return;
 
     setCopyingPdf(true);
@@ -1143,7 +1396,7 @@ export default function CreditLedgerDetail() {
           </Button>
           {statement ? (
             <>
-              <Button variant="outline" size="sm" onClick={exportPDF}>
+              <Button variant="outline" size="sm" onClick={() => exportPDF()}>
                 <FileText className="h-4 w-4 mr-1.5" />
                 PDF
               </Button>
@@ -1160,7 +1413,7 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={copyPDF}
+                onClick={() => void copyPDF()}
                 disabled={copyingPdf}
                 title="Copy ledger PDF to clipboard"
               >
@@ -1171,6 +1424,8 @@ export default function CreditLedgerDetail() {
           ) : null}
         </div>
       </div>
+
+      {picturePageButtons}
 
       <div className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b border-stone-200 bg-stone-50/80">
@@ -1200,7 +1455,11 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowColumnSettings((v) => !v)}
+                onClick={() => {
+                  if (showCopySettings) flushCopySettings();
+                  setShowCopySettings(false);
+                  setShowColumnSettings((v) => !v);
+                }}
                 className="flex items-center gap-2"
               >
                 <Columns3 className="h-4 w-4" />
@@ -1244,6 +1503,146 @@ export default function CreditLedgerDetail() {
                     <Button variant="outline" size="sm" className="flex-1" onClick={resetColumns}>
                       Reset
                     </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => toggleCopySettings()}
+                className="flex items-center gap-2"
+                title="Copy / PDF page split"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Copy settings
+                <span className="bg-amber-800 text-white rounded-full min-w-[1.25rem] h-5 px-1.5 flex items-center justify-center text-xs">
+                  {ledgerExportSplitBadge(exportSplit)}
+                </span>
+              </Button>
+              {showCopySettings ? (
+                <div className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-stone-200 bg-white shadow-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-stone-800">Copy / PDF pages</div>
+                    <button
+                      type="button"
+                      className="text-stone-400 hover:text-stone-600"
+                      onClick={() => closeCopySettings()}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-stone-500 mb-2">
+                    Saved for the whole shop (all users and devices). When both are on, Split by
+                    rows takes priority. Split by days is used only when rows is off.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="rounded border-stone-300 text-amber-700 focus:ring-amber-600"
+                      checked={exportSplit.useRows}
+                      onChange={() =>
+                        persistExportSplit({
+                          useRows: !exportSplit.useRows,
+                          useDays: exportSplit.useDays || exportSplit.useRows,
+                        })
+                      }
+                    />
+                    Split by rows
+                  </label>
+                  {exportSplit.useRows ? (
+                    <div className="mt-1.5 mb-2">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={rowsPerPageDraft}
+                        onChange={(e) => setRowsPerPageDraft(e.target.value)}
+                        onBlur={() => commitRowsPerPageDraft()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitRowsPerPageDraft();
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
+                        className="h-8 py-1 text-sm"
+                      />
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {LEDGER_EXPORT_ROW_PRESETS.map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() =>
+                              persistExportSplit({ useRows: true, rowsPerPage: n })
+                            }
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              exportSplit.rowsPerPage === n
+                                ? 'border-amber-800 bg-amber-800 text-white'
+                                : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                            }`}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <label className="flex items-center gap-2 text-sm text-stone-800 cursor-pointer mt-2">
+                    <input
+                      type="checkbox"
+                      className="rounded border-stone-300 text-amber-700 focus:ring-amber-600"
+                      checked={exportSplit.useDays}
+                      onChange={() =>
+                        persistExportSplit({
+                          useDays: !exportSplit.useDays,
+                          useRows: exportSplit.useRows || exportSplit.useDays,
+                        })
+                      }
+                    />
+                    Split by days
+                  </label>
+                  {exportSplit.useDays ? (
+                    <div className="mt-1.5">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={366}
+                        value={daysPerPageDraft}
+                        onChange={(e) => setDaysPerPageDraft(e.target.value)}
+                        onBlur={() => commitDaysPerPageDraft()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitDaysPerPageDraft();
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
+                        className="h-8 py-1 text-sm"
+                      />
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {LEDGER_EXPORT_DAY_PRESETS.map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() =>
+                              persistExportSplit({ useDays: true, daysPerPage: n })
+                            }
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              exportSplit.daysPerPage === n
+                                ? 'border-amber-800 bg-amber-800 text-white'
+                                : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                            }`}
+                          >
+                            {n}d
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600 leading-snug">
+                    {copySplitExplain}
                   </div>
                 </div>
               ) : null}
@@ -1787,9 +2186,11 @@ export default function CreditLedgerDetail() {
             </div>
 
             <div
-              className="px-4 py-2.5 border-t flex flex-wrap justify-end gap-2 bg-white"
+              className="px-4 py-2.5 border-t flex flex-col gap-2 bg-white"
               style={{ borderColor: ledgerTheme.primaryBorder }}
             >
+              {picturePageButtons}
+              <div className="flex flex-wrap justify-end gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -1803,17 +2204,18 @@ export default function CreditLedgerDetail() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={copyPDF}
+                onClick={() => void copyPDF()}
                 disabled={copyingPdf}
                 title="Copy ledger PDF to clipboard"
               >
                 <ClipboardCopy className="h-4 w-4 mr-1" />
                 {copyingPdf ? 'Copying…' : 'Copy PDF'}
               </Button>
-              <Button variant="secondary" size="sm" onClick={exportPDF}>
+              <Button variant="secondary" size="sm" onClick={() => exportPDF()}>
                 <Printer className="h-4 w-4 mr-1" />
                 Download PDF
               </Button>
+              </div>
             </div>
           </div>
         )}

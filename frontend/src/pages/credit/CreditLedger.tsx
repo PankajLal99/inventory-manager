@@ -46,6 +46,7 @@ import {
   type CreditLedgerCustomerRow,
   type CreditLedgerDeleteSummary,
 } from './creditLedgerUtils';
+import { hydrateLedgerExportSplitFromServer } from './ledgerExportSettings';
 import CreditLedgerDeletePreview from './CreditLedgerDeletePreview';
 
 const thClass =
@@ -127,6 +128,10 @@ export default function CreditLedger() {
       );
     }
   }, [searchParams, navigate]);
+
+  useEffect(() => {
+    void hydrateLedgerExportSplitFromServer();
+  }, []);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedCustomerSearch(customerSearch), 250);

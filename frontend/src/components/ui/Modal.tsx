@@ -8,6 +8,7 @@ interface ModalProps {
   children: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'xl-plus' | 'wide' | 'xl-wide';
   closeOnBackdropClick?: boolean;
+  hideCloseButton?: boolean;
 }
 
 export default function Modal({
@@ -16,7 +17,8 @@ export default function Modal({
   title,
   children,
   size = 'md',
-  closeOnBackdropClick = true
+  closeOnBackdropClick = true,
+  hideCloseButton = false,
 }: ModalProps) {
   if (!isOpen) return null;
 
@@ -48,13 +50,15 @@ export default function Modal({
           <div className="p-4 sm:p-6 h-full flex flex-col flex-1 min-h-0">
             <div className="flex items-center justify-between mb-6 flex-shrink-0">
               <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-              <button
-                onClick={onClose}
-                className="text-gray-400 hover:text-gray-500 focus:outline-none transition-colors p-1 rounded-lg hover:bg-gray-100"
-                aria-label="Close"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              {!hideCloseButton && (
+                <button
+                  onClick={onClose}
+                  className="text-gray-400 hover:text-gray-500 focus:outline-none transition-colors p-1 rounded-lg hover:bg-gray-100"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              )}
             </div>
             <div className="flex-1 overflow-y-auto min-h-0 px-1 pb-4">
               <div className="pr-2">

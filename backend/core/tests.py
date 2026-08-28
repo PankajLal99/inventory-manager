@@ -6,11 +6,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 
-from backend.catalog.models import Product, Barcode, Category
+from backend.catalog.models import Product, Barcode, Category, DefectiveProductMoveOut, DefectiveProductItem
 from backend.locations.models import Store
 from backend.pos.models import Invoice, InvoiceItem
 from backend.parties.models import Supplier
 from backend.purchasing.models import Purchase, PurchaseItem
+from backend.core.models import Setting
 
 User = get_user_model()
 
@@ -191,6 +192,44 @@ class GlobalSearchBarcodeTests(APITestCase):
         self.assertEqual(len(barcodes), 1, 'Backend normalizes query to upper; lowercase search should find EXACT-BARCODE-001')
         self.assertEqual(barcodes[0]['barcode'], 'EXACT-BARCODE-001')
 
+    def test_defective_barcode_without_move_out_has_no_move_out_info(self):
+        """Defective barcodes that are not on a move-out stay tagged Defective."""
+        url = reverse('global-search')
+        response = self.client.get(url, {'q': 'EXACT-BARCODE-002', 'type': 'barcode'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        barcodes = response.data.get('barcodes', [])
+        self.assertEqual(len(barcodes), 1)
+        self.assertEqual(barcodes[0]['tag'], 'defective')
+        self.assertIn('Defective', barcodes[0]['tag_display'])
+        self.assertFalse(barcodes[0].get('defective_move_out_info'))
+
+    def test_defective_barcode_in_move_out_includes_written_to_supplier_info(self):
+        """Defective barcodes on a move-out item include move-out info for search display."""
+        move_out = DefectiveProductMoveOut.objects.create(
+            move_out_number='DEF-SEARCH-001',
+            store=self.store,
+            reason='defective',
+            total_items=1,
+        )
+        DefectiveProductItem.objects.create(
+            move_out=move_out,
+            product=self.product,
+            barcode=self.barcode_defective,
+            purchase_price=Decimal('0.00'),
+        )
+
+        url = reverse('global-search')
+        response = self.client.get(url, {'q': 'EXACT-BARCODE-002', 'type': 'barcode'})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        barcodes = response.data.get('barcodes', [])
+        self.assertEqual(len(barcodes), 1)
+        self.assertEqual(barcodes[0]['tag'], 'defective')
+        info = barcodes[0].get('defective_move_out_info') or {}
+        self.assertTrue(info.get('moved_out'))
+        self.assertEqual(info.get('move_out_id'), move_out.id)
+        self.assertEqual(info.get('move_out_number'), 'DEF-SEARCH-001')
+        self.assertEqual(info.get('reason'), 'Defective')
+
 
 class GlobalSearchProductPriceFallbackTests(APITestCase):
     """Regression tests for product price fields in global search payload."""
@@ -239,3 +278,101 @@ class GlobalSearchProductPriceFallbackTests(APITestCase):
         # Fallback behavior from supplier_breakdown should populate top-level fields.
         self.assertEqual(target.get('purchase_price'), 665.0)
         self.assertEqual(target.get('selling_price'), 665.0)
+
+
+class LedgerExportSettingsTests(APITestCase):
+    """Shop-wide copy settings are stored as JSON on core.Setting, not per user."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='ledger-a', password='password')
+        self.user_b = User.objects.create_user(username='ledger-b', password='password')
+        self.url = reverse('ledger-export-settings')
+
+    def test_get_empty_when_unset(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {})
+
+    def test_put_is_shared_across_users(self):
+        self.client.force_authenticate(user=self.user_a)
+        put_response = self.client.put(
+            self.url,
+            {
+                'useRows': False,
+                'useDays': True,
+                'rowsPerPage': 10,
+                'daysPerPage': 7,
+            },
+            format='json',
+        )
+        self.assertEqual(put_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            put_response.data,
+            {
+                'useRows': False,
+                'useDays': True,
+                'rowsPerPage': 10,
+                'daysPerPage': 7,
+            },
+        )
+
+        self.client.force_authenticate(user=self.user_b)
+        get_response = self.client.get(self.url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data['daysPerPage'], 7)
+        self.assertEqual(get_response.data['useDays'], True)
+        self.assertEqual(Setting.objects.filter(key='credit_ledger_export_split').count(), 1)
+
+    def test_put_clamps_and_requires_a_mode(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.put(
+            self.url,
+            {'useRows': False, 'useDays': False, 'rowsPerPage': 999, 'daysPerPage': 0},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['useRows'])
+        self.assertEqual(response.data['rowsPerPage'], 200)
+        self.assertEqual(response.data['daysPerPage'], 1)
+
+
+class InvoiceExportSettingsTests(APITestCase):
+    """Shop-wide invoice photo split is stored as JSON on core.Setting, not per user."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='invoice-a', password='password')
+        self.user_b = User.objects.create_user(username='invoice-b', password='password')
+        self.url = reverse('invoice-export-settings')
+
+    def test_get_empty_when_unset(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {})
+
+    def test_put_is_shared_across_users(self):
+        self.client.force_authenticate(user=self.user_a)
+        put_response = self.client.put(
+            self.url,
+            {'rowsPerPage': 20},
+            format='json',
+        )
+        self.assertEqual(put_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(put_response.data, {'rowsPerPage': 20})
+
+        self.client.force_authenticate(user=self.user_b)
+        get_response = self.client.get(self.url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data['rowsPerPage'], 20)
+        self.assertEqual(Setting.objects.filter(key='invoice_photo_export_split').count(), 1)
+
+    def test_put_clamps_rows_per_page(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.put(
+            self.url,
+            {'rowsPerPage': 999},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['rowsPerPage'], 200)

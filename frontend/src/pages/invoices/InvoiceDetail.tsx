@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber, formatAmountINR, formatAppDate, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatAmountINR, formatAppDate, getProductNameColor, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   CheckCircle,
   XCircle,
+  X,
   Clock,
   User,
   Store,
@@ -27,6 +28,7 @@ import {
   Printer,
   Download,
   Camera,
+  SlidersHorizontal,
   ShoppingCart,
   Plus,
   Minus,
@@ -40,11 +42,12 @@ import {
   AlertTriangle,
   Package,
   BookOpen,
+  Calendar,
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import RepairStatusModal from '../repair/RepairStatusModal';
 import CartLineScannedTime from '../../components/pos/CartLineScannedTime';
-import { addScannedBarcodeToInvoice } from '../../lib/scanningQueue';
+import { addScannedBarcodeToInvoice, looksLikeBarcode } from '../../lib/scanningQueue';
 import InvoiceTagEditor, { InvoiceTagChip } from '../../components/invoices/InvoiceTagEditor';
 import type { InvoiceTag } from '../../lib/invoiceTags';
 import {
@@ -58,6 +61,16 @@ import {
 } from '../../utils/thermalPrintStyles';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import { isSubmitBlocked } from '../../hooks/useSubmitLock';
+import {
+  chunkInvoiceRowsForExport,
+  INVOICE_EXPORT_ROW_PRESETS,
+  invoiceExportSplitBadge,
+  invoiceExportSplitExplain,
+  invoiceSnapshotPageCount,
+  saveInvoiceExportSplit,
+  useInvoiceExportSplit,
+  type InvoiceExportSplit,
+} from './invoiceExportSettings';
 
 /** A4 width at 96dpi — fixed capture size for sharp images regardless of on-screen preview scale */
 const INVOICE_CAPTURE_WIDTH_PX = 794;
@@ -77,6 +90,20 @@ const INV_THEME = {
   rowAlt: '#fff7ed',
   tableHead: '#fef3c7',
 };
+
+/** Allowed checkout delivery dates: on or after the repair registration day (local). Future dates are allowed. */
+function getRepairDeliveryDateBounds(repair?: {
+  created_at?: string;
+  delivery_date?: string | null;
+} | null) {
+  const today = getTodayDateString();
+  const created = toLocalDateString(repair?.created_at) || today;
+  const minDate = created <= today ? created : today;
+  const existing = toLocalDateString(repair?.delivery_date);
+  const defaultDate =
+    existing && existing >= minDate ? existing : today;
+  return { minDate, defaultDate, today, createdDate: minDate };
+}
 
 function invoiceCaptureScale(): number {
   return Math.min(4, Math.max(3, window.devicePixelRatio));
@@ -146,6 +173,46 @@ function formatTradeInReturnTag(tag: unknown): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
   return String(tag);
+}
+
+type InvoicePrintGroup = {
+  name: string;
+  brand: string;
+  totalQuantity: number;
+  totalAmount: number;
+  items: any[];
+};
+
+function buildInvoicePrintGroups(items: any[]): InvoicePrintGroup[] {
+  const groupedItems: Record<string, InvoicePrintGroup> = {};
+  items.forEach((item: any) => {
+    const name = item.product_name || '-';
+    const brand = item.product_brand_name || item.brand_name || '';
+    const groupKey = brand ? `${name}::${brand}` : name;
+    if (!groupedItems[groupKey]) {
+      groupedItems[groupKey] = { name, brand, totalQuantity: 0, totalAmount: 0, items: [] };
+    }
+    const quantity = parseInt(item.quantity || '0') || 0;
+    const amount = parseFloat(item.line_total || '0');
+    groupedItems[groupKey].totalQuantity += quantity;
+    groupedItems[groupKey].totalAmount += amount;
+    groupedItems[groupKey].items.push(item);
+  });
+  return Object.values(groupedItems);
+}
+
+async function copyPngBlobToClipboard(blob: Blob): Promise<boolean> {
+  try {
+    if (!navigator.clipboard || typeof (window as any).ClipboardItem === 'undefined') {
+      return false;
+    }
+    await navigator.clipboard.write([
+      new (window as any).ClipboardItem({ 'image/png': blob }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function getInvoiceAdjustedTotalValue(invoice: any): number {
@@ -275,12 +342,21 @@ export default function InvoiceDetail() {
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   const invoicePreviewRef = useRef<HTMLIFrameElement>(null);
   const invoiceCaptureFrameRef = useRef<HTMLIFrameElement>(null);
+  const pictureBlobsRef = useRef<Blob[]>([]);
+  const [pictureCopied, setPictureCopied] = useState<boolean[]>([]);
+  const [copyingPhoto, setCopyingPhoto] = useState(false);
+  const [preparingPictures, setPreparingPictures] = useState(false);
+  const [showCopySettings, setShowCopySettings] = useState(false);
+  const exportSplit = useInvoiceExportSplit();
+  const [rowsPerPageDraft, setRowsPerPageDraft] = useState(() => String(exportSplit.rowsPerPage));
   // Toggle to show/hide purchase price in checkout modal (default on = visible, blue)
   const [showPurchasePrice, setShowPurchasePrice] = useState(true);
   // Repair status in checkout modal (when invoice is repair)
   const [checkoutRepairStatus, setCheckoutRepairStatus] = useState<string>('');
   // Repair delivery date in checkout modal (from repair model, editable)
   const [checkoutDeliveryDate, setCheckoutDeliveryDate] = useState<string>('');
+  const checkoutDeliveryDateSectionRef = useRef<HTMLDivElement>(null);
+  const checkoutDeliveryDateInputRef = useRef<HTMLInputElement>(null);
   const [showCustomProductModal, setShowCustomProductModal] = useState(false);
   const [customProductName, setCustomProductName] = useState('');
   // Replacement-return finalize modal state
@@ -327,6 +403,61 @@ export default function InvoiceDetail() {
     () => (Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : []),
     [inv?.items]
   );
+
+  const invoicePrintGroups = useMemo(
+    () => buildInvoicePrintGroups(visibleInvoiceItems),
+    [visibleInvoiceItems]
+  );
+
+  useEffect(() => {
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+  }, [exportSplit]);
+
+  useEffect(() => {
+    pictureBlobsRef.current = [];
+    setPictureCopied([]);
+    setPreparingPictures(false);
+  }, [invoiceId, inv?.updated_at, invoicePrintGroups.length, exportSplit.rowsPerPage]);
+
+  const persistExportSplit = (patch: Partial<InvoiceExportSplit>) => {
+    const next = saveInvoiceExportSplit({ ...exportSplit, ...patch });
+    setRowsPerPageDraft(String(next.rowsPerPage));
+    return next;
+  };
+
+  const commitRowsPerPageDraft = () => {
+    const parsed = parseInt(rowsPerPageDraft, 10);
+    return persistExportSplit({
+      rowsPerPage: Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage,
+    });
+  };
+
+  const flushCopySettings = () => {
+    const parsed = parseInt(rowsPerPageDraft, 10);
+    const next = saveInvoiceExportSplit({
+      rowsPerPage: Number.isFinite(parsed) ? parsed : exportSplit.rowsPerPage,
+    });
+    setRowsPerPageDraft(String(next.rowsPerPage));
+    return next;
+  };
+
+  const openCopySettings = () => {
+    setRowsPerPageDraft(String(exportSplit.rowsPerPage));
+    setShowCopySettings(true);
+  };
+
+  const closeCopySettings = () => {
+    flushCopySettings();
+    setShowCopySettings(false);
+  };
+
+  const toggleCopySettings = () => {
+    if (showCopySettings) {
+      closeCopySettings();
+      return;
+    }
+    openCopySettings();
+  };
 
   const getEffectiveInvoiceTypeFromPayments = (payments: any[]): 'cash' | 'upi' | 'mixed' | null => {
     if (!Array.isArray(payments) || payments.length === 0) return null;
@@ -661,6 +792,10 @@ export default function InvoiceDetail() {
       // Invalidate and refetch to get updated invoice without deleted items
       await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
       await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-adjusted'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || 'Failed to delete item');
@@ -843,13 +978,6 @@ export default function InvoiceDetail() {
     return () => clearTimeout(handler);
   }, [barcodeInput]);
 
-  // Helper function to detect if input looks like a barcode
-  const looksLikeBarcode = (input: string): boolean => {
-    if (!input || input.length < 3) return false;
-    const barcodePattern = /^[A-Za-z0-9\-_]+$/;
-    return barcodePattern.test(input) && (input.length >= 4 || input.includes('-') || input.includes('_'));
-  };
-
   const trimmedBarcodeInput = useMemo(() => debouncedBarcodeInput.trim(), [debouncedBarcodeInput]);
 
   // Barcode check query
@@ -894,6 +1022,9 @@ export default function InvoiceDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['products'] }); // Refresh products to show updated stock
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+      queryClient.invalidateQueries({ queryKey: ['defective-move-outs-for-metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['existing-move-outs'] });
       setShowDeleteModal(false);
       navigate(invoicesListPath);
     },
@@ -1001,18 +1132,19 @@ export default function InvoiceDetail() {
       const hasProducts = Array.isArray(inv.items) && inv.items.length > 0;
       const pendingAllowed = new Set(['received', 'not_repaired']);
       const currentPending = (checkoutRepairStatus || inv.repair.status || '').trim();
+      // Non-pending checkout types only allow Delivered — do not reset to the stored repair status.
       const initialStatus = checkoutInvoiceType === 'pending'
         ? (hasProducts ? 'work_in_progress' : (pendingAllowed.has(currentPending) ? currentPending : 'received'))
-        : inv.repair.status;
+        : 'delivered';
       setCheckoutRepairStatus(initialStatus);
     }
   }, [showCheckoutModal, checkoutInvoiceType, checkoutRepairStatus, invoice?.data?.repair?.status, invoice?.data?.items?.length]);
 
-  // Prefill repair delivery date from existing value (do not auto-set to today)
+  // Prefill repair delivery date from existing value when the modal opens.
   useEffect(() => {
     const inv = invoice?.data;
     if (showCheckoutModal && inv?.repair) {
-      const existing = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
+      const existing = toLocalDateString(inv.repair.delivery_date);
       setCheckoutDeliveryDate(existing);
     }
   }, [showCheckoutModal, invoice?.data?.repair?.id]);
@@ -1168,6 +1300,7 @@ export default function InvoiceDetail() {
 
   // Edit invoice (cart): show for non-void
   const isReplacementReturn = inv?.is_replacement_return === true;
+  const isDefectiveInvoice = inv?.invoice_type === 'defective';
   const canEditItems = inv.status !== 'void' && !isReplacementReturn;
   const isEditable = inv.status !== 'void';
   const isPending = inv.invoice_type === 'pending' && inv.status === 'draft';
@@ -1185,6 +1318,47 @@ export default function InvoiceDetail() {
     effectiveCheckoutRepairStatus === 'done' ||
     effectiveCheckoutRepairStatus === 'delivered'
   );
+  const checkoutDeliveryDateBounds = getRepairDeliveryDateBounds(inv?.repair);
+  const displayedCheckoutDeliveryDate = checkoutDeliveryDate || inv?.repair?.delivery_date || '';
+
+  const scrollCheckoutDeliveryDateIntoView = () => {
+    window.setTimeout(() => {
+      checkoutDeliveryDateSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      checkoutDeliveryDateInputRef.current?.focus();
+    }, 50);
+  };
+
+  const applyDefaultCheckoutDeliveryDate = (repair: any) => {
+    const bounds = getRepairDeliveryDateBounds(repair);
+    setCheckoutDeliveryDate(bounds.defaultDate);
+    scrollCheckoutDeliveryDateIntoView();
+  };
+
+  const assertCheckoutDeliveryDate = (repair: any, isRequired: boolean): boolean => {
+    if (!repair || !isRequired) return true;
+    const { minDate, today } = getRepairDeliveryDateBounds(repair);
+    const selected = (checkoutDeliveryDate || '').trim();
+    if (!selected) {
+      alert('Please select a delivery date.');
+      scrollCheckoutDeliveryDateIntoView();
+      return false;
+    }
+    if (selected < minDate) {
+      alert(
+        `Delivery date must be on or after the repair registration date (${formatDateForInvoice(minDate)}).`
+      );
+      scrollCheckoutDeliveryDateIntoView();
+      return false;
+    }
+    if (selected === today) {
+      const confirmed = window.confirm('Delivery date has been set for today. Continue?');
+      if (!confirmed) {
+        scrollCheckoutDeliveryDateIntoView();
+        return false;
+      }
+    }
+    return true;
+  };
 
   // Group items by product only (not by barcode)
   const groupItemsByProduct = (items: any[]) => {
@@ -1597,10 +1771,11 @@ export default function InvoiceDetail() {
     const canSubmitDeliveryDate =
       submitRepairStatus === 'done' ||
       submitRepairStatus === 'delivered';
+    if (!assertCheckoutDeliveryDate(freshInv?.repair, !!freshInv?.repair && canSubmitDeliveryDate)) {
+      return;
+    }
     if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate.trim()) {
       checkoutData.delivery_date = checkoutDeliveryDate.trim();
-    } else if (freshInv?.repair && canSubmitDeliveryDate && (checkoutDeliveryDate === '' || checkoutDeliveryDate === null)) {
-      checkoutData.delivery_date = null;
     }
 
     // Only persist "clear delivery date" when user confirms submit (not while toggling controls).
@@ -1640,6 +1815,9 @@ export default function InvoiceDetail() {
       items: currentItems,
       invoiceStatus: inv?.status,
       invoiceType: inv?.invoice_type,
+      invoiceSupplierName: inv?.invoice_type === 'defective'
+        ? (inv?.customer_name || 'No Supplier')
+        : undefined,
       lookupBarcode: async (value) => {
         const response = await productsApi.byBarcode(value, true, true);
         return response.data;
@@ -1650,6 +1828,8 @@ export default function InvoiceDetail() {
         await queryClient.invalidateQueries({ queryKey: ['invoice', invoiceId] });
         await queryClient.refetchQueries({ queryKey: ['invoice', invoiceId] });
         queryClient.invalidateQueries({ queryKey: ['repair-invoices'] });
+        queryClient.invalidateQueries({ queryKey: ['defective-move-outs'] });
+        queryClient.invalidateQueries({ queryKey: ['products'] });
       },
     });
     if (!result.ok) {
@@ -1683,11 +1863,17 @@ export default function InvoiceDetail() {
   };
 
   // Shared function to generate invoice HTML for both print and download
-  const generateInvoiceHTML = () => {
+  const generateInvoiceHTML = (opts?: {
+    pageGroups?: InvoicePrintGroup[];
+    partIndex?: number;
+    partCount?: number;
+    showTotals?: boolean;
+    lineOffset?: number;
+  }) => {
     const T = INV_THEME;
     const isRepairInvoice = !!inv?.repair;
     const printableInvoiceTitle = isRepairInvoice ? 'Repair Invoice' : 'Sale Invoice';
-    const printableItems = Array.isArray(inv?.items) ? inv.items.filter((item: any) => !item?.replacement_ref) : [];
+    const printableItems = visibleInvoiceItems;
 
     const totalPcs = printableItems.reduce((sum: number, item: any) => sum + (parseInt(item.quantity || '0') || 0), 0);
     const totalAmount = getInvoiceAdjustedTotalValue(inv);
@@ -1701,34 +1887,16 @@ export default function InvoiceDetail() {
     const statusLabel = String(inv.status || '').toUpperCase();
     const typeLabel = String(inv.invoice_type || 'sale').toUpperCase();
 
-    // Group items by product name AND brand
-    const groupedItems: Record<string, {
-      name: string;
-      brand: string;
-      totalQuantity: number;
-      totalAmount: number;
-      items: any[];
-    }> = {};
-
-    printableItems.forEach((item: any) => {
-      const name = item.product_name || '-';
-      const brand = item.product_brand_name || item.brand_name || '';
-      const groupKey = brand ? `${name}::${brand}` : name;
-      if (!groupedItems[groupKey]) {
-        groupedItems[groupKey] = { name, brand, totalQuantity: 0, totalAmount: 0, items: [] };
-      }
-      const quantity = parseInt(item.quantity || '0') || 0;
-      const amount = parseFloat(item.line_total || '0');
-      groupedItems[groupKey].totalQuantity += quantity;
-      groupedItems[groupKey].totalAmount += amount;
-      groupedItems[groupKey].items.push(item);
-    });
-
-    const groupedList = Object.values(groupedItems);
+    const groupedList = invoicePrintGroups;
+    const pageGroups = opts?.pageGroups ?? groupedList;
+    const partIndex = opts?.partIndex ?? 1;
+    const partCount = opts?.partCount ?? 1;
+    const showTotals = opts?.showTotals !== false;
+    const lineOffset = opts?.lineOffset ?? 0;
     const lineCount = groupedList.length;
     const subtotalBeforeTradeIn = groupedList.reduce((s, g) => s + g.totalAmount, 0);
 
-    const bodyRows = groupedList
+    const bodyRows = pageGroups
       .map((group, i) => {
         const avgUnitPrice = group.totalQuantity > 0 ? group.totalAmount / group.totalQuantity : 0;
         const productDisplay = group.brand ? `${group.name} (${group.brand})` : group.name;
@@ -1738,7 +1906,7 @@ export default function InvoiceDetail() {
           .map((item: any) => formatExchangeSnapshotPrintHtml(exchangeSnapshotForItem(inv, item.id)))
           .join('');
         return `<tr style="background:${i % 2 === 1 ? T.rowAlt : T.white};">
-      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${i + 1}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${lineOffset + i + 1}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:left;font-size:12px;font-weight:600;color:${nameColor};">${escapeHtml(productDisplay)}${exchangeHtml}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:64px;font-size:12px;font-weight:600;">${escapeHtml(formatNumber(group.totalQuantity, 3))}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:52px;font-size:12px;color:${T.textMuted};">Pcs.</td>
@@ -1752,17 +1920,19 @@ export default function InvoiceDetail() {
       <td colspan="6" style="border:1px solid ${T.primaryBorder};padding:28px;text-align:center;font-size:12px;color:#a8a29e;">No line items</td>
     </tr>`;
 
-    const qtyFooterRow = `<tr>
+    const qtyFooterRow = showTotals
+      ? `<tr>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};font-size:12px;font-weight:700;color:${T.secondary};">Total Quantity</td>
       <td colspan="2" style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};text-align:right;font-size:12px;font-weight:700;color:${T.secondary};">${escapeHtml(formatNumber(totalPcs, 3))} Pcs.</td>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
       <td style="border:1px solid ${T.secondaryMuted};padding:7px 8px;background:${T.tableHead};"></td>
-    </tr>`;
+    </tr>`
+      : '';
 
-    const summaryRow = (label: string, value: string, opts?: { muted?: boolean }) => `
+    const summaryRow = (label: string, value: string, optsRow?: { muted?: boolean }) => `
       <tr>
-        <td style="padding:8px 14px;font-size:12px;color:${opts?.muted ? T.textMuted : T.textMuted};font-weight:600;border-bottom:1px solid ${T.primaryBorder};">${label}</td>
+        <td style="padding:8px 14px;font-size:12px;color:${optsRow?.muted ? T.textMuted : T.textMuted};font-weight:600;border-bottom:1px solid ${T.primaryBorder};">${label}</td>
         <td style="padding:8px 14px;font-size:12px;text-align:right;font-weight:700;color:${T.text};border-bottom:1px solid ${T.primaryBorder};">${value}</td>
       </tr>`;
 
@@ -1818,6 +1988,38 @@ export default function InvoiceDetail() {
         ? `<div style="margin-top:10px;display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;text-transform:uppercase;border-radius:4px;border:1px solid #b91c1c;background:#fee2e2;color:#b91c1c;">Void</div>`
         : '';
 
+    const partNote =
+      partCount > 1
+        ? `<div style="font-size:11px;margin-top:8px;color:${T.textMuted};font-weight:600;">Part ${partIndex} of ${partCount}${
+            pageGroups.length
+              ? ` · Lines ${lineOffset + 1}–${lineOffset + pageGroups.length}`
+              : ''
+          }</div>`
+        : '';
+
+    const totalsFooter = `<div style="position:relative;overflow:hidden;padding:16px 24px 20px;border-top:3px solid ${T.primary};background:${T.primaryPale};">
+      ${invoiceFooterShapes()}
+      ${summaryBlock}
+      <table style="position:relative;width:100%;border-collapse:collapse;font-size:12px;margin-top:18px;">
+        <tr>
+          <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
+            <div style="font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:11px;">Declaration</div>
+            <div style="font-size:12px;color:${T.textMuted};margin-top:5px;line-height:1.45;">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</div>
+          </td>
+          <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
+            <div style="font-size:12px;font-weight:700;color:${T.secondary};margin-bottom:28px;">for ${escapeHtml(shopName)}</div>
+            <div style="display:inline-block;border-top:2px solid ${T.secondaryMuted};padding:5px 18px 0;font-size:12px;font-weight:700;color:${T.secondary};">Authorised Signatory</div>
+          </td>
+        </tr>
+      </table>
+      <div style="position:relative;margin-top:14px;text-align:center;font-size:11px;color:${T.textMuted};">This is a Computer Generated Invoice · ${escapeHtml(shopName)}</div>
+    </div>`;
+
+    const continuedFooter =
+      partCount > 1
+        ? `<div style="border-top:2px dashed ${T.primaryBorder};padding:12px 24px;font-size:12px;text-align:right;color:${T.secondaryMuted};font-weight:600;background:${T.primaryPale};">Continued on next page…</div>`
+        : '';
+
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -1857,6 +2059,7 @@ export default function InvoiceDetail() {
           <div style="font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:0.2px;color:${T.text};line-height:1.25;">${escapeHtml(customerName)}</div>
           ${storeName ? `<div style="font-size:12px;color:${T.textMuted};margin-top:4px;font-weight:600;">Store: ${escapeHtml(storeName)}</div>` : ''}
           ${voidBadge}
+          ${partNote}
         </td>
         <td style="width:42%;vertical-align:top;padding:14px 20px;">
           <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -1900,23 +2103,7 @@ export default function InvoiceDetail() {
 
     <div style="flex:1;min-height:20px;"></div>
 
-    <div style="position:relative;overflow:hidden;padding:16px 24px 20px;border-top:3px solid ${T.primary};background:${T.primaryPale};">
-      ${invoiceFooterShapes()}
-      ${summaryBlock}
-      <table style="position:relative;width:100%;border-collapse:collapse;font-size:12px;margin-top:18px;">
-        <tr>
-          <td style="width:50%;vertical-align:bottom;padding:0 16px 0 0;">
-            <div style="font-weight:700;color:${T.secondary};text-transform:uppercase;letter-spacing:0.4px;font-size:11px;">Declaration</div>
-            <div style="font-size:12px;color:${T.textMuted};margin-top:5px;line-height:1.45;">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</div>
-          </td>
-          <td style="width:50%;vertical-align:bottom;text-align:center;padding:0 0 0 16px;">
-            <div style="font-size:12px;font-weight:700;color:${T.secondary};margin-bottom:28px;">for ${escapeHtml(shopName)}</div>
-            <div style="display:inline-block;border-top:2px solid ${T.secondaryMuted};padding:5px 18px 0;font-size:12px;font-weight:700;color:${T.secondary};">Authorised Signatory</div>
-          </td>
-        </tr>
-      </table>
-      <div style="position:relative;margin-top:14px;text-align:center;font-size:11px;color:${T.textMuted};">This is a Computer Generated Invoice · ${escapeHtml(shopName)}</div>
-    </div>
+    ${showTotals ? totalsFooter : continuedFooter}
   </div>
 </body>
 </html>`;
@@ -1957,56 +2144,211 @@ export default function InvoiceDetail() {
     };
   };
 
-  const handleCapturePhoto = async () => {
+  const renderInvoiceHtmlToBlob = async (html: string): Promise<Blob | null> => {
     const iframe = invoiceCaptureFrameRef.current;
     const doc = iframe?.contentDocument;
-    if (!iframe || !doc) {
+    if (!iframe || !doc) return null;
+    doc.open();
+    doc.write(html);
+    doc.close();
+    await new Promise((r) => window.setTimeout(r, 150));
+
+    const root =
+      (doc.getElementById('invoice-print-root') as HTMLElement | null) || doc.body;
+    const w = INVOICE_CAPTURE_WIDTH_PX;
+    const h = Math.max(
+      INVOICE_CAPTURE_HEIGHT_PX,
+      Math.ceil(root.scrollHeight || root.offsetHeight || 1)
+    );
+    iframe.style.height = `${h + 8}px`;
+
+    const canvas = await html2canvas(root, {
+      scale: invoiceCaptureScale(),
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      windowWidth: w,
+      windowHeight: h,
+      width: w,
+      height: h,
+    });
+    return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png', 1));
+  };
+
+  const markPictureCopied = (index: number) => {
+    setPictureCopied((prev) => {
+      const next = prev.slice();
+      next[index] = true;
+      return next;
+    });
+  };
+
+  const copyPreparedPicturePage = async (index: number) => {
+    const blob = pictureBlobsRef.current[index];
+    const total = pictureBlobsRef.current.length;
+    if (!blob) {
+      toast('That image is not ready yet', 'error');
+      return;
+    }
+    setCopyingPhoto(true);
+    try {
+      window.getSelection()?.removeAllRanges();
+      if (!(await copyPngBlobToClipboard(blob))) {
+        toast('Could not copy picture. Check clipboard permissions.', 'error');
+        return;
+      }
+      markPictureCopied(index);
+      toast(
+        total > 1
+          ? `Image ${index + 1} of ${total} copied — paste in WhatsApp, then copy the next page`
+          : 'Invoice image copied — paste in WhatsApp',
+        'success'
+      );
+    } finally {
+      setCopyingPhoto(false);
+    }
+  };
+
+  /** Next page to copy: page 1 first, then 2, 3… */
+  const nextUncopiedPictureIndex = () => {
+    for (let i = 0; i < pictureCopied.length; i++) {
+      if (!pictureCopied[i]) return i;
+    }
+    return -1;
+  };
+
+  const handleCapturePhoto = async (split: InvoiceExportSplit = flushCopySettings()) => {
+    const iframe = invoiceCaptureFrameRef.current;
+    if (!iframe) {
       toast('Invoice preview is not ready. Please wait a moment and try again.', 'error');
       return;
     }
+
+    const readyNext = nextUncopiedPictureIndex();
+    if (pictureBlobsRef.current.length > 0 && readyNext >= 0) {
+      await copyPreparedPicturePage(readyNext);
+      return;
+    }
+    if (pictureBlobsRef.current.length > 0 && readyNext < 0) {
+      await copyPreparedPicturePage(0);
+      return;
+    }
+
+    setCopyingPhoto(true);
+    setPreparingPictures(true);
     try {
-      doc.open();
-      doc.write(generateInvoiceHTML());
-      doc.close();
-      await new Promise((r) => window.setTimeout(r, 150));
+      window.getSelection()?.removeAllRanges();
+      const rowChunks = chunkInvoiceRowsForExport(invoicePrintGroups, split.rowsPerPage);
+      const partCount = rowChunks.length;
+      const blobs: Blob[] = [];
+      let lineOffset = 0;
 
-      const root =
-        (doc.getElementById('invoice-print-root') as HTMLElement | null) || doc.body;
-      const w = INVOICE_CAPTURE_WIDTH_PX;
-      const h = Math.max(
-        INVOICE_CAPTURE_HEIGHT_PX,
-        Math.ceil(root.scrollHeight || root.offsetHeight || 1)
-      );
-      iframe.style.height = `${h + 8}px`;
+      for (let i = 0; i < rowChunks.length; i++) {
+        const html = generateInvoiceHTML({
+          pageGroups: rowChunks[i],
+          partIndex: i + 1,
+          partCount,
+          showTotals: i === partCount - 1,
+          lineOffset,
+        });
+        lineOffset += rowChunks[i].length;
+        const blob = await renderInvoiceHtmlToBlob(html);
+        if (!blob) {
+          toast(`Failed to create image (part ${i + 1}).`, 'error');
+          return;
+        }
+        blobs.push(blob);
+      }
 
-      const canvas = await html2canvas(root, {
-        scale: invoiceCaptureScale(),
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: w,
-        windowHeight: h,
-        width: w,
-        height: h,
-      });
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            toast('Failed to create image.', 'error');
-            return;
-          }
-          navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(
-            () => toast('Invoice image copied to clipboard.', 'success'),
-            () => toast('Failed to copy to clipboard. Please check permissions.', 'error')
-          );
-        },
-        'image/png',
-        1
+      if (!blobs.length) {
+        toast('Could not create invoice picture', 'error');
+        return;
+      }
+
+      pictureBlobsRef.current = blobs;
+      setPictureCopied(blobs.map((_, i) => i === 0));
+
+      if (!(await copyPngBlobToClipboard(blobs[0]))) {
+        setPictureCopied(blobs.map(() => false));
+        toast('Could not copy picture. Check clipboard permissions.', 'error');
+        return;
+      }
+
+      toast(
+        blobs.length > 1
+          ? `Image 1 of ${blobs.length} copied. Use Copy 2 … Copy ${blobs.length} for the rest (${split.rowsPerPage} lines per image).`
+          : 'Invoice image copied to clipboard.',
+        'success'
       );
-    } catch (e) {
-      toast('Failed to capture invoice preview.', 'error');
+    } catch (e: any) {
+      pictureBlobsRef.current = [];
+      setPictureCopied([]);
+      toast(e?.message || 'Failed to capture invoice preview.', 'error');
+    } finally {
+      setPreparingPictures(false);
+      setCopyingPhoto(false);
     }
   };
+
+  const copiedPictureCount = pictureCopied.filter(Boolean).length;
+  const nextPicturePart = nextUncopiedPictureIndex();
+  const expectedPhotoParts = invoiceSnapshotPageCount(
+    invoicePrintGroups.length,
+    exportSplit.rowsPerPage
+  );
+  const copySplitExplain = invoiceExportSplitExplain(
+    invoicePrintGroups.length,
+    exportSplit.rowsPerPage
+  );
+  const picturePageButtons =
+    pictureCopied.length > 1 ? (
+      <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="text-sm text-amber-950 font-medium">
+            {copiedPictureCount}/{pictureCopied.length} images copied. Each button copies a new
+            WhatsApp image ({exportSplit.rowsPerPage} lines each).
+          </div>
+          <button
+            type="button"
+            className="shrink-0 text-xs font-semibold text-amber-900 underline"
+            onClick={() => openCopySettings()}
+          >
+            Change split
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {pictureCopied.map((done, i) => (
+            <button
+              key={i}
+              type="button"
+              disabled={copyingPhoto}
+              onClick={() => void copyPreparedPicturePage(i)}
+              className={`min-w-[2.75rem] rounded-md border px-2 py-1.5 text-xs font-semibold ${
+                done
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+                  : 'border-amber-800 bg-amber-800 text-white hover:bg-amber-900'
+              }`}
+              title={
+                done
+                  ? `Copy image ${i + 1} again`
+                  : `Copy image ${i + 1} of ${pictureCopied.length}`
+              }
+            >
+              {done ? `✓ ${i + 1}` : `Copy ${i + 1}`}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
+  const pictureButtonLabel = copyingPhoto
+    ? preparingPictures
+      ? `Preparing ${Math.max(pictureCopied.length, expectedPhotoParts)} images…`
+      : 'Copying…'
+    : pictureCopied.length > 1 && nextPicturePart >= 0
+      ? `Copy ${nextPicturePart + 1}/${pictureCopied.length}`
+      : pictureCopied.length > 1
+        ? 'Copy again'
+        : 'Photo';
 
   const generateThermalInvoiceHTML = (invoice: any) => {
     const thermalSettings = loadThermalPrintSettings();
@@ -2161,13 +2503,13 @@ export default function InvoiceDetail() {
             <span>${totalOutstanding < 0 ? formatNumber(Math.abs(totalOutstanding)) + ' (Cr)' : '₹' + formatNumber(totalOutstanding)}</span>
           </div>
           ` : ''}
-          ${parseFloat(invoice.paid_amount || '0') > 0 ? `
+          ${parseFloat(invoice.paid_amount || '0') > 0 && invoice.invoice_type !== 'defective' ? `
             <div class="summary-row">
               <span>Paid:</span>
               <span>₹${formatNumber(invoice.paid_amount || '0')}</span>
             </div>
             ` : ''}
-          ${parseFloat(invoice.due_amount || '0') > 0 ? `
+          ${parseFloat(invoice.due_amount || '0') > 0 && invoice.invoice_type !== 'defective' ? `
             <div class="summary-row">
               <span>Due:</span>
               <span>₹${formatNumber(invoice.due_amount || '0')}</span>
@@ -2750,13 +3092,13 @@ export default function InvoiceDetail() {
                 )}
               </>
             )}
-            {parseFloat(inv.paid_amount || '0') > 0 && (
+            {parseFloat(inv.paid_amount || '0') > 0 && !isDefectiveInvoice && (
               <div className="flex justify-between items-center py-2 bg-green-50 rounded-lg px-3">
                 <span className="text-sm font-medium text-green-700">Paid</span>
                 <span className="text-sm font-semibold text-green-700">₹{formatNumber(inv.paid_amount || '0')}</span>
               </div>
             )}
-            {parseFloat(inv.due_amount || '0') > 0 && (
+            {parseFloat(inv.due_amount || '0') > 0 && !isDefectiveInvoice && (
               <div className="space-y-2">
                 <div className="flex justify-between items-center py-2 bg-red-50 rounded-lg px-3">
                   <span className="text-sm font-medium text-red-700">Due</span>
@@ -2778,6 +3120,46 @@ export default function InvoiceDetail() {
       </div>
 
       {/* Invoice Items */}
+      {isDefectiveInvoice && (
+        <Card className="no-print">
+          <h3 className="text-lg font-semibold text-gray-900 mb-1">Add defective barcode</h3>
+          <p className="text-sm text-gray-600 mb-3">
+            Only defective barcodes from {inv?.customer_name || 'No Supplier'} can be added.
+            Removing a barcode leaves it defective so it can stay in inventory or go on another move-out.
+          </p>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <Input
+                type="text"
+                placeholder="Scan or type a defective barcode..."
+                value={barcodeInput}
+                autoComplete="off"
+                onChange={(e) => setBarcodeInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const value = (e.currentTarget.value || '').trim();
+                    if (value) {
+                      void handleBarcodeScan(value);
+                    }
+                  }
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              onClick={() => {
+                if (barcodeInput.trim()) {
+                  void handleBarcodeScan(barcodeInput);
+                }
+              }}
+              disabled={!barcodeInput.trim() || addItemMutation.isPending}
+            >
+              {addItemMutation.isPending ? 'Adding...' : 'Add'}
+            </Button>
+          </div>
+        </Card>
+      )}
       {visibleInvoiceItems.length > 0 && (
         <Card className="print-area">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -2848,8 +3230,11 @@ export default function InvoiceDetail() {
                 );
               } else {
                 // For other invoices, show full details with prices
+                const tableHeaders = isDefectiveInvoice
+                  ? ['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total', '']
+                  : ['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total'];
                 return (
-                  <Table headers={['Product', 'SKU', 'Quantity', 'Unit Price', 'Discount', 'Tax', 'Total']}>
+                  <Table headers={tableHeaders}>
                     {groupedItems.map((group, groupIndex) => {
                       const groupKey = `invoice_group_${group.productId}_${groupIndex} `;
                       const isExpanded = expandedInvoiceItems[groupKey] || false;
@@ -2896,6 +3281,27 @@ export default function InvoiceDetail() {
                             <TableCell align="right">
                               <span className="font-semibold text-gray-900">₹{formatNumber(totalLineTotal)}</span>
                             </TableCell>
+                            {isDefectiveInvoice && (
+                              <TableCell>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (window.confirm(
+                                      `Remove all barcodes of "${group.productName}" from this move-out invoice? They will stay marked defective.`
+                                    )) {
+                                      group.items.forEach((item) => {
+                                        deleteItemMutation.mutate(item.id);
+                                      });
+                                    }
+                                  }}
+                                  disabled={deleteItemMutation.isPending}
+                                  className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50 no-print"
+                                  title="Remove from move-out (stays defective)"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </TableCell>
+                            )}
                           </TableRow>
                           {isExpanded && barcodes.map((barcodeItem, barcodeIndex) => {
                             const item = barcodeItem.item;
@@ -2938,6 +3344,25 @@ export default function InvoiceDetail() {
                                 <TableCell align="right">
                                   <span className="text-xs font-semibold text-gray-900">₹{formatNumber(item.line_total || '0')}</span>
                                 </TableCell>
+                                {isDefectiveInvoice && (
+                                  <TableCell>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(
+                                          `Remove barcode ${barcodeItem.barcode} from this move-out invoice? It will stay marked defective.`
+                                        )) {
+                                          deleteItemMutation.mutate(item.id);
+                                        }
+                                      }}
+                                      disabled={deleteItemMutation.isPending}
+                                      className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 hover:border-red-300 transition-colors disabled:opacity-50 no-print"
+                                      title="Remove barcode (stays defective)"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </TableCell>
+                                )}
                               </TableRow>
                             );
                           })}
@@ -2987,12 +3412,33 @@ export default function InvoiceDetail() {
                             <span>Quantity: <span className="font-semibold text-gray-900">{totalQuantity}</span></span>
                           </div>
                         </div>
-                        {!isPending && (
-                          <div className="text-right flex-shrink-0">
-                            <div className="text-lg font-bold text-gray-900">₹{formatNumber(totalLineTotal)}</div>
-                            <div className="text-xs text-gray-500 mt-0.5">Total</div>
-                          </div>
-                        )}
+                        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                          {!isPending && (
+                            <div className="text-right">
+                              <div className="text-lg font-bold text-gray-900">₹{formatNumber(totalLineTotal)}</div>
+                              <div className="text-xs text-gray-500 mt-0.5">Total</div>
+                            </div>
+                          )}
+                          {isDefectiveInvoice && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm(
+                                  `Remove all barcodes of "${group.productName}" from this move-out invoice? They will stay marked defective.`
+                                )) {
+                                  group.items.forEach((item) => {
+                                    deleteItemMutation.mutate(item.id);
+                                  });
+                                }
+                              }}
+                              disabled={deleteItemMutation.isPending}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 disabled:opacity-50 no-print"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Remove
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {!isPending && (
                         <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-100 mt-3">
@@ -3026,7 +3472,26 @@ export default function InvoiceDetail() {
                                     <div className="text-xs font-mono text-gray-600">{barcodeItem.barcode}</div>
                                     <CartLineScannedTime item={item} variant="row" />
                                   </div>
-                                  <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="text-xs text-gray-500">Qty: {item.quantity}</div>
+                                    {isDefectiveInvoice && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (window.confirm(
+                                            `Remove barcode ${barcodeItem.barcode} from this move-out invoice? It will stay marked defective.`
+                                          )) {
+                                            deleteItemMutation.mutate(item.id);
+                                          }
+                                        }}
+                                        disabled={deleteItemMutation.isPending}
+                                        className="p-1.5 rounded-md text-red-600 bg-red-50 border border-red-200 hover:bg-red-100 disabled:opacity-50 no-print"
+                                        title="Remove barcode (stays defective)"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                                 {!isPending && (
                                   <div className="grid grid-cols-2 gap-2 text-xs">
@@ -3195,7 +3660,7 @@ export default function InvoiceDetail() {
             <Printer className="h-5 w-5 text-gray-400" />
             A4 Print Preview
           </h3>
-          <div className="flex gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
             <Button
               variant="outline"
               size="sm"
@@ -3208,12 +3673,85 @@ export default function InvoiceDetail() {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleCapturePhoto}
+              onClick={() => void handleCapturePhoto()}
+              disabled={copyingPhoto}
               className="flex-1 sm:flex-none"
+              title="Copy invoice picture to clipboard for WhatsApp"
             >
               <Camera className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">Photo</span>
+              <span className="hidden sm:inline">{pictureButtonLabel}</span>
+              <span className="sm:hidden">{pictureCopied.length > 1 ? pictureButtonLabel : 'Photo'}</span>
             </Button>
+            <div className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => toggleCopySettings()}
+                className="flex items-center gap-2"
+                title="Photo page split"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                <span className="hidden sm:inline">Copy settings</span>
+                <span className="bg-amber-800 text-white rounded-full min-w-[1.25rem] h-5 px-1.5 flex items-center justify-center text-xs">
+                  {invoiceExportSplitBadge(exportSplit)}
+                </span>
+              </Button>
+              {showCopySettings ? (
+                <div className="absolute right-0 z-30 mt-1 w-72 rounded-lg border border-stone-200 bg-white shadow-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-stone-800">Photo pages</div>
+                    <button
+                      type="button"
+                      className="text-stone-400 hover:text-stone-600"
+                      onClick={() => closeCopySettings()}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-stone-500 mb-2">
+                    For sale invoices, POS, and credit invoices (shop-wide). Credit Ledger
+                    statements use Credit Ledger copy settings separately. Longer invoices become
+                    Copy 1 / Copy 2 / Copy 3.
+                  </p>
+                  <label className="block text-sm text-stone-800 mb-1.5">Rows per image</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={rowsPerPageDraft}
+                    onChange={(e) => setRowsPerPageDraft(e.target.value)}
+                    onBlur={() => commitRowsPerPageDraft()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitRowsPerPageDraft();
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="h-8 py-1 text-sm"
+                  />
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {INVOICE_EXPORT_ROW_PRESETS.map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => persistExportSplit({ rowsPerPage: n })}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                          exportSplit.rowsPerPage === n
+                            ? 'border-amber-800 bg-amber-800 text-white'
+                            : 'border-stone-200 text-stone-600 hover:bg-stone-50'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-stone-100 text-xs text-stone-600 leading-snug">
+                    {copySplitExplain}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -3225,6 +3763,7 @@ export default function InvoiceDetail() {
             </Button>
           </div>
         </div>
+        {picturePageButtons ? <div className="mb-3">{picturePageButtons}</div> : null}
         <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-gray-100 shadow-lg">
           <div className="bg-gray-50 border-b border-gray-300 px-4 py-2 flex items-center justify-between">
             <span className="text-xs font-semibold text-gray-700">
@@ -4729,12 +5268,9 @@ export default function InvoiceDetail() {
                   // Auto-update repair status to 'delivered' when changing to a checkout type.
                   // (pending is handled in the early-return block above)
                   if (inv?.repair) {
-                    const statusToSet = 'delivered';
-                    setCheckoutRepairStatus(statusToSet);
-                    // Prefill delivery date to today (UI only). Do NOT auto-save because user may switch back to pending.
-                    const existingDeliveryDate = inv.repair.delivery_date ? String(inv.repair.delivery_date).slice(0, 10) : '';
-                    const today = new Date().toISOString().slice(0, 10);
-                    setCheckoutDeliveryDate(existingDeliveryDate || today);
+                    setCheckoutRepairStatus('delivered');
+                    // Prefill within [registration date, today]. Do NOT auto-save; user may switch back to pending.
+                    applyDefaultCheckoutDeliveryDate(inv.repair);
                   }
                 }}
                 className="w-full font-semibold border-2 border-blue-300 hover:border-blue-400 cursor-pointer bg-white"
@@ -4853,7 +5389,7 @@ export default function InvoiceDetail() {
                       {repairStatusOptions.find((o) => o.value === inv.repair.status)?.label ?? inv.repair.status}
                     </Badge>
                     <p className="text-xs text-gray-500 mt-1">
-                      Delivery: {inv.repair.delivery_date ? formatDate(inv.repair.delivery_date) : '—'}
+                      Delivery: {displayedCheckoutDeliveryDate ? formatDateForInvoice(displayedCheckoutDeliveryDate) : '—'}
                     </p>
                   </div>
                   <div className="flex-1 min-w-[160px]">
@@ -4871,6 +5407,8 @@ export default function InvoiceDetail() {
                         setCheckoutRepairStatus(newStatus);
                         if (newStatus !== 'done' && newStatus !== 'delivered') {
                           setCheckoutDeliveryDate('');
+                        } else if (inv?.repair) {
+                          applyDefaultCheckoutDeliveryDate(inv.repair);
                         }
                       }}
                       className="w-full"
@@ -4894,25 +5432,42 @@ export default function InvoiceDetail() {
                         ))}
                     </Select>
                   </div>
-                  {shouldShowCheckoutDeliveryDate && (
-                    <div className="flex-1 min-w-[160px]">
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Delivery date</label>
+                </div>
+                {shouldShowCheckoutDeliveryDate && (
+                  <div
+                    ref={checkoutDeliveryDateSectionRef}
+                    className="rounded-lg border-2 border-amber-400 bg-white p-3"
+                  >
+                    <label className="flex items-center gap-2 text-sm font-semibold text-gray-900 mb-2">
+                      <Calendar className="h-4 w-4 text-amber-600" />
+                      Delivery date
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                       <Input
+                        ref={checkoutDeliveryDateInputRef}
                         type="date"
                         value={checkoutDeliveryDate}
+                        min={checkoutDeliveryDateBounds.minDate}
                         onChange={(e) => setCheckoutDeliveryDate(e.target.value)}
-                        className="w-full"
+                        className="w-full sm:max-w-[220px] font-semibold"
                         disabled={isDraftPendingCheckout}
                       />
-                      {isDraftPendingCheckout && (
-                        <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
-                      )}
-                      {inv.repair.delivery_date && (
-                        <p className="text-xs text-gray-500 mt-1">Current: {formatDate(inv.repair.delivery_date)}</p>
-                      )}
+                      <p className="text-sm font-semibold text-gray-900">
+                        {checkoutDeliveryDate
+                          ? formatDateForInvoice(checkoutDeliveryDate)
+                          : 'Not selected'}
+                      </p>
                     </div>
-                  )}
-                </div>
+                    {isDraftPendingCheckout && (
+                      <p className="text-xs text-gray-500 mt-1">Delivery date is disabled for draft pending repairs.</p>
+                    )}
+                    <p className="text-xs text-gray-600 mt-2">
+                      Repair registered {formatDateForInvoice(checkoutDeliveryDateBounds.createdDate) || '—'}.
+                      {` Choose a date on or after ${formatDateForInvoice(checkoutDeliveryDateBounds.minDate)}.`}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -5034,6 +5589,9 @@ export default function InvoiceDetail() {
                     submitRepairStatus === 'delivered';
                   if (freshInv?.repair && submitRepairStatus) {
                     payload.repair_status = submitRepairStatus;
+                  }
+                  if (!assertCheckoutDeliveryDate(freshInv?.repair, !!freshInv?.repair && canSubmitDeliveryDate)) {
+                    return;
                   }
                   if (freshInv?.repair && canSubmitDeliveryDate && checkoutDeliveryDate?.trim()) {
                     payload.delivery_date = checkoutDeliveryDate.trim();

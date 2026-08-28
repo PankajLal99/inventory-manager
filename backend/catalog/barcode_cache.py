@@ -89,11 +89,20 @@ def cache_barcode_data(barcode_obj: Barcode, ttl: int = None):
     # Cache by barcode value
     barcode_key = get_barcode_cache_key(barcode_obj.barcode)
     cache.set(barcode_key, cached_data, ttl)
+
+    # Also cache the space-stripped key so "DD-0002" hits a stored "DD -0002"
+    from .barcode_resolution import clean_scanned_barcode
+    compact_barcode = clean_scanned_barcode(barcode_obj.barcode)
+    if compact_barcode and compact_barcode != barcode_obj.barcode:
+        cache.set(get_barcode_cache_key(compact_barcode), cached_data, ttl)
     
     # Cache by short_code if it exists
     if barcode_obj.short_code:
         short_code_key = get_short_code_cache_key(barcode_obj.short_code)
         cache.set(short_code_key, cached_data, ttl)
+        compact_short = clean_scanned_barcode(barcode_obj.short_code)
+        if compact_short and compact_short != barcode_obj.short_code:
+            cache.set(get_short_code_cache_key(compact_short), cached_data, ttl)
     
     # Cache status separately for quick status checks
     status_key = get_barcode_status_cache_key(barcode_obj.id)
@@ -167,11 +176,19 @@ def invalidate_barcode_cache(barcode_obj: Barcode):
     # Invalidate by barcode
     barcode_key = get_barcode_cache_key(old_barcode)
     cache.delete(barcode_key)
+
+    from .barcode_resolution import clean_scanned_barcode
+    compact_barcode = clean_scanned_barcode(old_barcode)
+    if compact_barcode and compact_barcode != old_barcode:
+        cache.delete(get_barcode_cache_key(compact_barcode))
     
     # Invalidate by short_code
     if old_short_code:
         short_code_key = get_short_code_cache_key(old_short_code)
         cache.delete(short_code_key)
+        compact_short = clean_scanned_barcode(old_short_code)
+        if compact_short and compact_short != old_short_code:
+            cache.delete(get_short_code_cache_key(compact_short))
     
     # Invalidate status cache
     status_key = get_barcode_status_cache_key(barcode_obj.id)
