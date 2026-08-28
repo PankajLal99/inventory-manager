@@ -29,7 +29,7 @@ def generate_label_image(
         product_name: Product name (will be truncated if too long)
         barcode_value: Barcode value to encode
         sku: SKU value (defaults to barcode_value if not provided)
-        vendor_name: Vendor/Supplier name (optional, for first line)
+        vendor_name: Vendor/supplier code (optional, for first line; may be name if code is empty)
         purchase_date: Purchase date (optional, for first line)
         serial_number: Serial number for the product (optional, for last line)
         width: Image width in pixels (default 400 = 4 inches at 100 DPI)

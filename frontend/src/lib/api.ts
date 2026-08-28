@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { getAuthScopeForPath, isCreditAppPath, isSalaryBookPath, type AuthScope } from './authPaths';
+import { getAuthScopeForPath, isCreditAppPath, type AuthScope } from './authPaths';
+import { sanitizeScannedBarcode } from './scanningQueue';
 
 // Get API URL from runtime config (for production) or build-time env (for development)
 // Priority: window.__ENV__ > import.meta.env.VITE_API_URL > default
@@ -74,6 +76,10 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+      return Promise.reject(error);
+    }
+
     const originalRequest = error.config;
 
     // Handle 401 Unauthorized - try to refresh token for that scope only
@@ -153,7 +159,8 @@ export const authApi = {
 
 // Products API
 export const productsApi = {
-  list: (params?: any) => api.get('/products/', { params }),
+  list: (params?: any, config?: { signal?: AbortSignal }) =>
+    api.get('/products/', { params, signal: config?.signal }),
   get: (id: number) => api.get(`/products/${id}/`),
   create: (data: any) => {
     if (data instanceof FormData) {
@@ -178,18 +185,22 @@ export const productsApi = {
   invoices: (id: number, params?: { limit?: number; offset?: number }) =>
     api.get(`/products/${id}/invoices/`, { params }),
   byBarcode: (barcode: string, barcodeOnly: boolean = false, noCache: boolean = false) => {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = {
+      // Query param so slashes (e.g. ON/-0185) are not treated as extra URL path segments
+      barcode: sanitizeScannedBarcode(barcode),
+    };
     if (barcodeOnly) params.barcode_only = 'true';
     if (noCache) params.no_cache = 'true';
-    return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
+    return api.get('/barcodes/by-barcode/', { params });
   },
   byBarcodePos: (barcode: string, noCache: boolean = true) => {
     const params: Record<string, string> = {
+      barcode: sanitizeScannedBarcode(barcode),
       barcode_only: 'true',
       pos_scan: 'true',
     };
     if (noCache) params.no_cache = 'true';
-    return api.get(`/barcodes/by-barcode/${barcode}/`, { params });
+    return api.get('/barcodes/by-barcode/', { params });
   },
   generateLabel: (zplCode: string) => api.post('/products/generate-label/', { zpl_code: zplCode }),
   generateLabels: (
@@ -381,6 +392,8 @@ export const customersApi = {
     list: () => api.get('/customer-groups/'),
     get: (id: number) => api.get(`/customer-groups/${id}/`),
     create: (data: any) => api.post('/customer-groups/', data),
+    update: (id: number, data: any) => api.patch(`/customer-groups/${id}/`, data),
+    delete: (id: number) => api.delete(`/customer-groups/${id}/`),
   },
   ledger: {
     entries: {
@@ -483,11 +496,16 @@ export const catalogApi = {
   defectiveProducts: {
     moveOut: (data: any) => api.post('/defective-products/move-out/', data),
     moveOuts: {
-      list: (params?: any) => api.get('/defective-products/move-outs/', { params }),
+      list: (params?: any, config?: { signal?: AbortSignal }) =>
+        api.get('/defective-products/move-outs/', { params, signal: config?.signal }),
       get: (id: number) => api.get(`/defective-products/move-outs/${id}/`),
-      updateAdjustment: (id: number, data: { total_adjustment: number }) => api.patch(`/defective-products/move-outs/${id}/`, data),
+      delete: (id: number) => api.delete(`/defective-products/move-outs/${id}/`),
+      updateAdjustment: (id: number, data: { total_adjustment?: number; notes?: string; sent_date?: string | null }) =>
+        api.patch(`/defective-products/move-outs/${id}/`, data),
       addItems: (id: number, data: any) => api.post(`/defective-products/move-outs/${id}/add-items/`, data),
     },
+    selectableBarcodes: (params?: { product_ids: string; supplier?: string }, config?: { signal?: AbortSignal }) =>
+      api.get('/defective-products/selectable-barcodes/', { params, signal: config?.signal }),
   },
 };
 

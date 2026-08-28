@@ -203,6 +203,53 @@ def user_me(request):
 
 
 DOCUMENT_THEME_KEY = 'credit_doc_themes'
+LEDGER_EXPORT_SETTINGS_KEY = 'credit_ledger_export_split'
+INVOICE_EXPORT_SETTINGS_KEY = 'invoice_photo_export_split'
+
+DEFAULT_LEDGER_EXPORT_SPLIT = {
+    'useRows': True,
+    'useDays': False,
+    'rowsPerPage': 40,
+    'daysPerPage': 15,
+}
+
+DEFAULT_INVOICE_EXPORT_SPLIT = {
+    'rowsPerPage': 25,
+}
+
+
+def _clamp_int(value, min_value, max_value, fallback):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(min_value, min(max_value, number))
+
+
+def normalize_ledger_export_split(value):
+    """Shop-wide copy/PDF page split. Not scoped to a user profile."""
+    if not isinstance(value, dict):
+        value = {}
+    use_rows = value.get('useRows')
+    use_days = value.get('useDays')
+    if use_rows is None and use_days is None:
+        if value.get('mode') == 'days':
+            use_rows, use_days = False, True
+        else:
+            use_rows, use_days = True, False
+    cleaned = {
+        'useRows': bool(use_rows),
+        'useDays': bool(use_days),
+        'rowsPerPage': _clamp_int(
+            value.get('rowsPerPage'), 1, 200, DEFAULT_LEDGER_EXPORT_SPLIT['rowsPerPage']
+        ),
+        'daysPerPage': _clamp_int(
+            value.get('daysPerPage'), 1, 366, DEFAULT_LEDGER_EXPORT_SPLIT['daysPerPage']
+        ),
+    }
+    if not cleaned['useRows'] and not cleaned['useDays']:
+        cleaned['useRows'] = True
+    return cleaned
 
 
 @api_view(['GET', 'PUT'])
@@ -244,6 +291,95 @@ def document_theme(request):
     if not setting.description:
         setting.description = 'Credit invoice/ledger document theme (colors, fonts, row styles)'
     setting.save(update_fields=['value', 'description', 'updated_at'])
+    return Response(cleaned)
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def ledger_export_settings(request):
+    """
+    Shop-wide credit ledger copy/PDF page-split settings (JSON on core.Setting).
+    Shared across all users and devices — not scoped to the logged-in user.
+    """
+    setting = Setting.objects.filter(key=LEDGER_EXPORT_SETTINGS_KEY).first()
+
+    if request.method == 'GET':
+        if setting is None:
+            return Response({})
+        try:
+            data = json.loads(setting.value or '{}')
+            if not isinstance(data, dict):
+                data = {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+        if not data:
+            return Response({})
+        return Response(normalize_ledger_export_split(data))
+
+    payload = request.data
+    if not isinstance(payload, dict):
+        return Response({'detail': 'Expected a JSON object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    cleaned = normalize_ledger_export_split(payload)
+    if setting is None:
+        setting = Setting(
+            key=LEDGER_EXPORT_SETTINGS_KEY,
+            description='Credit ledger copy/PDF page split (rows/days per image)',
+        )
+    setting.value = json.dumps(cleaned)
+    if not setting.description:
+        setting.description = 'Credit ledger copy/PDF page split (rows/days per image)'
+    setting.save()
+    return Response(cleaned)
+
+
+def normalize_invoice_export_split(value):
+    """Shop-wide invoice photo page split (rows per image)."""
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        'rowsPerPage': _clamp_int(
+            value.get('rowsPerPage'), 1, 200, DEFAULT_INVOICE_EXPORT_SPLIT['rowsPerPage']
+        ),
+    }
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def invoice_export_settings(request):
+    """
+    Shop-wide invoice photo copy page-split settings (JSON on core.Setting).
+    Shared across all users and devices — not scoped to the logged-in user.
+    """
+    setting = Setting.objects.filter(key=INVOICE_EXPORT_SETTINGS_KEY).first()
+
+    if request.method == 'GET':
+        if setting is None:
+            return Response({})
+        try:
+            data = json.loads(setting.value or '{}')
+            if not isinstance(data, dict):
+                data = {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+        if not data:
+            return Response({})
+        return Response(normalize_invoice_export_split(data))
+
+    payload = request.data
+    if not isinstance(payload, dict):
+        return Response({'detail': 'Expected a JSON object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    cleaned = normalize_invoice_export_split(payload)
+    if setting is None:
+        setting = Setting(
+            key=INVOICE_EXPORT_SETTINGS_KEY,
+            description='Invoice photo copy page split (rows per image)',
+        )
+    setting.value = json.dumps(cleaned)
+    if not setting.description:
+        setting.description = 'Invoice photo copy page split (rows per image)'
+    setting.save()
     return Response(cleaned)
 
 
@@ -478,7 +614,11 @@ def global_search(request):
             Barcode.objects
             .filter(barcode_q)
             .select_related('product', 'purchase__supplier', 'purchase_item__purchase__supplier')
-            .prefetch_related('invoice_items__invoice', 'invoice_items__invoice__customer')
+            .prefetch_related(
+                'invoice_items__invoice',
+                'invoice_items__invoice__customer',
+                'defective_move_outs__move_out',
+            )
         )[:20]
         add_to_results('barcodes', barcodes, BarcodeSerializer)
     

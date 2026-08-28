@@ -51,7 +51,7 @@ def generate_labels_for_purchase(purchase_id: int) -> Dict[str, Any]:
         for label in BarcodeLabel.objects.filter(barcode_id__in=[b.id for b in barcodes])
     }
 
-    vendor_name = purchase.supplier.name if purchase.supplier else None
+    vendor_name = purchase.supplier.qr_label_vendor() if purchase.supplier else None
     purchase_date = purchase.purchase_date.strftime('%d-%m-%Y') if purchase.purchase_date else None
 
     barcodes_to_queue: List[Dict[str, Any]] = []

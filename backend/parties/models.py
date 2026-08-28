@@ -80,6 +80,11 @@ class Supplier(models.Model):
     def __str__(self):
         return self.name
 
+    def qr_label_vendor(self) -> str:
+        """Identifier printed on QR labels: vendor code, falling back to name."""
+        code = (self.code or '').strip()
+        return code if code else self.name
+
     class Meta:
         db_table = 'suppliers'
 

@@ -79,6 +79,54 @@ class ReportsTests(TestCase):
             response.data['out_of_stock_count'] + response.data['low_stock_count'],
         )
 
+    def test_stock_ordering_includes_never_purchased_products(self):
+        """Never-purchased products have qty 0 and must appear as sold out."""
+        never_purchased = TestDataFactory.create_product(name='Never Purchased Widget')
+        in_stock = TestDataFactory.create_product(name='Purchased In Stock')
+        purchase = TestDataFactory.create_purchase(user=self.user, status='finalized')
+        purchase_item = TestDataFactory.create_purchase_item(
+            purchase=purchase,
+            product=in_stock,
+        )
+        barcode = TestDataFactory.create_barcode(
+            product=in_stock,
+            tag='new',
+            purchase_item=purchase_item,
+        )
+        barcode.purchase = purchase
+        barcode.save(update_fields=['purchase'])
+
+        inactive = TestDataFactory.create_product(name='Inactive Never Purchased')
+        inactive.is_active = False
+        inactive.save(update_fields=['is_active'])
+
+        untracked = TestDataFactory.create_product(
+            name='Custom Untracked',
+            track_inventory=False,
+        )
+
+        response = self.client.get('/api/v1/reports/stock-ordering/?refresh=1')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        out_ids = [row['product__id'] for row in response.data['out_of_stock']]
+        self.assertIn(never_purchased.id, out_ids)
+        self.assertNotIn(in_stock.id, out_ids)
+        self.assertNotIn(inactive.id, out_ids)
+        self.assertNotIn(untracked.id, out_ids)
+
+        never_row = next(
+            row for row in response.data['out_of_stock'] if row['product__id'] == never_purchased.id
+        )
+        self.assertEqual(never_row['available_quantity'], 0)
+        self.assertEqual(never_row['supplier__name'], 'N/A')
+
+        counts = self.client.get('/api/v1/reports/stock-ordering/?counts_only=1&refresh=1')
+        self.assertEqual(counts.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(counts.data['out_of_stock_count'], 1)
+        self.assertEqual(
+            counts.data['out_of_stock_count'],
+            len(response.data['out_of_stock']),
+        )
+
     def test_dashboard_kpis_invoice_totals_cash_upi_expenses_inhand(self):
         """Dashboard sums Invoice.total for cash/upi types, expenses, and inhand = cash - expenses."""
         cash_inv = TestDataFactory.create_invoice(

@@ -4,29 +4,49 @@
  */
 
 /**
- * Split a single line of input by newlines or pipes into trimmed barcode strings.
+ * Strip scanner artifacts from a scanned/typed barcode:
+ * whitespace (including NBSP / zero-width), then uppercase.
+ * Example: "ON/ -0185" -> "ON/-0185"
+ */
+export function sanitizeScannedBarcode(value: string): string {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, '')
+    .toUpperCase();
+}
+
+/**
+ * Split a single line of input by newlines or pipes into sanitized barcode strings.
  * Used when user pastes multiple barcodes or scanner buffers several scans.
  */
 export function parseBarcodesFromInput(input: string): string[] {
   if (!input || typeof input !== 'string') return [];
   return input
     .split(/[\n|]+/)
-    .map((s) => s.trim())
+    .map((s) => sanitizeScannedBarcode(s))
     .filter(Boolean);
 }
 
 /**
  * Heuristic: does the string look like a barcode (vs free-text search)?
  * Used to decide whether to send to the queue vs search.
+ * Collapses scanner spaces next to / - _ so "ON/ -0185" still counts as a barcode,
+ * but "FRAME A33" (space between words) stays a product-name search.
  */
 export function looksLikeBarcode(input: string): boolean {
-  if (!input || input.length < 3) return false;
-  const barcodePattern = /^[A-Za-z0-9\-_]+$/;
-  return barcodePattern.test(input) && (input.length >= 4 || input.includes('-') || input.includes('_'));
+  if (!input || typeof input !== 'string') return false;
+  const collapsed = input
+    .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s*([/\-_])\s*/g, '$1')
+    .trim();
+  if (collapsed.length < 3) return false;
+  const barcodePattern = /^[A-Za-z0-9\-_\/]+$/;
+  return barcodePattern.test(collapsed) && (collapsed.length >= 4 || /[-_/]/.test(collapsed));
 }
 
 export function normalizeBarcodeKey(value: string): string {
-  return value.trim().toUpperCase();
+  return sanitizeScannedBarcode(value);
 }
 
 export type InvoiceLineBarcodeFields = {
@@ -88,15 +108,38 @@ export type BarcodeLookupProduct = {
   id: number;
   barcode_id?: number | null;
   barcode_available?: boolean;
+  barcode_tag?: string | null;
   sold_invoice?: string;
   selling_price?: number | null;
   canonical_barcode?: string | null;
   matched_barcode?: string | null;
+  defective_moved_out?: boolean;
+  defective_move_out_number?: string;
+  supplier_id?: number | null;
+  supplier_name?: string | null;
 };
 
 export type AddScannedBarcodeToInvoiceResult =
   | { ok: true }
   | { ok: false; message: string; duplicate?: boolean; silent?: boolean };
+
+function normalizeSupplierName(name?: string | null): string {
+  const cleaned = (name || '').trim().toLowerCase();
+  return cleaned || 'no supplier';
+}
+
+function defectiveSuppliersMatch(params: {
+  invoiceSupplierId?: number | null;
+  invoiceSupplierName?: string | null;
+  barcodeSupplierId?: number | null;
+  barcodeSupplierName?: string | null;
+}): boolean {
+  const { invoiceSupplierId, invoiceSupplierName, barcodeSupplierId, barcodeSupplierName } = params;
+  if (invoiceSupplierId != null && barcodeSupplierId != null) {
+    return invoiceSupplierId === barcodeSupplierId;
+  }
+  return normalizeSupplierName(invoiceSupplierName) === normalizeSupplierName(barcodeSupplierName);
+}
 
 /**
  * Single entry point for scanning a barcode onto a draft invoice (checkout modal, edit modal, etc.).
@@ -107,20 +150,24 @@ export async function addScannedBarcodeToInvoice(params: {
   items: InvoiceLineBarcodeFields[] | null | undefined;
   invoiceStatus?: string;
   invoiceType?: string;
+  /** Supplier this defective move-out invoice is written to (customer/supplier name). */
+  invoiceSupplierId?: number | null;
+  invoiceSupplierName?: string | null;
   lookupBarcode: (barcode: string) => Promise<BarcodeLookupProduct | null | undefined>;
   addItem: (payload: Record<string, unknown>) => Promise<unknown>;
 }): Promise<AddScannedBarcodeToInvoiceResult> {
-  const trimmed = params.barcode?.trim();
+  const trimmed = sanitizeScannedBarcode(params.barcode);
   if (!trimmed) return { ok: false, message: '', silent: true };
 
-  const scanKey = normalizeBarcodeKey(trimmed);
+  const scanKey = trimmed;
   if (inFlightInvoiceBarcodeScans.has(scanKey)) {
     return { ok: false, message: '', silent: true };
   }
 
   const isDraft = params.invoiceStatus === 'draft';
   const isPendingOrCredit = params.invoiceType === 'pending' || params.invoiceType === 'credit';
-  if (!isDraft || !isPendingOrCredit) {
+  const isDefectiveInvoice = params.invoiceType === 'defective';
+  if (!isDefectiveInvoice && (!isDraft || !isPendingOrCredit)) {
     return {
       ok: false,
       message: 'Items can only be added to draft pending or draft credit invoices. Please ensure the invoice is in draft status with pending/credit type.',
@@ -162,7 +209,34 @@ export async function addScannedBarcodeToInvoice(params: {
       return { ok: false, message: 'This barcode is already on this invoice.', duplicate: true };
     }
 
-    if (product.barcode_available === false) {
+    if (isDefectiveInvoice) {
+      if (String(product.barcode_tag || '').toLowerCase() !== 'defective') {
+        return {
+          ok: false,
+          message: 'Only defective barcodes can be added to a move-out invoice. Mark the item as defective first.',
+        };
+      }
+      if (product.defective_moved_out) {
+        const moveOutNum = product.defective_move_out_number ? ` (${product.defective_move_out_number})` : '';
+        return {
+          ok: false,
+          message: `This defective barcode is already on a move-out${moveOutNum}.`,
+        };
+      }
+      const expectedName = params.invoiceSupplierName?.trim() || 'No Supplier';
+      if (!defectiveSuppliersMatch({
+        invoiceSupplierId: params.invoiceSupplierId,
+        invoiceSupplierName: expectedName,
+        barcodeSupplierId: product.supplier_id,
+        barcodeSupplierName: product.supplier_name || 'No Supplier',
+      })) {
+        const barcodeSupplier = (product.supplier_name || '').trim() || 'No Supplier';
+        return {
+          ok: false,
+          message: `This barcode belongs to ${barcodeSupplier}, but this move-out invoice is for ${expectedName}. Only barcodes from ${expectedName} can be added.`,
+        };
+      }
+    } else if (product.barcode_available === false) {
       const errorMsg = product.sold_invoice
         ? `This item (SKU: ${trimmed}) has already been sold and is assigned to invoice ${product.sold_invoice}. It is not available in inventory.`
         : `This item (SKU: ${trimmed}) has already been sold and is not available in inventory.`;

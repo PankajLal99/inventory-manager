@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
@@ -17,20 +17,93 @@ import ProductForm from './ProductForm';
 import ProductExportModal from './ProductExportModal';
 import BarcodeScanner from '../../components/BarcodeScanner';
 
+const PRODUCTS_FILTERS_STORAGE_KEY = 'products:filters:v2';
+const PRODUCTS_LIST_STALE_MS = 30_000;
+const PRODUCTS_REF_STALE_MS = 5 * 60_000;
+
+type TabFilterState = {
+  category: string;
+  brand: string;
+  supplier: string;
+};
+
+type PersistedProductFilters = Record<string, TabFilterState>;
+
+const EMPTY_TAB_FILTERS: TabFilterState = {
+  category: '',
+  brand: '',
+  supplier: '',
+};
+
+function sanitizeTabFilters(value: unknown): TabFilterState {
+  if (!value || typeof value !== 'object') return { ...EMPTY_TAB_FILTERS };
+  const parsed = value as Partial<TabFilterState>;
+  return {
+    category: typeof parsed.category === 'string' ? parsed.category : '',
+    brand: typeof parsed.brand === 'string' ? parsed.brand : '',
+    supplier: typeof parsed.supplier === 'string' ? parsed.supplier : '',
+  };
+}
+
+function readPersistedProductFilters(): PersistedProductFilters {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PRODUCTS_FILTERS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([tab, filters]) => [tab, sanitizeTabFilters(filters)])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function getPersistedFiltersForTab(tab: string, all?: PersistedProductFilters): TabFilterState {
+  const stored = all ?? readPersistedProductFilters();
+  return stored[tab] ? { ...stored[tab] } : { ...EMPTY_TAB_FILTERS };
+}
+
+function writePersistedFiltersForTab(tab: string, filters: TabFilterState): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const all = readPersistedProductFilters();
+    all[tab] = filters;
+    window.localStorage.setItem(PRODUCTS_FILTERS_STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    // quota / private mode
+  }
+}
+
 export default function Products() {
   const navigate = useNavigate();
   const user = auth.getUser();
   const userGroups = user?.groups || [];
   const isRetailUser = userGroups.includes('Retail') && !userGroups.includes('Admin') && !userGroups.includes('RetailAdmin');
   const [searchParams, setSearchParams] = useSearchParams();
+  const initialTag = searchParams.get('tag') || 'new';
+  const persistedFilters = useRef(readPersistedProductFilters()).current;
+  const initialTabFilters = getPersistedFiltersForTab(initialTag, persistedFilters);
   const [showForm, setShowForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<number | undefined>();
   const [search, setSearch] = useState(searchParams.get('search') || '');
-  const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
-  const [brandFilter, setBrandFilter] = useState(searchParams.get('brand') || '');
-  const [supplierFilter, setSupplierFilter] = useState(searchParams.get('supplier') || '');
+  const [categoryFilter, setCategoryFilter] = useState(
+    searchParams.get('category') || initialTabFilters.category
+  );
+  const [brandFilter, setBrandFilter] = useState(
+    searchParams.get('brand') || initialTabFilters.brand
+  );
+  const [supplierFilter, setSupplierFilter] = useState(
+    searchParams.get('supplier') || initialTabFilters.supplier
+  );
+  const [defectiveScopeReady, setDefectiveScopeReady] = useState(false);
+  const [pendingDefectiveSupplier, setPendingDefectiveSupplier] = useState(
+    (searchParams.get('tag') === 'defective' ? searchParams.get('supplier') : null)
+      || getPersistedFiltersForTab('defective', persistedFilters).supplier
+  );
   const [stockStatusFilter, setStockStatusFilter] = useState(searchParams.get('stock_status') || '');
-  const [tagFilter, setTagFilter] = useState(searchParams.get('tag') || 'new'); // Default to 'new' (fresh)
+  const [tagFilter, setTagFilter] = useState(initialTag); // Default to 'new' (fresh)
   const [activeStockTab, setActiveStockTab] = useState<'stock' | 'low' | 'out'>('stock');
   const [showAdjustmentForm, setShowAdjustmentForm] = useState(false);
   const [adjustingProduct, setAdjustingProduct] = useState<number | undefined>();
@@ -47,7 +120,7 @@ export default function Products() {
   const [barcodeScanError, setBarcodeScanError] = useState<string | null>(null);
   const [showMoveOutModal, setShowMoveOutModal] = useState(false);
   const [moveOutData, setMoveOutData] = useState({
-    reason: 'defective',
+    reason: 'return_to_supplier',
     notes: '',
   });
   const [moveOutMode, setMoveOutMode] = useState<'new' | 'existing'>('new');
@@ -81,6 +154,8 @@ export default function Products() {
       return response.data;
     },
     retry: false,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   const { data: brandsData } = useQuery({
@@ -90,6 +165,8 @@ export default function Products() {
       return response.data;
     },
     retry: false,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   // Fetch suppliers for filter
@@ -100,27 +177,58 @@ export default function Products() {
       return response.data;
     },
     retry: false,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
-  // Sync URL params with state on mount
+  const supplierOptions = useMemo(() => {
+    const list = suppliersData?.results || suppliersData?.data || suppliersData || [];
+    return Array.isArray(list) ? list : [];
+  }, [suppliersData]);
+
+  const defectiveReady = tagFilter !== 'defective' || (defectiveScopeReady && Boolean(supplierFilter));
+
+  useEffect(() => {
+    if (tagFilter !== 'defective') {
+      setDefectiveScopeReady(false);
+      return;
+    }
+    setDefectiveScopeReady(false);
+    setPendingDefectiveSupplier(supplierFilter || '');
+    setLoadedProducts([]);
+    setSelectedDefectiveProducts(new Set());
+    setSelectedDefectiveProductsData(new Map());
+    // Only re-prompt when entering the Defective tab, not when the supplier value changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagFilter]);
+
+  // Sync URL params with state on mount.
+  // Category/brand/supplier only apply when present in the URL so a bare /products
+  // visit (or reload without those params) can restore persisted filters.
   useEffect(() => {
     const urlSearch = searchParams.get('search') || '';
-    const urlCategory = searchParams.get('category') || '';
-    const urlBrand = searchParams.get('brand') || '';
-    const urlSupplier = searchParams.get('supplier') || '';
     const urlStockStatus = searchParams.get('stock_status') || '';
     const urlTag = searchParams.get('tag') || 'new'; // Default to 'new' if not in URL
 
     if (urlSearch !== search) setSearch(urlSearch);
-    if (urlCategory !== categoryFilter) setCategoryFilter(urlCategory);
-    if (urlBrand !== brandFilter) setBrandFilter(urlBrand);
-    if (urlSupplier !== supplierFilter) setSupplierFilter(urlSupplier);
+    if (searchParams.has('category')) {
+      const urlCategory = searchParams.get('category') || '';
+      if (urlCategory !== categoryFilter) setCategoryFilter(urlCategory);
+    }
+    if (searchParams.has('brand')) {
+      const urlBrand = searchParams.get('brand') || '';
+      if (urlBrand !== brandFilter) setBrandFilter(urlBrand);
+    }
+    if (searchParams.has('supplier')) {
+      const urlSupplier = searchParams.get('supplier') || '';
+      if (urlSupplier !== supplierFilter) setSupplierFilter(urlSupplier);
+    }
     if (urlStockStatus !== stockStatusFilter) setStockStatusFilter(urlStockStatus);
     if (urlTag !== tagFilter) setTagFilter(urlTag);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update URL params when filters change
+  // Update URL params when filters change, and persist category/brand/supplier per tab.
   useEffect(() => {
     const params = new URLSearchParams();
     if (search) params.set('search', search);
@@ -129,9 +237,31 @@ export default function Products() {
     if (supplierFilter) params.set('supplier', supplierFilter);
     if (stockStatusFilter) params.set('stock_status', stockStatusFilter);
     if (tagFilter) params.set('tag', tagFilter);
-    setSearchParams(params, { replace: true });
+    if (params.toString() !== searchParams.toString()) {
+      setSearchParams(params, { replace: true });
+    }
+    writePersistedFiltersForTab(tagFilter, {
+      category: categoryFilter,
+      brand: brandFilter,
+      supplier: supplierFilter,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
+
+  const applyProductTab = (nextTag: string) => {
+    if (nextTag === tagFilter) return;
+    writePersistedFiltersForTab(tagFilter, {
+      category: categoryFilter,
+      brand: brandFilter,
+      supplier: supplierFilter,
+    });
+    const nextFilters = getPersistedFiltersForTab(nextTag);
+    setTagFilter(nextTag);
+    setCategoryFilter(nextFilters.category);
+    setBrandFilter(nextFilters.brand);
+    setSupplierFilter(nextFilters.supplier);
+    setStockStatusFilter('');
+  };
 
   // Build query params for API
   const buildQueryParams = () => {
@@ -153,6 +283,8 @@ export default function Products() {
     params.tag = tagFilter || 'new';
     // Exclude Other/Custom products (name starts with "Other -") from Products page list
     params.exclude_other_custom = 'true';
+    // Skip unused breakdown/price fields so the Fresh tab can render without extra work
+    params.lite = 'true';
     // Pagination
     params.page = currentPage;
     params.limit = 50;
@@ -161,22 +293,38 @@ export default function Products() {
 
   // Fetch products
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ['products', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
-    queryFn: async () => {
-      const response = await productsApi.list(buildQueryParams());
+    queryKey: ['products', 'lite', search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter, currentPage],
+    queryFn: async ({ signal }) => {
+      const response = await productsApi.list(buildQueryParams(), { signal });
       return response.data;
     },
+    enabled: defectiveReady,
     retry: false,
-    placeholderData: keepPreviousData,
+    placeholderData: (previousData) => {
+      if (tagFilter === 'defective' && !defectiveReady) return undefined;
+      return previousData;
+    },
+    staleTime: PRODUCTS_LIST_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
-  // Reset to page 1 when filters change
+  // Reset to page 1 when filters change (skip the initial mount so we don't
+  // clear in-flight first-load results).
+  const hasMountedFilters = useRef(false);
   useEffect(() => {
+    if (!hasMountedFilters.current) {
+      hasMountedFilters.current = true;
+      return;
+    }
     setCurrentPage(1);
     setLoadedProducts([]);
   }, [search, categoryFilter, brandFilter, supplierFilter, stockStatusFilter, tagFilter]);
 
   useEffect(() => {
+    if (tagFilter === 'defective' && !defectiveReady) {
+      setLoadedProducts([]);
+      return;
+    }
     if (!data) return;
     const page = Number((data as any).page || 1);
     const pageRows: any[] = Array.isArray((data as any).results)
@@ -197,7 +345,25 @@ export default function Products() {
     });
   }, [data]);
 
-  // Fetch stores and warehouses
+  const loadedProductIdsKey = useMemo(
+    () => loadedProducts.map((product: any) => product.id).filter(Boolean).join(','),
+    [loadedProducts],
+  );
+
+  const { data: defectiveBarcodesResponse, isFetching: isFetchingDefectiveBarcodes } = useQuery({
+    queryKey: ['defective-selectable-barcodes', loadedProductIdsKey, supplierFilter],
+    queryFn: async ({ signal }) => {
+      const response = await catalogApi.defectiveProducts.selectableBarcodes({
+        product_ids: loadedProductIdsKey,
+        supplier: supplierFilter || undefined,
+      }, { signal });
+      return response.data;
+    },
+    enabled: tagFilter === 'defective' && defectiveReady && loadedProductIdsKey.length > 0,
+    staleTime: PRODUCTS_LIST_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
+  });
+
   const { data: storesResponse } = useQuery({
     queryKey: ['stores'],
     queryFn: async () => {
@@ -205,15 +371,9 @@ export default function Products() {
       return response.data || response;
     },
     retry: false,
-  });
-
-  const { data: _warehousesResponse } = useQuery({
-    queryKey: ['warehouses'],
-    queryFn: async () => {
-      const response = await catalogApi.warehouses.list();
-      return response.data || response;
-    },
-    retry: false,
+    enabled: showMoveOutModal || showAdjustmentForm,
+    staleTime: PRODUCTS_REF_STALE_MS,
+    gcTime: PRODUCTS_REF_STALE_MS,
   });
 
   // Handle different response formats
@@ -236,96 +396,8 @@ export default function Products() {
     return false;
   })();
 
-  // Get all product IDs that need label status checks (with caching)
-  const productIdsForLabelCheck = useMemo(() => {
-    if (!allProducts || allProducts.length === 0) return [];
-    return allProducts
-      .filter((product: any) => product.barcodes && product.barcodes.length > 0)
-      .map((product: any) => product.id)
-      .filter((id: number) => id > 0); // Filter out invalid IDs
-  }, [allProducts]);
-
-  // Use React Query to cache label status checks for all products
-  const labelStatusQueries = useQueries({
-    queries: productIdsForLabelCheck.map((productId: number) => ({
-      queryKey: ['label-status', productId],
-      queryFn: async () => {
-        try {
-          const response = await productsApi.labelsStatus(productId);
-          return { productId, data: response.data, error: null };
-        } catch (error: any) {
-          // Silently handle 404 errors - endpoint may not be available or product may not have barcodes
-          if (error.response?.status === 404) {
-            return { productId, data: { all_generated: false }, error: null };
-          }
-          return { productId, data: { all_generated: false }, error: error.message };
-        }
-      },
-      retry: false,
-      enabled: productId > 0,
-    })),
-  });
-
-  // Update labelStatuses state from cached queries
-  // Use ref to track processed states and prevent infinite loops
-  type LabelStatusQueryData = { productId: number; data: { all_generated?: boolean }; error: null } | { productId: number; data: { all_generated: boolean }; error: string };
-
-  const queriesDataRef = useRef<string>('');
-
-  // Create a stable dependency string that doesn't change size
-  const productIdsString = useMemo(() => {
-    return productIdsForLabelCheck.join(',');
-  }, [
-    productIdsForLabelCheck.length,
-    productIdsForLabelCheck.join(',')
-  ]);
-
-  const queriesDependencyString = useMemo(() => {
-    return labelStatusQueries.map(q => {
-      const qData = q.data as LabelStatusQueryData | undefined;
-      return qData ? `${qData.productId}:${qData.data?.all_generated ?? false}:${q.isFetching}` : '';
-    }).filter(Boolean).join('|');
-  }, [
-    productIdsString,
-    labelStatusQueries.length
-  ]);
-
-  useEffect(() => {
-    // Only process if data actually changed
-    if (queriesDataRef.current === queriesDependencyString) {
-      return;
-    }
-
-    queriesDataRef.current = queriesDependencyString;
-
-    labelStatusQueries.forEach((query) => {
-      const queryData = query.data as LabelStatusQueryData | undefined;
-      if (queryData && typeof queryData.productId === 'number') {
-        const productId = queryData.productId;
-        const all_generated = queryData.data?.all_generated || false;
-        const generating = query.isFetching || false;
-
-        // Update state only if it changed
-        setLabelStatuses(prev => {
-          const current = prev[productId];
-
-          // Only update if the value actually changed
-          if (current?.all_generated === all_generated && current?.generating === generating) {
-            return prev;
-          }
-
-          return {
-            ...prev,
-            [productId]: {
-              all_generated,
-              generating
-            }
-          };
-        });
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queriesDependencyString]);
+  const productHasStockForLabels = (product: any) =>
+    (Number(product?.barcodeCount) || 0) > 0 || (Number(product?.stock_quantity) || 0) > 0;
 
   // Enhance products with calculated stock fields
   const productsWithStock = useMemo(() => {
@@ -341,6 +413,23 @@ export default function Products() {
       };
     });
   }, [allProducts]);
+
+  const defectiveBarcodesByProduct = useMemo(() => {
+    const map = new Map<number, any[]>();
+    const rows = Array.isArray(defectiveBarcodesResponse)
+      ? defectiveBarcodesResponse
+      : Array.isArray((defectiveBarcodesResponse as any)?.results)
+        ? (defectiveBarcodesResponse as any).results
+        : [];
+    rows.forEach((row: any) => {
+      const productId = row?.product_id;
+      if (!productId) return;
+      const list = map.get(productId) || [];
+      list.push(row);
+      map.set(productId, list);
+    });
+    return map;
+  }, [defectiveBarcodesResponse]);
 
   // With new model: ONE Product per name, barcodes are individual items
   // No need to group - show Products directly with their barcodes
@@ -359,9 +448,12 @@ export default function Products() {
         barcodeCount, // Quantity to display in the badge
         isLowStock: stock.isLowStock,
         isOutOfStock: stock.isOutOfStock,
+        barcodes: tagFilter === 'defective'
+          ? (defectiveBarcodesByProduct.get(product.id) || [])
+          : product.barcodes,
       };
     });
-  }, [productsWithStock, tagFilter]);
+  }, [productsWithStock, tagFilter, defectiveBarcodesByProduct]);
 
   const stores = (() => {
     if (!storesResponse) return [];
@@ -370,14 +462,6 @@ export default function Products() {
     if (Array.isArray(storesResponse)) return storesResponse;
     return [];
   })();
-
-  // const _warehouses = (() => {
-  //   if (!warehousesResponse) return [];
-  //   if (Array.isArray(warehousesResponse.results)) return warehousesResponse.results;
-  //   if (Array.isArray(warehousesResponse.data)) return warehousesResponse.data;
-  //   if (Array.isArray(warehousesResponse)) return warehousesResponse;
-  //   return [];
-  // })();
 
   const adjustmentMutation = useMutation({
     mutationFn: (data: any) => inventoryApi.adjustments.create(data),
@@ -1133,7 +1217,7 @@ export default function Products() {
       setSelectedDefectiveProducts(new Set());
       setSelectedDefectiveProductsData(new Map());
       setShowMoveOutModal(false);
-      setMoveOutData({ reason: 'defective', notes: '' });
+      setMoveOutData({ reason: 'return_to_supplier', notes: '' });
       setMoveOutMode('new');
       setSelectedExistingMoveOutId(null);
 
@@ -1181,7 +1265,7 @@ export default function Products() {
       setSelectedDefectiveProducts(new Set());
       setSelectedDefectiveProductsData(new Map());
       setShowMoveOutModal(false);
-      setMoveOutData({ reason: 'defective', notes: '' });
+      setMoveOutData({ reason: 'return_to_supplier', notes: '' });
       setMoveOutMode('new');
       setSelectedExistingMoveOutId(null);
 
@@ -1200,7 +1284,7 @@ export default function Products() {
   // Fetch existing move-outs when modal is open
   const { data: existingMoveOutsData } = useQuery({
     queryKey: ['existing-move-outs'],
-    queryFn: () => catalogApi.defectiveProducts.moveOuts.list(),
+    queryFn: ({ signal }) => catalogApi.defectiveProducts.moveOuts.list(undefined, { signal }),
     enabled: showMoveOutModal,
   });
 
@@ -1303,6 +1387,38 @@ export default function Products() {
       [product.id]: { all_generated: false, generating: true }
     }));
     generateLabelsMutation.mutate(product.id);
+  };
+
+  const handleLabelButtonClick = async (product: any) => {
+    const cached = labelStatuses[product.id];
+    if (cached?.all_generated) {
+      await handlePrintLabels(product);
+      return;
+    }
+    if (cached && cached.all_generated === false && !cached.generating) {
+      await handleGenerateLabels(product);
+      return;
+    }
+
+    setGeneratingLabelsFor(product.id);
+    try {
+      const response = await productsApi.labelsStatus(product.id);
+      const allGenerated = Boolean(response.data?.all_generated);
+      setLabelStatuses((prev) => ({
+        ...prev,
+        [product.id]: { all_generated: allGenerated, generating: false },
+      }));
+      setGeneratingLabelsFor(null);
+      if (allGenerated) {
+        await handlePrintLabels(product);
+      } else {
+        await handleGenerateLabels(product);
+      }
+    } catch (error: any) {
+      setGeneratingLabelsFor(null);
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to check label status';
+      alert(errorMsg);
+    }
   };
 
 
@@ -1411,7 +1527,9 @@ export default function Products() {
     let hasMore = true;
 
     while (hasMore) {
-      const params = { ...buildQueryParams(), page, limit: 100 };
+      // List view uses lite=true (no prices). Export needs include_prices so PDF
+      // purchase/selling columns are populated instead of dashes.
+      const params = { ...buildQueryParams(), page, limit: 100, include_prices: 'true' };
       const response = await productsApi.list(params);
       const data = response.data;
       const pageRows: any[] = Array.isArray(data?.results)
@@ -1469,8 +1587,8 @@ export default function Products() {
   // Fetch move-outs for defective metrics
   const { data: moveOutsData } = useQuery({
     queryKey: ['defective-move-outs-for-metrics'],
-    queryFn: () => catalogApi.defectiveProducts.moveOuts.list(),
-    enabled: tagFilter === 'defective',
+    queryFn: ({ signal }) => catalogApi.defectiveProducts.moveOuts.list(undefined, { signal }),
+    enabled: tagFilter === 'defective' && defectiveReady,
     retry: false,
   });
 
@@ -1523,13 +1641,6 @@ export default function Products() {
       purchaseValue,
     };
   }, [tagFilter, productsList, moveOutsData]);
-
-  // Label status is now automatically fetched and cached via useQueries above
-  // No need for manual checking in useEffect - React Query handles it
-
-  if (isLoading) {
-    return <div className="flex items-center justify-center h-64">Loading...</div>;
-  }
 
   if (error) {
     return (
@@ -1588,6 +1699,12 @@ export default function Products() {
     adjustmentMutation.mutate(submitData);
   };
 
+  const listEmptyMessage = isLoading
+    ? 'Loading products...'
+    : (tagFilter === 'defective' && isFetchingDefectiveBarcodes)
+      ? 'Loading defective barcodes...'
+      : 'No products found. Add products first.';
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1618,10 +1735,7 @@ export default function Products() {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-2">
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => {
-              setTagFilter('new');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('new')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium text-sm ${tagFilter === 'new'
               ? 'bg-green-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1630,10 +1744,7 @@ export default function Products() {
             All Products
           </button>
           <button
-            onClick={() => {
-              setTagFilter('sold');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('sold')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'sold'
               ? 'bg-blue-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1642,10 +1753,7 @@ export default function Products() {
             Sold
           </button>
           <button
-            onClick={() => {
-              setTagFilter('unknown');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('unknown')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'unknown'
               ? 'bg-yellow-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1654,10 +1762,7 @@ export default function Products() {
             Unknown
           </button>
           <button
-            onClick={() => {
-              setTagFilter('returned');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('returned')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'returned'
               ? 'bg-purple-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1666,10 +1771,7 @@ export default function Products() {
             Returned
           </button>
           <button
-            onClick={() => {
-              setTagFilter('defective');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('defective')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'defective'
               ? 'bg-red-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1678,10 +1780,7 @@ export default function Products() {
             Defective
           </button>
           <button
-            onClick={() => {
-              setTagFilter('in-cart');
-              setStockStatusFilter(''); // Reset stock filter when switching tags
-            }}
+            onClick={() => applyProductTab('in-cart')}
             className={`px-4 py-2 rounded-lg transition-colors font-medium ${tagFilter === 'in-cart'
               ? 'bg-orange-600 text-white'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -1693,7 +1792,7 @@ export default function Products() {
       </div>
 
       {/* Defective Products Summary Cards */}
-      {tagFilter === 'defective' && (
+      {tagFilter === 'defective' && defectiveReady && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
             <div className="flex items-center justify-between">
@@ -1751,7 +1850,7 @@ export default function Products() {
       )}
 
       {/* Barcode Input and Move Out Section for Defective Products */}
-      {tagFilter === 'defective' && (
+      {tagFilter === 'defective' && defectiveReady && (
         <div className="space-y-3">
           {/* Barcode Input Field - for physical scanner (machine gun input) */}
           <Card>
@@ -1843,7 +1942,7 @@ export default function Products() {
                 className="flex items-center gap-2"
               >
                 <Eye className="h-4 w-4" />
-                View All Move-Outs
+                View Move-Outs
               </Button>
               {selectedDefectiveProducts.size > 0 && (
                 <Button
@@ -1970,23 +2069,34 @@ export default function Products() {
           </Select>
           <Select
             value={supplierFilter}
-            onChange={(e) => setSupplierFilter(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSupplierFilter(value);
+              if (tagFilter === 'defective' && !value) {
+                setDefectiveScopeReady(false);
+              }
+            }}
             icon={<Filter className="h-4 w-4" />}
           >
-            <option value="">All Suppliers</option>
-            {(() => {
-              const suppliers = suppliersData?.results || suppliersData?.data || suppliersData || [];
-              return Array.isArray(suppliers) ? suppliers.map((supplier: any) => (
-                <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
-              )) : null;
-            })()}
+            {tagFilter === 'defective'
+              ? (!supplierFilter && <option value="">Select a supplier</option>)
+              : <option value="">All Suppliers</option>}
+            {supplierOptions.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
           </Select>
         </div>
       </Card>
 
       {/* Desktop Table View */}
       <div className="hidden md:block">
-        {tagFilter === 'defective' ? (
+        {tagFilter === 'defective' && !defectiveReady ? (
+          <Card>
+            <div className="py-12 text-center text-gray-500">
+              Select a supplier to view defective products.
+            </div>
+          </Card>
+        ) : tagFilter === 'defective' ? (
           <div className="flex flex-col gap-4">
             {/* Selected Barcodes panel - sticky at top */}
             <div className="sticky top-0 z-10 bg-white border border-gray-200 rounded-lg shadow-sm">
@@ -2132,7 +2242,7 @@ export default function Products() {
                   <tr>
                     <td colSpan={getTableHeaders('defective').length} className="px-6 py-8 text-center text-gray-500">
                       {productsList.length === 0
-                        ? 'No products found. Add products first.'
+                        ? listEmptyMessage
                         : 'No defective products found.'}
                     </td>
                   </tr>
@@ -2222,7 +2332,7 @@ export default function Products() {
                 <tr>
                   <td colSpan={getTableHeaders(tagFilter).length} className="px-6 py-8 text-center text-gray-500">
                     {productsList.length === 0
-                      ? 'No products found. Add products first.'
+                      ? listEmptyMessage
                       : tagFilter === 'sold'
                         ? 'No sold products found.'
                         : tagFilter === 'unknown'
@@ -2252,7 +2362,7 @@ export default function Products() {
                 let statusBadge;
                 if (currentTagFilter === 'new') {
                   const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-                  const hasStock = (product.barcodeCount || 0) > 0;
+                  const hasStock = (product.barcodeCount || 0) > 0 || (Number(product.stock_quantity) || 0) > 0;
                   if (!hasBarcodes && !hasStock) {
                     statusBadge = <Badge variant="warning">Not Purchased</Badge>;
                   } else if (product.isOutOfStock) {
@@ -2423,11 +2533,11 @@ export default function Products() {
                                 </button>
                                 {renderProductImageAction(product)}
                                 {(() => {
-                                  const hasBarcodes = product.barcodes && product.barcodes.length > 0;
+                                  const hasLabels = productHasStockForLabels(product) || (product.barcodes && product.barcodes.length > 0);
                                   const status = labelStatuses[product.id];
                                   const isGenerating = generatingLabelsFor === product.id || (status?.generating);
                                   const allGenerated = status?.all_generated;
-                                  if (!hasBarcodes) return null;
+                                  if (!hasLabels) return null;
                                   if (isGenerating) {
                                     return (
                                       <button
@@ -2442,7 +2552,7 @@ export default function Products() {
                                   if (allGenerated) {
                                     return (
                                       <button
-                                        onClick={() => handlePrintLabels(product)}
+                                        onClick={() => handleLabelButtonClick(product)}
                                         className="flex items-center justify-center w-8 h-8 text-green-700 bg-green-50 border border-green-200 rounded-md hover:bg-green-100 hover:border-green-300 transition-all duration-200"
                                         title="Print Labels"
                                       >
@@ -2452,9 +2562,9 @@ export default function Products() {
                                   }
                                   return (
                                     <button
-                                      onClick={() => handleGenerateLabels(product)}
+                                      onClick={() => handleLabelButtonClick(product)}
                                       className="flex items-center justify-center w-8 h-8 text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 hover:border-blue-300 transition-all duration-200"
-                                      title="Generate Labels"
+                                      title={status ? 'Generate Labels' : 'Print or generate labels'}
                                     >
                                       <Printer className="h-3.5 w-3.5" />
                                     </button>
@@ -2526,7 +2636,7 @@ export default function Products() {
                 <tr>
                   <td colSpan={getTableHeaders(tagFilter).length} className="px-6 py-8 text-center text-gray-500">
                     {productsList.length === 0
-                      ? 'No products found. Add products first.'
+                      ? listEmptyMessage
                       : tagFilter === 'new' && (activeStockTab === 'low' || stockStatusFilter === 'low_stock')
                         ? 'No products match the "Low Stock" filter.'
                         : tagFilter === 'new' && (activeStockTab === 'out' || stockStatusFilter === 'out_of_stock')
@@ -2549,7 +2659,7 @@ export default function Products() {
       {/* Mobile Card View */}
       <div className="md:hidden space-y-3">
         {/* Barcode Input for Defective Products - Mobile */}
-        {tagFilter === 'defective' && (
+        {tagFilter === 'defective' && defectiveReady && (
           <div className="mb-4 space-y-3">
             <Card>
               <div className="space-y-2">
@@ -2609,14 +2719,18 @@ export default function Products() {
             </div>
           </div>
         )}
-        {filteredProducts.length > 0 ? filteredProducts.map((product: any, productIndex: number) => {
+        {tagFilter === 'defective' && !defectiveReady ? (
+          <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500">
+            Select a supplier to view defective products.
+          </div>
+        ) : filteredProducts.length > 0 ? filteredProducts.map((product: any, productIndex: number) => {
           // Determine status - only show stock status for fresh (new) products
           // Determine status - show stock/tag status as clickable badge to change barcode tags (mobile view)
           let statusBadge;
           if (tagFilter === 'new') {
             // Check if product has no barcodes (not purchased yet)
             const hasBarcodes = product.barcodes && product.barcodes.length > 0;
-            const hasStock = (product.barcodeCount || 0) > 0;
+            const hasStock = (product.barcodeCount || 0) > 0 || (Number(product.stock_quantity) || 0) > 0;
 
             if (!hasBarcodes && !hasStock) {
               statusBadge = <Badge variant="warning">Not Purchased</Badge>;
@@ -2653,7 +2767,7 @@ export default function Products() {
             );
           }
 
-          const hasBarcodes = product.barcodes && product.barcodes.length > 0;
+          const hasLabels = productHasStockForLabels(product) || (product.barcodes && product.barcodes.length > 0);
           const status = labelStatuses[product.id];
           const isGenerating = generatingLabelsFor === product.id || (status?.generating);
           const allGenerated = status?.all_generated;
@@ -2735,7 +2849,7 @@ export default function Products() {
                         <Eye className="h-3.5 w-3.5" />
                       </button>
                       {renderProductImageAction(product, true)}
-                      {hasBarcodes && (
+                      {hasLabels && (
                         <>
                           {isGenerating ? (
                             <button
@@ -2747,7 +2861,7 @@ export default function Products() {
                             </button>
                           ) : allGenerated ? (
                             <button
-                              onClick={() => handlePrintLabels(product)}
+                              onClick={() => handleLabelButtonClick(product)}
                               className="flex items-center justify-center w-7 h-7 text-green-600 bg-green-50 border border-green-200 rounded hover:bg-green-100 transition-colors"
                               title="Print Labels"
                             >
@@ -2755,9 +2869,9 @@ export default function Products() {
                             </button>
                           ) : (
                             <button
-                              onClick={() => handleGenerateLabels(product)}
+                              onClick={() => handleLabelButtonClick(product)}
                               className="flex items-center justify-center w-7 h-7 text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 transition-colors"
-                              title="Generate Labels"
+                              title={status ? 'Generate Labels' : 'Print or generate labels'}
                             >
                               <Printer className="h-3.5 w-3.5" />
                             </button>
@@ -2919,7 +3033,7 @@ export default function Products() {
         }) : (
           <div className="bg-white border border-gray-200 rounded-lg p-8 text-center text-gray-500">
             {productsList.length === 0
-              ? 'No products found. Add products first.'
+              ? listEmptyMessage
               : tagFilter === 'new' && (activeStockTab === 'low' || stockStatusFilter === 'low_stock')
                 ? 'No products match the "Low Stock" filter.'
                 : tagFilter === 'new' && (activeStockTab === 'out' || stockStatusFilter === 'out_of_stock')
@@ -3349,13 +3463,62 @@ export default function Products() {
         </div>
       </Modal>
 
+      <Modal
+        isOpen={tagFilter === 'defective' && !defectiveScopeReady}
+        onClose={() => {}}
+        title="Filter defective products?"
+        size="md"
+        closeOnBackdropClick={false}
+        hideCloseButton
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Select a supplier to view defective products. This keeps the list small and fast.
+          </p>
+          <Select
+            value={pendingDefectiveSupplier}
+            onChange={(e) => setPendingDefectiveSupplier(e.target.value)}
+            icon={<Filter className="h-4 w-4" />}
+          >
+            <option value="">Select a supplier</option>
+            {supplierOptions.map((supplier: any) => (
+              <option key={supplier.id} value={supplier.id.toString()}>{supplier.name}</option>
+            ))}
+          </Select>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/defective-move-outs')}
+              className="flex items-center justify-center gap-2"
+            >
+              <FileText className="h-4 w-4" />
+              Go to Move-Outs
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!pendingDefectiveSupplier) return;
+                setSupplierFilter(pendingDefectiveSupplier);
+                setDefectiveScopeReady(true);
+                setCurrentPage(1);
+                setLoadedProducts([]);
+              }}
+              disabled={!pendingDefectiveSupplier}
+            >
+              View this supplier
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Move Out Modal for Defective Products */}
       {showMoveOutModal && (
         <Modal
           isOpen={showMoveOutModal}
           onClose={() => {
             setShowMoveOutModal(false);
-            setMoveOutData({ reason: 'defective', notes: '' });
+            setMoveOutData({ reason: 'return_to_supplier', notes: '' });
             setMoveOutMode('new');
             setSelectedExistingMoveOutId(null);
           }}
@@ -3425,20 +3588,11 @@ export default function Products() {
               <>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Reason <span className="text-red-500">*</span>
+                    Reason
                   </label>
-                  <Select
-                    value={moveOutData.reason}
-                    onChange={(e) => setMoveOutData({ ...moveOutData, reason: e.target.value })}
-                    required
-                  >
-                    <option value="defective">Defective</option>
-                    <option value="damaged">Damaged</option>
-                    <option value="expired">Expired</option>
-                    <option value="return_to_supplier">Return to Supplier</option>
-                    <option value="disposal">Disposal</option>
-                    <option value="other">Other</option>
-                  </Select>
+                  <div className="px-3 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm text-gray-900">
+                    Return to Supplier
+                  </div>
                 </div>
 
                 <div>
@@ -3462,7 +3616,7 @@ export default function Products() {
                 variant="outline"
                 onClick={() => {
                   setShowMoveOutModal(false);
-                  setMoveOutData({ reason: 'defective', notes: '' });
+                  setMoveOutData({ reason: 'return_to_supplier', notes: '' });
                   setMoveOutMode('new');
                   setSelectedExistingMoveOutId(null);
                 }}

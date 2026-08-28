@@ -11,6 +11,7 @@ import ToastContainer from '../../components/ui/Toast';
 import type { Toast } from '../../components/ui/Toast';
 import { Search, Camera, AlertTriangle, Package, Plus, Minus, FileText, ArrowLeft, DollarSign, Barcode } from 'lucide-react';
 import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
+import { looksLikeBarcode } from '../../lib/scanningQueue';
 
 interface InvoiceItem {
   id: number;
@@ -103,21 +104,6 @@ export default function ReplaceProduct() {
       source_customer: sourceInvoice.customer ?? null,
       source_customer_name: sourceInvoice.customer_name,
     }));
-
-  // Helper function to check if input looks like a barcode
-  const looksLikeBarcode = (input: string): boolean => {
-    if (!input || input.length < 3) return false;
-    // Barcodes are typically alphanumeric, may contain dashes, and are usually longer
-    // Product names usually have spaces and are more varied
-    const hasSpaces = /\s/.test(input);
-    const isMostlyNumeric = /^\d+$/.test(input);
-    const hasSpecialChars = /[^a-zA-Z0-9\s-]/.test(input);
-
-    // If it has spaces or special chars (except dashes), it's likely a product name
-    if (hasSpaces || hasSpecialChars) return false;
-    // If it's mostly numeric or alphanumeric without spaces, it's likely a barcode
-    return isMostlyNumeric || (!hasSpaces && input.length >= 3);
-  };
 
   // Debounce product searches
   useEffect(() => {

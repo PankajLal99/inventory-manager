@@ -39,8 +39,9 @@ import {
   copyDocumentThenQueueLedgerImage,
   copyPngBlobToClipboard,
   finishDocumentPartsAndQueueLedger,
-  SNAPSHOT_ROWS_PER_PAGE,
+  creditDocumentRowsPerPage,
 } from './creditDocumentClipboard';
+import { useInvoiceExportSplit } from '../invoices/invoiceExportSettings';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
@@ -205,6 +206,8 @@ function effectiveLineTotal(
 }
 
 export default function POSCredit() {
+  const exportSplit = useInvoiceExportSplit();
+  const photoRowsPerPage = creditDocumentRowsPerPage(exportSplit);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const productInputRef = useRef<HTMLInputElement>(null);
@@ -1331,8 +1334,8 @@ export default function POSCredit() {
   const snapshotExpectedParts = useMemo(() => {
     const itemCount = cartItems.length;
     if (itemCount === 0) return 1;
-    return Math.ceil(itemCount / SNAPSHOT_ROWS_PER_PAGE);
-  }, [cartItems.length]);
+    return Math.ceil(itemCount / photoRowsPerPage);
+  }, [cartItems.length, photoRowsPerPage]);
 
   useEffect(() => {
     snapshotPartsQueueRef.current = [];
@@ -1394,21 +1397,25 @@ export default function POSCredit() {
           ? (parseFloat(String(selectedCustomer.balance)) || 0) + cartTotal
           : null;
 
-      const blobs = await buildCreditDocumentSnapshotBlobs(iframe, {
-        invoice_number: invoiceNo,
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        created_at: createdAt,
-        subtotal: cartTotal,
-        total: cartTotal,
-        customer_balance: closingBalance,
-        items: cartItems.map((item: any) => ({
-          product_name: item.product_name || item.product_display_name || 'Item',
-          quantity: Math.round(parseFloat(String(item.quantity ?? '0')) || 0),
-          unit_price: parseFloat(String(item.unit_price ?? '0')) || 0,
-          line_total: parseFloat(String(item.line_total ?? '0')) || 0,
-        })),
-      });
+      const blobs = await buildCreditDocumentSnapshotBlobs(
+        iframe,
+        {
+          invoice_number: invoiceNo,
+          customer_name: customerName,
+          customer_phone: customerPhone,
+          created_at: createdAt,
+          subtotal: cartTotal,
+          total: cartTotal,
+          customer_balance: closingBalance,
+          items: cartItems.map((item: any) => ({
+            product_name: item.product_name || item.product_display_name || 'Item',
+            quantity: Math.round(parseFloat(String(item.quantity ?? '0')) || 0),
+            unit_price: parseFloat(String(item.unit_price ?? '0')) || 0,
+            line_total: parseFloat(String(item.line_total ?? '0')) || 0,
+          })),
+        },
+        exportSplit
+      );
 
       if (!(await copyPngBlobToClipboard(blobs[0]))) {
         showToast('Image clipboard not supported in this browser.', 'error');
@@ -1444,6 +1451,7 @@ export default function POSCredit() {
     selectedCustomer?.phone,
     selectedCustomer?.balance,
     showToast,
+    exportSplit,
   ]);
 
   const productsList = (productResults as MergedProduct[]) || [];

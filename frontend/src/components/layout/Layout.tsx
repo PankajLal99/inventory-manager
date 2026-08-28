@@ -2,6 +2,8 @@ import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { auth } from '../../lib/auth';
+import { clearPersonalLedgerUnlockIfLeaving } from '../../lib/personalLedgerUnlock';
+import { hydrateInvoiceExportSplitFromServer } from '../../pages/invoices/invoiceExportSettings';
 import { productsApi, reportsApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
@@ -66,6 +68,14 @@ export default function Layout() {
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+
+  useEffect(() => {
+    clearPersonalLedgerUnlockIfLeaving(location.pathname);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    void hydrateInvoiceExportSplitFromServer();
+  }, []);
 
   const { data: stockAlertsData } = useQuery({
     queryKey: ['stock-alerts', 'counts'],
@@ -293,7 +303,7 @@ export default function Layout() {
       items: [
         // { path: '/ledger', icon: BookOpen, label: 'Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
         { path: '/credit-ledger', icon: BookOpen, label: 'Credit Ledger', showFor: ['Admin',] },
-        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: 'admin' },
+        { path: '/personal-ledger', icon: BookOpen, label: 'Personal Ledger', showFor: ['Admin', 'Admin2'] },
         { path: '/internal-ledger', icon: BookOpen, label: 'Shop Boys Ledger', showFor: ['Admin', 'RetailAdmin', 'Retail', 'Repair'] },
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/expenses', icon: Coins, label: 'Expenses', showFor: ['Admin', 'Super', 'RetailAdmin', 'WholesaleAdmin', 'Temp', 'Retail', 'Wholesale'] },
@@ -310,7 +320,7 @@ export default function Layout() {
         { path: '/history', icon: History, label: 'History', showFor: 'admin' },
         { path: '/pos-credit', icon: Coins, label: 'POS Credit', showFor: ['Admin'] },
         { path: '/credit-invoices', icon: FileText, label: 'Credit Invoices', showFor: ['Admin'] },
-        { path: '/categories-brands', icon: Tags, label: 'Categories & Brands', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/categories-brands', icon: Tags, label: 'Categories, Brands & Groups', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
       ],
     },
   ];

@@ -61,6 +61,13 @@ def is_admin_user(user):
     return False
 
 
+def can_access_personal_ledger(user):
+    """Admin or Admin2 (Admin2 may also belong to other groups)."""
+    if is_admin_user(user):
+        return True
+    return 'Admin2' in set(user.groups.values_list('name', flat=True))
+
+
 def is_retail_admin_user(user):
     """Retail managers: same app nav as Retail but elevated (e.g. Payments delete)."""
     return 'RetailAdmin' in set(user.groups.values_list('name', flat=True))
@@ -1176,9 +1183,8 @@ def personal_customer_detail(request, pk):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_entry_list_create(request):
-    """List all personal ledger entries or create a new entry (Admin only)"""
-    # Check Admin permission
-    if not is_admin_user(request.user):
+    """List all personal ledger entries or create a new entry (Admin / Admin2)"""
+    if not can_access_personal_ledger(request.user):
         return Response({'error': 'Only Admin users can access personal ledger'}, status=status.HTTP_403_FORBIDDEN)
     if request.method == 'GET':
         queryset = PersonalLedgerEntry.objects.select_related('customer', 'created_by').all()
@@ -1249,8 +1255,8 @@ def personal_ledger_entry_list_create(request):
 @api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_entry_retrieve_update_destroy(request, entry_id):
-    """Retrieve, update or delete a personal ledger entry (Admin only)."""
-    if not is_admin_user(request.user):
+    """Retrieve, update or delete a personal ledger entry (Admin / Admin2)."""
+    if not can_access_personal_ledger(request.user):
         return Response({'error': 'Only Admin users can edit/delete personal ledger entries'}, status=status.HTTP_403_FORBIDDEN)
     entry = get_object_or_404(PersonalLedgerEntry, pk=entry_id)
     if request.method == 'GET':
@@ -1277,9 +1283,8 @@ def personal_ledger_entry_retrieve_update_destroy(request, entry_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_summary(request):
-    """Get personal ledger summary: Total Credit, Total Debit, Number of Accounts (Admin only)"""
-    # Check Admin permission
-    if not is_admin_user(request.user):
+    """Get personal ledger summary: Total Credit, Total Debit, Number of Accounts (Admin / Admin2)"""
+    if not can_access_personal_ledger(request.user):
         return Response({'error': 'Only Admin users can access personal ledger'}, status=status.HTTP_403_FORBIDDEN)
     store_id = request.query_params.get('store', None)
     
@@ -1309,10 +1314,9 @@ def personal_ledger_summary(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def personal_ledger_customer_detail(request, customer_id):
-    """Get personal ledger entries for a specific customer with running balance (Admin only).
+    """Get personal ledger entries for a specific customer with running balance (Admin / Admin2).
     Query params: date_from, date_to, entry_type, search."""
-    # Check Admin permission
-    if not is_admin_user(request.user):
+    if not can_access_personal_ledger(request.user):
         return Response({'error': 'Only Admin users can access personal ledger'}, status=status.HTTP_403_FORBIDDEN)
     customer = get_object_or_404(PersonalCustomer, pk=customer_id)
     date_from = request.query_params.get('date_from', None)

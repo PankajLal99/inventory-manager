@@ -95,6 +95,11 @@ def invalidate_products_cache_manual():
             return
         invalidate_cache_pattern("products_list")
         logger.info("Invalidated products cache (Manual/Signal)")
+        try:
+            from backend.reports.stock_alerts import invalidate_stock_alerts_cache
+            invalidate_stock_alerts_cache()
+        except Exception as e:
+            logger.warning(f"Error invalidating stock alerts cache after products change: {e}")
     except Exception as e:
         logger.warning(f"Error invalidating products cache: {e}")
 

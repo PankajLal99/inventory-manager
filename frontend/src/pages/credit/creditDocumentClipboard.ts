@@ -10,9 +10,23 @@ import {
   buildCreditLedgerSnapshotPageHtmlList,
   type CreditLedgerStatementSnapshot,
 } from './creditLedgerSnapshot';
+import {
+  loadLedgerExportSplit,
+  type LedgerExportSplit,
+} from './ledgerExportSettings';
+import {
+  loadInvoiceExportSplit,
+  normalizeInvoiceExportSplit,
+  type InvoiceExportSplit,
+} from '../invoices/invoiceExportSettings';
 import { setPendingLedgerClipboardImage } from './pendingLedgerClipboard';
 
-export const SNAPSHOT_ROWS_PER_PAGE = 25;
+/** Rows per image for credit invoice/return photos — same shop setting as Invoice Detail / POS. */
+export function creditDocumentRowsPerPage(
+  split: InvoiceExportSplit = loadInvoiceExportSplit()
+): number {
+  return normalizeInvoiceExportSplit(split).rowsPerPage;
+}
 
 type CartSnapshotRow = {
   idx: number;
@@ -112,7 +126,8 @@ export type CreditDocumentClipboardInput = {
 
 export async function buildCreditDocumentSnapshotBlobs(
   iframe: HTMLIFrameElement,
-  input: CreditDocumentClipboardInput
+  input: CreditDocumentClipboardInput,
+  split: InvoiceExportSplit = loadInvoiceExportSplit()
 ): Promise<Blob[]> {
   const items = input.items || [];
   const rows: CartSnapshotRow[] = items.map((item, idx) => {
@@ -136,7 +151,7 @@ export async function buildCreditDocumentSnapshotBlobs(
     parseFloat(String(input.total ?? 0)) ||
     rows.reduce((sum, row) => sum + row.lineTotal, 0);
   const totalAmt = input.variant === 'return' ? Math.abs(totalAmtRaw) : totalAmtRaw;
-  const rowChunks = chunkSnapshotRows(rows, SNAPSHOT_ROWS_PER_PAGE);
+  const rowChunks = chunkSnapshotRows(rows, creditDocumentRowsPerPage(split));
   const blobs: Blob[] = [];
   let lineOffset = 0;
 
@@ -237,13 +252,14 @@ export async function copyCreditDocumentImageToClipboard(
 }
 
 /**
- * Render ledger statement as one PNG per page (40 rows/page), then merge vertically.
+ * Render ledger statement as one PNG per page (rows or days split).
  */
 export async function buildCreditLedgerSnapshotBlobs(
   iframe: HTMLIFrameElement,
-  statement: CreditLedgerStatementSnapshot
+  statement: CreditLedgerStatementSnapshot,
+  split: LedgerExportSplit = loadLedgerExportSplit()
 ): Promise<Blob[]> {
-  const pages = buildCreditLedgerSnapshotPageHtmlList(statement);
+  const pages = buildCreditLedgerSnapshotPageHtmlList(statement, split);
   const blobs: Blob[] = [];
   for (let i = 0; i < pages.length; i++) {
     const blob = await renderSnapshotHtmlToBlob(iframe, pages[i]);

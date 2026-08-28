@@ -188,7 +188,7 @@ class BarcodeLabelAdmin(admin.ModelAdmin):
             purchase_date = None
             if barcode.purchase:
                 if barcode.purchase.supplier:
-                    vendor_name = barcode.purchase.supplier.name
+                    vendor_name = barcode.purchase.supplier.qr_label_vendor()
                 purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
             
             # Extract serial number from barcode

@@ -46,6 +46,25 @@ interface SearchResults {
 const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_UI_STATE_KEY = 'search:ui-state:v1';
 
+const isWrittenToSupplier = (item: any) =>
+  item?.tag === 'defective' && Boolean(item?.defective_move_out_info?.moved_out);
+
+const getBarcodeStatusLabel = (item: any) =>
+  isWrittenToSupplier(item)
+    ? 'Written to Supplier'
+    : (item?.tag_display || item?.tag || 'Unknown');
+
+const getBarcodeStatusBadgeClass = (item: any) => {
+  if (isWrittenToSupplier(item)) {
+    return 'border-purple-200 text-purple-700 bg-purple-50';
+  }
+  if (item?.tag === 'sold') return 'border-amber-200 text-amber-700 bg-amber-50';
+  if (item?.tag === 'defective') return 'border-red-200 text-red-700 bg-red-50';
+  if (item?.tag === 'new') return 'border-green-200 text-green-700 bg-green-50';
+  if (item?.tag === 'returned') return 'border-blue-200 text-blue-700 bg-blue-50';
+  return 'border-gray-200 text-gray-700';
+};
+
 type SearchUiState = {
   q: string;
   type: string;
@@ -807,12 +826,15 @@ export default function Search() {
                 getItemLabel={(item) => item.short_code || item.barcode || 'N/A'}
                 getItemSubLabel={(item) => {
                   const parts = [];
-                  parts.push(`Status: ${item.tag_display || item.tag || 'Unknown'}`);
+                  parts.push(`Status: ${getBarcodeStatusLabel(item)}`);
+                  if (isWrittenToSupplier(item) && item.defective_move_out_info?.move_out_number) {
+                    parts.push(`Move-out: ${item.defective_move_out_info.move_out_number}`);
+                  }
                   if (item.invoice_number) parts.push(`Invoice: ${item.invoice_number}`);
                   if (item.product) parts.push(`Product ID: ${item.product}`);
                   return parts.join(' | ');
                 }}
-                getItemBadge={(item) => item.tag_display || item.tag || 'Unknown'}
+                getItemBadge={(item) => getBarcodeStatusLabel(item)}
                 customRender={(item, idx) => (
                   <div
                     key={idx}
@@ -833,19 +855,9 @@ export default function Search() {
                           </h3>
                           <Badge
                             variant="outline"
-                            className={`text-xs ${
-                              item.tag === 'sold'
-                                ? 'border-amber-200 text-amber-700 bg-amber-50'
-                                : item.tag === 'defective'
-                                  ? 'border-red-200 text-red-700 bg-red-50'
-                                  : item.tag === 'new'
-                                    ? 'border-green-200 text-green-700 bg-green-50'
-                                    : item.tag === 'returned'
-                                      ? 'border-blue-200 text-blue-700 bg-blue-50'
-                                      : 'border-gray-200 text-gray-700'
-                            }`}
+                            className={`text-xs ${getBarcodeStatusBadgeClass(item)}`}
                           >
-                            {item.tag_display || item.tag || 'Unknown'}
+                            {getBarcodeStatusLabel(item)}
                           </Badge>
                         </div>
                         {/* Invoice details when sold */}
@@ -885,8 +897,34 @@ export default function Search() {
                             )}
                           </div>
                         )}
+                        {isWrittenToSupplier(item) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2 gap-x-4 text-sm mt-3">
+                            {item.defective_move_out_info?.move_out_number && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium">Move-out:</span>
+                                <span className="font-semibold text-purple-700">
+                                  {item.defective_move_out_info.move_out_number}
+                                </span>
+                              </div>
+                            )}
+                            {item.defective_move_out_info?.sent_date && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium">Sent:</span>
+                                <span className="text-gray-700 font-medium">
+                                  {formatAppDate(item.defective_move_out_info.sent_date, { includeTime: false, empty: '' })}
+                                </span>
+                              </div>
+                            )}
+                            {item.product && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 font-medium whitespace-nowrap">Product ID:</span>
+                                <span className="text-gray-600">{item.product}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {/* Non-sold: show status only (defective, fresh/new, returned, etc.) */}
-                        {item.tag !== 'sold' && item.tag_display && (
+                        {item.tag !== 'sold' && !isWrittenToSupplier(item) && item.tag_display && (
                           <p className="text-sm text-gray-600 mt-1">
                             Current status: {item.tag_display}
                             {item.product && ` · Product ID: ${item.product}`}

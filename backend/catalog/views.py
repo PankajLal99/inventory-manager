@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from backend.core.permissions import IsAuthenticatedOrVendorPurchaseLabels
-from django.db.models import Q, Count, Sum, OuterRef, Subquery, Value, DecimalField
+from django.db.models import Q, Count, Sum, OuterRef, Subquery, Value, DecimalField, Prefetch
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -15,6 +15,7 @@ import re
 from urllib.parse import unquote
 from .models import Category, Brand, TaxRate, Product, ProductVariant, Barcode, ProductComponent, BarcodeLabel, DefectiveProductMoveOut, DefectiveProductItem
 from .filters import normalize_barcode_for_search, find_barcode_by_search_value
+from .barcode_resolution import clean_scanned_barcode
 from .serializers import (
     CategorySerializer, BrandSerializer, TaxRateSerializer, ProductSerializer,
     ProductListSerializer, ProductVariantSerializer, BarcodeSerializer, ProductComponentSerializer,
@@ -1047,12 +1048,13 @@ def product_generate_labels(request, pk):
         safe_name = escape_zpl(truncated_name)
         safe_barcode = escape_zpl(barcode_obj.barcode)
         
-        # Get vendor name and purchase date
+        # Get vendor code (fallback name) and purchase date
         vendor_name = ""
         purchase_date = ""
         if barcode_obj.purchase:
             if barcode_obj.purchase.supplier:
-                vendor_name = barcode_obj.purchase.supplier.name[:20] if len(barcode_obj.purchase.supplier.name) > 20 else barcode_obj.purchase.supplier.name
+                vendor_label = barcode_obj.purchase.supplier.qr_label_vendor()
+                vendor_name = vendor_label[:20] if len(vendor_label) > 20 else vendor_label
             purchase_date = barcode_obj.purchase.purchase_date.strftime('%Y-%m-%d')
         
         safe_vendor = escape_zpl(vendor_name)
@@ -1105,7 +1107,7 @@ def product_generate_labels(request, pk):
         purchase_date = None
         if barcode.purchase:
             if barcode.purchase.supplier:
-                vendor_name = barcode.purchase.supplier.name
+                vendor_name = barcode.purchase.supplier.qr_label_vendor()
             purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
         
         # Extract serial number from barcode
@@ -1489,7 +1491,7 @@ def product_regenerate_labels(request, pk):
         purchase_date = None
         if barcode.purchase:
             if barcode.purchase.supplier:
-                vendor_name = barcode.purchase.supplier.name
+                vendor_name = barcode.purchase.supplier.qr_label_vendor()
             purchase_date = barcode.purchase.purchase_date.strftime('%d-%m-%Y')
         
         # Extract serial number from barcode
@@ -1799,8 +1801,10 @@ def barcode_by_barcode(request, barcode=None):
         if not barcode:
             return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Clean and standardize: trim, URL decode, uppercase for consistent lookup
-        barcode_clean = unquote(str(barcode)).strip().upper()
+        # Clean and standardize: URL decode, strip scanner whitespace, uppercase
+        barcode_clean = clean_scanned_barcode(unquote(str(barcode)))
+        if not barcode_clean:
+            return Response({'error': 'Barcode is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if we should only search barcodes (skip SKU fallback)
         barcode_only = request.query_params.get('barcode_only', 'false').lower() == 'true'
@@ -2633,7 +2637,7 @@ def defective_product_move_out(request):
 
             created_move_outs.append(move_out)
 
-        serializer = DefectiveProductMoveOutSerializer(created_move_outs, many=True)
+        serializer = DefectiveProductMoveOutSerializer(created_move_outs, many=True, context={'include_items': True})
         first = created_move_outs[0]
         return Response({
             'move_outs': serializer.data,
@@ -2654,7 +2658,9 @@ def defective_product_move_out(request):
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_list(request):
     """List all defective product move-outs"""
-    move_outs = DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items').all()
+    move_outs = DefectiveProductMoveOut.objects.select_related(
+        'store', 'invoice', 'invoice__customer', 'created_by'
+    ).all()
     
     # Apply filters
     store_id = request.query_params.get('store', None)
@@ -2690,36 +2696,167 @@ def defective_product_move_out_list(request):
         ).values_list('product_id', flat=True).distinct()
         # Filter move-outs that have items with products from this supplier
         move_outs = move_outs.filter(items__product_id__in=supplier_product_ids).distinct()
+
+    has_adjustment = str(request.query_params.get('has_adjustment', '')).lower()
+    if has_adjustment in ('1', 'true', 'yes'):
+        move_outs = move_outs.filter(total_adjustment__gt=0, invoice__isnull=False)
+    elif has_adjustment in ('0', 'false', 'no'):
+        move_outs = move_outs.exclude(total_adjustment__gt=0)
     
     move_outs = move_outs.order_by('-created_at')
     
-    serializer = DefectiveProductMoveOutSerializer(move_outs, many=True)
+    serializer = DefectiveProductMoveOutSerializer(move_outs, many=True, context={'include_items': False})
     return Response(serializer.data)
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def defective_selectable_barcodes(request):
+    """Compact defective barcodes for products already shown on the Products page.
+
+    Kept separate from GET /products/?tag=defective so that list can return in
+    milliseconds instead of serializing every barcode in the same request.
+    """
+    raw_ids = request.query_params.get('product_ids') or ''
+    product_ids = []
+    for part in raw_ids.split(','):
+        part = part.strip()
+        if part.isdigit():
+            product_ids.append(int(part))
+        if len(product_ids) >= 50:
+            break
+    if not product_ids:
+        return Response([])
+
+    moved_out_ids = set(
+        DefectiveProductItem.objects.filter(
+            barcode__product_id__in=product_ids,
+        ).values_list('barcode_id', flat=True)
+    )
+    barcodes = Barcode.objects.filter(
+        product_id__in=product_ids,
+        tag='defective',
+    )
+    if moved_out_ids:
+        barcodes = barcodes.exclude(id__in=moved_out_ids)
+
+    supplier_id = request.query_params.get('supplier')
+    if supplier_id:
+        barcodes = barcodes.filter(purchase__supplier_id=supplier_id)
+
+    rows = barcodes.values(
+        'id',
+        'barcode',
+        'short_code',
+        'tag',
+        'product_id',
+        'purchase__supplier_id',
+        'purchase__supplier__name',
+        'purchase__supplier__code',
+    )
+    payload = []
+    for row in rows:
+        supplier_id_value = row.get('purchase__supplier_id')
+        supplier_name = row.get('purchase__supplier__code') or row.get('purchase__supplier__name')
+        payload.append({
+            'id': row['id'],
+            'barcode': row['barcode'],
+            'short_code': row['short_code'],
+            'tag': row['tag'],
+            'product_id': row['product_id'],
+            'supplier_id': supplier_id_value,
+            'supplier_name': supplier_name,
+            'defective_move_out_info': None,
+        })
+    return Response(payload)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def defective_product_move_out_detail(request, pk):
-    """Get details of a specific move-out or update total_adjustment"""
-    move_out = get_object_or_404(DefectiveProductMoveOut.objects.select_related('store', 'invoice', 'created_by').prefetch_related('items'), pk=pk)
+    """Get details of a specific move-out, update total_adjustment, or delete it.
+
+    Deleting a move-out also deletes its items and the linked invoice (if any).
+    Barcodes stay tagged defective so they can be moved out again.
+    """
+    if request.method == 'DELETE':
+        from django.db import transaction
+        with transaction.atomic():
+            move_out = get_object_or_404(
+                DefectiveProductMoveOut.objects.select_for_update(),
+                pk=pk,
+            )
+            invoice = move_out.invoice
+            create_audit_log(
+                request=request,
+                action='delete',
+                model_name='DefectiveProductMoveOut',
+                object_id=str(move_out.id),
+                object_name=f"Move Out {move_out.move_out_number}",
+                object_reference=move_out.move_out_number,
+                barcode=None,
+                changes={
+                    'move_out_number': move_out.move_out_number,
+                    'invoice_number': invoice.invoice_number if invoice else None,
+                    'total_items': move_out.total_items,
+                },
+            )
+            move_out.delete()
+            if invoice is not None:
+                invoice.delete()
+        from backend.core.cache_signals import invalidate_products_cache_manual
+        invalidate_products_cache_manual()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    move_out = get_object_or_404(
+        DefectiveProductMoveOut.objects.select_related(
+            'store', 'invoice', 'invoice__customer', 'created_by'
+        ).prefetch_related(
+            Prefetch('items', queryset=DefectiveProductItem.objects.select_related('product', 'barcode')),
+        ),
+        pk=pk,
+    )
     
     if request.method == 'PATCH':
-        # Only allow updating total_adjustment
+        update_fields = []
         total_adjustment = request.data.get('total_adjustment')
         if total_adjustment is not None:
             try:
                 move_out.total_adjustment = Decimal(str(total_adjustment))
-                move_out.save(update_fields=['total_adjustment'])
+                update_fields.append('total_adjustment')
             except (ValueError, InvalidOperation):
                 return Response({
                     'error': 'Invalid total_adjustment value'
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'notes' in request.data:
+            notes = request.data.get('notes')
+            move_out.notes = '' if notes is None else str(notes)
+            update_fields.append('notes')
+
+        if 'sent_date' in request.data:
+            raw_sent = request.data.get('sent_date')
+            if raw_sent in (None, ''):
+                move_out.sent_date = None
+                update_fields.append('sent_date')
+            else:
+                from datetime import datetime
+                try:
+                    move_out.sent_date = datetime.strptime(str(raw_sent)[:10], '%Y-%m-%d').date()
+                    update_fields.append('sent_date')
+                except ValueError:
+                    return Response({
+                        'error': 'Invalid sent_date. Use YYYY-MM-DD.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+        if update_fields:
+            move_out.save(update_fields=update_fields)
         
-        serializer = DefectiveProductMoveOutSerializer(move_out)
+        serializer = DefectiveProductMoveOutSerializer(move_out, context={'include_items': True})
         return Response(serializer.data)
     
     # GET request
-    serializer = DefectiveProductMoveOutSerializer(move_out)
+    serializer = DefectiveProductMoveOutSerializer(move_out, context={'include_items': True})
     return Response(serializer.data)
 
 
@@ -2774,8 +2911,48 @@ def defective_product_move_out_add_items(request, pk):
                 return Response({'error': 'All selected barcodes are already in a move-out'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
-            added_loss = Decimal('0.00')
+            # Only allow barcodes from the same supplier as this move-out invoice
+            from backend.catalog.defective_supplier import (
+                barcode_supplier,
+                defective_invoice_supplier,
+                defective_suppliers_match,
+            )
             invoice = move_out.invoice
+            expected_id, expected_name = (None, 'No Supplier')
+            if invoice:
+                expected_id, expected_name = defective_invoice_supplier(invoice)
+            else:
+                # No invoice: derive from existing move-out items
+                existing = (
+                    DefectiveProductItem.objects.filter(move_out=move_out, barcode_id__isnull=False)
+                    .select_related(
+                        'barcode__purchase__supplier',
+                        'barcode__purchase_item__purchase__supplier',
+                    )
+                    .first()
+                )
+                if existing and existing.barcode:
+                    expected_id, expected_name = barcode_supplier(existing.barcode)
+
+            same_supplier = []
+            for barcode in new_barcodes:
+                bid, bname = barcode_supplier(barcode)
+                if defective_suppliers_match(expected_id, expected_name, bid, bname):
+                    same_supplier.append(barcode)
+
+            if not same_supplier:
+                return Response(
+                    {
+                        'error': (
+                            f'None of the selected barcodes belong to {expected_name}. '
+                            f'Only barcodes from {expected_name} can be added to this move-out.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            new_barcodes = same_supplier
+            added_loss = Decimal('0.00')
 
             for barcode in new_barcodes:
                 # Determine purchase price
@@ -2818,8 +2995,9 @@ def defective_product_move_out_add_items(request, pk):
             if invoice:
                 invoice.subtotal = invoice.subtotal + added_loss
                 invoice.total = invoice.total + added_loss
-                invoice.paid_amount = invoice.paid_amount + added_loss
-                invoice.save(update_fields=['subtotal', 'total', 'paid_amount'])
+                invoice.paid_amount = invoice.total
+                invoice.due_amount = Decimal('0.00')
+                invoice.save(update_fields=['subtotal', 'total', 'paid_amount', 'due_amount'])
 
             create_audit_log(
                 request=request,
@@ -2839,7 +3017,7 @@ def defective_product_move_out_add_items(request, pk):
 
         # Re-fetch for serialization
         move_out.refresh_from_db()
-        serializer = DefectiveProductMoveOutSerializer(move_out)
+        serializer = DefectiveProductMoveOutSerializer(move_out, context={'include_items': True})
         return Response({
             'move_out': serializer.data,
             'added_items': len(new_barcodes),

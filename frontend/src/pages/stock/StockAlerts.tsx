@@ -90,6 +90,53 @@ function matchesIdOrNone(
   return String(id || '') === filterValue;
 }
 
+function productThreshold(product: StockAlertProduct) {
+  return product.product__low_stock_threshold || 0;
+}
+
+function hasLowStockLimit(product: StockAlertProduct) {
+  return productThreshold(product) > 0;
+}
+
+const STOCK_ALERTS_FILTERS_STORAGE_KEY = 'stock-alerts:filters:v1';
+
+type PersistedStockAlertFilters = {
+  onlyWithLimit: boolean;
+};
+
+const DEFAULT_STOCK_ALERT_FILTERS: PersistedStockAlertFilters = {
+  onlyWithLimit: true,
+};
+
+function readPersistedStockAlertFilters(): PersistedStockAlertFilters {
+  if (typeof window === 'undefined') return { ...DEFAULT_STOCK_ALERT_FILTERS };
+  try {
+    const raw = window.localStorage.getItem(STOCK_ALERTS_FILTERS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_STOCK_ALERT_FILTERS };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...DEFAULT_STOCK_ALERT_FILTERS };
+    }
+    return {
+      onlyWithLimit:
+        typeof parsed.onlyWithLimit === 'boolean'
+          ? parsed.onlyWithLimit
+          : DEFAULT_STOCK_ALERT_FILTERS.onlyWithLimit,
+    };
+  } catch {
+    return { ...DEFAULT_STOCK_ALERT_FILTERS };
+  }
+}
+
+function writePersistedStockAlertFilters(filters: PersistedStockAlertFilters): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(STOCK_ALERTS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
+  } catch {
+    // quota / private mode
+  }
+}
+
 export default function StockAlerts() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -101,6 +148,9 @@ export default function StockAlerts() {
   const [thresholdMin, setThresholdMin] = useState(0);
   const [thresholdMax, setThresholdMax] = useState(0);
   const [thresholdInitialized, setThresholdInitialized] = useState(false);
+  const [onlyWithLimit, setOnlyWithLimit] = useState(
+    () => readPersistedStockAlertFilters().onlyWithLimit,
+  );
   const [showExportModal, setShowExportModal] = useState(false);
 
   const { data, isLoading, error, isFetching } = useQuery({
@@ -166,14 +216,23 @@ export default function StockAlerts() {
     });
   }, [data]);
 
+  const alertsForThreshold = useMemo(
+    () => (onlyWithLimit ? alerts.filter(hasLowStockLimit) : alerts),
+    [alerts, onlyWithLimit],
+  );
+
   const thresholdBounds = useMemo(() => {
-    if (alerts.length === 0) return { min: 0, max: 0 };
-    const values = alerts.map((p) => p.product__low_stock_threshold || 0);
+    if (alertsForThreshold.length === 0) return { min: 0, max: 0 };
+    const values = alertsForThreshold.map(productThreshold);
     return {
       min: Math.min(...values),
       max: Math.max(...values),
     };
-  }, [alerts]);
+  }, [alertsForThreshold]);
+
+  useEffect(() => {
+    writePersistedStockAlertFilters({ onlyWithLimit });
+  }, [onlyWithLimit]);
 
   useEffect(() => {
     if (!thresholdInitialized && alerts.length > 0) {
@@ -202,8 +261,11 @@ export default function StockAlerts() {
       if (!matchesIdOrNone(supplierFilter, product.supplier__id, isMissingSupplier(product))) {
         return false;
       }
+      if (onlyWithLimit && !hasLowStockLimit(product)) {
+        return false;
+      }
       if (thresholdInitialized) {
-        const threshold = product.product__low_stock_threshold || 0;
+        const threshold = productThreshold(product);
         if (threshold < thresholdMin || threshold > thresholdMax) {
           return false;
         }
@@ -232,6 +294,7 @@ export default function StockAlerts() {
     thresholdMin,
     thresholdMax,
     thresholdInitialized,
+    onlyWithLimit,
   ]);
 
   const soldOutCount = productFilteredAlerts.filter((p) => p.status === 'sold_out').length;
@@ -244,7 +307,7 @@ export default function StockAlerts() {
     return productFilteredAlerts;
   }, [productFilteredAlerts, activeTab]);
 
-  const hasActiveFilters =
+  const otherFiltersActive =
     !!search.trim() ||
     !!categoryFilter ||
     !!brandFilter ||
@@ -252,13 +315,41 @@ export default function StockAlerts() {
     (thresholdInitialized &&
       (thresholdMin > thresholdBounds.min || thresholdMax < thresholdBounds.max));
 
+  const hasActiveFilters = otherFiltersActive || !onlyWithLimit;
+
+  const tabSourceAlerts =
+    activeTab === 'sold_out'
+      ? alerts.filter((p) => p.status === 'sold_out')
+      : activeTab === 'low'
+        ? alerts.filter((p) => p.status === 'low')
+        : alerts;
+
+  const hiddenWithoutLimitOnTab =
+    onlyWithLimit && tabSourceAlerts.some((p) => !hasLowStockLimit(p));
+
+  const applyThresholdBounds = (pool: StockAlertProduct[]) => {
+    if (pool.length === 0) {
+      setThresholdMin(0);
+      setThresholdMax(0);
+      return;
+    }
+    const values = pool.map(productThreshold);
+    setThresholdMin(Math.min(...values));
+    setThresholdMax(Math.max(...values));
+  };
+
   const clearFilters = () => {
     setSearch('');
     setCategoryFilter('');
     setBrandFilter('');
     setSupplierFilter('');
-    setThresholdMin(thresholdBounds.min);
-    setThresholdMax(thresholdBounds.max);
+    setOnlyWithLimit(true);
+    applyThresholdBounds(alerts.filter(hasLowStockLimit));
+  };
+
+  const handleOnlyWithLimitChange = (checked: boolean) => {
+    setOnlyWithLimit(checked);
+    applyThresholdBounds(checked ? alerts.filter(hasLowStockLimit) : alerts);
   };
 
   const handleThresholdMinChange = (value: number) => {
@@ -414,12 +505,20 @@ export default function StockAlerts() {
             <div>
               <p className="text-sm font-medium text-gray-900">Low Stock Limit</p>
               <p className="text-xs text-gray-500">
-                Show products whose threshold is between {thresholdMin} and {thresholdMax}
+                {onlyWithLimit
+                  ? `Show products whose limit is between ${thresholdMin} and ${thresholdMax}`
+                  : `Include products with no limit (0). Range ${thresholdMin}–${thresholdMax}`}
               </p>
             </div>
-            <p className="text-sm font-medium text-gray-700">
-              {thresholdMin} – {thresholdMax}
-            </p>
+            <label className="flex items-center gap-2 text-sm text-gray-700 select-none cursor-pointer">
+              <input
+                type="checkbox"
+                checked={onlyWithLimit}
+                onChange={(e) => handleOnlyWithLimitChange(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
+              />
+              Only products with a limit
+            </label>
           </div>
 
           <div className="space-y-3">
@@ -503,18 +602,24 @@ export default function StockAlerts() {
             icon={Package}
             title="No matching stock alerts"
             message={
-              hasActiveFilters
-                ? 'No products match the current filters. Try clearing filters or widening the threshold range.'
-                : activeTab === 'sold_out'
-                  ? 'No products are sold out right now.'
-                  : activeTab === 'low'
-                    ? 'No products are at or below their low stock limit.'
-                    : 'All products with a low stock limit are above threshold. Nice work.'
+              otherFiltersActive
+                ? 'No products match the current filters. Try clearing filters or widening the limit range.'
+                : hiddenWithoutLimitOnTab
+                  ? 'Sold-out products with no low stock limit are hidden. Uncheck “Only products with a limit” to include them.'
+                  : activeTab === 'sold_out'
+                    ? 'No products are sold out right now.'
+                    : activeTab === 'low'
+                      ? 'No products are at or below their low stock limit.'
+                      : 'All products with a low stock limit are above threshold. Nice work.'
             }
             action={
-              hasActiveFilters ? (
+              otherFiltersActive || !onlyWithLimit ? (
                 <Button variant="outline" onClick={clearFilters}>
                   Clear filters
+                </Button>
+              ) : hiddenWithoutLimitOnTab ? (
+                <Button variant="outline" onClick={() => handleOnlyWithLimitChange(false)}>
+                  Show products without a limit
                 </Button>
               ) : undefined
             }
