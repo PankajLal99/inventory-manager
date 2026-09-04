@@ -10,6 +10,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 import json
+import re
 
 from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
 from .models import Setting, AuditLog
@@ -205,6 +206,10 @@ def user_me(request):
 DOCUMENT_THEME_KEY = 'credit_doc_themes'
 LEDGER_EXPORT_SETTINGS_KEY = 'credit_ledger_export_split'
 INVOICE_EXPORT_SETTINGS_KEY = 'invoice_photo_export_split'
+PRODUCT_NAME_COLOR_RULES_KEY = 'product_name_color_rules'
+
+SUPER_PRODUCT_KEYWORDS = {'NON PESTING', 'PESTING'}
+HEX_COLOR_RE = re.compile(r'^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$')
 
 DEFAULT_LEDGER_EXPORT_SPLIT = {
     'useRows': True,
@@ -379,6 +384,64 @@ def invoice_export_settings(request):
     setting.value = json.dumps(cleaned)
     if not setting.description:
         setting.description = 'Invoice photo copy page split (rows per image)'
+    setting.save()
+    return Response(cleaned)
+
+
+def normalize_product_name_color_rules(value):
+    """User-defined keyword highlight rules (PESTING/NON PESTING are fixed super rules on the client)."""
+    if not isinstance(value, list):
+        return []
+    cleaned = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            continue
+        keyword = str(entry.get('keyword') or '').strip()
+        color = str(entry.get('color') or '').strip()
+        if not keyword or not color or not HEX_COLOR_RE.match(color):
+            continue
+        if keyword.upper() in SUPER_PRODUCT_KEYWORDS:
+            continue
+        rule_id = str(entry.get('id') or '').strip() or f'rule-{index}-{keyword.lower().replace(" ", "-")}'
+        scope_raw = str(entry.get('scope') or 'keyword').strip().lower()
+        scope = 'whole_line' if scope_raw == 'whole_line' else 'keyword'
+        cleaned.append({'id': rule_id, 'keyword': keyword, 'color': color, 'scope': scope})
+    return cleaned
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def product_name_color_rules(request):
+    """
+    Shop-wide custom product-name keyword color rules (JSON array on core.Setting).
+    PESTING / NON PESTING super rules are fixed in the frontend and not stored here.
+    """
+    setting = Setting.objects.filter(key=PRODUCT_NAME_COLOR_RULES_KEY).first()
+
+    if request.method == 'GET':
+        if setting is None:
+            return Response([])
+        try:
+            data = json.loads(setting.value or '[]')
+            if not isinstance(data, list):
+                data = []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = []
+        return Response(normalize_product_name_color_rules(data))
+
+    payload = request.data
+    if not isinstance(payload, list):
+        return Response({'detail': 'Expected a JSON array.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    cleaned = normalize_product_name_color_rules(payload)
+    if setting is None:
+        setting = Setting(
+            key=PRODUCT_NAME_COLOR_RULES_KEY,
+            description='Custom product name keyword highlight colors',
+        )
+    setting.value = json.dumps(cleaned)
+    if not setting.description:
+        setting.description = 'Custom product name keyword highlight colors'
     setting.save()
     return Response(cleaned)
 

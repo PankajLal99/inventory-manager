@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { customersApi, catalogApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
@@ -1085,7 +1086,11 @@ export default function LedgerDetail() {
                       {entry.invoice && invoiceItemsMap[entry.invoice] ? (
                         <div className="flex flex-col gap-0.5">
                           {invoiceItemsMap[entry.invoice].map((item, idx) => (
-                            <span key={idx} className="text-xs text-gray-700">
+                            <span
+                              key={idx}
+                              className="text-xs text-gray-700"
+                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                            >
                               {item.product_name} <span className="text-gray-400">×</span> {item.quantity}
                             </span>
                           ))}

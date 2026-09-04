@@ -2,7 +2,8 @@ import { useState, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi } from '../../lib/api';
-import { formatAppDate, formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -653,7 +654,10 @@ export default function ReturnToStock() {
                               className="w-4 h-4 text-blue-600 rounded mt-1"
                             />
                             <div className="flex-1">
-                              <div className="font-medium text-gray-900">{item.product_name}</div>
+                              <ProductName as="div"
+                                className="font-medium text-gray-900"
+                                
+                               name={item.product_name} />
                               <div className="text-sm text-gray-600 mt-1">
                                 {item.barcode_value && item.barcode_value !== item.barcode_full && <>Short code: {item.barcode_value}</>}
                                 {item.barcode_value && item.barcode_value !== item.barcode_full && item.barcode_full && <> | </>}

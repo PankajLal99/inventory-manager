@@ -17,7 +17,8 @@ import {
   finishDocumentPartsAndQueueLedger,
 } from './creditDocumentClipboard';
 import { catalogApi, creditApi } from '../../lib/api';
-import { amountForInput, formatNumber } from '../../lib/utils';
+import { amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import ToastContainer from '../../components/ui/Toast';
@@ -755,7 +756,10 @@ export default function POSCreditReturn() {
                         }}
                       >
                         <div className="flex justify-between gap-2">
-                          <span className="font-medium text-gray-900">{p.name}</span>
+                          <ProductName as="span"
+                            className="font-medium text-gray-900"
+                            
+                           name={p.name} />
                           <span className="text-xs text-gray-500 shrink-0">
                             ₹{formatNumber(num(p.unit_price))}
                           </span>
@@ -797,7 +801,10 @@ export default function POSCreditReturn() {
                       <div className="text-center text-sm font-semibold text-gray-500 tabular-nums">
                         {index + 1}
                       </div>
-                      <div className="font-medium text-gray-900 text-sm">{row.product_name}</div>
+                      <ProductName as="div"
+                        className="font-medium text-gray-900 text-sm"
+                        
+                       name={row.product_name} />
                       <Input
                         type="text"
                         inputMode="numeric"

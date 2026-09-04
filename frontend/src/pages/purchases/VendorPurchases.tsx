@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatAppDate, toLocalDateString } from '../../lib/utils';
+import { formatAppDate, getProductNameColor, toLocalDateString } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -784,7 +785,12 @@ export default function VendorPurchases() {
                         {purchaseItems.map((item, index) => (
                           <tr key={index}>
                             <td className="px-3 py-2">
-                              <div className="text-sm font-medium text-gray-900">{item.product_name || 'Product'}</div>
+                              <div
+                                className="text-sm font-medium text-gray-900"
+                                style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                              >
+                                {item.product_name || 'Product'}
+                              </div>
                               <div className="text-xs text-gray-500">{item.product_sku || 'N/A'}</div>
                             </td>
                             <td className="px-3 py-2">

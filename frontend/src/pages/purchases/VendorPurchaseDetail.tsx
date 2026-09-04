@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatAppDate } from '../../lib/utils';
+import { formatAppDate, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import LoadingState from '../../components/ui/LoadingState';
@@ -478,7 +479,10 @@ export default function VendorPurchaseDetail() {
                   <div key={item.id || index} className="border border-gray-200 rounded-lg p-4">
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1">
-                        <h3 className="font-semibold text-gray-900 text-lg">
+                        <h3
+                          className="font-semibold text-gray-900 text-lg"
+                          style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                        >
                           {item.product_name || 'Product'}
                         </h3>
                         <p className="text-sm text-gray-600 font-mono mt-1">

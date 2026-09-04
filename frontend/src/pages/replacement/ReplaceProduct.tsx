@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi, productsApi } from '../../lib/api';
-import { formatAppDate, formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
@@ -1088,7 +1089,10 @@ export default function ReplaceProduct() {
                               className="w-4 h-4 text-blue-600 rounded mt-1"
                             />
                             <div className="flex-1">
-                              <div className="font-medium text-gray-900">{item.product_name}</div>
+                              <ProductName as="div"
+                                className="font-medium text-gray-900"
+                                
+                               name={item.product_name} />
                               <div className="text-sm text-gray-600 mt-1">
                                 {item.barcode_value && item.barcode_value !== item.barcode_full && <>Short code: {item.barcode_value}</>}
                                 {item.barcode_value && item.barcode_value !== item.barcode_full && item.barcode_full && <> | </>}
@@ -1252,7 +1256,10 @@ export default function ReplaceProduct() {
                                           className={`w-full text-left px-4 py-3 hover:bg-blue-50 border-b last:border-b-0 transition-colors ${isSelected ? 'bg-blue-50' : ''
                                             }`}
                                         >
-                                          <div className="font-medium text-gray-900">{product.name}</div>
+                                          <ProductName as="div"
+                                            className="font-medium text-gray-900"
+                                            
+                                           name={product.name} />
                                           <div className="text-sm text-gray-600 mt-1 space-y-0.5">
                                             {product.matched_barcode && (
                                               <div>Short Code: {product.matched_barcode}</div>
@@ -1283,7 +1290,9 @@ export default function ReplaceProduct() {
                                 <>
                                   <div className="mt-2 text-sm text-green-600 flex items-center gap-1">
                                     <Package className="h-4 w-4" />
-                                    Selected: {replacement.new_product_name}
+                                    Selected:{' '}
+                                    <ProductName as="span"
+                                     name={replacement.new_product_name} />
                                     {replacement.selected_short_code && (
                                       <span className="text-gray-600">
                                         (short: {replacement.selected_short_code})

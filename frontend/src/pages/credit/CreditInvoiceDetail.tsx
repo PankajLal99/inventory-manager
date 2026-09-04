@@ -19,7 +19,8 @@ import {
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { creditApi } from '../../lib/api';
-import { amountForInput, formatAmountINR, formatNumber, getTodayDateString, toLocalDateString } from '../../lib/utils';
+import { amountForInput, formatAmountINR, formatNumber, getProductNameColor, getTodayDateString, toLocalDateString } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Input from '../../components/ui/Input';
@@ -758,7 +759,12 @@ export default function CreditInvoiceDetail() {
                 return (
                   <TableRow key={item.id ?? idx}>
                     <TableCell>
-                      <span className="font-medium text-gray-900">{item.product_name || '—'}</span>
+                      <span
+                        className="font-medium text-gray-900"
+                        style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                      >
+                        {item.product_name || '—'}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <span className="text-gray-600 font-semibold">{qty}</span>
@@ -784,7 +790,12 @@ export default function CreditInvoiceDetail() {
                   key={item.id ?? idx}
                   className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm"
                 >
-                  <p className="font-medium text-gray-900">{item.product_name || '—'}</p>
+                  <p
+                    className="font-medium text-gray-900"
+                    style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                  >
+                    {item.product_name || '—'}
+                  </p>
                   <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
                     <div>
                       <span className="text-gray-500">Qty</span>
@@ -1025,7 +1036,10 @@ export default function CreditInvoiceDetail() {
                       className="grid grid-cols-1 sm:grid-cols-[1fr_5.5rem_6.5rem_6rem_2.5rem] gap-2 px-3 py-3 items-center"
                     >
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-gray-900 truncate">{line.product_name}</div>
+                        <ProductName as="div"
+                          className="text-sm font-medium text-gray-900 truncate"
+                          
+                         name={line.product_name} />
                         {line.returned_quantity > 0 ? (
                           <div className="text-xs text-amber-700 mt-0.5">
                             {line.returned_quantity} returned (min qty {line.returned_quantity})

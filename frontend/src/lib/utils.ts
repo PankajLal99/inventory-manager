@@ -1,13 +1,36 @@
-/** Red for product names containing "NON PESTING" */
-export const PRODUCT_NAME_COLOR_NON_PESTING = '#be1129';
+import {
+  PRODUCT_NAME_COLOR_NON_PESTING,
+  PRODUCT_NAME_COLOR_PESTING,
+  resolveProductNameColor,
+} from './productNameColorRules';
 
-/** Green for product names containing "PESTING" (and not "NON PESTING") */
-export const PRODUCT_NAME_COLOR_PESTING = '#418f28';
+export {
+  PRODUCT_NAME_COLOR_NON_PESTING,
+  PRODUCT_NAME_COLOR_PESTING,
+  PRODUCT_NAME_SUPER_RULES,
+  DEFAULT_CUSTOM_KEYWORD_RULES,
+  DEFAULT_PRODUCT_NAME_COLOR_RULES,
+  loadCustomKeywordColorRules,
+  loadProductNameColorRules,
+  saveCustomKeywordColorRules,
+  saveProductNameColorRules,
+  resetCustomKeywordColorRules,
+  resetProductNameColorRules,
+  resolveProductNameSuperColor,
+  resolveProductNameColor,
+  buildProductNameSegments,
+  getProductNameInlineStyle,
+  formatProductNameHtml,
+  createProductNameColorRule,
+  hydrateProductNameColorRulesFromServer,
+  subscribeProductNameColorRules,
+  PRODUCT_NAME_COLOR_RULES_CHANGED,
+  type ProductNameColorRule,
+  type ProductNameColorRuleScope,
+  type ProductNameSegment,
+} from './productNameColorRules';
 
-/**
- * Returns the display color for a product name based on PESTING / NON PESTING.
- * Check "NON PESTING" first so names containing both get red.
- */
+/** Returns the display color for a product name based on configured keyword rules. */
 /** Parse API purchase_date (dd-mm-yyyy or ISO) for sorting. */
 function purchaseDateSortKey(value: string | null | undefined): number {
   if (!value) return 0;
@@ -47,11 +70,7 @@ export function sortSupplierBreakdownByDateDesc<
 }
 
 export function getProductNameColor(name: string | null | undefined): string | undefined {
-  if (name == null || typeof name !== 'string') return undefined;
-  const upper = name.toUpperCase();
-  if (upper.includes('NON PESTING')) return PRODUCT_NAME_COLOR_NON_PESTING;
-  if (upper.includes('PESTING')) return PRODUCT_NAME_COLOR_PESTING;
-  return undefined;
+  return resolveProductNameColor(name);
 }
 
 /**

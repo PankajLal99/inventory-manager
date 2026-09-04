@@ -22,6 +22,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { formatAppDate, formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -630,12 +631,10 @@ export default function Search() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start gap-2 mb-2">
                                 <div className="flex-1 min-w-0">
-                                  <h3
+                                  <ProductName as="h3"
                                     className="font-medium text-gray-900 group-hover:text-blue-600 block sm:inline"
-                                    style={getProductNameColor(item.name) ? { color: getProductNameColor(item.name) } : undefined}
-                                  >
-                                    {item.name}
-                                  </h3>
+                                    
+                                   name={item.name} />
                                   {(item.brand_name || item.category_name) && (
                                     <span className="hidden md:inline-flex items-center text-sm text-gray-500 ml-2 font-normal">
                                       {item.brand_name && <span>{item.brand_name}</span>}

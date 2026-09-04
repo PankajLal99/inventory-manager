@@ -3,6 +3,7 @@ import { useQuery, useQueries, useMutation, useQueryClient, useInfiniteQuery } f
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
 import { formatAppDate, formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { auth } from '../../lib/auth';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -2118,7 +2119,7 @@ export default function Purchases() {
                                     return (
                                       <tr key={item.id || `${purchase.id} -item - ${idx} `}>
                                         <td className="px-3 py-2">
-                                          <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</div>
+                                          <ProductName as="div" className="text-sm font-medium text-gray-900" name={item.product_name || '-'} />
                                           <div className="text-xs text-gray-500">{item.product_sku || 'N/A'}</div>
                                         </td>
                                         <td className="px-3 py-2">
@@ -2403,7 +2404,7 @@ export default function Purchases() {
                             <div key={item.id || `${purchase.id} -item - ${idx} `} className="bg-white rounded-md p-3 border border-gray-200">
                               <div className="flex justify-between items-start mb-1">
                                 <div className="flex-1 min-w-0">
-                                  <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</div>
+                                  <ProductName as="div" className="text-sm font-medium text-gray-900" name={item.product_name || '-'} />
                                   <div className="text-xs text-gray-500 mt-0.5">{item.product_sku || 'N/A'}</div>
                                   {item.variant_name && (
                                     <>
@@ -2715,7 +2716,7 @@ export default function Purchases() {
                             onClick={() => handleAddProduct(product)}
                             className="w-full text-left px-4 py-2 hover:bg-blue-50 border-b border-gray-100 last:border-b-0"
                           >
-                            <div className="font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</div>
+                            <ProductName as="div" className="font-medium text-gray-900"  name={product.name} />
                             <div className="text-xs text-gray-500">
                               {product.brand_name ? `Brand: ${product.brand_name} • ` : ''}SKU: {product.sku || 'N/A'}
                               {product.variants && product.variants.length > 0 && ` • ${product.variants.length} variant(s)`}
@@ -2804,7 +2805,7 @@ export default function Purchases() {
                           return (
                             <tr key={index}>
                               <td className="px-3 py-2">
-                                <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || 'Product'}</div>
+                                <ProductName as="div" className="text-sm font-medium text-gray-900" name={item.product_name || 'Product'} />
                                 <div className="text-xs text-gray-500">
                                   {item.product_sku || 'N/A'}
                                   {item.variant_name && ` • Variant: ${item.variant_name} `}
@@ -2958,7 +2959,7 @@ export default function Purchases() {
                           {/* Product Info Header */}
                           <div className="flex items-start justify-between">
                             <div className="flex-1 min-w-0 pr-2">
-                              <div className="text-sm font-medium text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || 'Product'}</div>
+                              <ProductName as="div" className="text-sm font-medium text-gray-900" name={item.product_name || 'Product'} />
                               <div className="text-xs text-gray-500 mt-0.5">
                                 {item.product_sku || 'N/A'}
                                 {item.variant_name && ` • Variant: ${item.variant_name} `}

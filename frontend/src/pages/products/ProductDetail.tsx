@@ -4,7 +4,8 @@ import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { productsApi, catalogApi } from '../../lib/api';
 import Badge from '../../components/ui/Badge';
 import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
-import { formatAppDate, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import { formatAppDate, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
 
@@ -118,7 +119,9 @@ export default function ProductDetail() {
               />
             </button>
           )}
-          <h1 className="text-3xl font-bold text-gray-900">{p.name}</h1>
+          <ProductName as="h1"
+            className="text-3xl font-bold text-gray-900"
+           name={p.name} />
         </div>
         <Badge variant={p.is_active ? 'success' : 'default'}>
           {p.is_active ? 'Active' : 'Inactive'}
@@ -497,7 +500,9 @@ export default function ProductDetail() {
               <tbody className="divide-y divide-gray-200">
                 {p.components.map((component: any) => (
                   <tr key={component.id}>
-                    <td className="px-4 py-3 text-sm font-medium">{component.component_product_name}</td>
+                    <ProductName as="td"
+                      className="px-4 py-3 text-sm font-medium"
+                     name={component.component_product_name} />
                     <td className="px-4 py-3 text-sm">{component.quantity}</td>
                   </tr>
                 ))}

@@ -166,8 +166,11 @@ export function truncateThermalItemName(name: string, settings?: ThermalPrintSet
   return name.substring(0, max);
 }
 
+import { formatProductNameHtml } from '../lib/productNameColorRules';
+
 export function formatThermalItemName(name: string, settings?: ThermalPrintSettings): string {
-  return escapeThermalHtml(truncateThermalItemName(name, settings));
+  const truncated = truncateThermalItemName(name, settings);
+  return formatProductNameHtml(truncated);
 }
 
 export const THERMAL_ITEMS_TABLE_HEAD_HTML = `

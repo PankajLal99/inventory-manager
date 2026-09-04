@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { parseBarcodesFromInput, looksLikeBarcode, sanitizeScannedBarcode } from '../../lib/scanningQueue';
 import { formatNumber, formatAmountINR, formatAppDate, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { creditAmountInWords } from '../credit/CreditInvoiceDocument';
 import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import { auth } from '../../lib/auth';
@@ -5706,7 +5707,14 @@ export default function POS() {
                         {bulkCheckResult.addable.map((a, idx) => (
                           <li key={a.barcode + String(idx)}>
                             <span className="font-mono text-sm">{formatBarcodeDisplay(a)}</span>
-                            {a.product_name && <span className="text-gray-500 ml-1">· {a.product_name}</span>}
+                            {a.product_name && (
+                              <span
+                                className="ml-1"
+                                style={getProductNameColor(a.product_name) ? { color: getProductNameColor(a.product_name) } : undefined}
+                              >
+                                · {a.product_name}
+                              </span>
+                            )}
                           </li>
                         ))}
                       </ul>

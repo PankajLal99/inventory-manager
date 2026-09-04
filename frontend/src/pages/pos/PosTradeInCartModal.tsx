@@ -4,7 +4,8 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import { posApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { Camera, Trash2, Search, Package } from 'lucide-react';
 
 export type PosTradeInReturnTag = 'returned' | 'defective' | 'unknown';
@@ -252,7 +253,10 @@ export default function PosTradeInCartModal({
                 <li key={line.id} className="border border-gray-200 rounded-lg p-3 space-y-2">
                   <div className="flex justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-medium text-gray-900 truncate">{line.product_name}</p>
+                      <ProductName as="p"
+                        className="font-medium text-gray-900 truncate"
+                        
+                       name={line.product_name} />
                       <p className="text-xs text-gray-500 font-mono">{line.barcode || '—'}</p>
                       <p className="text-xs text-gray-500">From {line.source_invoice_number}</p>
                     </div>

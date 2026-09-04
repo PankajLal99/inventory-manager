@@ -1,7 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { posApi } from '../../lib/api';
-import { formatAppDate, formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
+import { formatProductNameHtml } from '../../lib/productNameColorRules';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card, { CardHeader } from '../../components/ui/Card';
@@ -131,7 +133,7 @@ export default function CreditNoteDetail() {
         <tbody>
             ${items.map((item: any) => `
                 <tr>
-                    <td>${(item.product_name || 'Unknown').substring(0, 30)}</td>
+                    <td>${formatProductNameHtml((item.product_name || 'Unknown').substring(0, 30))}</td>
                     <td class="text-right">${item.quantity}</td>
                     <td class="text-right">₹${formatNumber(item.refund_amount)}</td>
                 </tr>
@@ -290,7 +292,9 @@ export default function CreditNoteDetail() {
                                         <TableRow key={item.id}>
                                             <TableCell>
                                                 <div>
-                                                    <p className="font-semibold text-gray-900">{item.product_name}</p>
+                                                    <ProductName as="p"
+                                                      className="font-semibold text-gray-900"
+                                                     name={item.product_name} />
                                                     <div className="flex gap-2 text-xs text-gray-500 mt-0.5">
                                                         <span>SKU: {item.product_sku}</span>
                                                     </div>

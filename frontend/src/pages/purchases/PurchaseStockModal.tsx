@@ -10,7 +10,8 @@ import {
     ArrowRightLeft
 } from 'lucide-react';
 import { purchasingApi } from '../../lib/api';
-import { formatNumber, formatDateOnlyDisplay } from '../../lib/utils';
+import { formatNumber, formatDateOnlyDisplay, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 
 interface PurchaseItem {
     id: number;
@@ -177,7 +178,9 @@ const PurchaseStockModal: React.FC<PurchaseStockModalProps> = ({
                                                     <Package className="w-5 h-5" />
                                                 </div>
                                                 <div>
-                                                    <p className="font-semibold text-slate-900">{item.product_name}</p>
+                                                    <ProductName as="p"
+                                                      className="font-semibold text-slate-900"
+                                                     name={item.product_name} />
                                                     {item.variant_name && (
                                                         <p className="text-xs text-slate-500">{item.variant_name}</p>
                                                     )}

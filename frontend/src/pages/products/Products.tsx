@@ -4,6 +4,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { getStockInfo, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X, Image as ImageIcon, Download } from 'lucide-react';
 import Button from '../../components/ui/Button';
 import Table from '../../components/ui/Table';
@@ -2131,9 +2132,7 @@ export default function Products() {
                           key={barcodeId}
                           className="flex items-center gap-1.5 px-2 py-1 bg-red-50 border border-red-200 rounded-md text-xs"
                         >
-                          <span className="font-medium text-gray-800" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
-                            {product.name}
-                          </span>
+                          <ProductName as="span" className="font-medium text-gray-800"  name={product.name} />
                           <span className="text-gray-500 font-mono">{barcode.short_code || barcode.barcode || '-'}</span>
                           <button
                             onClick={() => handleRemoveFromSelection(barcodeId)}
@@ -2191,9 +2190,7 @@ export default function Products() {
                         </td>
                         {/* Name */}
                         <td className="px-6 py-3 whitespace-nowrap">
-                          <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
-                            {product.name}
-                          </span>
+                          <ProductName as="span" className="text-sm font-medium text-gray-900"  name={product.name} />
                         </td>
                         {/* Short Code */}
                         <td className="px-6 py-3 whitespace-nowrap">
@@ -2283,9 +2280,7 @@ export default function Products() {
                         {rowSerial}
                       </td>
                       <td className="px-6 py-3 whitespace-nowrap">
-                        <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
-                          {product.name}
-                        </span>
+                        <ProductName as="span" className="text-sm font-medium text-gray-900"  name={product.name} />
                       </td>
                       <td className="px-6 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
@@ -2397,7 +2392,7 @@ export default function Products() {
                       return (
                         <td key={cellKey} className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-gray-900" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</span>
+                            <ProductName as="span" className="text-sm font-medium text-gray-900"  name={product.name} />
                             {currentTagFilter !== 'defective' && (
                               <button
                                 onClick={(e) => {
@@ -2784,7 +2779,7 @@ export default function Products() {
                     <Package className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h4 className="font-semibold text-gray-900 text-base break-words leading-tight" style={getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>{product.name}</h4>
+                        <ProductName as="h4" className="font-semibold text-gray-900 text-base break-words leading-tight"  name={product.name} />
                         {tagFilter !== 'defective' && (
                           <button
                             onClick={(e) => {

@@ -6,6 +6,7 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import { Search, AlertTriangle, Package, Plus, Minus } from 'lucide-react';
 import { formatAppDate, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
 
 interface ReplacementModalProps {
@@ -268,7 +269,7 @@ export default function ReplacementModal({ isOpen, onClose, onSuccess }: Replace
                               className="w-4 h-4 text-blue-600 rounded"
                             />
                             <div>
-                              <div className="font-medium" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name}</div>
+                              <ProductName as="div" className="font-medium"  name={item.product_name} />
                               <div className="text-sm text-gray-600">
                                 SKU: {item.product_sku}
                                 {item.barcode_value && ` | Barcode: ${item.barcode_value}`}

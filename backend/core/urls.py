@@ -3,7 +3,7 @@ from .views import (
     CustomTokenObtainPairView, CustomTokenRefreshView, register, user_me,
     user_list_create, user_detail,
     setting_list_create, setting_detail, document_theme, ledger_export_settings,
-    invoice_export_settings,
+    invoice_export_settings, product_name_color_rules,
     audit_log_list, audit_log_detail,
     global_search
 )
@@ -25,6 +25,7 @@ urlpatterns = [
     path('document-theme/', document_theme, name='document-theme'),
     path('ledger-export-settings/', ledger_export_settings, name='ledger-export-settings'),
     path('invoice-export-settings/', invoice_export_settings, name='invoice-export-settings'),
+    path('product-name-color-rules/', product_name_color_rules, name='product-name-color-rules'),
     
     # AuditLog endpoints
     path('audit-logs/', audit_log_list, name='audit-log-list'),

@@ -4,12 +4,14 @@ import { useQuery } from '@tanstack/react-query';
 import { auth } from '../../lib/auth';
 import { clearPersonalLedgerUnlockIfLeaving } from '../../lib/personalLedgerUnlock';
 import { hydrateInvoiceExportSplitFromServer } from '../../pages/invoices/invoiceExportSettings';
+import { hydrateProductNameColorRulesFromServer } from '../../lib/productNameColorRules';
 import { productsApi, reportsApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import PrintSettingsModal from '../PrintSettings';
 import ThermalPrintSettingsModal from '../ThermalPrintSettings';
+import ProductNameColorRulesSettingsModal from '../ProductNameColorRulesSettings';
 import ShortcutsHelpModal from '../ShortcutsHelpModal';
 import {
   LayoutDashboard,
@@ -65,6 +67,7 @@ export default function Layout() {
   const [_searchSelectedIndex, _setSearchSelectedIndex] = useState(-1);
   const [printSettingsOpen, setPrintSettingsOpen] = useState(false);
   const [thermalPrintSettingsOpen, setThermalPrintSettingsOpen] = useState(false);
+  const [productNameColorRulesOpen, setProductNameColorRulesOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -75,6 +78,7 @@ export default function Layout() {
 
   useEffect(() => {
     void hydrateInvoiceExportSplitFromServer();
+    void hydrateProductNameColorRulesFromServer();
   }, []);
 
   const { data: stockAlertsData } = useQuery({
@@ -597,6 +601,16 @@ export default function Layout() {
                     <button
                       onClick={() => {
                         setUserMenuOpen(false);
+                        setProductNameColorRulesOpen(true);
+                      }}
+                      className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      <Tags className="h-4 w-4 mr-3 text-gray-400" />
+                      Product Name Colors
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
                         setShortcutsHelpOpen(true);
                       }}
                       className="w-full flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
@@ -633,6 +647,11 @@ export default function Layout() {
       <ThermalPrintSettingsModal
         isOpen={thermalPrintSettingsOpen}
         onClose={() => setThermalPrintSettingsOpen(false)}
+      />
+
+      <ProductNameColorRulesSettingsModal
+        isOpen={productNameColorRulesOpen}
+        onClose={() => setProductNameColorRulesOpen(false)}
       />
 
       {/* Shortcuts Help Modal */}

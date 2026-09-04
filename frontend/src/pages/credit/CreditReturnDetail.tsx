@@ -21,9 +21,11 @@ import {
   amountForInput,
   formatAmountINR,
   formatNumber,
+  getProductNameColor,
   getTodayDateString,
   toLocalDateString,
 } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -578,7 +580,12 @@ export default function CreditReturnDetail() {
           <Table headers={['Product', 'Qty', 'Unit price', 'Line total', 'Source invoice']}>
             {items.map((item: any) => (
               <TableRow key={item.id}>
-                <TableCell className="font-medium">{item.product_name}</TableCell>
+                <TableCell
+                  className="font-medium"
+                  style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
+                >
+                  {item.product_name}
+                </TableCell>
                 <TableCell>
                   - ({formatNumber(Math.abs(parseFloat(String(item.quantity || 0)) || 0))}) - Pcs.
                 </TableCell>
@@ -809,9 +816,10 @@ export default function CreditReturnDetail() {
                       className="grid grid-cols-1 sm:grid-cols-[1fr_5.5rem_6.5rem_6rem_2.5rem] gap-2 px-3 py-3 items-center"
                     >
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-gray-900 truncate">
-                          {line.product_name}
-                        </div>
+                        <ProductName as="div"
+                          className="text-sm font-medium text-gray-900 truncate"
+                          
+                         name={line.product_name} />
                       </div>
                       <Input
                         type="text"

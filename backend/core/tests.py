@@ -376,3 +376,65 @@ class InvoiceExportSettingsTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['rowsPerPage'], 200)
+
+
+class ProductNameColorRulesSettingsTests(APITestCase):
+    """Shop-wide custom keyword rules stored as JSON array on core.Setting."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username='pname-a', password='password')
+        self.user_b = User.objects.create_user(username='pname-b', password='password')
+        self.url = reverse('product-name-color-rules')
+
+    def test_get_empty_when_unset(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
+
+    def test_put_is_shared_across_users(self):
+        self.client.force_authenticate(user=self.user_a)
+        payload = [
+            {'id': 'imported', 'keyword': 'IMPORTED', 'color': '#2563eb'},
+        ]
+        put_response = self.client.put(self.url, payload, format='json')
+        self.assertEqual(put_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(put_response.data), 1)
+        self.assertEqual(put_response.data[0]['keyword'], 'IMPORTED')
+        self.assertEqual(put_response.data[0]['scope'], 'keyword')
+
+        self.client.force_authenticate(user=self.user_b)
+        get_response = self.client.get(self.url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data[0]['color'], '#2563eb')
+        self.assertEqual(Setting.objects.filter(key='product_name_color_rules').count(), 1)
+
+    def test_put_filters_super_keywords_and_invalid_colors(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.put(
+            self.url,
+            [
+                {'id': 'bad-super', 'keyword': 'PESTING', 'color': '#418f28'},
+                {'id': 'bad-color', 'keyword': 'SPECIAL', 'color': 'not-a-color'},
+                {'id': 'ok', 'keyword': 'SPECIAL', 'color': '#111111'},
+            ],
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['keyword'], 'SPECIAL')
+
+    def test_put_preserves_whole_line_scope(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.put(
+            self.url,
+            [{'id': 'vip', 'keyword': 'VIP', 'color': '#2563eb', 'scope': 'whole_line'}],
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data[0]['scope'], 'whole_line')
+
+    def test_put_requires_array(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.put(self.url, {'keyword': 'X'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

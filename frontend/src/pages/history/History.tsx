@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { historyApi, productsApi } from '../../lib/api';
-import { formatAppDate } from '../../lib/utils';
+import { formatAppDate, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Modal from '../../components/ui/Modal';
 import { 
   History as HistoryIcon, 
@@ -712,7 +713,9 @@ export default function History() {
                           <div className="space-y-1.5 max-h-48 overflow-y-auto">
                             {(value as Array<{ product_name?: string; product_id?: number; quantity?: string; unit_price?: string }>).map((item: any, idx: number) => (
                               <div key={idx} className="text-xs text-gray-800 border-b border-gray-100 pb-1.5 last:border-0 last:pb-0">
-                                <span className="font-medium">{item.product_name ?? `Product #${item.product_id}`}</span>
+                                <ProductName as="span"
+                                  className="font-medium"
+                                 name={item.product_name ?? `Product #${item.product_id}`} />
                                 {' · '}
                                 <span>Qty: {item.quantity ?? '-'}</span>
                                 {' · '}

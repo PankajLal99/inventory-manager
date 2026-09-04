@@ -17,6 +17,7 @@ import {
   Play,
 } from 'lucide-react';
 import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import PageHeader from '../../components/ui/PageHeader';
 import Card from '../../components/ui/Card';
@@ -619,9 +620,7 @@ export default function ActiveCartsOverview() {
                                       key={item.id}
                                       className="border-b border-gray-100 last:border-0"
                                     >
-                                      <td className="px-4 py-2" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>
-                                        {item.product_name}
-                                      </td>
+                                      <ProductName as="td" className="px-4 py-2"  name={item.product_name} />
                                       <td className="px-4 py-2 font-mono text-gray-600">
                                         {visible.length ? visible.join(', ') : '—'}
                                       </td>

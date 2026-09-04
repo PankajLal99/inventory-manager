@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi, customersApi } from '../../lib/api';
 import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
@@ -775,12 +776,10 @@ export default function ReplacementPOS() {
                     >
                       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                         <div className="flex-1 min-w-0">
-                          <h3
+                          <ProductName as="h3"
                             className="font-semibold text-sm text-gray-900 break-words"
-                            style={getProductNameColor(row.product_name) ? { color: getProductNameColor(row.product_name) } : undefined}
-                          >
-                            {row.product_name}
-                          </h3>
+                            
+                           name={row.product_name} />
                           {(row.lookup_input ||
                             row.sold_barcode_value ||
                             row.barcode_short ||

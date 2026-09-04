@@ -11,6 +11,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Pagination from '../../components/ui/Pagination';
 import { formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { exportStockOverviewToPdf } from '../../utils/exportStockPdf';
 
 export default function StockOverview() {
@@ -338,12 +339,10 @@ export default function StockOverview() {
                               {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                             </button>
                             <div className="min-w-0 flex-1">
-                              <div
+                              <ProductName as="div"
                                 className="font-medium truncate"
-                                style={getProductNameColor(p.name) ? { color: getProductNameColor(p.name) } : undefined}
-                              >
-                                {p.name}
-                              </div>
+                                
+                               name={p.name} />
                               <div className="text-xs text-gray-500 mt-0.5 truncate">
                                 {p.brand_name ? p.brand_name : '—'}
                                 <span className="mx-1.5 text-gray-300">|</span>

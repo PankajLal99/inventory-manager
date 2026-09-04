@@ -19,7 +19,8 @@ import {
 } from 'lucide-react';
 import { catalogApi, creditApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { amountForInput, dateStringWithCurrentTimeISO, formatNumber, toLocalDateString } from '../../lib/utils';
+import { amountForInput, dateStringWithCurrentTimeISO, formatNumber, getProductNameColor, toLocalDateString } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import {
   addCreditCartTab,
@@ -1879,7 +1880,9 @@ export default function POSCredit() {
                           addProduct(p);
                         }}
                       >
-                        <span>
+                        <span
+                          style={getProductNameColor(p.name) ? { color: getProductNameColor(p.name) } : undefined}
+                        >
                           {p.name}
                           {p.sku ? <span className="text-gray-400 ml-2">{p.sku}</span> : null}
                         </span>
@@ -1973,9 +1976,9 @@ export default function POSCredit() {
                       {index + 1}
                     </div>
                     <div className="flex-1 min-w-[140px]">
-                      <div className="font-medium text-gray-900 text-sm">
-                        {item.product_name || item.product_display_name}
-                      </div>
+                      <ProductName as="div"
+                        className="font-medium text-gray-900 text-sm"
+                       name={item.product_name || item.product_display_name} />
                       <div className="text-xs text-gray-400">
                         {item.product ? 'catalog' : 'credit'}
                       </div>

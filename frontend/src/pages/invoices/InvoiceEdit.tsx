@@ -2,7 +2,8 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { posApi, productsApi } from '../../lib/api';
-import { formatNumber } from '../../lib/utils';
+import { formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { getPriceValidationError } from '../pos/priceValidation';
 import { parseBarcodesFromInput, looksLikeBarcode } from '../../lib/scanningQueue';
 import Button from '../../components/ui/Button';
@@ -806,7 +807,10 @@ export default function InvoiceEdit() {
                       <div className="flex items-center gap-3">
                         <Package className="h-5 w-5 text-blue-500" />
                         <div>
-                          <div className="font-medium text-gray-900 text-sm">{product.name}</div>
+                          <ProductName as="div"
+                            className="font-medium text-gray-900 text-sm"
+                            
+                           name={product.name} />
                           <div className="text-[10px] text-gray-500 font-mono">SKU: {product.sku}</div>
                         </div>
                       </div>
@@ -851,7 +855,10 @@ export default function InvoiceEdit() {
                   <TableRow key={item.id}>
                     <TableCell>
                       <div className="min-w-[180px] max-w-[320px]">
-                        <p className="font-medium text-gray-900">{item.product_name}</p>
+                        <ProductName as="p"
+                          className="font-medium text-gray-900"
+                          
+                         name={item.product_name} />
                         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                           {item.scanned_barcodes_display && item.scanned_barcodes_display.length > 0 ? (
                             <span className="text-[10px] text-gray-500 font-mono bg-gray-50 px-1.5 py-0.5 border border-gray-100 rounded break-all">

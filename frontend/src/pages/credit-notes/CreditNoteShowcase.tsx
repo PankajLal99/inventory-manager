@@ -1,7 +1,9 @@
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { posApi } from '../../lib/api';
-import { formatAppDate, formatNumber } from '../../lib/utils';
+import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
+import { formatProductNameHtml } from '../../lib/productNameColorRules';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -179,7 +181,7 @@ export default function CreditNoteShowcase() {
                 <tbody>
                     ${groupedByProduct.map((g: GroupedProduct) => `
                         <tr>
-                            <td>${g.productName}${g.productBrandName ? ` (${g.productBrandName})` : ''}${g.barcodes.length > 0 ? `<br><small style="color:#666;">Barcodes: ${g.barcodes.join(', ')}</small>` : ''}</td>
+                            <td>${formatProductNameHtml(g.productName)}${g.productBrandName ? ` (${g.productBrandName})` : ''}${g.barcodes.length > 0 ? `<br><small style="color:#666;">Barcodes: ${g.barcodes.join(', ')}</small>` : ''}</td>
                             <td class="text-center">${formatNumber(g.totalQty, 3)}</td>
                         </tr>
                     `).join('')}
@@ -291,7 +293,7 @@ export default function CreditNoteShowcase() {
         <tbody>
             ${groupedByProduct.map((g: GroupedProduct) => `
                 <tr>
-                    <td>${(g.productName + (g.productBrandName ? ` (${g.productBrandName})` : '')).substring(0, 30)}${g.barcodes.length > 0 ? '<br><small>Barcodes: ' + g.barcodes.slice(0, 5).join(', ') + (g.barcodes.length > 5 ? '...' : '') + '</small>' : ''}</td>
+                    <td>${formatProductNameHtml((g.productName + (g.productBrandName ? ` (${g.productBrandName})` : '')).substring(0, 30))}${g.barcodes.length > 0 ? '<br><small>Barcodes: ' + g.barcodes.slice(0, 5).join(', ') + (g.barcodes.length > 5 ? '...' : '') + '</small>' : ''}</td>
                     <td class="text-right">${formatNumber(g.totalQty, 0)}</td>
                 </tr>
             `).join('')}
@@ -462,7 +464,10 @@ export default function CreditNoteShowcase() {
                                     groupedByProduct.map((g, idx) => (
                                         <TableRow key={idx}>
                                             <TableCell>
-                                                <span className="font-semibold text-gray-900">{g.productName}</span>
+                                                <ProductName as="span"
+                                                  className="font-semibold text-gray-900"
+                                                  
+                                                 name={g.productName} />
                                                 {g.productBrandName && (
                                                     <span className="text-gray-500 font-normal"> ({g.productBrandName})</span>
                                                 )}

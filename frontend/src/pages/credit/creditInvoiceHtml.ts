@@ -1,4 +1,5 @@
 import { formatAmountINR } from '../../lib/utils';
+import { formatProductNameHtml } from '../../lib/productNameColorRules';
 import { creditAmountInWords } from './CreditInvoiceDocument';
 import {
   docFooterFontPx,
@@ -187,7 +188,7 @@ export function buildCreditInvoiceHtml(input: CreditInvoiceHtmlInput): string {
     .map(
       (r, i) => `<tr style="background:${docRowBackground(theme, i)};">
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:42px;font-size:${itemFont};color:${theme.secondaryMuted};font-weight:${itemWeight};">${r.idx}</td>
-      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:left;font-size:${itemFont};font-weight:${itemWeight};color:${theme.text};">${escapeHtml(r.name)}</td>
+      <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:left;font-size:${itemFont};font-weight:${itemWeight};color:${theme.text};">${formatProductNameHtml(r.name)}</td>
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:${isReturn ? '78' : '64'}px;font-size:${itemFont};font-weight:${itemWeight};">${escapeHtml(qtyDisplay(r.qty))}</td>
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:center;width:${isReturn ? '64' : '52'}px;font-size:${itemFont};font-weight:${itemWeight};color:${theme.textMuted};">${escapeHtml(unitDisplay)}</td>
       <td style="border:1px solid ${theme.primaryBorder};padding:${cellPad};text-align:right;width:80px;font-size:${itemFont};font-weight:${itemWeight};">${escapeHtml(formatAmountINR(r.price))}</td>
