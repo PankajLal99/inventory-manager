@@ -4,7 +4,7 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import BarcodeScanner from '../../components/BarcodeScanner';
 import { posApi } from '../../lib/api';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { Camera, Trash2, Search, Package } from 'lucide-react';
 

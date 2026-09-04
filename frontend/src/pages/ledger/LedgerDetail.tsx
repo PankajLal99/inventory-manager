@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { customersApi, catalogApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
 import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
-import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';

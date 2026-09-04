@@ -1,5 +1,4 @@
 import { formatAmountINR, getProductNameColor } from '../../lib/utils';
-import ProductName from '../../components/ProductName';
 import { formatCreditInvoiceDate } from './creditLedgerUtils';
 import { CREDIT_SHOP_NAME } from './creditInvoiceHtml';
 

@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
 import { formatAppDate, formatNumber, getProductNameColor, toLocalDateString } from '../../lib/utils';
-import ProductName from '../../components/ProductName';
 import { formatProductNameHtml } from '../../lib/productNameColorRules';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';

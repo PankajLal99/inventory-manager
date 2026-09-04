@@ -4,7 +4,7 @@ import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { productsApi, catalogApi } from '../../lib/api';
 import Badge from '../../components/ui/Badge';
 import { Box, Barcode, Package, DollarSign, ShoppingCart, AlertCircle, Store, Warehouse, ChevronDown, ChevronRight, FileText } from 'lucide-react';
-import { formatAppDate, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import { formatAppDate, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';

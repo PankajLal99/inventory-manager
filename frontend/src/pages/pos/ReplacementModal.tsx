@@ -5,7 +5,7 @@ import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import { Search, AlertTriangle, Package, Plus, Minus } from 'lucide-react';
-import { formatAppDate, getProductNameColor } from '../../lib/utils';
+import { formatAppDate } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { invoiceLineSticker } from '../../lib/invoiceLineSticker';
 

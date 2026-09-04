@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment, useMemo, type KeyboardEvent as R
 import { useQuery, useQueries, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatAppDate, formatNumber, toLocalDateString, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber, toLocalDateString } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { auth } from '../../lib/auth';
 import Table, { TableRow, TableCell } from '../../components/ui/Table';

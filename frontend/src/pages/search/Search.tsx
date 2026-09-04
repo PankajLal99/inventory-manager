@@ -21,7 +21,7 @@ import {
   X,
   Image as ImageIcon,
 } from 'lucide-react';
-import { formatAppDate, formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import { formatAppDate, formatNumber, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Input from '../../components/ui/Input';
 import Badge from '../../components/ui/Badge';

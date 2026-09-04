@@ -10,7 +10,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import Pagination from '../../components/ui/Pagination';
-import { formatNumber, getProductNameColor, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
+import { formatNumber, sortSupplierBreakdownByDateDesc } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { exportStockOverviewToPdf } from '../../utils/exportStockPdf';
 

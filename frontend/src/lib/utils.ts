@@ -1,8 +1,4 @@
-import {
-  PRODUCT_NAME_COLOR_NON_PESTING,
-  PRODUCT_NAME_COLOR_PESTING,
-  resolveProductNameColor,
-} from './productNameColorRules';
+import { resolveProductNameColor } from './productNameColorRules';
 
 export {
   PRODUCT_NAME_COLOR_NON_PESTING,

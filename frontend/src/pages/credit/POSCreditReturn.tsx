@@ -17,7 +17,7 @@ import {
   finishDocumentPartsAndQueueLedger,
 } from './creditDocumentClipboard';
 import { catalogApi, creditApi } from '../../lib/api';
-import { amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
+import { amountForInput, formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';

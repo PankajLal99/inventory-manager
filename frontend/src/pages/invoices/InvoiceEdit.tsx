@@ -2,7 +2,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { posApi, productsApi } from '../../lib/api';
-import { formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { getPriceValidationError } from '../pos/priceValidation';
 import { parseBarcodesFromInput, looksLikeBarcode } from '../../lib/scanningQueue';

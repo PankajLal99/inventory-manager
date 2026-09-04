@@ -2,7 +2,7 @@ import { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi, customersApi } from '../../lib/api';
-import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';

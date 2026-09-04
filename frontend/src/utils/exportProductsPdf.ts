@@ -342,6 +342,181 @@ export function sortProductsByCategoryThenBrand(products: any[]): any[] {
   });
 }
 
+/** Sort products by brand, then category, then name. */
+export function sortProductsByBrandThenCategory(products: any[]): any[] {
+  return [...products].sort((a, b) => {
+    const byBrand = compareText(brandLabel(a), brandLabel(b));
+    if (byBrand !== 0) return byBrand;
+    const byCategory = compareText(categoryLabel(a), categoryLabel(b));
+    if (byCategory !== 0) return byCategory;
+    return compareText(sanitizePdfText(a.name) || '', sanitizePdfText(b.name) || '');
+  });
+}
+
+export type ProductPdfDensity = 'spacious' | 'compact' | 'high_compact';
+export type ProductPdfPageBreak = 'brand' | 'category' | 'none';
+
+export const DEFAULT_PRODUCT_PDF_DENSITY: ProductPdfDensity = 'compact';
+export const DEFAULT_PRODUCT_PDF_PAGE_BREAK: ProductPdfPageBreak = 'brand';
+
+export const PRODUCT_PDF_DENSITY_OPTIONS: Array<{
+  id: ProductPdfDensity;
+  label: string;
+  description: string;
+}> = [
+  { id: 'spacious', label: 'Spacious', description: 'Comfortable padding between rows' },
+  { id: 'compact', label: 'Compact', description: 'Tighter rows, more products per page' },
+  {
+    id: 'high_compact',
+    label: 'High compact',
+    description: 'Two side-by-side tables with the selected columns',
+  },
+];
+
+export const PRODUCT_PDF_PAGE_BREAK_OPTIONS: Array<{
+  id: ProductPdfPageBreak;
+  label: string;
+}> = [
+  { id: 'brand', label: 'Brand' },
+  { id: 'category', label: 'Category' },
+  { id: 'none', label: 'Continuous — keep flowing' },
+];
+
+export function normalizeProductPdfDensity(value: unknown): ProductPdfDensity {
+  if (value === 'spacious' || value === 'compact' || value === 'high_compact') return value;
+  return DEFAULT_PRODUCT_PDF_DENSITY;
+}
+
+export function normalizeProductPdfPageBreak(value: unknown): ProductPdfPageBreak {
+  if (value === 'brand' || value === 'category' || value === 'none') return value;
+  return DEFAULT_PRODUCT_PDF_PAGE_BREAK;
+}
+
+export type ProductPdfDensityStyles = {
+  fontSize: number;
+  cellPadding: number;
+  margin: number;
+  overflow: 'linebreak' | 'ellipsize';
+  titleSize: number;
+  sectionSize: number;
+};
+
+export function getPdfDensityStyles(density: ProductPdfDensity): ProductPdfDensityStyles {
+  switch (density) {
+    case 'spacious':
+      return {
+        fontSize: 8,
+        cellPadding: 2,
+        margin: 14,
+        overflow: 'linebreak',
+        titleSize: 16,
+        sectionSize: 11,
+      };
+    case 'high_compact':
+      return {
+        fontSize: 6,
+        cellPadding: 0.35,
+        margin: 8,
+        overflow: 'ellipsize',
+        titleSize: 11,
+        sectionSize: 9,
+      };
+    case 'compact':
+    default:
+      return {
+        fontSize: 7,
+        cellPadding: 0.7,
+        margin: 10,
+        overflow: 'linebreak',
+        titleSize: 13,
+        sectionSize: 10,
+      };
+  }
+}
+
+export function resolvePdfOrientation(
+  columnCount: number,
+  density: ProductPdfDensity
+): 'portrait' | 'landscape' {
+  if (density === 'high_compact') {
+    return columnCount > 4 ? 'landscape' : 'portrait';
+  }
+  return columnCount > 6 ? 'landscape' : 'portrait';
+}
+
+export type ProductPdfSection = {
+  key: string;
+  label: string | null;
+  products: any[];
+};
+
+export function groupProductsForPdfPages(
+  products: any[],
+  pageBreak: ProductPdfPageBreak
+): ProductPdfSection[] {
+  if (pageBreak === 'none') {
+    return [{ key: 'all', label: null, products: sortProductsByCategoryThenBrand(products) }];
+  }
+
+  const sorted =
+    pageBreak === 'brand'
+      ? sortProductsByBrandThenCategory(products)
+      : sortProductsByCategoryThenBrand(products);
+
+  const sections: ProductPdfSection[] = [];
+  sorted.forEach((product) => {
+    const key = pageBreak === 'brand' ? brandLabel(product) : categoryLabel(product);
+    const last = sections[sections.length - 1];
+    if (!last || last.key !== key) {
+      sections.push({
+        key,
+        label: pageBreak === 'brand' ? `Brand: ${key}` : `Category: ${key}`,
+        products: [product],
+      });
+    } else {
+      last.products.push(product);
+    }
+  });
+  return sections;
+}
+
+export function chunkRowsForTwoColumns<T>(
+  rows: T[],
+  rowsPerColumn: number
+): Array<{ left: T[]; right: T[] }> {
+  const perCol = Math.max(1, Math.floor(rowsPerColumn) || 1);
+  const pages: Array<{ left: T[]; right: T[] }> = [];
+  for (let i = 0; i < rows.length; i += perCol * 2) {
+    const pageRows = rows.slice(i, i + perCol * 2);
+    if (pageRows.length <= perCol) {
+      pages.push({ left: pageRows, right: [] });
+    } else {
+      pages.push({
+        left: pageRows.slice(0, perCol),
+        right: pageRows.slice(perCol),
+      });
+    }
+  }
+  return pages;
+}
+
+/** Estimate how many body rows fit in one table column on a page. */
+export function estimateRowsPerColumn(options: {
+  pageHeight: number;
+  startY: number;
+  bottomMargin: number;
+  fontSize: number;
+  cellPadding: number;
+}): number {
+  const mmPerPt = 25.4 / 72;
+  const lineHeight = 1.15;
+  const textMm = options.fontSize * lineHeight * mmPerPt;
+  const rowMm = textMm + options.cellPadding * 2 + 0.4;
+  const headMm = textMm + options.cellPadding * 2 + 1;
+  const usable = options.pageHeight - options.startY - options.bottomMargin - headMm;
+  return Math.max(1, Math.floor(usable / rowMm));
+}
+
 type PdfBodyRow =
   | { kind: 'category'; label: string }
   | { kind: 'brand'; label: string }
@@ -351,26 +526,36 @@ function buildGroupedBody(
   products: any[],
   cols: ProductExportColumnDef[],
   tagFilter: string,
-  priceOffset: number
+  priceOffset: number,
+  options: {
+    productIndexStart?: number;
+    showCategoryHeaders?: boolean;
+    showBrandHeaders?: boolean;
+  } = {}
 ): PdfBodyRow[] {
+  const {
+    productIndexStart = 0,
+    showCategoryHeaders = true,
+    showBrandHeaders = true,
+  } = options;
   const sorted = sortProductsByCategoryThenBrand(products);
   const rows: PdfBodyRow[] = [];
   let lastCategory = '';
   let lastBrand = '';
-  let productIndex = 0;
+  let productIndex = productIndexStart;
 
   sorted.forEach((product) => {
     const category = categoryLabel(product);
     const brand = brandLabel(product);
     const prices = resolveExportPrices(product);
 
-    if (category !== lastCategory) {
+    if (showCategoryHeaders && category !== lastCategory) {
       rows.push({ kind: 'category', label: `Category: ${category}` });
       lastCategory = category;
       lastBrand = '';
     }
 
-    if (brand !== lastBrand) {
+    if (showBrandHeaders && brand !== lastBrand) {
       rows.push({ kind: 'brand', label: `Brand: ${brand}` });
       lastBrand = brand;
     }
@@ -426,7 +611,45 @@ export type ExportProductsPdfOptions = {
   filterLabels?: string[];
   /** Temporary amount added to purchase/selling price columns in the PDF only. */
   priceOffset?: number;
+  density?: ProductPdfDensity;
+  pageBreak?: ProductPdfPageBreak;
 };
+
+function groupedRowsToBody(rows: PdfBodyRow[], colCount: number): string[][] {
+  return rows.map((row) => {
+    if (row.kind === 'product') return row.cells;
+    return [row.label, ...Array(Math.max(colCount - 1, 0)).fill('')];
+  });
+}
+
+function applyGroupHeaderCellStyles(
+  data: any,
+  rowMeta: PdfBodyRow | undefined,
+  colCount: number,
+  density: ProductPdfDensity
+) {
+  if (data.section !== 'body') return;
+  if (!rowMeta || rowMeta.kind === 'product') return;
+
+  const compactHeaders = density !== 'spacious';
+  if (data.column.index === 0) {
+    data.cell.colSpan = colCount;
+    data.cell.styles.fontStyle = 'bold';
+    data.cell.styles.halign = 'left';
+    if (rowMeta.kind === 'category') {
+      data.cell.styles.fillColor = [30, 64, 175];
+      data.cell.styles.textColor = 255;
+      data.cell.styles.fontSize = compactHeaders ? 7 : 9;
+    } else {
+      data.cell.styles.fillColor = [219, 234, 254];
+      data.cell.styles.textColor = [30, 64, 175];
+      data.cell.styles.fontSize = compactHeaders ? 6 : 8;
+    }
+  } else {
+    data.cell.styles.fillColor = rowMeta.kind === 'category' ? [30, 64, 175] : [219, 234, 254];
+    data.cell.text = [];
+  }
+}
 
 export function exportProductsToPdf({
   products,
@@ -434,95 +657,168 @@ export function exportProductsToPdf({
   tagFilter = 'new',
   filterLabels: _filterLabels = [],
   priceOffset = 0,
+  density: densityInput,
+  pageBreak: pageBreakInput,
 }: ExportProductsPdfOptions): void {
   const selectedColumns = PRODUCT_EXPORT_COLUMNS.filter((c) => columnIds.includes(c.id));
   const cols = selectedColumns.length
     ? selectedColumns
     : PRODUCT_EXPORT_COLUMNS.filter((c) => c.defaultOn);
 
+  const density = normalizeProductPdfDensity(densityInput);
+  const pageBreak = normalizeProductPdfPageBreak(pageBreakInput);
+  const styles = getPdfDensityStyles(density);
   const safeOffset =
     Number.isFinite(priceOffset) && priceOffset > 0 ? Math.floor(priceOffset) : 0;
 
-  const orientation = cols.length > 6 ? 'landscape' : 'portrait';
+  const orientation = resolvePdfOrientation(cols.length, density);
   const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 14;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = styles.margin;
+  const fontSize = cols.length > 8 && density === 'spacious' ? 7 : styles.fontSize;
 
-  doc.setFontSize(16);
-  doc.setTextColor(31, 41, 55);
-  doc.text('Products Export', margin, 18);
-
-  doc.setFontSize(9);
-  doc.setTextColor(107, 114, 128);
-  const metaY = 25;
-  doc.text(`Generated: ${toLocalDateString(new Date())}`, margin, metaY);
-
-  const groupedRows = buildGroupedBody(products, cols, tagFilter, safeOffset);
-
-  const body = groupedRows.map((row) => {
-    if (row.kind === 'product') return row.cells;
-    // Span-style label in first cell; rest empty (styled in didParseCell)
-    return [row.label, ...Array(Math.max(cols.length - 1, 0)).fill('')];
-  });
-
-  const columnStyles: Record<number, { cellWidth?: number; halign?: 'center' | 'left' | 'right' }> = {};
+  const columnStyles: Record<number, { cellWidth?: number; halign?: 'center' | 'left' | 'right' }> =
+    {};
   cols.forEach((col, idx) => {
     if (col.id === 'sr') {
-      columnStyles[idx] = { cellWidth: 12, halign: 'center' };
+      columnStyles[idx] = {
+        cellWidth: density === 'high_compact' ? 8 : density === 'compact' ? 10 : 12,
+        halign: 'center',
+      };
     }
   });
 
-  autoTable(doc, {
-    startY: metaY + 4,
-    head: [cols.map((c) => pdfColumnLabel(c))],
-    body,
-    styles: {
-      fontSize: cols.length > 8 ? 7 : 8,
-      cellPadding: 2,
-      overflow: 'linebreak',
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [37, 99, 235],
-      textColor: 255,
-      fontStyle: 'bold',
-      fontSize: cols.length > 8 ? 7 : 8,
-    },
-    columnStyles,
-    alternateRowStyles: { fillColor: [249, 250, 251] },
-    margin: { left: margin, right: margin },
-    didParseCell: (data) => {
-      if (data.section !== 'body') return;
-      const rowMeta = groupedRows[data.row.index];
-      if (!rowMeta || rowMeta.kind === 'product') return;
+  const headerBottom = (sectionLabel: string | null) => (sectionLabel ? 26 : 22);
 
-      if (data.column.index === 0) {
-        data.cell.colSpan = cols.length;
-        data.cell.styles.fontStyle = 'bold';
-        data.cell.styles.halign = 'left';
-        if (rowMeta.kind === 'category') {
-          data.cell.styles.fillColor = [30, 64, 175];
-          data.cell.styles.textColor = 255;
-          data.cell.styles.fontSize = cols.length > 8 ? 8 : 9;
-        } else {
-          data.cell.styles.fillColor = [219, 234, 254];
-          data.cell.styles.textColor = [30, 64, 175];
-          data.cell.styles.fontSize = cols.length > 8 ? 7 : 8;
+  const drawPageChrome = (sectionLabel: string | null) => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(styles.titleSize);
+    doc.setTextColor(31, 41, 55);
+    doc.text('Products Export', margin, 12);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(107, 114, 128);
+    doc.text(`Generated: ${toLocalDateString(new Date())}`, margin, 17);
+
+    if (sectionLabel) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(styles.sectionSize);
+      doc.setTextColor(30, 64, 175);
+      doc.text(sectionLabel, margin, 22);
+    }
+  };
+
+  const drawTable = (
+    bodyRows: PdfBodyRow[],
+    startY: number,
+    tableMargin: { top: number; left: number; right: number; bottom: number },
+    tableWidth: number | 'auto',
+    pageBreakMode: 'auto' | 'avoid',
+    onDrawPage?: () => void
+  ) => {
+    autoTable(doc, {
+      startY,
+      tableWidth,
+      pageBreak: pageBreakMode,
+      showHead: 'everyPage',
+      head: [cols.map((c) => pdfColumnLabel(c))],
+      body: groupedRowsToBody(bodyRows, cols.length),
+      styles: {
+        fontSize,
+        cellPadding: styles.cellPadding,
+        overflow: styles.overflow,
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [37, 99, 235],
+        textColor: 255,
+        fontStyle: 'bold',
+        fontSize,
+        cellPadding: styles.cellPadding,
+      },
+      columnStyles,
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      margin: tableMargin,
+      didParseCell: (data) => applyGroupHeaderCellStyles(data, bodyRows[data.row.index], cols.length, density),
+      willDrawPage: onDrawPage ? () => onDrawPage() : undefined,
+    });
+  };
+
+  const sections = groupProductsForPdfPages(products, pageBreak);
+  const showCategoryHeaders = pageBreak !== 'category';
+  const showBrandHeaders = pageBreak !== 'brand';
+  let productIndex = 0;
+  let usedFirstPage = false;
+
+  const startNewPageIfNeeded = () => {
+    if (!usedFirstPage) {
+      usedFirstPage = true;
+      return;
+    }
+    doc.addPage();
+  };
+
+  sections.forEach((section) => {
+    const groupedRows = buildGroupedBody(section.products, cols, tagFilter, safeOffset, {
+      productIndexStart: productIndex,
+      showCategoryHeaders,
+      showBrandHeaders,
+    });
+    productIndex += section.products.length;
+
+    const top = headerBottom(section.label);
+    const tableMargin = { top, left: margin, right: margin, bottom: margin };
+
+    if (density === 'high_compact') {
+      const gap = 3;
+      const tableWidth = (pageWidth - margin * 2 - gap) / 2;
+      const rowsPerColumn = Math.max(
+        1,
+        estimateRowsPerColumn({
+          pageHeight,
+          startY: top,
+          bottomMargin: margin,
+          fontSize,
+          cellPadding: styles.cellPadding,
+        }) - 2
+      );
+      const pages = chunkRowsForTwoColumns(groupedRows, rowsPerColumn);
+
+      pages.forEach((page) => {
+        startNewPageIfNeeded();
+        drawPageChrome(section.label);
+        drawTable(
+          page.left,
+          top,
+          { ...tableMargin, right: margin + tableWidth + gap },
+          tableWidth,
+          'avoid'
+        );
+        if (page.right.length > 0) {
+          drawTable(
+            page.right,
+            top,
+            { ...tableMargin, left: margin + tableWidth + gap },
+            tableWidth,
+            'avoid'
+          );
         }
-      } else {
-        data.cell.styles.fillColor = rowMeta.kind === 'category' ? [30, 64, 175] : [219, 234, 254];
-        data.cell.text = [];
-      }
-    },
+      });
+      return;
+    }
+
+    startNewPageIfNeeded();
+    drawTable(groupedRows, top, tableMargin, 'auto', 'auto', () => drawPageChrome(section.label));
   });
 
   const summary = buildProductExportSummary(products);
   const summaryText = formatProductExportSummary(summary);
-  const finalY = (doc as any).lastAutoTable?.finalY ?? metaY + 10;
-  const pageHeight = doc.internal.pageSize.getHeight();
-  let summaryY = finalY + 10;
+  const finalY = (doc as any).lastAutoTable?.finalY ?? 30;
+  let summaryY = finalY + 8;
 
-  if (summaryY > pageHeight - 20) {
+  if (summaryY > pageHeight - 18) {
     doc.addPage();
     summaryY = 20;
   }

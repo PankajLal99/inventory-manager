@@ -21,7 +21,6 @@ import {
   amountForInput,
   formatAmountINR,
   formatNumber,
-  getProductNameColor,
   getTodayDateString,
   toLocalDateString,
 } from '../../lib/utils';
@@ -580,11 +579,8 @@ export default function CreditReturnDetail() {
           <Table headers={['Product', 'Qty', 'Unit price', 'Line total', 'Source invoice']}>
             {items.map((item: any) => (
               <TableRow key={item.id}>
-                <TableCell
-                  className="font-medium"
-                  style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                >
-                  {item.product_name}
+                <TableCell className="font-medium">
+                  <ProductName name={item.product_name} />
                 </TableCell>
                 <TableCell>
                   - ({formatNumber(Math.abs(parseFloat(String(item.quantity || 0)) || 0))}) - Pcs.

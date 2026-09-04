@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { posApi } from '../../lib/api';
-import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { formatProductNameHtml } from '../../lib/productNameColorRules';
 import Badge from '../../components/ui/Badge';

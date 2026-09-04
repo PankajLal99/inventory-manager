@@ -3,13 +3,20 @@ import { AlertTriangle, Download, Loader2 } from 'lucide-react';
 import Modal from '../../components/ui/Modal';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import Select from '../../components/ui/Select';
 import {
+  DEFAULT_PRODUCT_PDF_DENSITY,
+  DEFAULT_PRODUCT_PDF_PAGE_BREAK,
   PRODUCT_EXPORT_COLUMNS,
+  PRODUCT_PDF_DENSITY_OPTIONS,
+  PRODUCT_PDF_PAGE_BREAK_OPTIONS,
   defaultProductExportColumnIds,
   exportProductsToPdf,
   formatFallbackPriceChange,
   getSellingPriceFallbackInfo,
   type ProductExportColumnId,
+  type ProductPdfDensity,
+  type ProductPdfPageBreak,
   type SellingPriceFallbackInfo,
 } from '../../utils/exportProductsPdf';
 
@@ -44,6 +51,8 @@ export default function ProductExportModal({
   const [selectedIds, setSelectedIds] = useState<ProductExportColumnId[]>(
     () => defaultProductExportColumnIds()
   );
+  const [density, setDensity] = useState<ProductPdfDensity>(DEFAULT_PRODUCT_PDF_DENSITY);
+  const [pageBreak, setPageBreak] = useState<ProductPdfPageBreak>(DEFAULT_PRODUCT_PDF_PAGE_BREAK);
   const [priceOffsetInput, setPriceOffsetInput] = useState('');
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,6 +107,8 @@ export default function ProductExportModal({
       tagFilter,
       filterLabels,
       priceOffset,
+      density,
+      pageBreak,
     });
     resetPending();
     onClose();
@@ -219,6 +230,60 @@ export default function ProductExportModal({
             </div>
           </div>
 
+          <div>
+            <h4 className="text-sm font-semibold text-gray-900 mb-2">Row density</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {PRODUCT_PDF_DENSITY_OPTIONS.map((option) => {
+                const selected = density === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setDensity(option.id)}
+                    className={`text-left rounded-lg border px-3 py-2 transition-colors ${
+                      selected
+                        ? 'border-blue-600 bg-blue-50 ring-1 ring-blue-600'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-gray-900">{option.label}</span>
+                      {option.id === DEFAULT_PRODUCT_PDF_DENSITY ? (
+                        <span className="text-[10px] uppercase tracking-wide text-gray-400">
+                          default
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 text-xs text-gray-500">{option.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <Select
+            label="Start a new page for"
+            value={pageBreak}
+            onChange={(e) => setPageBreak(e.target.value as ProductPdfPageBreak)}
+          >
+            {PRODUCT_PDF_PAGE_BREAK_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.id === DEFAULT_PRODUCT_PDF_PAGE_BREAK
+                  ? `${option.label} (default)`
+                  : option.label}
+              </option>
+            ))}
+          </Select>
+          <p className="-mt-2 text-xs text-gray-500">
+            {pageBreak === 'brand'
+              ? density === 'high_compact'
+                ? 'Each brand fills two columns, then the next brand starts on a new page.'
+                : 'Each brand starts on a new page. Categories stay grouped under the brand.'
+              : pageBreak === 'category'
+                ? 'Each category starts on a new page. Brands stay grouped under the category.'
+                : 'No forced page breaks. Products stay grouped by category, then brand.'}
+          </p>
+
           <div className="rounded-lg border border-gray-200 p-3 space-y-2">
             <Input
               label="Price adjustment (PDF only)"
@@ -242,8 +307,9 @@ export default function ProductExportModal({
           </div>
 
           <p className="text-xs text-gray-500">
-            PDF is grouped by category, then brand, and ends with a summary of product, category, and
-            brand counts.
+            {density === 'high_compact'
+              ? 'High compact puts two product tables side by side, each with the columns selected above.'
+              : 'PDF ends with a summary of product, category, and brand counts.'}
           </p>
 
           {error ? <p className="text-sm text-red-600">{error}</p> : null}

@@ -16,7 +16,7 @@ import {
   Search,
   Play,
 } from 'lucide-react';
-import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import PageHeader from '../../components/ui/PageHeader';

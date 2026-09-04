@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { historyApi, productsApi } from '../../lib/api';
-import { formatAppDate, getProductNameColor } from '../../lib/utils';
+import { formatAppDate } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Modal from '../../components/ui/Modal';
 import { 

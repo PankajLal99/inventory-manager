@@ -28,7 +28,6 @@ import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
 import { formatNumber, formatAppDate, getStockInfo, getProductNameColor } from '../../lib/utils';
-import ProductName from '../../components/ProductName';
 import {
   buildThermalPrintCss,
   buildThermalReceiptHeaderHtml,

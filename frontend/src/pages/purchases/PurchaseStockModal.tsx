@@ -10,7 +10,7 @@ import {
     ArrowRightLeft
 } from 'lucide-react';
 import { purchasingApi } from '../../lib/api';
-import { formatNumber, formatDateOnlyDisplay, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatDateOnlyDisplay } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 
 interface PurchaseItem {
