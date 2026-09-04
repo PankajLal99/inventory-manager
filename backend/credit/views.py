@@ -1910,7 +1910,7 @@ def credit_ledger_by_customer(request):
         qs = qs.filter(next_follow_up_date__isnull=False)
 
     # Oldest ledger activity first; newest at the bottom; no-entry accounts last
-    qs = qs.order_by(F('last_activity_at').asc(nulls_last=True), 'name')[:200]
+    qs = qs.order_by(F('last_activity_at').asc(nulls_last=True), 'name')
 
     out = []
     for row in qs:
