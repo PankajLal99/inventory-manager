@@ -198,7 +198,7 @@ class CreditLedgerStatementOrderTests(TestCase):
 
 
 class MainLedgerSentSyncTimestampTests(TestCase):
-    """Payments-page Sent should post credit at 12:00 AM on the click day."""
+    """Payments-page Sent should post credit at 12:00 AM on the payment entry date."""
 
     def setUp(self):
         self.user = TestDataFactory.create_user()
@@ -210,11 +210,11 @@ class MainLedgerSentSyncTimestampTests(TestCase):
             is_active=True,
         )
 
-    def _midnight_today(self):
-        now = timezone.localtime(timezone.now())
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    def _local_midnight_of(self, dt):
+        local = timezone.localtime(dt)
+        return local.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    def test_sent_payment_is_stamped_at_local_midnight_today(self):
+    def test_sent_payment_is_stamped_at_local_midnight_of_entry_date(self):
         yesterday_afternoon = timezone.localtime(timezone.now()).replace(
             hour=15, minute=30, second=0, microsecond=0
         ) - timedelta(days=1)
@@ -233,12 +233,15 @@ class MainLedgerSentSyncTimestampTests(TestCase):
 
         payment = CreditPayment.objects.get(source_ledger_entry_id=entry.id)
         ledger_row = CreditLedgerEntry.objects.get(payment=payment)
-        expected = self._midnight_today()
+        expected = self._local_midnight_of(yesterday_afternoon)
         self.assertEqual(timezone.localtime(payment.paid_at), expected)
         self.assertEqual(timezone.localtime(ledger_row.created_at), expected)
         self.assertNotEqual(timezone.localtime(payment.paid_at), yesterday_afternoon)
 
-    def test_rebuild_keeps_original_sent_midnight(self):
+    def test_rebuild_keeps_midnight_of_payment_entry_date(self):
+        yesterday_afternoon = timezone.localtime(timezone.now()).replace(
+            hour=15, minute=30, second=0, microsecond=0
+        ) - timedelta(days=1)
         entry = LedgerEntry.objects.create(
             customer=self.party,
             entry_type='credit',
@@ -246,9 +249,11 @@ class MainLedgerSentSyncTimestampTests(TestCase):
             amount=Decimal('200.00'),
             is_sent=True,
             created_by=self.user,
+            created_at=yesterday_afternoon,
         )
         sync_main_ledger_payment(entry, self.user)
         original_paid_at = CreditPayment.objects.get(source_ledger_entry_id=entry.id).paid_at
+        self.assertEqual(timezone.localtime(original_paid_at), self._local_midnight_of(yesterday_afternoon))
 
         entry.amount = Decimal('250.00')
         entry.save(update_fields=['amount'])

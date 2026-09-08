@@ -51,10 +51,12 @@ def _ledger_description(method: str, notes: str) -> str:
     return f'From main ledger — {text}' if text else 'From main ledger — Payment received'
 
 
-def _local_midnight_today():
-    """12:00 AM on the local day Sent was clicked, so the credit row leads that day."""
-    now = timezone.localtime(timezone.now())
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+def _local_midnight_of(dt):
+    """12:00 AM on the local calendar day of dt so the credit row leads that day."""
+    if dt is None:
+        dt = timezone.now()
+    local = timezone.localtime(dt)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def _create_synced_payment(
@@ -186,7 +188,6 @@ def sync_main_ledger_payment(ledger_entry, user=None) -> None:
         existing = list(
             CreditPayment.objects.filter(source_ledger_entry_id=ledger_entry.id).order_by('id')
         )
-        previous_paid_at = existing[0].paid_at if existing else None
         if existing:
             restored = Decimal('0.00')
             for payment in existing:
@@ -204,9 +205,9 @@ def sync_main_ledger_payment(ledger_entry, user=None) -> None:
             method, amount, ledger_entry.cash_amount, ledger_entry.upi_amount
         )
         notes = (ledger_entry.description or '').strip()
-        # New Sent clicks stamp midnight today so the credit row is first that day.
-        # Rebuilds keep the original sent timestamp.
-        paid_at = previous_paid_at or _local_midnight_today()
+        # Stamp midnight of the Payments-page entry date (not the Sent-click day),
+        # so credit-ledger date matches the payment entry date.
+        paid_at = _local_midnight_of(ledger_entry.created_at)
 
         if method == 'mixed':
             # Two separate credit-ledger rows so cash and UPI appear distinctly.
