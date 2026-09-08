@@ -48,10 +48,10 @@ class ProductNameSearchZeroQtyTests(TestCase):
         )
         self.assertIn(product.id, self._product_ids(response))
 
-    def test_fresh_tab_without_search_hides_defective_only_product(self):
-        name = 'OLED FOLDER 1+NORD 5/RENO 14 PRO NON PESTING HIDE'
+    def test_all_stock_shows_zero_qty_defective_only_product(self):
+        name = 'OLED FOLDER 1+NORD 5/RENO 14 PRO NON PESTING ALL'
         product = TestDataFactory.create_product(name=name)
         TestDataFactory.create_barcode(product, tag='defective')
 
         response = self._list(tag='new', lite='true', exclude_other_custom='true', limit=50)
-        self.assertNotIn(product.id, self._product_ids(response))
+        self.assertIn(product.id, self._product_ids(response))

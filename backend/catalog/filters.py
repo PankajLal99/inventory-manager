@@ -518,37 +518,10 @@ class ProductFilter(django_filters.FilterSet):
                 Q(id__in=sold_invoice_product_ids)
             )
         elif value == 'new':
-            # Name-only search (Products page, Purchases, global-style lookup) must find the
-            # SKU even when qty is 0 — sold out, never purchased, or only defective/unknown
-            # barcodes. Browse-without-search still uses the Fresh-tab barcode filter below.
-            request_data = getattr(self, 'data', {}) or {}
-            search = (request_data.get('search') or '').strip()
-            search_mode = request_data.get('search_mode') or 'all'
-            if isinstance(search_mode, (list, tuple)):
-                search_mode = search_mode[0] if search_mode else 'all'
-            if search and str(search_mode).strip().lower() == 'name_only':
-                return queryset
-
-            # For 'new' tag: products with 'new' barcodes OR products without any barcodes
-            # OPTIMIZATION: Use Exists() subqueries - most efficient for large datasets
-            # Exists() generates optimized SQL with EXISTS clause instead of IN
-            
-            # Subquery: Check if product has any "normal" barcode (new, returned, sold, or in-cart)
-            # This ensures products don't disappear when sold out or when they only have returns
-            has_normal_barcode = Barcode.objects.filter(
-                product_id=OuterRef('pk'),
-                tag__in=['new', 'returned', 'sold', 'in-cart']
-            )
-            
-            # Subquery: Check if product has ANY barcodes at all
-            has_any_barcode = Barcode.objects.filter(
-                product_id=OuterRef('pk')
-            )
-            
-            # Filter: Products with normal barcodes OR no barcodes at all
-            return queryset.filter(
-                Q(Exists(has_normal_barcode)) | ~Q(Exists(has_any_barcode))
-            ).distinct()
+            # Fresh / All Stock: do not hide zero-qty SKUs (sold out, never purchased,
+            # or only defective/unknown barcodes). Stock counts still use new+returned
+            # barcodes in the list serializer; Sold/Defective tabs keep their own filters.
+            return queryset
         else:
             # EXISTS avoids JOIN + DISTINCT across the whole barcodes table, which is
             # what made /products/?tag=defective hang for 15+ seconds.

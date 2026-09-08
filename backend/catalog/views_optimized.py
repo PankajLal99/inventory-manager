@@ -100,7 +100,7 @@ def _optimized_product_list_internal(request):
         'include_barcodes': request.query_params.get('include_barcodes', ''),
         'include_prices': request.query_params.get('include_prices', ''),
         # Bump when list filter semantics change so stale Redis pages are not served.
-        'v': 'name_search_zero_qty',
+        'v': 'all_stock_zero_qty',
     }
     
     # Try cache first (skip if Redis not available)
