@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { parseBarcodesFromInput, looksLikeBarcode, sanitizeScannedBarcode } from '../../lib/scanningQueue';
-import { formatNumber, formatAmountINR, formatAppDate, getStockInfo, getProductNameColor, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import { formatNumber, formatAmountINR, formatAppDate, getStockInfo, toLocalDateString, dateStringWithCurrentTimeISO } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { creditAmountInWords } from '../credit/CreditInvoiceDocument';
 import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import { auth } from '../../lib/auth';
@@ -4814,9 +4815,12 @@ export default function POS() {
                                   <div className={`font-medium truncate flex items-center gap-2 ${isOutOfStock
                                     ? 'text-gray-500'
                                     : 'text-gray-900 group-hover:text-blue-900'
-                                    }`}
-                                    style={!isOutOfStock && getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
-                                    {product.name}
+                                    }`}>
+                                    {isOutOfStock ? (
+                                      product.name
+                                    ) : (
+                                      <ProductName name={product.name} className="truncate" />
+                                    )}
                                     {isOutOfStock && (
                                       <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
                                     )}
@@ -5043,9 +5047,11 @@ export default function POS() {
                             <h3
                               className="font-semibold text-sm text-gray-900 break-words"
                               title={[item.product_name, item.product_brand_name, item.product_supplier_name].filter(Boolean).join(' • ')}
-                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
                             >
-                              {item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
+                              <ProductName name={item.product_name} />
+                              {item.product_brand_name ? (
+                                <span className="text-gray-700 font-normal"> - {item.product_brand_name}</span>
+                              ) : null}
                               {item.product_supplier_name ? (
                                 <span className="text-gray-500 font-normal ml-1">({item.product_supplier_name})</span>
                               ) : null}
@@ -5707,11 +5713,8 @@ export default function POS() {
                           <li key={a.barcode + String(idx)}>
                             <span className="font-mono text-sm">{formatBarcodeDisplay(a)}</span>
                             {a.product_name && (
-                              <span
-                                className="ml-1"
-                                style={getProductNameColor(a.product_name) ? { color: getProductNameColor(a.product_name) } : undefined}
-                              >
-                                · {a.product_name}
+                              <span className="ml-1">
+                                · <ProductName name={a.product_name} />
                               </span>
                             )}
                           </li>

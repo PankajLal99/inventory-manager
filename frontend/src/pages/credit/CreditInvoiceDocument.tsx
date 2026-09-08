@@ -1,4 +1,5 @@
-import { formatAmountINR, getProductNameColor } from '../../lib/utils';
+import { formatAmountINR } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import { formatCreditInvoiceDate } from './creditLedgerUtils';
 import { CREDIT_SHOP_NAME } from './creditInvoiceHtml';
 
@@ -201,11 +202,8 @@ export default function CreditInvoiceDocument({ invoice, className = '' }: Props
                     <td className="border border-amber-300 px-2 py-1.5 text-center font-semibold text-amber-900">
                       {idx + 1}
                     </td>
-                    <td
-                      className="border border-amber-300 px-3 py-1.5 font-semibold"
-                      style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                    >
-                      {item.product_name || '—'}
+                    <td className="border border-amber-300 px-3 py-1.5 font-semibold">
+                      <ProductName name={item.product_name || '—'} />
                     </td>
                     <td className="border border-amber-300 px-2 py-1.5 text-right tabular-nums font-semibold">
                       {Number.isInteger(qty) ? qty : formatAmountINR(qty)}

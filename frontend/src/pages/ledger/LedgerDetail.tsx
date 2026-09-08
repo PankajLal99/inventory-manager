@@ -3,7 +3,9 @@ import { useQuery, useMutation, useQueryClient, useQueries } from '@tanstack/rea
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { customersApi, catalogApi, posApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput, formatNumber, getProductNameColor } from '../../lib/utils';
+import { DateRangePreset, formatAmountINR, formatAppDate, toLocalDateString, dateStringWithCurrentTimeISO, amountForInput, formatNumber } from '../../lib/utils';
+import { formatProductNameHtml } from '../../lib/productNameColorRules';
+import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import DatePicker from '../../components/ui/DatePicker';
@@ -381,11 +383,9 @@ export default function LedgerDetail() {
     let itemsHtml = Object.values(groupedItems).map((group) => {
       const avgUnitPrice = group.totalQuantity > 0 ? group.totalAmount / group.totalQuantity : 0;
       const productDisplay = group.brand ? `${group.name} (${group.brand})` : group.name;
-      const productColor = getProductNameColor(group.name);
-      const productColorStyle = productColor ? ` color: ${productColor};` : '';
       return `
         <tr style="border-bottom: 1px solid #eee;">
-          <td style="border-bottom: 1px solid #eee;${productColorStyle}">${productDisplay}</td>
+          <td style="border-bottom: 1px solid #eee;">${formatProductNameHtml(productDisplay)}</td>
           <td style="border-bottom: 1px solid #eee; text-align: center;">${formatNumber(group.totalQuantity, 3)}</td>
           <td style="border-bottom: 1px solid #eee; text-align: right;">${formatNumber(avgUnitPrice, 2)}</td>
           <td style="border-bottom: 1px solid #eee; text-align: center;">PCS</td>
@@ -1085,12 +1085,8 @@ export default function LedgerDetail() {
                       {entry.invoice && invoiceItemsMap[entry.invoice] ? (
                         <div className="flex flex-col gap-0.5">
                           {invoiceItemsMap[entry.invoice].map((item, idx) => (
-                            <span
-                              key={idx}
-                              className="text-xs text-gray-700"
-                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                            >
-                              {item.product_name} <span className="text-gray-400">×</span> {item.quantity}
+                            <span key={idx} className="text-xs text-gray-700">
+                              <ProductName name={item.product_name} /> <span className="text-gray-400">×</span> {item.quantity}
                             </span>
                           ))}
                         </div>

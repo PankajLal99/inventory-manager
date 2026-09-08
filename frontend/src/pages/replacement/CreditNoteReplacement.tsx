@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { posApi } from '../../lib/api';
-import { formatAppDate, formatNumber, getProductNameColor } from '../../lib/utils';
+import { formatAppDate, formatNumber } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -1070,11 +1070,8 @@ export default function CreditNoteReplacement() {
                           <li key={p.item_id ?? idx}>
                             <span className="font-mono text-sm">{formatBarcodeDisplay(p)}</span>
                             {p.product_name && (
-                              <span
-                                className="text-gray-500 ml-1"
-                                style={getProductNameColor(p.product_name) ? { color: getProductNameColor(p.product_name) } : undefined}
-                              >
-                                · {p.product_name}
+                              <span className="ml-1">
+                                · <ProductName name={p.product_name} />
                               </span>
                             )}
                           </li>
@@ -1095,11 +1092,8 @@ export default function CreditNoteReplacement() {
                           <li key={p.barcode_id ?? idx}>
                             <span className="font-mono text-sm">{formatBarcodeDisplay(p)}</span>
                             {p.product_name && (
-                              <span
-                                className="text-gray-500 ml-1"
-                                style={getProductNameColor(p.product_name) ? { color: getProductNameColor(p.product_name) } : undefined}
-                              >
-                                · {p.product_name}
+                              <span className="ml-1">
+                                · <ProductName name={p.product_name} />
                               </span>
                             )}
                           </li>

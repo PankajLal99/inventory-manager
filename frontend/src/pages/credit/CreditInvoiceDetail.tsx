@@ -19,7 +19,7 @@ import {
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { creditApi } from '../../lib/api';
-import { amountForInput, formatAmountINR, formatNumber, getProductNameColor, getTodayDateString, toLocalDateString } from '../../lib/utils';
+import { amountForInput, formatAmountINR, formatNumber, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -759,11 +759,8 @@ export default function CreditInvoiceDetail() {
                 return (
                   <TableRow key={item.id ?? idx}>
                     <TableCell>
-                      <span
-                        className="font-medium text-gray-900"
-                        style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                      >
-                        {item.product_name || '—'}
+                      <span className="font-medium text-gray-900">
+                        <ProductName name={item.product_name || '—'} />
                       </span>
                     </TableCell>
                     <TableCell>
@@ -790,11 +787,8 @@ export default function CreditInvoiceDetail() {
                   key={item.id ?? idx}
                   className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm"
                 >
-                  <p
-                    className="font-medium text-gray-900"
-                    style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                  >
-                    {item.product_name || '—'}
+                  <p className="font-medium text-gray-900">
+                    <ProductName name={item.product_name || '—'} />
                   </p>
                   <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
                     <div>

@@ -27,7 +27,8 @@ import ProductForm from '../products/ProductForm';
 import RepairModal from './RepairModal';
 import usePosKeyboardShortcuts from './hooks/usePosKeyboardShortcuts';
 import ShortcutsHelpModal from '../../components/ShortcutsHelpModal';
-import { formatNumber, formatAppDate, getStockInfo, getProductNameColor } from '../../lib/utils';
+import { formatNumber, formatAppDate, getStockInfo } from '../../lib/utils';
+import ProductName from '../../components/ProductName';
 import {
   buildThermalPrintCss,
   buildThermalReceiptHeaderHtml,
@@ -3556,9 +3557,12 @@ export default function POS() {
                                   <div className={`font-medium truncate flex items-center gap-2 ${isOutOfStock
                                     ? 'text-gray-500'
                                     : 'text-gray-900 group-hover:text-blue-900'
-                                    }`}
-                                    style={!isOutOfStock && getProductNameColor(product.name) ? { color: getProductNameColor(product.name) } : undefined}>
-                                    {product.name}
+                                    }`}>
+                                    {isOutOfStock ? (
+                                      product.name
+                                    ) : (
+                                      <ProductName name={product.name} className="truncate" />
+                                    )}
                                     {isOutOfStock && (
                                       <AlertTriangle className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
                                     )}
@@ -3701,9 +3705,11 @@ export default function POS() {
                             <h3
                               className="font-semibold text-sm text-gray-900 break-words"
                               title={item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
-                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
                             >
-                              {item.product_brand_name ? `${item.product_name} - ${item.product_brand_name}` : item.product_name}
+                              <ProductName name={item.product_name} />
+                              {item.product_brand_name ? (
+                                <span className="text-gray-700 font-normal"> - {item.product_brand_name}</span>
+                              ) : null}
                             </h3>
                             {/* Edit Product Button */}
                             <button

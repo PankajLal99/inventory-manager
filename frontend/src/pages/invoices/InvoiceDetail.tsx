@@ -3,8 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { formatNumber, formatAmountINR, formatAppDate, getProductNameColor, getTodayDateString, toLocalDateString } from '../../lib/utils';
+import { formatNumber, formatAmountINR, formatAppDate, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
+import { formatProductNameHtml } from '../../lib/productNameColorRules';
 import { toast } from '../../lib/toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
@@ -638,11 +639,8 @@ export default function InvoiceDetail() {
           {posTradeInsRows.map((row: any, idx: number) => (
             <TableRow key={idx}>
               <TableCell>
-                <span
-                  className="text-sm text-gray-900"
-                  style={getProductNameColor(row.product_name) ? { color: getProductNameColor(row.product_name) } : undefined}
-                >
-                  {row.product_name || '—'}
+                <span className="text-sm text-gray-900">
+                  <ProductName name={row.product_name || '—'} />
                 </span>
               </TableCell>
               <TableCell>
@@ -1906,14 +1904,12 @@ export default function InvoiceDetail() {
       .map((group, i) => {
         const avgUnitPrice = group.totalQuantity > 0 ? group.totalAmount / group.totalQuantity : 0;
         const productDisplay = group.brand ? `${group.name} (${group.brand})` : group.name;
-        const productColor = getProductNameColor(group.name);
-        const nameColor = productColor || T.text;
         const exchangeHtml = group.items
           .map((item: any) => formatExchangeSnapshotPrintHtml(exchangeSnapshotForItem(inv, item.id)))
           .join('');
         return `<tr style="background:${i % 2 === 1 ? T.rowAlt : T.white};">
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:42px;font-size:12px;color:${T.secondaryMuted};font-weight:600;">${lineOffset + i + 1}</td>
-      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:left;font-size:12px;font-weight:600;color:${nameColor};">${escapeHtml(productDisplay)}${exchangeHtml}</td>
+      <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:left;font-size:12px;font-weight:600;color:${T.text};">${formatProductNameHtml(productDisplay)}${exchangeHtml}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:64px;font-size:12px;font-weight:600;">${escapeHtml(formatNumber(group.totalQuantity, 3))}</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:center;width:52px;font-size:12px;color:${T.textMuted};">Pcs.</td>
       <td style="border:1px solid ${T.primaryBorder};padding:7px 8px;text-align:right;width:80px;font-size:12px;">${escapeHtml(formatAmountINR(avgUnitPrice))}</td>
@@ -2435,8 +2431,6 @@ export default function InvoiceDetail() {
             ? `${group.name} (${group.brand})`
             : group.name;
           const displayText = formatThermalItemName(productDisplay, thermalSettings);
-          const productColor = getProductNameColor(group.name);
-          const productColorStyle = productColor ? ` style="color: ${productColor};"` : '';
 
           const exchangeRows = group.items
             .map((item: any) => {
@@ -2457,7 +2451,7 @@ export default function InvoiceDetail() {
 
           return `
                     <tr>
-                      <td class="col-item"${productColorStyle}>${displayText}</td>
+                      <td class="col-item">${displayText}</td>
                       <td class="col-qty text-right">${group.totalQuantity}</td>
                       <td class="col-price text-right">₹${formatNumber(group.avgPrice)}</td>
                       <td class="col-total text-right">₹${formatNumber(group.totalAmount)}</td>
@@ -4547,7 +4541,7 @@ export default function InvoiceDetail() {
                                   return (
                                     <tr key={`${groupKey}_barcode_${barcodeIndex} `} className="bg-gray-50 hover:bg-gray-100 transition-colors">
                                       <td className="px-4 py-3 pl-12">
-                                        <div className="text-xs text-gray-500" style={getProductNameColor(group.productName) ? { color: getProductNameColor(group.productName) } : undefined}>↳ {group.productName}</div>
+                                        <div className="text-xs text-gray-500">↳ <ProductName name={group.productName} /></div>
                                       </td>
                                       <td className="px-4 py-3">
                                         <div className="text-xs text-gray-600 font-mono">{barcodeItem.barcode}</div>
@@ -6219,7 +6213,7 @@ export default function InvoiceDetail() {
                       <div key={item.id} className="border border-gray-200 rounded-lg p-4">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
-                            <h5 className="font-semibold text-gray-900" style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}>{item.product_name || '-'}</h5>
+                            <h5 className="font-semibold text-gray-900"><ProductName name={item.product_name || '-'} /></h5>
                             <div className="text-sm text-gray-600 flex items-center gap-2 flex-wrap">
                               <span>SKU: {item.barcode_value || item.product_sku || 'N/A'}</span>
                               {(item.replacement_ref?.return_tag || item.barcode_tag) && (

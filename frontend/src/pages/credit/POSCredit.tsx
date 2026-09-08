@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { catalogApi, creditApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { amountForInput, dateStringWithCurrentTimeISO, formatNumber, getProductNameColor, toLocalDateString } from '../../lib/utils';
+import { amountForInput, dateStringWithCurrentTimeISO, formatNumber, toLocalDateString } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { useGuardedAsync } from '../../hooks/useGuardedAsync';
 import {
@@ -1880,10 +1880,8 @@ export default function POSCredit() {
                           addProduct(p);
                         }}
                       >
-                        <span
-                          style={getProductNameColor(p.name) ? { color: getProductNameColor(p.name) } : undefined}
-                        >
-                          {p.name}
+                        <span>
+                          <ProductName name={p.name} />
                           {p.sku ? <span className="text-gray-400 ml-2">{p.sku}</span> : null}
                         </span>
                         <span className="text-xs uppercase text-gray-400">{p.source}</span>

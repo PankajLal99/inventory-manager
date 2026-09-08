@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { productsApi, inventoryApi, catalogApi, purchasingApi } from '../../lib/api';
 import { auth } from '../../lib/auth';
-import { getStockInfo, getProductNameColor } from '../../lib/utils';
+import { getStockInfo } from '../../lib/utils';
 import ProductName from '../../components/ProductName';
 import { Plus, Edit, Barcode, AlertTriangle, TrendingDown, Package, Trash2, Printer, Eye, Loader2, Filter, Tag, RotateCcw, CheckCircle, XCircle, ShoppingCart, Coins, FileText, X, Image as ImageIcon, Download } from 'lucide-react';
 import Button from '../../components/ui/Button';
@@ -3096,8 +3096,7 @@ export default function Products() {
                 {adjustingProduct ? (() => {
                   const p = allProducts.find((p: any) => p.id === adjustingProduct);
                   const name = p?.name || 'Unknown';
-                  const color = getProductNameColor(name);
-                  return <span style={color ? { color } : undefined}>{name}</span>;
+                  return <ProductName name={name} />;
                 })() : 'Select product'}
               </div>
             </div>

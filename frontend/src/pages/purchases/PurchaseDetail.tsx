@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasingApi, productsApi } from '../../lib/api';
-import { formatAppDate, formatNumber, getProductNameColor, toLocalDateString } from '../../lib/utils';
+import { formatAppDate, formatNumber, toLocalDateString } from '../../lib/utils';
 import { formatProductNameHtml } from '../../lib/productNameColorRules';
+import ProductName from '../../components/ProductName';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
@@ -862,11 +863,8 @@ export default function PurchaseDetail() {
                     return (
                       <TableRow key={item.id || index}>
                         <TableCell>
-                          <div
-                            className="font-medium text-gray-900"
-                            style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                          >
-                            {item.product_name || 'Product'}
+                          <div className="font-medium text-gray-900">
+                            <ProductName name={item.product_name || 'Product'} />
                           </div>
                         </TableCell>
                         <TableCell>
@@ -1085,11 +1083,8 @@ export default function PurchaseDetail() {
                       return (
                         <tr key={item.id}>
                           <td className="px-4 py-3">
-                            <div
-                              className="text-sm font-medium text-gray-900"
-                              style={getProductNameColor(item.product_name) ? { color: getProductNameColor(item.product_name) } : undefined}
-                            >
-                              {item.product_name || 'Product'}
+                            <div className="text-sm font-medium text-gray-900">
+                              <ProductName name={item.product_name || 'Product'} />
                             </div>
                             <div className="text-xs text-gray-500">{item.product_sku || 'N/A'}</div>
                           </td>
