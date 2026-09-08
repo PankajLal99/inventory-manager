@@ -518,6 +518,17 @@ class ProductFilter(django_filters.FilterSet):
                 Q(id__in=sold_invoice_product_ids)
             )
         elif value == 'new':
+            # Name-only search (Products page, Purchases, global-style lookup) must find the
+            # SKU even when qty is 0 — sold out, never purchased, or only defective/unknown
+            # barcodes. Browse-without-search still uses the Fresh-tab barcode filter below.
+            request_data = getattr(self, 'data', {}) or {}
+            search = (request_data.get('search') or '').strip()
+            search_mode = request_data.get('search_mode') or 'all'
+            if isinstance(search_mode, (list, tuple)):
+                search_mode = search_mode[0] if search_mode else 'all'
+            if search and str(search_mode).strip().lower() == 'name_only':
+                return queryset
+
             # For 'new' tag: products with 'new' barcodes OR products without any barcodes
             # OPTIMIZATION: Use Exists() subqueries - most efficient for large datasets
             # Exists() generates optimized SQL with EXISTS clause instead of IN
