@@ -43,6 +43,11 @@ else:
     ALLOWED_HOSTS = ['ec2-13-127-116-174.ap-south-1.compute.amazonaws.com','127.0.0.1','13.127.116.174', 'localhost', 'mtpos-api.intratechnosolutions.com', 'mtims-api.intratechnosolutions.com']
 
     SECURE_SSL_REDIRECT = True
+    # K45 ADMS speaks plain HTTP to the public IP; do not 301 these paths to HTTPS.
+    SECURE_REDIRECT_EXEMPT = [
+        r'^iclock/',
+        r'^health/',
+    ]
     USE_X_FORWARDED_HOST = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
