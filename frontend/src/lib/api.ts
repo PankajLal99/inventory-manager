@@ -826,6 +826,8 @@ export const salaryBookApi = {
     list: () => api.get('/salary-book/devices/', sb as any),
     syncMappings: (id: number) =>
       api.post(`/salary-book/devices/${id}/sync-mappings/`, {}, sb as any),
+    pushEmployees: (id: number) =>
+      api.post(`/salary-book/devices/${id}/push-employees/`, {}, sb as any),
   },
   deviceMappings: {
     list: (params?: { device?: number }) =>

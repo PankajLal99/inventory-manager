@@ -8,7 +8,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from backend.attendance.models import Device, DeviceCommand, DeviceUserMapping
-from backend.attendance.services.commands import sync_mapping_to_device
+from backend.attendance.services.commands import (
+    push_all_employees_to_device,
+    sync_mapping_to_device,
+)
 from backend.salary_book.models import Employee
 from backend.salary_book.permissions import IsSalaryBookUser, user_is_salary_book_admin
 
@@ -227,6 +230,25 @@ def device_sync_all_mappings(request, pk):
     for mapping in device.user_mappings.filter(is_active=True):
         total += len(sync_mapping_to_device(mapping))
     return Response({'queued': total})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def device_push_all_employees(request, pk):
+    """
+    Create PIN mappings for every ACTIVE Salary Book employee (EMP-001 → PIN 1)
+    and queue USERINFO register commands (name+PIN only).
+    """
+    denied = _admin_required(request)
+    if denied:
+        return denied
+    device = Device.objects.filter(pk=pk).first()
+    if not device:
+        return Response({'error': 'Device not found.'}, status=404)
+    result = push_all_employees_to_device(device)
+    if not result.get('ok'):
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+    return Response(result)
 
 
 @api_view(['GET'])

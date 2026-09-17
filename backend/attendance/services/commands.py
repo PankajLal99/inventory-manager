@@ -164,6 +164,94 @@ def sync_employee_name_to_devices(employee_id: str, name: str) -> int:
     return count
 
 
+def default_pin_for_employee(employee_id: str) -> str | None:
+    """EMP-001 → '1'; returns None if no trailing digits."""
+    match = re.search(r'(\d+)$', (employee_id or '').strip())
+    if not match:
+        return None
+    return str(int(match.group(1)))
+
+
+def _next_free_pin(used: set[str], preferred: str | None = None) -> str:
+    if preferred and preferred not in used:
+        return preferred
+    n = 1
+    while str(n) in used:
+        n += 1
+    return str(n)
+
+
+def push_all_employees_to_device(device: Device) -> dict:
+    """
+    Ensure every ACTIVE Salary Book employee has a PIN mapping on this device,
+    then queue USERINFO (name+PIN only) for each. Safe to re-run.
+    """
+    from backend.salary_book.models import Employee
+
+    if not device.is_accepted:
+        return {
+            'ok': False,
+            'error': 'Device must be Active and is_active before pushing users.',
+            'created': 0,
+            'updated': 0,
+            'queued': 0,
+            'employees': 0,
+        }
+
+    employees = list(
+        Employee.objects.filter(status=Employee.STATUS_ACTIVE).order_by('employee_id')
+    )
+    existing = {
+        m.employee_id: m
+        for m in DeviceUserMapping.objects.filter(device=device).select_related('device')
+    }
+    used_pins = {
+        m.device_user_id
+        for m in DeviceUserMapping.objects.filter(device=device)
+    }
+
+    created = 0
+    updated = 0
+    queued = 0
+
+    for emp in employees:
+        mapping = existing.get(emp.employee_id)
+        if mapping is None:
+            pin = _next_free_pin(used_pins, default_pin_for_employee(emp.employee_id))
+            mapping = DeviceUserMapping.objects.create(
+                device=device,
+                device_user_id=pin,
+                employee_id=emp.employee_id,
+                employee_name=emp.name,
+                is_active=True,
+            )
+            used_pins.add(pin)
+            existing[emp.employee_id] = mapping
+            created += 1
+        else:
+            fields: list[str] = []
+            if mapping.employee_name != emp.name:
+                mapping.employee_name = emp.name
+                fields.append('employee_name')
+            if not mapping.is_active:
+                mapping.is_active = True
+                fields.append('is_active')
+            if fields:
+                fields.append('updated_at')
+                mapping.save(update_fields=fields)
+                updated += 1
+
+        queued += len(sync_mapping_to_device(mapping))
+
+    return {
+        'ok': True,
+        'created': created,
+        'updated': updated,
+        'queued': queued,
+        'employees': len(employees),
+    }
+
+
 def next_pending_command(device: Device) -> DeviceCommand | None:
     with transaction.atomic():
         cmd = (

@@ -92,6 +92,20 @@ export default function DeviceMappingsPage() {
     onError: (err) => toast(apiError(err, 'Sync all failed.'), 'error'),
   });
 
+  const pushEmployeesMutation = useMutation({
+    mutationFn: async (id: number) => salaryBookApi.devices.pushEmployees(id),
+    onSuccess: async (res) => {
+      const d = res.data as { created?: number; queued?: number; employees?: number };
+      toast(
+        `Mapped ${d.created ?? 0} new · queued ${d.queued ?? 0} for ${d.employees ?? 0} employees`,
+        'success',
+      );
+      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'device-mappings'] });
+      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'device-commands'] });
+    },
+    onError: (err) => toast(apiError(err, 'Push employees failed.'), 'error'),
+  });
+
   const devices = devicesQuery.data || [];
   const defaultDevice = useMemo(() => {
     if (deviceId) return deviceId;
@@ -111,8 +125,10 @@ export default function DeviceMappingsPage() {
       <div>
         <h1 className="text-xl lg:text-2xl font-bold">Device mappings</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Map fingerprint machine PIN → Salary Book employee. Push registers name + PIN only (no
-          fingerprint or password). Device picks commands up on the next ~30s poll.
+          Map fingerprint machine PIN → Salary Book employee. Use{' '}
+          <strong>Push all employees</strong> after emptying the device: creates PIN mappings
+          (EMP-001 → PIN 1) and registers name + PIN only (no fingerprint). Device picks commands
+          up on the next ~30s poll — then enroll fingerprints on the machine.
         </p>
       </div>
 
@@ -135,16 +151,26 @@ export default function DeviceMappingsPage() {
                 </div>
               </div>
               {admin && d.is_active && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-10"
-                  loading={syncAllMutation.isPending}
-                  onClick={() => syncAllMutation.mutate(d.id)}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  Push all users
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    className="bg-emerald-600 hover:bg-emerald-700 min-h-10"
+                    loading={pushEmployeesMutation.isPending}
+                    onClick={() => pushEmployeesMutation.mutate(d.id)}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Push all employees
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-10"
+                    loading={syncAllMutation.isPending}
+                    onClick={() => syncAllMutation.mutate(d.id)}
+                  >
+                    Re-push mappings
+                  </Button>
+                </div>
               )}
             </div>
           ))}

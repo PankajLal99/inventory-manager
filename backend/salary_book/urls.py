@@ -67,6 +67,11 @@ urlpatterns = [
         name='salary-book-device-sync-mappings',
     ),
     path(
+        'salary-book/devices/<int:pk>/push-employees/',
+        attendance_api.device_push_all_employees,
+        name='salary-book-device-push-employees',
+    ),
+    path(
         'salary-book/device-mappings/',
         attendance_api.mapping_list_create,
         name='salary-book-mapping-list',

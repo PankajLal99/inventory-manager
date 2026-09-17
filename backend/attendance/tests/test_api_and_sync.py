@@ -169,6 +169,40 @@ class DeviceMappingApiTests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data['queued'], 1)
 
+    def test_push_all_employees_creates_mappings_and_queues(self):
+        self.client.force_authenticate(user=self.admin)
+        Employee.objects.create(
+            employee_id='EMP-002',
+            name='AMIT',
+            mobile='9876543211',
+            date_of_joining=date(2025, 1, 1),
+            monthly_salary=Decimal('25000'),
+        )
+        DeviceCommand.objects.all().delete()
+        res = self.client.post(
+            reverse('salary-book-device-push-employees', args=[self.device.id])
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['employees'], 2)
+        self.assertEqual(res.data['created'], 2)
+        self.assertEqual(res.data['queued'], 2)
+        pins = set(
+            DeviceUserMapping.objects.filter(device=self.device).values_list(
+                'device_user_id', flat=True
+            )
+        )
+        self.assertEqual(pins, {'1', '2'})
+        self.assertEqual(DeviceCommand.objects.filter(purpose='USERINFO_UPSERT').count(), 2)
+
+    def test_push_all_employees_requires_active_device(self):
+        self.client.force_authenticate(user=self.admin)
+        self.device.is_active = False
+        self.device.save(update_fields=['is_active'])
+        res = self.client.post(
+            reverse('salary-book-device-push-employees', args=[self.device.id])
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 class EmployeeNameSyncTests(APITestCase):
     def setUp(self):
