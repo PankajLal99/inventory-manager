@@ -1,6 +1,7 @@
 import { loadPrintSettings, PrintSettings } from '../components/PrintSettings';
 
-// Helper to convert URL to Base64
+let lastPrintWindow: Window | null = null;
+
 const appendCacheBust = (url: string): string => {
   if (!/^https?:\/\//i.test(url)) return url;
   const separator = url.includes('?') ? '&' : '?';
@@ -23,6 +24,22 @@ const convertImageToDataURL = async (url: string): Promise<string> => {
   }
 };
 
+const closePrintWindow = (printWindow: Window | null) => {
+  if (!printWindow || printWindow.closed) return;
+  try {
+    printWindow.close();
+  } catch {
+    // Popup may already be gone.
+  }
+};
+
+const openPrintWindow = (): Window | null => {
+  closePrintWindow(lastPrintWindow);
+  const printWindow = window.open(`about:blank?print=${Date.now()}`, '_blank');
+  lastPrintWindow = printWindow;
+  return printWindow;
+};
+
 export const printLabelsFromResponse = async (responseData: any) => {
   const labels = (responseData?.labels || []).filter((label: any) => label?.image);
   const rawUrls = labels.map((label: any) => appendCacheBust(label.image));
@@ -32,18 +49,15 @@ export const printLabelsFromResponse = async (responseData: any) => {
     return;
   }
 
-  // Load print settings
   const settings: PrintSettings = loadPrintSettings();
   const pageMargin = settings.pageMargin;
   const labelWidth = settings.labelWidth;
   const labelHeight = settings.labelHeight;
   const gapBetweenLabels = settings.gapBetweenLabels;
-  
-  // Calculate printable area (label size minus margins)
+
   const printableWidth = labelWidth - (pageMargin * 2);
   const printableHeight = labelHeight - (pageMargin * 2);
 
-  // Convert all images to Base64 before opening the window
   const imageUrls = await Promise.all(
     rawUrls.map((url: string) => convertImageToDataURL(url))
   );
@@ -51,10 +65,14 @@ export const printLabelsFromResponse = async (responseData: any) => {
   const normalizedTags = labels.map((label: any) => String(label?.barcode_tag || label?.tag || 'new').toLowerCase());
   const isBlockedTag = (tag: string) => tag === 'sold' || tag === 'defective';
 
-  // Open print preview in one tab with all labels
-  const printWindow = window.open('', '_blank');
-  if (printWindow) {
-    printWindow.document.write(`
+  const printWindow = openPrintWindow();
+  if (!printWindow) {
+    alert('Please allow popups to print labels.');
+    return;
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
@@ -165,17 +183,13 @@ export const printLabelsFromResponse = async (responseData: any) => {
                 overflow: hidden;
                 page-break-inside: avoid;
                 break-inside: avoid;
+                page-break-after: always;
+                break-after: page;
                 box-sizing: border-box;
                 position: relative;
               }
               .status-pill {
                 display: none;
-              }
-              .label-container:not(:last-child) {
-                page-break-after: always;
-              }
-              .label-container:last-child {
-                page-break-after: auto;
               }
               /* Force consistent styling for print - account for margins */
               img {
@@ -210,27 +224,15 @@ export const printLabelsFromResponse = async (responseData: any) => {
           }).join('')}
           <script>
             (function() {
-              // Images are already base64, so they should be loaded instantly.
-              // We just need to handle the layout logic.
-              
               var images = document.querySelectorAll('img');
               var totalImages = images.length;
-              
-              // Use settings from parent scope
-              var pageMargin = ${pageMargin};
               var labelWidth = ${labelWidth};
               var labelHeight = ${labelHeight};
               var printableWidth = ${printableWidth};
               var printableHeight = ${printableHeight};
-              
+
               function finalizeLayout() {
-                 // Account for margins
-                 // Effective printable area
-                 var printableWidth = ${printableWidth}; // labelWidth - (pageMargin * 2)
-                 var printableHeight = ${printableHeight}; // labelHeight - (pageMargin * 2)
-                 
                  if (totalImages === 1) {
-                    // Single label centering
                     document.documentElement.style.width = labelWidth + 'mm';
                     document.documentElement.style.height = labelHeight + 'mm';
                     document.documentElement.style.margin = '0';
@@ -249,10 +251,9 @@ export const printLabelsFromResponse = async (responseData: any) => {
                     document.body.style.margin = '0';
                     document.body.style.padding = '0';
                   }
-                  
-                  // Style containers - use printable area size and ensure vertical centering
+
                   var containers = document.querySelectorAll('.label-container');
-                  containers.forEach(function(container, index) {
+                  containers.forEach(function(container) {
                     container.style.width = printableWidth + 'mm';
                     container.style.height = printableHeight + 'mm';
                     container.style.maxWidth = printableWidth + 'mm';
@@ -262,58 +263,58 @@ export const printLabelsFromResponse = async (responseData: any) => {
                     container.style.margin = '0';
                     container.style.padding = '0';
                     container.style.boxSizing = 'border-box';
-                    // Ensure flexbox centering is maintained
                     container.style.display = 'flex';
                     container.style.justifyContent = 'center';
                     container.style.alignItems = 'center';
-                    if (index < containers.length - 1) {
-                      container.style.pageBreakAfter = 'always';
-                    } else {
-                      container.style.pageBreakAfter = 'auto';
-                    }
+                    // Always break after every label, including the last one, so
+                    // thermal printers eject the final sticker instead of holding it.
+                    container.style.pageBreakAfter = 'always';
+                    container.style.breakAfter = 'page';
                   });
-                  
-                  // Style images - use printable area size and ensure proper centering
+
                   images.forEach(function(img) {
                     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                       var naturalWidth = img.naturalWidth;
                       var naturalHeight = img.naturalHeight;
                       var aspectRatio = naturalWidth / naturalHeight;
-                      
-                      var maxWidth = printableWidth; // Account for margins
-                      var maxHeight = printableHeight; // Account for margins
-                      
+
+                      var maxWidth = printableWidth;
+                      var maxHeight = printableHeight;
+
                       var calculatedWidth = maxWidth;
                       var calculatedHeight = maxWidth / aspectRatio;
-                      
+
                       if (calculatedHeight > maxHeight) {
                         calculatedHeight = maxHeight;
                         calculatedWidth = maxHeight * aspectRatio;
                       }
-                      
+
                       img.style.maxWidth = calculatedWidth + 'mm';
                       img.style.maxHeight = calculatedHeight + 'mm';
                     } else {
                       img.style.maxWidth = printableWidth + 'mm';
                       img.style.maxHeight = printableHeight + 'mm';
                     }
-                    
+
                     img.style.width = 'auto';
                     img.style.height = 'auto';
                     img.style.objectFit = 'contain';
                     img.style.objectPosition = 'center';
                     img.style.display = 'block';
-                    img.style.margin = 'auto'; // Use auto for centering within flex container
+                    img.style.margin = 'auto';
                     img.style.padding = '0';
-                    img.style.verticalAlign = 'middle'; // Additional vertical alignment
+                    img.style.verticalAlign = 'middle';
                   });
               }
 
-              // Run layout immediately - base64 images are parsed synchronously or very fast
               finalizeLayout();
 
-              // Brief timeout to ensure rendering pipeline is clear, then print
+              window.addEventListener('afterprint', function() {
+                window.close();
+              });
+
               setTimeout(function() {
+                window.focus();
                 window.print();
               }, 500);
             })();
@@ -321,7 +322,5 @@ export const printLabelsFromResponse = async (responseData: any) => {
         </body>
       </html>
     `);
-    printWindow.document.close();
-  }
+  printWindow.document.close();
 };
-
