@@ -4,8 +4,26 @@ import { Link } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { formatINR, formatTime, monthLabel, statusLabel } from './utils';
-import { ClipboardCheck, UserPlus, Wallet, BookOpen, CalendarDays, Radio } from 'lucide-react';
+import {
+  formatDurationMinutes,
+  formatINR,
+  formatLateLabel,
+  formatTime,
+  methodLabel,
+  monthLabel,
+  statusLabel,
+} from './utils';
+import {
+  ClipboardCheck,
+  UserPlus,
+  Wallet,
+  BookOpen,
+  CalendarDays,
+  Radio,
+  LogIn,
+  LogOut,
+  Clock3,
+} from 'lucide-react';
 import type { Attendance, DashboardLiveUnmarked, DashboardResponse } from './types';
 
 const LIVE_FILTERS = [
@@ -60,7 +78,7 @@ export default function SalaryBookDashboard() {
       <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-2">
         <div>
           <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">{data.greeting}</h1>
-          <p className="text-sm text-gray-500 mt-1">Today's Attendance</p>
+          <p className="text-sm text-gray-500 mt-1">Today&apos;s attendance</p>
         </div>
         <Link
           to="/salary-book/calendar"
@@ -133,15 +151,23 @@ function LiveAttendanceList({
   onRefresh: () => void;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-emerald-100 p-4 lg:p-6">
+    <div className="bg-white rounded-2xl border border-emerald-100 p-4 lg:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
           <Radio className={`h-4 w-4 ${fetching ? 'text-emerald-500 animate-pulse' : 'text-emerald-700'}`} />
-          <h2 className="font-semibold text-gray-900">Live check-ins</h2>
+          <h2 className="font-semibold text-gray-900">Live timetable</h2>
         </div>
         <button type="button" onClick={onRefresh} className="text-xs text-emerald-800 font-medium text-left">
-          Updated {updatedAt ? new Date(updatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
-          {' · '}Refresh
+          Updated{' '}
+          {updatedAt
+            ? new Date(updatedAt).toLocaleTimeString('en-IN', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              })
+            : '—'}
+          {' · '}
+          Refresh
         </button>
       </div>
       <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
@@ -161,38 +187,119 @@ function LiveAttendanceList({
       {items.length === 0 ? (
         <p className="text-sm text-gray-500 py-6 text-center">No one in this list yet.</p>
       ) : (
-        <ul className="divide-y divide-emerald-50 mt-1">
+        <ul className="mt-2 space-y-2">
           {items.map((item) =>
             item.kind === 'unmarked' ? (
-              <li key={`u-${item.row.id}`} className="py-3 flex items-center justify-between gap-3">
+              <li
+                key={`u-${item.row.id}`}
+                className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 px-3 py-3 flex items-center justify-between gap-3"
+              >
                 <div className="min-w-0">
                   <div className="font-medium text-gray-900 truncate">{item.row.name}</div>
                   <div className="text-xs text-gray-500">{item.row.employee_id}</div>
                 </div>
-                <span className={`text-xs font-medium px-2 py-1 rounded-full ${STATUS_PILL.UNMARKED}`}>
+                <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_PILL.UNMARKED}`}>
                   Not marked
                 </span>
               </li>
             ) : (
-              <li key={item.row.id} className="py-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-medium text-gray-900 truncate">{item.row.employee_name}</div>
-                  <div className="text-xs text-gray-500">{item.row.employee_code}</div>
-                  <div className="text-sm text-gray-700 mt-1">
-                    {item.row.check_in_time ? `In ${formatTime(item.row.check_in_time)}` : 'No check-in time'}
-                    {item.row.check_out_time ? ` · Out ${formatTime(item.row.check_out_time)}` : ''}
-                    {item.row.is_late && item.row.minutes_late ? ` · Late ${item.row.minutes_late}m` : ''}
-                    {item.row.rule_penalty_applied ? ' · Penalty' : ''}
-                  </div>
-                </div>
-                <span className={`text-xs font-medium px-2 py-1 rounded-full shrink-0 ${STATUS_PILL[item.row.status] || STATUS_PILL.UNMARKED}`}>
-                  {statusLabel(item.row.status)}
-                </span>
-              </li>
+              <LiveMarkedRow key={item.row.id} row={item.row} />
             )
           )}
         </ul>
       )}
+    </div>
+  );
+}
+
+function LiveMarkedRow({ row }: { row: Attendance }) {
+  const late = Boolean(row.is_late && row.minutes_late);
+  const worked =
+    formatDurationMinutes(row.worked_minutes) ||
+    (Number(row.worked_hours) > 0 ? `${row.worked_hours}h` : '');
+  const method = methodLabel(row.attendance_method);
+
+  return (
+    <li
+      className={`rounded-xl border px-3 py-3 ${
+        late ? 'border-amber-200 bg-amber-50/40' : 'border-emerald-100 bg-white'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-gray-900 truncate">{row.employee_name}</div>
+          <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span>{row.employee_code}</span>
+            {method ? <span className="text-emerald-800">· {method}</span> : null}
+            {row.rule_penalty_applied ? <span className="text-red-700">· Penalty</span> : null}
+          </div>
+        </div>
+        <span
+          className={`text-xs font-medium px-2.5 py-1 rounded-full shrink-0 ${
+            STATUS_PILL[row.status] || STATUS_PILL.UNMARKED
+          }`}
+        >
+          {statusLabel(row.status)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <TimeChip
+          icon={LogIn}
+          label="In"
+          value={row.check_in_time ? formatTime(row.check_in_time) : '—'}
+          tone={row.check_in_time ? 'emerald' : 'muted'}
+        />
+        <TimeChip
+          icon={LogOut}
+          label="Out"
+          value={row.check_out_time ? formatTime(row.check_out_time) : '—'}
+          tone={row.check_out_time ? 'emerald' : 'muted'}
+        />
+        <TimeChip
+          icon={Clock3}
+          label="Worked"
+          value={worked || '—'}
+          tone={worked ? 'slate' : 'muted'}
+        />
+        <TimeChip
+          icon={Clock3}
+          label="Late"
+          value={late ? formatLateLabel(row.minutes_late).replace(/^Late\s/, '') : 'On time'}
+          tone={late ? 'amber' : 'emerald'}
+        />
+      </div>
+    </li>
+  );
+}
+
+function TimeChip({
+  icon: Icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: typeof Clock3;
+  label: string;
+  value: string;
+  tone: 'emerald' | 'amber' | 'slate' | 'muted';
+}) {
+  const toneClass =
+    tone === 'emerald'
+      ? 'bg-emerald-50 text-emerald-900 border-emerald-100'
+      : tone === 'amber'
+        ? 'bg-amber-50 text-amber-950 border-amber-200'
+        : tone === 'slate'
+          ? 'bg-slate-50 text-slate-800 border-slate-100'
+          : 'bg-gray-50 text-gray-500 border-gray-100';
+
+  return (
+    <div className={`rounded-lg border px-2.5 py-2 ${toneClass}`}>
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide opacity-70">
+        <Icon className="h-3 w-3" />
+        {label}
+      </div>
+      <div className="mt-0.5 text-sm font-semibold tabular-nums">{value}</div>
     </div>
   );
 }

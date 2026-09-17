@@ -100,14 +100,22 @@ export default function CreditLogin() {
           >
             {loading ? 'Signing in…' : 'Sign in to Credit'}
           </button>
-          <div className="text-center text-sm text-gray-500">
-            Full inventory app?{' '}
-            <Link to="/login" className="text-amber-700 hover:text-amber-900 font-medium">
-              Main login
-            </Link>
-            <span className="block mt-1 text-xs text-gray-400">
-              Accounts group: use this Credit login only (no main POS access).
-            </span>
+          <div className="text-center text-sm text-gray-500 space-y-2">
+            <div>
+              Full inventory app?{' '}
+              <Link to="/login" className="text-amber-700 hover:text-amber-900 font-medium">
+                Main login
+              </Link>
+              <span className="block mt-1 text-xs text-gray-400">
+                Accounts group: use this Credit login only (no main POS access).
+              </span>
+            </div>
+            <div>
+              Payroll &amp; attendance?{' '}
+              <Link to="/salary-book/login" className="text-emerald-700 hover:text-emerald-900 font-medium">
+                Salary Book login
+              </Link>
+            </div>
           </div>
         </form>
       </div>

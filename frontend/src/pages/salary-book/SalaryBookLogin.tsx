@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { auth } from '../../lib/auth';
 import { applySalaryBookPwa } from '../../lib/salaryBookPwa';
 import { BookOpen, Eye, EyeOff, Loader2 } from 'lucide-react';
@@ -135,6 +135,20 @@ export default function SalaryBookLogin() {
           >
             Forgot Password
           </button>
+          <div className="text-center text-sm text-gray-500 space-y-1">
+            <div>
+              Full inventory app?{' '}
+              <Link to="/login" className="text-emerald-700 hover:text-emerald-900 font-medium">
+                Main login
+              </Link>
+            </div>
+            <div>
+              Credit sales?{' '}
+              <Link to="/credit-login" className="text-amber-700 hover:text-amber-900 font-medium">
+                Credit login
+              </Link>
+            </div>
+          </div>
         </form>
       </div>
       </div>

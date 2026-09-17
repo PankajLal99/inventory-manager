@@ -23,8 +23,12 @@ admin.site.site_header = "MT-IMS Management Admin Panel"
 admin.site.site_title = "MT-IMS Management Admin Portal"
 admin.site.index_title = "Welcome to Manish Traders Admin Portal"
 
+from backend.attendance.views import health as attendance_health
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('health/', attendance_health, name='attendance-health'),
+    path('iclock/', include('backend.attendance.urls')),
     path('api/v1/', include('backend.core.urls')),
     path('api/v1/', include('backend.locations.urls')),
     path('api/v1/', include('backend.catalog.urls')),

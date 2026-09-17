@@ -16,6 +16,34 @@ export function formatTime(iso: string | null) {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 }
 
+export function formatDurationMinutes(mins: number | null | undefined) {
+  if (mins == null || Number.isNaN(Number(mins)) || Number(mins) <= 0) return '';
+  const total = Math.round(Number(mins));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h <= 0) return `${m}m`;
+  if (m <= 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+export function formatLateLabel(mins: number | null | undefined) {
+  const d = formatDurationMinutes(mins);
+  return d ? `Late ${d}` : '';
+}
+
+export function methodLabel(method?: string | null) {
+  switch (method) {
+    case 'HARDWARE':
+      return 'Hardware';
+    case 'CAMERA':
+      return 'Geo';
+    case 'MANUAL':
+      return 'Manual';
+    default:
+      return method || '';
+  }
+}
+
 export function toTimeInput(value: string | null | undefined) {
   if (!value) return '';
   return String(value).slice(0, 5);

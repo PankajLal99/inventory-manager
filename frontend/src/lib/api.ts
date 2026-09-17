@@ -822,5 +822,29 @@ export const salaryBookApi = {
     advances: (params?: any) => api.get('/salary-book/reports/advances/', { params, ...sb } as any),
     salaries: (params?: any) => api.get('/salary-book/reports/salaries/', { params, ...sb } as any),
   },
+  devices: {
+    list: () => api.get('/salary-book/devices/', sb as any),
+    syncMappings: (id: number) =>
+      api.post(`/salary-book/devices/${id}/sync-mappings/`, {}, sb as any),
+  },
+  deviceMappings: {
+    list: (params?: { device?: number }) =>
+      api.get('/salary-book/device-mappings/', { params, ...sb } as any),
+    create: (data: {
+      device: number;
+      device_user_id: string;
+      employee_id: string;
+      employee_name?: string;
+      is_active?: boolean;
+    }) => api.post('/salary-book/device-mappings/', data, sb as any),
+    update: (id: number, data: Record<string, unknown>) =>
+      api.patch(`/salary-book/device-mappings/${id}/`, data, sb as any),
+    remove: (id: number) => api.delete(`/salary-book/device-mappings/${id}/`, sb as any),
+    sync: (id: number) => api.post(`/salary-book/device-mappings/${id}/sync/`, {}, sb as any),
+  },
+  deviceCommands: {
+    list: (params?: { device?: number }) =>
+      api.get('/salary-book/device-commands/', { params, ...sb } as any),
+  },
 };
 

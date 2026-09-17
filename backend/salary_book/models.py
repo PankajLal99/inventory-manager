@@ -52,6 +52,18 @@ class SalaryBookSettings(models.Model):
     office_latitude = models.DecimalField(max_digits=9, decimal_places=6, default=Decimal('23.259900'))
     office_longitude = models.DecimalField(max_digits=9, decimal_places=6, default=Decimal('77.412600'))
     geofence_radius_meters = models.PositiveIntegerField(default=150)
+    # Capture mode: HARDWARE (device punches), GEO (GPS+selfie), MANUAL (admin mark)
+    CAPTURE_HARDWARE = 'HARDWARE'
+    CAPTURE_GEO = 'GEO'
+    CAPTURE_MANUAL = 'MANUAL'
+    CAPTURE_CHOICES = [
+        (CAPTURE_HARDWARE, 'Hardware (fingerprint / card)'),
+        (CAPTURE_GEO, 'Geo (GPS + selfie)'),
+        (CAPTURE_MANUAL, 'Manual'),
+    ]
+    attendance_capture_mode = models.CharField(
+        max_length=16, choices=CAPTURE_CHOICES, default=CAPTURE_HARDWARE
+    )
     require_gps = models.BooleanField(default=True)
     require_photo = models.BooleanField(default=True)
     require_checkout_gps_photo = models.BooleanField(default=True)
@@ -79,6 +91,11 @@ class SalaryBookSettings(models.Model):
                 )
 
     def save(self, *args, **kwargs):
+        # Keep legacy require_gps aligned with capture mode for existing GPS helpers.
+        if self.attendance_capture_mode == self.CAPTURE_GEO:
+            self.require_gps = True
+        else:
+            self.require_gps = False
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -86,6 +103,18 @@ class SalaryBookSettings(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    @property
+    def is_hardware_capture(self) -> bool:
+        return self.attendance_capture_mode == self.CAPTURE_HARDWARE
+
+    @property
+    def is_geo_capture(self) -> bool:
+        return self.attendance_capture_mode == self.CAPTURE_GEO
+
+    @property
+    def is_manual_capture(self) -> bool:
+        return self.attendance_capture_mode == self.CAPTURE_MANUAL
 
 
 class Employee(models.Model):
@@ -312,9 +341,11 @@ class Attendance(models.Model):
 
     METHOD_MANUAL = 'MANUAL'
     METHOD_CAMERA = 'CAMERA'
+    METHOD_HARDWARE = 'HARDWARE'
     METHOD_CHOICES = [
         (METHOD_MANUAL, 'Manual'),
         (METHOD_CAMERA, 'Camera'),
+        (METHOD_HARDWARE, 'Hardware'),
     ]
 
     PHOTO_STATUSES = {STATUS_PRESENT, STATUS_HALF_DAY}

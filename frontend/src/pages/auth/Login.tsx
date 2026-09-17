@@ -137,14 +137,22 @@ export default function Login() {
               Sign up
             </Link>
           </div>
-          <div className="text-center text-sm text-gray-500">
-            Accounts / credit sales?{' '}
-            <Link to="/credit-login" className="text-amber-700 hover:text-amber-900 font-medium">
-              Credit login
-            </Link>
-            <span className="block mt-1 text-xs text-gray-400">
-              Accounts-only users must use Credit login.
-            </span>
+          <div className="text-center text-sm text-gray-500 space-y-2">
+            <div>
+              Accounts / credit sales?{' '}
+              <Link to="/credit-login" className="text-amber-700 hover:text-amber-900 font-medium">
+                Credit login
+              </Link>
+              <span className="block mt-1 text-xs text-gray-400">
+                Accounts-only users must use Credit login.
+              </span>
+            </div>
+            <div>
+              Payroll &amp; attendance?{' '}
+              <Link to="/salary-book/login" className="text-emerald-700 hover:text-emerald-900 font-medium">
+                Salary Book login
+              </Link>
+            </div>
           </div>
         </form>
       </div>

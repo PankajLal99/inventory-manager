@@ -229,8 +229,11 @@ def settings_view(request):
     if request.method == 'GET':
         return Response(SalaryBookSettingsSerializer(obj).data)
     data = request.data.copy()
-    if 'require_gps' in data and not user_is_salary_book_admin(request.user):
-        return _err('Only admins can change location-based attendance.', status.HTTP_403_FORBIDDEN)
+    if (
+        ('require_gps' in data or 'attendance_capture_mode' in data)
+        and not user_is_salary_book_admin(request.user)
+    ):
+        return _err('Only admins can change attendance capture mode.', status.HTTP_403_FORBIDDEN)
     serializer = SalaryBookSettingsSerializer(obj, data=data, partial=True)
     if serializer.is_valid():
         serializer.save()
@@ -293,11 +296,16 @@ def employee_detail(request, pk):
     )
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    old_name = employee.name
     employee = serializer.save()
     photo = maybe_compress(request.FILES, 'profile_photo')
     if photo:
         employee.profile_photo = photo
         employee.save(update_fields=['profile_photo'])
+    if employee.name != old_name:
+        from backend.attendance.services.commands import sync_employee_name_to_devices
+
+        sync_employee_name_to_devices(employee.employee_id, employee.name)
     return Response(EmployeeSerializer(employee, context={'request': request}).data)
 
 

@@ -23,6 +23,7 @@ class SalaryBookSettingsAdmin(admin.ModelAdmin):
         'office_latitude',
         'office_longitude',
         'geofence_radius_meters',
+        'attendance_capture_mode',
         'require_gps',
         'require_photo',
         'updated_at',

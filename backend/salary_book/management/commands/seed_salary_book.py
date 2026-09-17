@@ -167,7 +167,7 @@ class Command(BaseCommand):
         settings_obj.office_longitude = Decimal('77.412600')
         settings_obj.geofence_radius_meters = 150
         settings_obj.max_gps_accuracy_meters = 100
-        settings_obj.require_gps = True
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_HARDWARE
         settings_obj.require_photo = True
         settings_obj.save()
 

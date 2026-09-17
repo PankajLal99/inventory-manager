@@ -23,6 +23,7 @@ import ReportsPage from './pages/salary-book/ReportsPage';
 import SettingsPage from './pages/salary-book/SettingsPage';
 import CalendarPage from './pages/salary-book/CalendarPage';
 import ProfilePage from './pages/salary-book/ProfilePage';
+import DeviceMappingsPage from './pages/salary-book/DeviceMappingsPage';
 import Register from './pages/auth/Register';
 import Dashboard from './pages/dashboard/Dashboard';
 import Products from './pages/products/Products';
@@ -270,6 +271,7 @@ function App() {
                 <Route path="salary-book/salaries" element={<SalaryBookPage />} />
                 <Route path="salary-book/salaries/:id" element={<SalaryDetails />} />
                 <Route path="salary-book/reports" element={<ReportsPage />} />
+                <Route path="salary-book/devices" element={<DeviceMappingsPage />} />
                 <Route path="salary-book/settings" element={<SettingsPage />} />
                 <Route path="salary-book/profile" element={<ProfilePage />} />
 
