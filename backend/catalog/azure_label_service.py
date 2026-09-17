@@ -3,6 +3,7 @@ Azure Function service for generating barcode labels.
 This service calls the Azure Function to generate labels and store them in Blob Storage.
 """
 import os
+import time
 import requests
 import logging
 from typing import Optional, Dict, Any
@@ -146,6 +147,45 @@ def construct_blob_url(barcode_id: int, **kwargs) -> Optional[str]:
     
     # Return direct URL (will work if container is public)
     return base_url
+
+
+def _response_looks_like_image(response: requests.Response) -> bool:
+    content_type = (response.headers.get('Content-Type') or '').lower()
+    if content_type.startswith('image/'):
+        return True
+    body = response.content[:8] if response.content else b''
+    return (
+        body.startswith(b'\x89PNG')
+        or body.startswith(b'\xff\xd8\xff')
+        or body.startswith(b'GIF87a')
+        or body.startswith(b'GIF89a')
+    )
+
+
+def is_blob_image_ready(blob_url: str, timeout: float = 5.0) -> bool:
+    """Return True when the blob URL actually serves an image, not a 404/HTML placeholder."""
+    if not blob_url:
+        return False
+    try:
+        response = requests.get(blob_url, timeout=timeout, allow_redirects=True)
+        return response.status_code == 200 and _response_looks_like_image(response)
+    except requests.exceptions.RequestException:
+        return False
+
+
+def wait_for_blob_image(
+    blob_url: str,
+    timeout_seconds: float = 8.0,
+    interval_seconds: float = 0.4,
+) -> bool:
+    """Poll Azure until the queued label PNG exists, or until timeout."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if is_blob_image_ready(blob_url):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_seconds)
 
 
 def delete_blob_from_azure(barcode_id: int) -> bool:

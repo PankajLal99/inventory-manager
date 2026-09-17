@@ -45,7 +45,6 @@ from .cart_scan_times import (
     ensure_line_scanned_at,
     lookup_barcode_scan_time,
 )
-from backend.catalog.label_generator import generate_label_image
 
 
 def _get_barcode_supplier_id(barcode_obj):
@@ -632,139 +631,104 @@ def update_repair(request, pk):
     return Response(serializer.data)
 
 
+def _cache_bust_label_url(url: str) -> str:
+    if not url or not str(url).startswith('https://'):
+        return url
+    separator = '&' if '?' in url else '?'
+    return f"{url}{separator}t={int(timezone.now().timestamp() * 1000)}"
+
+
+def _repair_label_payload(repair, invoice, image: str):
+    return {
+        'success': True,
+        'label': {
+            'barcode': repair.barcode,
+            'image': image,
+            'invoice_number': invoice.invoice_number,
+            'repair_id': repair.id,
+        },
+    }
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generate_repair_label(request, pk):
-    """Generate barcode label for a repair invoice using Azure Function (with fallback to local)"""
-    from django.utils import timezone
+    """Generate barcode label for a repair invoice via Azure and wait until the PNG is ready."""
     import logging
-    
+
     logger = logging.getLogger(__name__)
-    
+
     repair = get_object_or_404(Repair, invoice_id=pk)
     invoice = repair.invoice
     force_regenerate = str(request.query_params.get('force', '')).strip().lower() in {'1', 'true', 'yes'}
-    
-    # Check if label already exists and is valid (same logic as products)
-    # Valid image can be: base64 data URL (data:image/...) or blob URL (https://...)
-    has_valid_image = (
-        repair.label_image and 
-        len(repair.label_image.strip()) > 0 and
-        (repair.label_image.startswith('data:image') or 
-         repair.label_image.startswith('https://'))
-    )
-    
-    if has_valid_image and not force_regenerate:
-        # If it's a blob URL, verify it's accessible (not 404)
-        if repair.label_image.startswith('https://'):
-            try:
-                import requests
-                # Check if URL is accessible (HEAD request is faster than GET)
-                response = requests.head(repair.label_image, timeout=5, allow_redirects=True)
-                if response.status_code == 404:
-                    # URL returns 404 - need to regenerate
-                    logger.warning(f"Repair label URL returns 404 for repair {repair.id}, regenerating...")
-                    has_valid_image = False
-                    # Clear the invalid URL so we regenerate
-                    repair.label_image = ''
-                    repair.save(update_fields=['label_image', 'updated_at'])
-                elif response.status_code != 200:
-                    # Other error (403, 500, etc.) - log but try to regenerate
-                    logger.warning(f"Repair label URL returns {response.status_code} for repair {repair.id}, regenerating...")
-                    has_valid_image = False
-                    repair.label_image = ''
-                    repair.save(update_fields=['label_image', 'updated_at'])
-            except requests.exceptions.RequestException as e:
-                # Network error or timeout - log but try to regenerate
-                logger.warning(f"Failed to verify repair label URL for repair {repair.id}: {str(e)}, regenerating...")
-                has_valid_image = False
-                repair.label_image = ''
-                repair.save(update_fields=['label_image', 'updated_at'])
-        
-        # If image is still valid (base64 or verified blob URL), return it
-        if has_valid_image:
-            return Response({
-                'success': True,
-                'label': {
-                    'barcode': repair.barcode,
-                    'image': repair.label_image,
-                    'invoice_number': invoice.invoice_number,
-                    'repair_id': repair.id
-                }
-            })
-    
-    # Get repair information
-    repair_barcode = repair.barcode
-    invoice_number = invoice.invoice_number
-    customer_name = invoice.customer.name if invoice.customer else 'Walk-in Customer'
-    model_name = repair.model_name
-    contact_no = repair.contact_no
-    
-    # Format date to dd-mm-yyyy (same format as products)
-    created_date = repair.created_at.strftime('%d-%m-%Y') if repair.created_at else ''
-    
-    # Create label text - use phone number and model name (not invoice number)
-    label_name = model_name[:10]
-    
-    # Try Azure Function first (same as products)
-    try:
-        from backend.catalog.azure_label_service import queue_bulk_label_generation_via_azure, construct_blob_url
-        
-        # Prepare data in the same format as products
-        # Logic: User requested amount in barcode_value.
-        # We pack tracking ID and Work Desc into product_name.
-        
-        amount_value = str(repair.booking_amount) if repair.booking_amount else "0.00"
-        display_name = f"Rs.{amount_value} | {repair.description[:30]}"
-        repair_short_code = (repair_barcode.split('-')[-1] if repair_barcode else '').strip()
 
+    from backend.catalog.azure_label_service import (
+        is_blob_image_ready,
+        queue_bulk_label_generation_via_azure,
+        wait_for_blob_image,
+    )
+
+    stored_image = (repair.label_image or '').strip()
+    has_azure_image = stored_image.startswith('https://')
+
+    if has_azure_image and not force_regenerate and is_blob_image_ready(stored_image):
+        return Response(_repair_label_payload(
+            repair, invoice, _cache_bust_label_url(stored_image)
+        ))
+
+    if stored_image and not has_azure_image:
+        repair.label_image = ''
+        repair.save(update_fields=['label_image', 'updated_at'])
+
+    customer_name = invoice.customer.name if invoice.customer else 'Walk-in Customer'
+    created_date = repair.created_at.strftime('%d-%m-%Y') if repair.created_at else ''
+    amount_value = str(repair.booking_amount) if repair.booking_amount else '0.00'
+    display_name = f"Rs.{amount_value} | {(repair.description or '')[:30]}"
+    repair_short_code = (repair.barcode.split('-')[-1] if repair.barcode else '').strip()
+
+    try:
         repair_data = [{
-            'product_name': display_name[:50],  # Tracking ID + Work Desc
+            'product_name': display_name[:50],
             'barcode_value': repair_short_code,
             'short_code': repair_short_code or None,
             'barcode_id': repair.id,
             'vendor_name': f"{customer_name[:20]} | {repair.model_name}" if customer_name else repair.model_name,
             'purchase_date': created_date,
-            'serial_number': contact_no[:10] if contact_no else None,
-            'font_size_text':'18',
-            'barcode_type':'repair'
+            'serial_number': (repair.contact_no or '')[:10] or None,
+            'font_size_text': '18',
+            'barcode_type': 'repair',
         }]
-        
-        # Queue via Azure Function (returns blob URLs immediately)
+
         blob_urls = queue_bulk_label_generation_via_azure(repair_data)
         blob_url = blob_urls.get(repair.id)
-        
-        if blob_url:
-            # Azure queued successfully - save blob URL to repair model
-            # Note: Azure Function will generate the label asynchronously
-            # The blob URL will be available once Azure processes it
-            repair.label_image = blob_url
-            repair.save(update_fields=['label_image', 'updated_at'])
-            
-            response_image = blob_url
-            if force_regenerate:
-                # Avoid stale browser/CDN cache after regeneration.
-                response_image = f"{blob_url}?t={int(timezone.now().timestamp())}"
-            return Response({
-                'success': True,
-                'label': {
-                    'barcode': repair_barcode,
-                    'image': response_image,  # Return blob URL (same as products)
-                    'invoice_number': invoice_number,
-                    'repair_id': repair.id
-                }
-            })
-        else:
-            # Azure not configured or failed - fallback to local generation
-            logger.warning(f"Azure label generation not available for repair {repair.id}, falling back to local generation")
-            raise Exception("Azure not configured")
-            
+
+        if not blob_url:
+            return Response(
+                {'error': 'Failed to generate label', 'message': 'Azure label generation is not available'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        repair.label_image = blob_url
+        repair.save(update_fields=['label_image', 'updated_at'])
+
+        if not wait_for_blob_image(blob_url, timeout_seconds=45):
+            logger.warning(f"Azure repair label PNG was not ready for repair {repair.id} after waiting")
+            return Response(
+                {
+                    'error': 'Label image is not ready yet',
+                    'message': 'Azure is still generating the barcode. Please try printing again in a moment.',
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(_repair_label_payload(
+            repair, invoice, _cache_bust_label_url(blob_url)
+        ))
     except Exception as azure_error:
-        # Fallback to local generation (same as products)
-        logger.info(f"Falling back to local label generation for repair {repair.id}: {str(azure_error)}")
+        logger.exception(f"Failed to generate Azure repair label for repair {repair.id}")
         return Response(
             {'error': 'Failed to generate label', 'message': str(azure_error)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 

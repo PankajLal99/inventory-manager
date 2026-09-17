@@ -255,18 +255,19 @@ export default function RepairRegistration() {
 
     const generateLabelMutation = useMutation({
         mutationFn: async (invoiceId: number) => {
-            return await posApi.repair.generateLabel(invoiceId);
-        },
-        onSuccess: (response: any) => {
-            if (response?.data?.label?.image) {
-                printLabelsFromResponse({ labels: [{ image: response.data.label.image }] });
-                showToast('Repair label generated and opened for printing', 'success');
-            } else {
-                showToast('Label generated but no image found', 'error');
+            const response = await posApi.repair.generateLabel(invoiceId);
+            const image = response?.data?.label?.image;
+            if (!image) {
+                throw new Error('Label generated but no image found');
             }
+            await printLabelsFromResponse({ labels: [{ image }] });
+            return response;
+        },
+        onSuccess: () => {
+            showToast('Repair label generated and opened for printing', 'success');
         },
         onError: (error: any) => {
-            const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to generate repair label';
+            const errorMsg = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Failed to generate repair label';
             showToast(errorMsg, 'error');
         },
     });

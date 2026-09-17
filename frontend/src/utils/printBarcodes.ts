@@ -1,6 +1,9 @@
 import { loadPrintSettings, PrintSettings } from '../components/PrintSettings';
 
 let lastPrintWindow: Window | null = null;
+let printJobSeq = 0;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const appendCacheBust = (url: string): string => {
   if (!/^https?:\/\//i.test(url)) return url;
@@ -8,20 +11,66 @@ const appendCacheBust = (url: string): string => {
   return `${url}${separator}_cb=${Date.now()}`;
 };
 
+const blobToDataURL = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+const imageLooksValid = async (blob: Blob): Promise<boolean> => {
+  if (blob.size < 32) return false;
+  const header = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
+  const isPng = header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e && header[3] === 0x47;
+  const isJpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+  const type = (blob.type || '').toLowerCase();
+  return isPng || isJpeg || type.startsWith('image/');
+};
+
+const decodeImage = (src: string): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalWidth > 0) resolve(src);
+      else reject(new Error('empty image'));
+    };
+    img.onerror = () => reject(new Error('invalid image'));
+    img.src = src;
+  });
+
 const convertImageToDataURL = async (url: string): Promise<string> => {
-  try {
-    const response = await fetch(url, { cache: 'no-store' });
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch (e) {
-    console.warn('Failed to convert image to base64, falling back to URL', e);
+  if (url.startsWith('data:image')) {
+    await decodeImage(url);
     return url;
   }
+
+  const delays = [0, 400, 800, 1200, 2000];
+  for (const delay of delays) {
+    if (delay) await sleep(delay);
+    const attemptUrl = appendCacheBust(url);
+    try {
+      const response = await fetch(attemptUrl, { cache: 'no-store' });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (await imageLooksValid(blob)) {
+          const dataUrl = await blobToDataURL(blob);
+          await decodeImage(dataUrl);
+          return dataUrl;
+        }
+      }
+    } catch {
+      // CORS can block fetch even when the PNG is ready; fall through to <img> decode.
+    }
+    try {
+      await decodeImage(attemptUrl);
+      return attemptUrl;
+    } catch {
+      // Retry until the queued Azure PNG actually exists.
+    }
+  }
+
+  throw new Error('Label image is not ready yet. Please try printing again in a moment.');
 };
 
 const closePrintWindow = (printWindow: Window | null) => {
@@ -41,8 +90,9 @@ const openPrintWindow = (): Window | null => {
 };
 
 export const printLabelsFromResponse = async (responseData: any) => {
+  const jobId = ++printJobSeq;
   const labels = (responseData?.labels || []).filter((label: any) => label?.image);
-  const rawUrls = labels.map((label: any) => appendCacheBust(label.image));
+  const rawUrls = labels.map((label: any) => label.image);
 
   if (rawUrls.length === 0) {
     alert('No labels available to print.');
@@ -58,9 +108,19 @@ export const printLabelsFromResponse = async (responseData: any) => {
   const printableWidth = labelWidth - (pageMargin * 2);
   const printableHeight = labelHeight - (pageMargin * 2);
 
-  const imageUrls = await Promise.all(
-    rawUrls.map((url: string) => convertImageToDataURL(url))
-  );
+  let imageUrls: string[];
+  try {
+    imageUrls = await Promise.all(
+      rawUrls.map((url: string) => convertImageToDataURL(url))
+    );
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : 'Label image is not ready yet. Please try printing again in a moment.';
+    alert(message);
+    throw error;
+  }
+  if (jobId !== printJobSeq) return;
 
   const normalizedTags = labels.map((label: any) => String(label?.barcode_tag || label?.tag || 'new').toLowerCase());
   const isBlockedTag = (tag: string) => tag === 'sold' || tag === 'defective';
@@ -309,14 +369,39 @@ export const printLabelsFromResponse = async (responseData: any) => {
 
               finalizeLayout();
 
+              var hasPrinted = false;
+              function startPrint() {
+                if (hasPrinted) return;
+                hasPrinted = true;
+                window.focus();
+                window.print();
+              }
+
               window.addEventListener('afterprint', function() {
                 window.close();
               });
 
-              setTimeout(function() {
-                window.focus();
-                window.print();
-              }, 500);
+              var pending = images.length;
+              if (pending === 0) {
+                setTimeout(startPrint, 300);
+              } else {
+                images.forEach(function(img) {
+                  if (img.complete && img.naturalWidth > 0) {
+                    pending--;
+                    if (pending === 0) setTimeout(startPrint, 200);
+                    return;
+                  }
+                  img.onload = function() {
+                    pending--;
+                    if (pending === 0) setTimeout(startPrint, 200);
+                  };
+                  img.onerror = function() {
+                    pending--;
+                    if (pending === 0) setTimeout(startPrint, 200);
+                  };
+                });
+                setTimeout(startPrint, 4000);
+              }
             })();
           </script>
         </body>

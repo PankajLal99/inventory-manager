@@ -355,7 +355,10 @@ export const posApi = {
       api.post(
         `/pos/invoices/${invoiceId}/generate-repair-label/`,
         undefined,
-        force ? { params: { force: 'true' } } : undefined
+        {
+          timeout: 60000,
+          ...(force ? { params: { force: 'true' } } : {}),
+        }
       ),
   },
   creditNotes: {

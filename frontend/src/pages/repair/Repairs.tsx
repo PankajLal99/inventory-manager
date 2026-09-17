@@ -429,18 +429,19 @@ export default function Repairs() {
   // Generate and print repair label
   const generateLabelMutation = useMutation({
     mutationFn: async (invoiceId: number) => {
-      return await posApi.repair.generateLabel(invoiceId);
-    },
-    onSuccess: (response: any) => {
-      if (response?.data?.label?.image) {
-        printLabelsFromResponse({ labels: [{ image: response.data.label.image }] });
-        showToast('Repair label generated and opened for printing', 'success');
-      } else {
-        showToast('Label generated but no image found', 'error');
+      const response = await posApi.repair.generateLabel(invoiceId);
+      const image = response?.data?.label?.image;
+      if (!image) {
+        throw new Error('Label generated but no image found');
       }
+      await printLabelsFromResponse({ labels: [{ image }] });
+      return response;
+    },
+    onSuccess: () => {
+      showToast('Repair label generated and opened for printing', 'success');
     },
     onError: (error: any) => {
-      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || 'Failed to generate repair label';
+      const errorMsg = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Failed to generate repair label';
       showToast(errorMsg, 'error');
     },
   });
@@ -452,6 +453,8 @@ export default function Repairs() {
     }
     generateLabelMutation.mutate(invoice.id);
   };
+
+  const printingInvoiceId = generateLabelMutation.isPending ? generateLabelMutation.variables : null;
 
   const REGENERATE_COOLDOWN_MS = 30 * 1000;
   const REGENERATE_MIN_WAIT_MS = 5 * 1000;
@@ -1186,10 +1189,14 @@ export default function Repairs() {
                               }}
                               className="!px-2 !py-1.5 min-w-0 shrink-0"
                               disabled={!invoice.repair || generateLabelMutation.isPending}
-                              title="Print repair barcode label"
-                              aria-label="Print repair barcode label"
+                              title={printingInvoiceId === invoice.id ? 'Generating barcode...' : 'Print repair barcode label'}
+                              aria-label={printingInvoiceId === invoice.id ? 'Generating barcode' : 'Print repair barcode label'}
                             >
-                              <Printer className="h-3.5 w-3.5" />
+                              {printingInvoiceId === invoice.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Printer className="h-3.5 w-3.5" />
+                              )}
                             </Button>
                             {regeneratingInvoiceId === invoice.id ? (
                               <Button
@@ -1396,8 +1403,12 @@ export default function Repairs() {
                             className="w-full gap-1.5"
                             disabled={!invoice.repair || generateLabelMutation.isPending}
                           >
-                            <Printer className="h-4 w-4 flex-shrink-0" />
-                            <span>Print Label</span>
+                            {printingInvoiceId === invoice.id ? (
+                              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+                            ) : (
+                              <Printer className="h-4 w-4 flex-shrink-0" />
+                            )}
+                            <span>{printingInvoiceId === invoice.id ? 'Generating...' : 'Print Label'}</span>
                           </Button>
                           {regeneratingInvoiceId === invoice.id ? (
                             <Button
