@@ -277,6 +277,7 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         settings_obj.office_latitude = Decimal('23.259900')
         settings_obj.office_longitude = Decimal('77.412600')
         settings_obj.geofence_radius_meters = 150
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_GEO
         settings_obj.save()
 
     def test_reject_without_gps(self):
@@ -385,7 +386,57 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         url = reverse('salary-book-settings')
         res = self.client.patch(url, {'require_gps': False}, format='json')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertFalse(SalaryBookSettings.get_solo().require_gps)
+        settings_obj = SalaryBookSettings.get_solo()
+        self.assertFalse(settings_obj.require_gps)
+        self.assertEqual(settings_obj.attendance_capture_mode, SalaryBookSettings.CAPTURE_MANUAL)
+
+    def test_admin_can_set_hardware_mode(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse('salary-book-settings')
+        res = self.client.patch(
+            url, {'attendance_capture_mode': SalaryBookSettings.CAPTURE_HARDWARE}, format='json'
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        settings_obj = SalaryBookSettings.get_solo()
+        self.assertEqual(settings_obj.attendance_capture_mode, SalaryBookSettings.CAPTURE_HARDWARE)
+        self.assertFalse(settings_obj.require_gps)
+
+    def test_admin_can_set_geo_mode(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse('salary-book-settings')
+        res = self.client.patch(
+            url, {'attendance_capture_mode': SalaryBookSettings.CAPTURE_GEO}, format='json'
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        settings_obj = SalaryBookSettings.get_solo()
+        self.assertEqual(settings_obj.attendance_capture_mode, SalaryBookSettings.CAPTURE_GEO)
+        self.assertTrue(settings_obj.require_gps)
+
+    def test_non_admin_cannot_change_capture_mode(self):
+        url = reverse('salary-book-settings')
+        res = self.client.patch(
+            url, {'attendance_capture_mode': SalaryBookSettings.CAPTURE_HARDWARE}, format='json'
+        )
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_hardware_mode_allows_attendance_without_gps(self):
+        self.user.is_superuser = True
+        self.user.save()
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_HARDWARE
+        settings_obj.save()
+        url = reverse('salary-book-attendance-list-create')
+        res = self.client.post(url, {
+            'employee': self.emp.id,
+            'date': '2026-04-10',
+            'status': 'PRESENT',
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        att = Attendance.objects.get(employee=self.emp, date='2026-04-10')
+        self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
+        self.assertIsNone(att.latitude)
 
     def test_non_admin_cannot_disable_location_attendance(self):
         url = reverse('salary-book-settings')
@@ -397,7 +448,7 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         self.user.is_superuser = True
         self.user.save()
         settings_obj = SalaryBookSettings.get_solo()
-        settings_obj.require_gps = False
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_MANUAL
         settings_obj.save()
         url = reverse('salary-book-attendance-list-create')
         res = self.client.post(url, {
@@ -739,7 +790,7 @@ class SalaryBookIntegrationTests(SalaryBookMixin, APITestCase):
         self.user = self.make_user('owner', admin=True)
         self.client.force_authenticate(user=self.user)
         settings_obj = SalaryBookSettings.get_solo()
-        settings_obj.require_gps = False
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_MANUAL
         settings_obj.save()
         self.emp = self.make_employee(monthly_salary=Decimal('30000.00'))
         self.att_url = reverse('salary-book-attendance-list-create')

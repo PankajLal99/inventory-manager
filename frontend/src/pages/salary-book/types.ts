@@ -50,6 +50,46 @@ export interface Attendance {
   rule_remarks: string;
   expected_check_in: string | null;
   expected_check_out: string | null;
+  attendance_method?: 'MANUAL' | 'CAMERA' | 'HARDWARE' | string;
+}
+
+export interface AttendanceDevice {
+  id: number;
+  serial_number: string;
+  device_name: string;
+  ip_address: string | null;
+  status: string;
+  is_active: boolean;
+  last_seen_at: string | null;
+  last_attendance_at: string | null;
+  firmware_version: string;
+}
+
+export interface DeviceUserMapping {
+  id: number;
+  device: number;
+  device_serial: string;
+  device_user_id: string;
+  employee_id: string;
+  employee_name: string;
+  is_active: boolean;
+  pending_commands: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceCommand {
+  id: number;
+  device: number;
+  command_text: string;
+  status: string;
+  purpose: string;
+  related_employee_id: string;
+  related_pin: string;
+  result_code: string;
+  sent_at: string | null;
+  acked_at: string | null;
+  created_at: string;
 }
 
 export interface AttendanceRule {
@@ -142,6 +182,7 @@ export interface SalaryBookSettings {
   office_latitude: string | number;
   office_longitude: string | number;
   geofence_radius_meters: number;
+  attendance_capture_mode: 'HARDWARE' | 'GEO' | 'MANUAL';
   require_gps: boolean;
   require_photo: boolean;
   require_checkout_gps_photo: boolean;

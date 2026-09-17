@@ -17,6 +17,7 @@ import {
   Settings,
   UserRound,
   X,
+  Fingerprint,
 } from 'lucide-react';
 
 const PRIMARY: Array<{
@@ -36,6 +37,7 @@ const MORE = [
   { path: '/salary-book/advances', label: 'Advances', icon: Wallet },
   { path: '/salary-book/salaries', label: 'Salary Book', icon: BookOpen },
   { path: '/salary-book/reports', label: 'Reports', icon: BarChart3 },
+  { path: '/salary-book/devices', label: 'Devices', icon: Fingerprint },
   { path: '/salary-book/settings', label: 'Settings', icon: Settings },
   { path: '/salary-book/profile', label: 'Profile', icon: UserRound },
 ];

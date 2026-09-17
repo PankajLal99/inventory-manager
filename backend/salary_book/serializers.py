@@ -34,6 +34,7 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
             'office_latitude',
             'office_longitude',
             'geofence_radius_meters',
+            'attendance_capture_mode',
             'require_gps',
             'require_photo',
             'require_checkout_gps_photo',
@@ -50,7 +51,27 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'default_check_out': 'Default check-out must be after default check-in.'}
             )
+        mode = attrs.get('attendance_capture_mode')
+        if mode is not None and mode not in {
+            SalaryBookSettings.CAPTURE_HARDWARE,
+            SalaryBookSettings.CAPTURE_GEO,
+            SalaryBookSettings.CAPTURE_MANUAL,
+        }:
+            raise serializers.ValidationError({'attendance_capture_mode': 'Invalid capture mode.'})
         return attrs
+
+    def update(self, instance, validated_data):
+        if 'attendance_capture_mode' in validated_data:
+            mode = validated_data['attendance_capture_mode']
+            validated_data['require_gps'] = mode == SalaryBookSettings.CAPTURE_GEO
+        elif 'require_gps' in validated_data:
+            # Legacy clients toggling GPS map to GEO / MANUAL (not HARDWARE).
+            validated_data['attendance_capture_mode'] = (
+                SalaryBookSettings.CAPTURE_GEO
+                if validated_data['require_gps']
+                else SalaryBookSettings.CAPTURE_MANUAL
+            )
+        return super().update(instance, validated_data)
 
 
 class EmployeeSerializer(serializers.ModelSerializer):

@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     'backend.credit',
     'backend.reports',
     'backend.salary_book',
+    'backend.attendance',
 ]
 
 MIDDLEWARE = [
@@ -322,6 +323,11 @@ LOGGING = {
             'propagate': False,
         },
         'backend.reports': {
+            'handlers': ['console', 'error_file', 'app_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'attendance.adms': {
             'handlers': ['console', 'error_file', 'app_file'],
             'level': 'INFO',
             'propagate': False,

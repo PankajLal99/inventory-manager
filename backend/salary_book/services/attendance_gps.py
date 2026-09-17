@@ -21,6 +21,9 @@ def haversine_meters(lat1, lon1, lat2, lon2) -> float:
 
 def location_required(settings_obj=None) -> bool:
     settings_obj = settings_obj or SalaryBookSettings.get_solo()
+    mode = getattr(settings_obj, 'attendance_capture_mode', None)
+    if mode is not None:
+        return mode == SalaryBookSettings.CAPTURE_GEO
     return bool(settings_obj.require_gps)
 
 
@@ -136,9 +139,9 @@ def _manual_create_payload(settings_obj, files, status):
 
 
 def validate_create_gps_and_photo(data, files, status):
-    """Validate GPS/geofence when enabled; otherwise allow manual attendance."""
+    """Validate GPS/geofence when geo capture is enabled; otherwise allow manual/hardware UI marks."""
     settings_obj = SalaryBookSettings.get_solo()
-    if not settings_obj.require_gps:
+    if not location_required(settings_obj):
         return _manual_create_payload(settings_obj, files, status)
 
     lat, lng, accuracy = parse_gps(data)
@@ -169,8 +172,8 @@ def validate_checkout_gps_and_photo(data, files):
     photo = None
     if files is not None:
         photo = files.get('check_out_photo') or files.get('photo')
-    if not settings_obj.require_gps:
-        if settings_obj.require_checkout_gps_photo and not photo:
+    if not location_required(settings_obj):
+        if settings_obj.require_checkout_gps_photo and settings_obj.is_geo_capture and not photo:
             raise ValidationError({
                 'check_out_photo': 'A selfie is required to check out.'
             })

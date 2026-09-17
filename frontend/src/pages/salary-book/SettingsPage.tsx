@@ -47,7 +47,9 @@ export default function SettingsPage() {
         require_checkout_gps_photo: form?.require_checkout_gps_photo,
         default_check_in: form?.default_check_in,
         default_check_out: form?.default_check_out,
-        ...(isAdminUser(user) ? { require_gps: form?.require_gps } : {}),
+        ...(isAdminUser(user)
+          ? { attendance_capture_mode: form?.attendance_capture_mode }
+          : {}),
       }),
     onSuccess: async () => {
       toast('Settings saved', 'success');
@@ -81,6 +83,9 @@ export default function SettingsPage() {
   if (isError) return <ErrorState onRetry={() => refetch()} />;
 
   const admin = isAdminUser(user);
+  const captureMode =
+    form.attendance_capture_mode || (form.require_gps ? 'GEO' : 'MANUAL');
+  const isGeoMode = captureMode === 'GEO';
 
   return (
     <form
@@ -122,18 +127,21 @@ export default function SettingsPage() {
         value={String(form.default_check_out || '').slice(0, 5)}
         onChange={(e) => setForm({ ...form, default_check_out: e.target.value })}
       />
-      <Input
-        label="Maximum GPS Accuracy (meters)"
-        inputMode="numeric"
-        value={String(form.max_gps_accuracy_meters)}
-        onChange={(e) => setForm({ ...form, max_gps_accuracy_meters: Number(e.target.value) })}
-      />
+      {isGeoMode && (
+        <Input
+          label="Maximum GPS Accuracy (meters)"
+          inputMode="numeric"
+          value={String(form.max_gps_accuracy_meters)}
+          onChange={(e) => setForm({ ...form, max_gps_accuracy_meters: Number(e.target.value) })}
+        />
+      )}
 
       </div>
+      {isGeoMode && (
       <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 lg:col-span-2">
         <h2 className="font-semibold">Workplace geofence</h2>
         <p className="text-xs text-gray-500">
-          When location-based attendance is on, attendance can only be marked inside this radius.
+          When Geo capture mode is on, attendance can only be marked inside this radius.
         </p>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <Input
@@ -157,48 +165,66 @@ export default function SettingsPage() {
           Use my current location as office
         </Button>
       </div>
+      )}
 
       <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 text-sm">
         <h2 className="font-semibold text-gray-900">Attendance capture</h2>
         {admin ? (
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
-            <div>
-              <div className="font-medium text-gray-900">Location-based attendance</div>
-              <div className="text-xs text-gray-500 mt-0.5">
-                When off, admins can manually mark attendance without GPS or geofence.
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              className="h-5 w-5 rounded border-gray-300 text-emerald-600"
-              checked={form.require_gps}
-              onChange={(e) => setForm({ ...form, require_gps: e.target.checked })}
-            />
-          </label>
+          <Select
+            label="Capture mode"
+            value={captureMode}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                attendance_capture_mode: e.target.value as SalaryBookSettings['attendance_capture_mode'],
+              })
+            }
+          >
+            <option value="HARDWARE">Hardware (fingerprint / card)</option>
+            <option value="GEO">Geo (GPS + selfie)</option>
+            <option value="MANUAL">Manual</option>
+          </Select>
         ) : (
           <div className="flex justify-between">
-            <span>Location-based attendance</span>
-            <span className="font-medium">{form.require_gps ? 'ON' : 'OFF'}</span>
+            <span>Capture mode</span>
+            <span className="font-medium">
+              {captureMode === 'HARDWARE'
+                ? 'Hardware'
+                : captureMode === 'MANUAL'
+                  ? 'Manual'
+                  : 'Geo'}
+            </span>
           </div>
         )}
-        <label className="flex items-center justify-between gap-3 cursor-pointer">
-          <span>Require selfie for present / half day</span>
-          <input
-            type="checkbox"
-            className="h-5 w-5 rounded border-gray-300 text-emerald-600"
-            checked={form.require_photo}
-            onChange={(e) => setForm({ ...form, require_photo: e.target.checked })}
-          />
-        </label>
-        <label className="flex items-center justify-between gap-3 cursor-pointer">
-          <span>Require selfie for check-out</span>
-          <input
-            type="checkbox"
-            className="h-5 w-5 rounded border-gray-300 text-emerald-600"
-            checked={form.require_checkout_gps_photo}
-            onChange={(e) => setForm({ ...form, require_checkout_gps_photo: e.target.checked })}
-          />
-        </label>
+        <p className="text-xs text-gray-500">
+          {captureMode === 'HARDWARE'
+            ? 'Punches from the biometric device create attendance automatically. Map device PINs under More → Devices, then push name+PIN to the K45 (no fingerprint/password).'
+            : captureMode === 'MANUAL'
+              ? 'Admins mark attendance without GPS or geofence.'
+              : 'Employees must be inside the workplace geofence and provide a selfie when required.'}
+        </p>
+        {isGeoMode && (
+          <>
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <span>Require selfie for present / half day</span>
+              <input
+                type="checkbox"
+                className="h-5 w-5 rounded border-gray-300 text-emerald-600"
+                checked={form.require_photo}
+                onChange={(e) => setForm({ ...form, require_photo: e.target.checked })}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 cursor-pointer">
+              <span>Require selfie for check-out</span>
+              <input
+                type="checkbox"
+                className="h-5 w-5 rounded border-gray-300 text-emerald-600"
+                checked={form.require_checkout_gps_photo}
+                onChange={(e) => setForm({ ...form, require_checkout_gps_photo: e.target.checked })}
+              />
+            </label>
+          </>
+        )}
       </div>
       <Button type="submit" className="w-full lg:w-auto min-h-12 px-8 bg-emerald-600 hover:bg-emerald-700" loading={mutation.isPending}>
         Save Settings

@@ -1,5 +1,7 @@
 from django.urls import path
 
+from backend.attendance import api_views as attendance_api
+
 from . import views
 
 urlpatterns = [
@@ -57,4 +59,31 @@ urlpatterns = [
     path('salary-book/reports/leaves/', views.report_leaves, name='salary-book-report-leaves'),
     path('salary-book/reports/advances/', views.report_advances, name='salary-book-report-advances'),
     path('salary-book/reports/salaries/', views.report_salaries, name='salary-book-report-salaries'),
+
+    path('salary-book/devices/', attendance_api.device_list, name='salary-book-device-list'),
+    path(
+        'salary-book/devices/<int:pk>/sync-mappings/',
+        attendance_api.device_sync_all_mappings,
+        name='salary-book-device-sync-mappings',
+    ),
+    path(
+        'salary-book/device-mappings/',
+        attendance_api.mapping_list_create,
+        name='salary-book-mapping-list',
+    ),
+    path(
+        'salary-book/device-mappings/<int:pk>/',
+        attendance_api.mapping_detail,
+        name='salary-book-mapping-detail',
+    ),
+    path(
+        'salary-book/device-mappings/<int:pk>/sync/',
+        attendance_api.mapping_sync,
+        name='salary-book-mapping-sync',
+    ),
+    path(
+        'salary-book/device-commands/',
+        attendance_api.device_command_list,
+        name='salary-book-device-commands',
+    ),
 ]

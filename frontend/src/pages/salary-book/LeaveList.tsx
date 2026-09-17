@@ -124,7 +124,7 @@ export default function LeaveList() {
       {open && (
         <LeaveForm
           employees={employeesQuery.data?.results || []}
-          locationRequired={settingsQuery.data?.require_gps ?? true}
+          locationRequired={(settingsQuery.data?.attendance_capture_mode || (settingsQuery.data?.require_gps ? 'GEO' : 'MANUAL')) === 'GEO'}
           loading={createMutation.isPending}
           onClose={() => setOpen(false)}
           onSave={(payload) => createMutation.mutate(payload)}

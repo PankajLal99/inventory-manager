@@ -12,6 +12,9 @@ import {
   appendGps,
   compressImage,
   formatTime,
+  formatDurationMinutes,
+  formatLateLabel,
+  methodLabel,
   geofenceStatus,
   getCurrentGps,
   GPS_POLL_MS,
@@ -54,7 +57,11 @@ export default function AttendancePage() {
     queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
   });
 
-  const locationRequired = settingsQuery.data?.require_gps ?? true;
+  const captureMode =
+    settingsQuery.data?.attendance_capture_mode ||
+    (settingsQuery.data?.require_gps === false ? 'MANUAL' : 'GEO');
+  const locationRequired = captureMode === 'GEO';
+  const hardwareMode = captureMode === 'HARDWARE';
 
   const requestGps = async (opts?: { silent?: boolean }) => {
     if (syncingRef.current) return;
@@ -133,6 +140,7 @@ export default function AttendancePage() {
     queryFn: async () =>
       (await salaryBookApi.attendance.list({ date, page_size: 100 })).data as Paginated<Attendance>,
     enabled: listReady,
+    refetchInterval: hardwareMode ? 10000 : false,
   });
 
   const byEmployee = useMemo(() => {
@@ -291,7 +299,9 @@ export default function AttendancePage() {
         {!locationRequired ? (
           <div className="mt-2 space-y-2">
             <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-              Manual attendance mode is on. Location is not required — pick a date, employee, and status to mark attendance.
+              {hardwareMode
+                ? 'Hardware attendance mode is on. Fingerprint/card punches from the device create attendance automatically. You can still mark or adjust records below if needed.'
+                : 'Manual attendance mode is on. Location is not required — pick a date, employee, and status to mark attendance.'}
             </p>
             <Input
               label="Attendance date"
@@ -366,15 +376,43 @@ export default function AttendancePage() {
             >
               <div className="font-semibold">{emp.name}</div>
               {row ? (
-                <div className="text-sm text-gray-600">
-                  {statusLabel(row.status)}
-                  {row.check_in_time ? ` · ${formatTime(row.check_in_time)}` : ''}
-                  {row.check_out_time ? ' · Out' : ''}
-                  {row.is_late && row.minutes_late ? ` · Late ${row.minutes_late}m` : ''}
-                  {row.rule_penalty_applied ? ' · Penalty absent' : ''}
+                <div className="text-sm text-gray-600 space-y-1.5 mt-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-800">
+                      {statusLabel(row.status)}
+                    </span>
+                    {row.attendance_method ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-700">
+                        {methodLabel(row.attendance_method)}
+                      </span>
+                    ) : null}
+                    {row.is_late && row.minutes_late ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-900">
+                        {formatLateLabel(row.minutes_late)}
+                      </span>
+                    ) : null}
+                    {row.rule_penalty_applied ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        Penalty
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="font-medium text-gray-800 tabular-nums">
+                    {row.check_in_time ? `In ${formatTime(row.check_in_time)}` : 'No check-in'}
+                    {row.check_out_time
+                      ? ` → Out ${formatTime(row.check_out_time)}`
+                      : row.check_in_time
+                        ? ' → …'
+                        : ''}
+                    {row.worked_minutes
+                      ? ` · ${formatDurationMinutes(row.worked_minutes)}`
+                      : row.worked_hours && Number(row.worked_hours) > 0
+                        ? ` · ${row.worked_hours}h`
+                        : ''}
+                  </div>
                 </div>
               ) : (
-                <div className="text-sm text-gray-400">Not marked</div>
+                <div className="text-sm text-gray-400 mt-1">Not marked</div>
               )}
             </button>
           );
@@ -494,16 +532,53 @@ function MarkSheet(props: {
         <h2 className="font-semibold text-lg">{props.employee.name}</h2>
         <p className="text-sm text-gray-500">{props.employee.employee_id}</p>
 
+        {props.existing && (
+          <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 text-sm space-y-1">
+            <div className="font-medium text-gray-900">
+              {statusLabel(props.existing.status)}
+              {props.existing.attendance_method
+                ? ` · ${methodLabel(props.existing.attendance_method)}`
+                : ''}
+            </div>
+            <div className="text-gray-800">
+              Check-in:{' '}
+              <span className="font-semibold">
+                {props.existing.check_in_time ? formatTime(props.existing.check_in_time) : '—'}
+              </span>
+            </div>
+            <div className="text-gray-800">
+              Check-out:{' '}
+              <span className="font-semibold">
+                {props.existing.check_out_time ? formatTime(props.existing.check_out_time) : '—'}
+              </span>
+            </div>
+            {(props.existing.worked_minutes > 0 || Number(props.existing.worked_hours) > 0) && (
+              <div className="text-gray-700">
+                Worked:{' '}
+                {props.existing.worked_minutes
+                  ? formatDurationMinutes(props.existing.worked_minutes)
+                  : `${props.existing.worked_hours}h`}
+                {props.existing.expected_check_in && props.existing.expected_check_out
+                  ? ` (scheduled ${String(props.existing.expected_check_in).slice(0, 5)}–${String(props.existing.expected_check_out).slice(0, 5)})`
+                  : ''}
+              </div>
+            )}
+            {props.existing.is_late && (
+              <div className="text-amber-800 font-medium">
+                {formatLateLabel(props.existing.minutes_late)}
+              </div>
+            )}
+          </div>
+        )}
+
         {checkoutMode ? (
           <p className="mt-3 text-sm text-gray-700">Record check-out with GPS and photograph.</p>
         ) : (
           <>
-            {props.existing && (
-              <p className="mt-3 text-sm text-gray-600">
-                Currently {statusLabel(props.existing.status)}
-                {props.manualMode ? ' — choose a new status to update.' : '.'}
-              </p>
+            {props.existing && props.manualMode && (
+              <p className="mt-3 text-sm text-gray-600">Choose a new status to update.</p>
             )}
+            {(props.manualMode || !props.existing) && (
             <div className="mt-3 grid grid-cols-2 gap-2">
               {STATUSES.map((s) => (
                 <button
@@ -518,6 +593,7 @@ function MarkSheet(props: {
                 </button>
               ))}
             </div>
+            )}
           </>
         )}
 

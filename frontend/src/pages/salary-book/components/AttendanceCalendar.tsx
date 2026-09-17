@@ -133,7 +133,7 @@ export function EmployeeMonthGrid({
           const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           const cell = employee.days[String(day)];
           const title = cell?.status && cell.status !== 'BEFORE_JOINING'
-            ? `${statusLabel(cell.status)}${cell.check_in_time ? ` · ${formatTime(cell.check_in_time)}` : ''}${cell.is_late && cell.minutes_late ? ` · Late ${cell.minutes_late}m` : ''}${cell.rule_penalty_applied ? ' · Penalty' : ''}`
+            ? `${statusLabel(cell.status)}${cell.check_in_time ? ` · In ${formatTime(cell.check_in_time)}` : ''}${cell.check_out_time ? ` · Out ${formatTime(cell.check_out_time)}` : ''}${cell.is_late && cell.minutes_late ? ` · Late ${cell.minutes_late}m` : ''}${cell.rule_penalty_applied ? ' · Penalty' : ''}`
             : iso;
           return (
             <div
@@ -143,6 +143,12 @@ export function EmployeeMonthGrid({
             >
               <span className="font-semibold">{day}</span>
               <span className="text-[10px] leading-none mt-0.5">{cellLabel(cell)}</span>
+              {cell?.check_in_time && (
+                <span className="text-[9px] leading-none text-gray-600">{formatTime(cell.check_in_time)}</span>
+              )}
+              {cell?.check_out_time && (
+                <span className="text-[9px] leading-none text-gray-600">→{formatTime(cell.check_out_time)}</span>
+              )}
               {cell?.is_late && !cell?.rule_penalty_applied && <span className="text-[9px] leading-none">L</span>}
               {cell?.rule_penalty_applied && <span className="text-[9px] leading-none">P</span>}
             </div>
