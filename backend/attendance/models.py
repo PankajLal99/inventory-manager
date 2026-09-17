@@ -30,6 +30,8 @@ class Device(models.Model):
     class Meta:
         db_table = 'attendance_devices'
         ordering = ['serial_number']
+        verbose_name = 'ADMS device'
+        verbose_name_plural = 'ADMS devices'
 
     def __str__(self):
         return f'{self.device_name or self.serial_number} ({self.serial_number})'
@@ -56,6 +58,8 @@ class DeviceUserMapping(models.Model):
     class Meta:
         db_table = 'attendance_device_user_mappings'
         ordering = ['device_id', 'device_user_id']
+        verbose_name = 'Device user mapping'
+        verbose_name_plural = 'Device user mappings'
         constraints = [
             models.UniqueConstraint(
                 fields=['device', 'device_user_id'],
@@ -89,6 +93,8 @@ class AttendanceEvent(models.Model):
     class Meta:
         db_table = 'attendance_events'
         ordering = ['-punch_datetime', '-id']
+        verbose_name = 'Attendance event'
+        verbose_name_plural = 'Attendance events'
         indexes = [
             models.Index(fields=['device', 'punch_datetime']),
             models.Index(fields=['device_user_id', 'punch_datetime']),
@@ -135,6 +141,8 @@ class DeviceCommand(models.Model):
     class Meta:
         db_table = 'attendance_device_commands'
         ordering = ['id']
+        verbose_name = 'Device command'
+        verbose_name_plural = 'Device commands'
         indexes = [
             models.Index(fields=['device', 'status', 'id']),
         ]

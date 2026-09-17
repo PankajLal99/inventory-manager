@@ -70,7 +70,7 @@ INSTALLED_APPS = [
     'backend.credit',
     'backend.reports',
     'backend.salary_book',
-    'backend.attendance',
+    'backend.attendance.apps.AttendanceConfig',
 ]
 
 MIDDLEWARE = [
