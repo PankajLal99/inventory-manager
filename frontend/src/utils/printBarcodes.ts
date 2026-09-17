@@ -215,15 +215,26 @@ export const printLabelsFromResponse = async (responseData: any) => {
                 padding: 0;
                 box-sizing: border-box;
               }
-              html {
+              html, body {
                 margin: 0;
                 padding: 0;
+                overflow: visible;
+                height: auto;
               }
               body {
-                margin: 0;
-                padding: 0;
                 background: white;
                 display: block;
+              }
+              .print-eject {
+                display: block;
+                page-break-before: always;
+                break-before: page;
+                width: 0;
+                height: 0;
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                visibility: hidden;
               }
               .label-container {
                 box-shadow: none;
@@ -282,34 +293,30 @@ export const printLabelsFromResponse = async (responseData: any) => {
             </div>
           `;
           }).join('')}
+          <div class="print-eject" aria-hidden="true"></div>
           <script>
             (function() {
-              var images = document.querySelectorAll('img');
+              var images = document.querySelectorAll('.label-container img');
               var totalImages = images.length;
-              var labelWidth = ${labelWidth};
-              var labelHeight = ${labelHeight};
               var printableWidth = ${printableWidth};
               var printableHeight = ${printableHeight};
 
               function finalizeLayout() {
+                 document.documentElement.style.margin = '0';
+                 document.documentElement.style.padding = '0';
+                 document.documentElement.style.overflow = 'visible';
+                 document.documentElement.style.height = 'auto';
+                 document.body.style.margin = '0';
+                 document.body.style.padding = '0';
+                 document.body.style.overflow = 'visible';
+                 document.body.style.height = 'auto';
                  if (totalImages === 1) {
-                    document.documentElement.style.width = labelWidth + 'mm';
-                    document.documentElement.style.height = labelHeight + 'mm';
-                    document.documentElement.style.margin = '0';
-                    document.documentElement.style.padding = '0';
-                    document.documentElement.style.overflow = 'hidden';
-                    document.body.style.width = labelWidth + 'mm';
-                    document.body.style.height = labelHeight + 'mm';
-                    document.body.style.margin = '0';
-                    document.body.style.padding = '0';
-                    document.body.style.overflow = 'hidden';
                     document.body.style.display = 'flex';
+                    document.body.style.flexDirection = 'column';
                     document.body.style.justifyContent = 'center';
                     document.body.style.alignItems = 'center';
                   } else {
                     document.body.style.display = 'block';
-                    document.body.style.margin = '0';
-                    document.body.style.padding = '0';
                   }
 
                   var containers = document.querySelectorAll('.label-container');
