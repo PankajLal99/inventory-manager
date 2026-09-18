@@ -574,6 +574,10 @@ def update_repair_status(request, pk):
     return Response(serializer.data)
 
 
+# Fields reproduced on the printed repair label; delivery_date is not shown on it.
+LABEL_VISIBLE_REPAIR_FIELDS = frozenset({'contact_no', 'model_name', 'description', 'booking_amount'})
+
+
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def update_repair(request, pk):
@@ -617,6 +621,13 @@ def update_repair(request, pk):
             after = getattr(repair, k, None)
             if before != after:
                 changes[k] = {'old': str(before) if before is not None else None, 'new': str(after) if after is not None else None}
+
+    # The printed label carries these fields, so a cached image is now out of date.
+    # Dropping it forces the next print to regenerate instead of serving the old PNG.
+    if repair.label_image and LABEL_VISIBLE_REPAIR_FIELDS.intersection(changes):
+        repair.label_image = ''
+        repair.save(update_fields=['label_image', 'updated_at'])
+
     create_audit_log(
         request=request,
         action='repair_update',
@@ -663,6 +674,8 @@ def generate_repair_label(request, pk):
     force_regenerate = str(request.query_params.get('force', '')).strip().lower() in {'1', 'true', 'yes'}
 
     from backend.catalog.azure_label_service import (
+        construct_blob_url,
+        get_blob_image_version,
         is_blob_image_ready,
         queue_bulk_label_generation_via_azure,
         wait_for_blob_image,
@@ -699,6 +712,15 @@ def generate_repair_label(request, pk):
             'barcode_type': 'repair',
         }]
 
+        # Snapshot the blob we are about to overwrite. Label blob names are derived
+        # from the repair id, so an earlier PNG may already be sitting there; without
+        # this the wait below would pass instantly and we would print the old label.
+        # Probe the blob path rather than repair.label_image, which may have been
+        # cleared on edit while the stale PNG is still in storage.
+        previous_version = get_blob_image_version(
+            construct_blob_url(repair.id, prefix='barcode-repair')
+        )
+
         blob_urls = queue_bulk_label_generation_via_azure(repair_data)
         blob_url = blob_urls.get(repair.id)
 
@@ -711,7 +733,7 @@ def generate_repair_label(request, pk):
         repair.label_image = blob_url
         repair.save(update_fields=['label_image', 'updated_at'])
 
-        if not wait_for_blob_image(blob_url, timeout_seconds=45):
+        if not wait_for_blob_image(blob_url, timeout_seconds=45, previous_version=previous_version):
             logger.warning(f"Azure repair label PNG was not ready for repair {repair.id} after waiting")
             return Response(
                 {

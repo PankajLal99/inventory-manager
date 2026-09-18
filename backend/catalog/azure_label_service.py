@@ -162,26 +162,64 @@ def _response_looks_like_image(response: requests.Response) -> bool:
     )
 
 
+def _probe_url(blob_url: str) -> str:
+    """Add a unique query param so probes always read blob metadata from origin, never a cache."""
+    if not blob_url:
+        return blob_url
+    separator = '&' if '?' in blob_url else '?'
+    return f"{blob_url}{separator}probe={int(time.time() * 1000)}"
+
+
+def _blob_version_from_headers(headers: Any) -> str:
+    """Build an opaque marker that changes whenever Azure rewrites the blob."""
+    etag = (headers.get('ETag') or '').strip('"')
+    if etag:
+        return etag
+    return f"{headers.get('Last-Modified') or ''}|{headers.get('Content-Length') or ''}"
+
+
+def _fetch_blob_image_state(blob_url: str, timeout: float = 5.0):
+    """Fetch the blob once, reporting whether it serves an image and which version it is."""
+    if not blob_url:
+        return False, None
+    try:
+        response = requests.get(_probe_url(blob_url), timeout=timeout, allow_redirects=True)
+    except requests.exceptions.RequestException:
+        return False, None
+    if response.status_code != 200 or not _response_looks_like_image(response):
+        return False, None
+    return True, _blob_version_from_headers(response.headers)
+
+
 def is_blob_image_ready(blob_url: str, timeout: float = 5.0) -> bool:
     """Return True when the blob URL actually serves an image, not a 404/HTML placeholder."""
-    if not blob_url:
-        return False
-    try:
-        response = requests.get(blob_url, timeout=timeout, allow_redirects=True)
-        return response.status_code == 200 and _response_looks_like_image(response)
-    except requests.exceptions.RequestException:
-        return False
+    ready, _ = _fetch_blob_image_state(blob_url, timeout=timeout)
+    return ready
+
+
+def get_blob_image_version(blob_url: str, timeout: float = 5.0) -> Optional[str]:
+    """Version marker of the image currently stored at blob_url, or None if there is no image yet."""
+    _, version = _fetch_blob_image_state(blob_url, timeout=timeout)
+    return version
 
 
 def wait_for_blob_image(
     blob_url: str,
     timeout_seconds: float = 8.0,
     interval_seconds: float = 0.4,
+    previous_version: Optional[str] = None,
 ) -> bool:
-    """Poll Azure until the queued label PNG exists, or until timeout."""
+    """Poll Azure until the queued label PNG is ready, or until timeout.
+
+    Label blob names are deterministic (barcode-repair-<id>.png), so a regenerated
+    label overwrites the previous one. When previous_version is supplied, an image
+    only counts as ready once its version differs from it; otherwise the first poll
+    would succeed against the stale PNG and the caller would print the old label.
+    """
     deadline = time.monotonic() + timeout_seconds
     while True:
-        if is_blob_image_ready(blob_url):
+        ready, version = _fetch_blob_image_state(blob_url)
+        if ready and (previous_version is None or version != previous_version):
             return True
         if time.monotonic() >= deadline:
             return False
