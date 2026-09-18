@@ -413,6 +413,13 @@ export function buildThermalPrintCss(
                 margin: 0 !important;
                 padding: ${settings.pageMarginMm}mm ${settings.contentPaddingPx}px !important;
               }
+              /* Trailing feed so the roll clears the tear bar and the printer
+                 flushes this receipt instead of holding it until the next one. */
+              body::after {
+                content: '';
+                display: block;
+                height: 12mm;
+              }
               .no-print { display: none; }
               table.items-table tbody td,
               table.items-table thead th {
@@ -498,13 +505,25 @@ export function buildThermalTestPrintHtml(settings: ThermalPrintSettings): strin
       </html>`;
 }
 
+let lastThermalPrintWindow: Window | null = null;
+
 export function printThermalHtml(html: string): boolean {
-  const printWindow = window.open('', '_blank');
+  if (lastThermalPrintWindow && !lastThermalPrintWindow.closed) {
+    try {
+      lastThermalPrintWindow.close();
+    } catch {
+      // Popup may already be gone.
+    }
+  }
+
+  const printWindow = window.open(`about:blank?receipt=${Date.now()}`, '_blank');
   if (!printWindow) {
     alert('Please allow popups to print the test receipt');
     return false;
   }
+  lastThermalPrintWindow = printWindow;
 
+  printWindow.document.open();
   printWindow.document.write(html);
   printWindow.document.close();
 

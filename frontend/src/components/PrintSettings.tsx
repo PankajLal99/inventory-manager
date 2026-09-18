@@ -9,6 +9,8 @@ export interface PrintSettings {
   labelWidth: number; // mm
   labelHeight: number; // mm
   gapBetweenLabels: number; // mm
+  /** Append a blank trailing page so thermal printers eject the final label instead of holding it. */
+  ejectLastLabel: boolean;
 }
 
 const DEFAULT_SETTINGS: PrintSettings = {
@@ -16,6 +18,7 @@ const DEFAULT_SETTINGS: PrintSettings = {
   labelWidth: 50,
   labelHeight: 25,
   gapBetweenLabels: 3,
+  ejectLastLabel: true,
 };
 
 const STORAGE_KEY = 'print_settings';
@@ -56,7 +59,7 @@ export default function PrintSettingsModal({ isOpen, onClose }: PrintSettingsMod
     }
   }, [isOpen]);
 
-  const handleChange = (key: keyof PrintSettings, value: number) => {
+  const handleChange = (key: keyof PrintSettings, value: number | boolean) => {
     setSettings(prev => ({ ...prev, [key]: value }));
     setHasChanges(true);
   };
@@ -234,6 +237,27 @@ export default function PrintSettingsModal({ isOpen, onClose }: PrintSettingsMod
               </p>
             </div>
 
+            {/* Eject Last Label */}
+            <div>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.ejectLastLabel}
+                  onChange={(e) => handleChange('ejectLastLabel', e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600 cursor-pointer"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-gray-700">
+                    Feed a blank label after the last barcode
+                  </span>
+                  <span className="block text-xs text-gray-500 mt-1">
+                    Stops the printer from holding the final sticker until the next print. Uses about
+                    one blank label per print job.
+                  </span>
+                </span>
+              </label>
+            </div>
+
             {/* Summary Info */}
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
               <h4 className="text-sm font-medium text-gray-900 mb-2">Summary</h4>
@@ -242,6 +266,7 @@ export default function PrintSettingsModal({ isOpen, onClose }: PrintSettingsMod
                 <p><span className="font-medium">Printable Area:</span> {printableWidth.toFixed(1)}mm × {printableHeight.toFixed(1)}mm</p>
                 <p><span className="font-medium">Margins:</span> {settings.pageMargin}mm (all sides)</p>
                 <p><span className="font-medium">Gap:</span> {settings.gapBetweenLabels}mm</p>
+                <p><span className="font-medium">Blank eject label:</span> {settings.ejectLastLabel ? 'On' : 'Off'}</p>
               </div>
             </div>
           </div>

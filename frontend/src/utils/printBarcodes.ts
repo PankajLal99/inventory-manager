@@ -104,6 +104,7 @@ export const printLabelsFromResponse = async (responseData: any) => {
   const labelWidth = settings.labelWidth;
   const labelHeight = settings.labelHeight;
   const gapBetweenLabels = settings.gapBetweenLabels;
+  const ejectLastLabel = settings.ejectLastLabel !== false;
 
   const printableWidth = labelWidth - (pageMargin * 2);
   const printableHeight = labelHeight - (pageMargin * 2);
@@ -201,6 +202,9 @@ export const printLabelsFromResponse = async (responseData: any) => {
               max-height: 100vh;
               object-fit: contain;
             }
+            .print-eject {
+              display: none;
+            }
             @media print {
               @page {
                 size: ${labelWidth}mm ${labelHeight}mm;
@@ -225,16 +229,21 @@ export const printLabelsFromResponse = async (responseData: any) => {
                 background: white;
                 display: block;
               }
+              /* A real, full-size page so the printer ejects the last barcode
+                 instead of holding it until the next job. Hidden with white ink,
+                 because a zero-height or visibility:hidden box generates no page. */
               .print-eject {
                 display: block;
                 page-break-before: always;
                 break-before: page;
-                width: 0;
-                height: 0;
+                width: ${printableWidth}mm;
+                height: ${printableHeight}mm;
+                min-height: ${printableHeight}mm;
                 margin: 0;
                 padding: 0;
                 overflow: hidden;
-                visibility: hidden;
+                color: #fff;
+                background: #fff;
               }
               .label-container {
                 box-shadow: none;
@@ -293,11 +302,10 @@ export const printLabelsFromResponse = async (responseData: any) => {
             </div>
           `;
           }).join('')}
-          <div class="print-eject" aria-hidden="true"></div>
+          ${ejectLastLabel ? '<div class="print-eject" aria-hidden="true">&nbsp;</div>' : ''}
           <script>
             (function() {
               var images = document.querySelectorAll('.label-container img');
-              var totalImages = images.length;
               var printableWidth = ${printableWidth};
               var printableHeight = ${printableHeight};
 
@@ -310,14 +318,9 @@ export const printLabelsFromResponse = async (responseData: any) => {
                  document.body.style.padding = '0';
                  document.body.style.overflow = 'visible';
                  document.body.style.height = 'auto';
-                 if (totalImages === 1) {
-                    document.body.style.display = 'flex';
-                    document.body.style.flexDirection = 'column';
-                    document.body.style.justifyContent = 'center';
-                    document.body.style.alignItems = 'center';
-                  } else {
-                    document.body.style.display = 'block';
-                  }
+                 // Block layout only: Chrome ignores forced page breaks on flex
+                 // items, which would drop the trailing eject page.
+                 document.body.style.display = 'block';
 
                   var containers = document.querySelectorAll('.label-container');
                   containers.forEach(function(container) {
