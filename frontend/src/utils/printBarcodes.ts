@@ -1,6 +1,5 @@
 import { loadPrintSettings, PrintSettings } from '../components/PrintSettings';
 
-let lastPrintWindow: Window | null = null;
 let printJobSeq = 0;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,21 +72,10 @@ const convertImageToDataURL = async (url: string): Promise<string> => {
   throw new Error('Label image is not ready yet. Please try printing again in a moment.');
 };
 
-const closePrintWindow = (printWindow: Window | null) => {
-  if (!printWindow || printWindow.closed) return;
-  try {
-    printWindow.close();
-  } catch {
-    // Popup may already be gone.
-  }
-};
-
-const openPrintWindow = (): Window | null => {
-  closePrintWindow(lastPrintWindow);
-  const printWindow = window.open(`about:blank?print=${Date.now()}`, '_blank');
-  lastPrintWindow = printWindow;
-  return printWindow;
-};
+// Each job gets its own tab and is left open, so a previous preview is never
+// closed out from under the user before they have printed it.
+const openPrintWindow = (): Window | null =>
+  window.open(`about:blank?print=${Date.now()}`, '_blank');
 
 export const printLabelsFromResponse = async (responseData: any) => {
   const jobId = ++printJobSeq;
@@ -205,7 +193,38 @@ export const printLabelsFromResponse = async (responseData: any) => {
             .print-eject {
               display: none;
             }
+            .print-toolbar {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              flex-wrap: wrap;
+              gap: 12px;
+              padding: 10px 16px;
+              background: #fff;
+              border: 1px solid #e5e7eb;
+              border-radius: 8px;
+              box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              font-size: 13px;
+              color: #374151;
+            }
+            .print-toolbar button {
+              padding: 6px 16px;
+              border: 0;
+              border-radius: 6px;
+              background: #2563eb;
+              color: #fff;
+              font-size: 13px;
+              font-weight: 600;
+              cursor: pointer;
+            }
+            .print-toolbar button:hover {
+              background: #1d4ed8;
+            }
             @media print {
+              .print-toolbar {
+                display: none !important;
+              }
               @page {
                 size: ${labelWidth}mm ${labelHeight}mm;
                 margin-top: ${pageMargin}mm;
@@ -290,6 +309,10 @@ export const printLabelsFromResponse = async (responseData: any) => {
           </style>
         </head>
         <body>
+          <div class="print-toolbar">
+            <span>${imageUrls.length} label(s) ready. Press Ctrl+P (Cmd+P on Mac) when you want to print.</span>
+            <button id="print-now" type="button">Print</button>
+          </div>
           ${imageUrls.map((url: string, index: number) => {
             const tag = normalizedTags[index] || 'new';
             const isBlocked = isBlockedTag(tag);
@@ -309,7 +332,7 @@ export const printLabelsFromResponse = async (responseData: any) => {
               var printableWidth = ${printableWidth};
               var printableHeight = ${printableHeight};
 
-              function finalizeLayout() {
+              function applyPrintLayout() {
                  document.documentElement.style.margin = '0';
                  document.documentElement.style.padding = '0';
                  document.documentElement.style.overflow = 'visible';
@@ -377,40 +400,30 @@ export const printLabelsFromResponse = async (responseData: any) => {
                   });
               }
 
-              finalizeLayout();
+              // Print geometry is applied only when a print actually starts, so the
+              // tab keeps its readable on-screen preview. By then the images have
+              // decoded, so their real aspect ratio is used for sizing.
+              // This tab never opens the print dialog and never closes itself.
+              window.addEventListener('beforeprint', applyPrintLayout);
 
-              var hasPrinted = false;
-              function startPrint() {
-                if (hasPrinted) return;
-                hasPrinted = true;
-                window.focus();
-                window.print();
+              if (window.matchMedia) {
+                var printMedia = window.matchMedia('print');
+                var onMediaChange = function(event) {
+                  if (event.matches) applyPrintLayout();
+                };
+                if (printMedia.addEventListener) {
+                  printMedia.addEventListener('change', onMediaChange);
+                } else if (printMedia.addListener) {
+                  printMedia.addListener(onMediaChange);
+                }
               }
 
-              window.addEventListener('afterprint', function() {
-                window.close();
-              });
-
-              var pending = images.length;
-              if (pending === 0) {
-                setTimeout(startPrint, 300);
-              } else {
-                images.forEach(function(img) {
-                  if (img.complete && img.naturalWidth > 0) {
-                    pending--;
-                    if (pending === 0) setTimeout(startPrint, 200);
-                    return;
-                  }
-                  img.onload = function() {
-                    pending--;
-                    if (pending === 0) setTimeout(startPrint, 200);
-                  };
-                  img.onerror = function() {
-                    pending--;
-                    if (pending === 0) setTimeout(startPrint, 200);
-                  };
+              var printButton = document.getElementById('print-now');
+              if (printButton) {
+                printButton.addEventListener('click', function() {
+                  applyPrintLayout();
+                  window.print();
                 });
-                setTimeout(startPrint, 4000);
               }
             })();
           </script>
@@ -418,4 +431,9 @@ export const printLabelsFromResponse = async (responseData: any) => {
       </html>
     `);
   printWindow.document.close();
+  try {
+    printWindow.focus();
+  } catch {
+    // Focus can be refused by the browser; the tab is still open.
+  }
 };
