@@ -8,6 +8,7 @@ import {
   Camera,
   ClipboardCopy,
   Columns3,
+  FileSpreadsheet,
   FileText,
   Filter,
   Minus,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 import { creditApi } from '../../lib/api';
 import { dateStringWithCurrentTimeISO, formatNumber, getTodayDateString, toLocalDateString } from '../../lib/utils';
 import { toast } from '../../lib/toast';
@@ -38,11 +40,17 @@ import {
   collectionStatusBadgeVariant,
   collectionStatusLabel,
   compareLedgerStatementRows,
-  ledgerEventTimeMs,
   formatCreditDate,
   formatCreditDateTime,
   formatCreditStatementDate,
+  formatDurationYearsMonths,
+  ledgerEventTimeMs,
 } from './creditLedgerUtils';
+import {
+  drawPdfHeartAfterText,
+  nameHasCreditHeart,
+  sanitizePdfText,
+} from './creditPdfText';
 import {
   docFooterFontPx,
   docFooterFontWeight,
@@ -146,17 +154,6 @@ function formatPdfDate(value?: string | null) {
 /** Statement / table date columns: DD/MM/YYYY, or DD/MM/YYYY h:mm AM/PM when time is on. */
 function formatPdfDateShort(value?: string | null, includeTime = false) {
   return includeTime ? formatCreditDateTime(value) : formatCreditStatementDate(value);
-}
-
-/** jsPDF Helvetica can't render ₹ / emoji — keep printable Latin text only */
-function sanitizePdfText(value?: string | null) {
-  return String(value ?? '')
-    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
-    .replace(/[\u2600-\u27BF]/g, '')
-    .replace(/[\uFE0E\uFE0F]/g, '')
-    .replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function formatPdfAmount(value: string | number | null | undefined) {
@@ -772,7 +769,9 @@ export default function CreditLedgerDetail() {
     const pageHeight = doc.internal.pageSize.getHeight();
     const marginX = 10;
     const contentW = pageWidth - marginX * 2;
-    const customerName = sanitizePdfText(selectedCustomer.name || 'Customer') || 'Customer';
+    const rawCustomerName = selectedCustomer.name || 'Customer';
+    const showHeart = nameHasCreditHeart(rawCustomerName);
+    const customerName = sanitizePdfText(rawCustomerName) || 'Customer';
     const firstName = customerName.split(/\s+/)[0] || customerName;
     const netSide = String(statement.closing_side || 'Dr').toUpperCase();
     const isCr = netSide === 'CR';
@@ -782,6 +781,15 @@ export default function CreditLedgerDetail() {
       : oldestRow?.created_at
         ? `on ${formatPdfDate(oldestRow.created_at)}`
         : '';
+
+    const drawCenteredNameTitle = (titleY: number) => {
+      const title = `${customerName} Statement`;
+      doc.text(title, pageWidth / 2, titleY, { align: 'center' });
+      if (!showHeart) return;
+      const titleW = doc.getTextWidth(title);
+      const titleLeft = pageWidth / 2 - titleW / 2;
+      drawPdfHeartAfterText(doc, customerName, titleLeft, titleY, 3.4);
+    };
 
     // Top brand bar — ledger chrome color
     doc.setFillColor(...PDF_PRIMARY);
@@ -799,7 +807,7 @@ export default function CreditLedgerDetail() {
     doc.setTextColor(...PDF_SECONDARY);
     doc.setFont(pdfFont, pdfHeaderWeight);
     doc.setFontSize(pdfHeaderSize);
-    doc.text(`${customerName} Statement`, pageWidth / 2, y, { align: 'center' });
+    drawCenteredNameTitle(y);
     y += 4.5;
     doc.setFont(pdfFont, pdfSubWeight);
     doc.setFontSize(pdfSubSize);
@@ -968,7 +976,7 @@ export default function CreditLedgerDetail() {
         doc.setTextColor(...PDF_SECONDARY);
         doc.setFont(pdfFont, pdfHeaderWeight);
         doc.setFontSize(pdfHeaderSize);
-        doc.text(`${customerName} Statement`, pageWidth / 2, continuedY, { align: 'center' });
+        drawCenteredNameTitle(continuedY);
         continuedY += 4.5;
         doc.setFont(pdfFont, pdfSubWeight);
         doc.setFontSize(pdfSubSize);
@@ -1093,6 +1101,34 @@ export default function CreditLedgerDetail() {
     const built = buildCreditLedgerPdf(split);
     if (!built) return;
     built.doc.save(built.fileName);
+  };
+
+  const exportExcel = () => {
+    if (!selectedCustomer || !statement) return;
+    // Body rows only — skip opening / total aggregates
+    const bodyRows = statementRows.filter((r) => !r.isOpening && !r.isTotal);
+    if (!bodyRows.length) {
+      toast('No ledger rows to export', 'error');
+      return;
+    }
+    const data = bodyRows.map((r) => ({
+      Date: r.date,
+      Type: r.type,
+      Voucher: r.vch,
+      Particulars: r.particulars,
+      Narration: r.narration,
+      Debit: r.debit || '',
+      Credit: r.credit || '',
+      Balance: r.balance || '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Statement');
+    const safeName = String(selectedCustomer.name || 'customer')
+      .replace(/[^\w\-]+/g, '_')
+      .replace(/_+/g, '_');
+    XLSX.writeFile(wb, `credit_ledger_${safeName}_${getTodayDateString()}.xlsx`);
+    toast(`Exported ${bodyRows.length} row${bodyRows.length === 1 ? '' : 's'}`, 'success');
   };
 
   const clearCopyLedgerParam = () => {
@@ -1400,6 +1436,10 @@ export default function CreditLedgerDetail() {
                 <FileText className="h-4 w-4 mr-1.5" />
                 PDF
               </Button>
+              <Button variant="outline" size="sm" onClick={() => exportExcel()}>
+                <FileSpreadsheet className="h-4 w-4 mr-1.5" />
+                Excel
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -1436,7 +1476,7 @@ export default function CreditLedgerDetail() {
               <Badge variant={collectionStatusBadgeVariant(customerMeta.collection_status)}>
                 {collectionStatusLabel(customerMeta.collection_status)}
                 {customerMeta.days_since_last_payment != null
-                  ? ` (${customerMeta.days_since_last_payment}d)`
+                  ? ` (${formatDurationYearsMonths(customerMeta.days_since_last_payment)})`
                   : ''}
               </Badge>
             ) : null}

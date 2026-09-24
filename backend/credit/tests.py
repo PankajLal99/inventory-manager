@@ -262,3 +262,89 @@ class MainLedgerSentSyncTimestampTests(TestCase):
         payment = CreditPayment.objects.get(source_ledger_entry_id=entry.id)
         self.assertEqual(payment.paid_at, original_paid_at)
         self.assertEqual(payment.amount, Decimal('250.00'))
+
+
+class CreditLedgerExportTests(TestCase):
+    """Export returns row data only — no aggregate totals."""
+
+    def setUp(self):
+        self.user = TestDataFactory.create_user()
+        self.client = AuthenticatedAPIClient()
+        self.client.authenticate_user(self.user)
+        self.good = CreditCustomer.objects.create(
+            name='Good Pay ❤',
+            phone='9000000101',
+            balance=Decimal('0.00'),
+            is_active=True,
+        )
+        self.overdue = CreditCustomer.objects.create(
+            name='Overdue ❤',
+            phone='9000000102',
+            balance=Decimal('500.00'),
+            is_active=True,
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.overdue,
+            entry_type='debit',
+            amount=Decimal('500.00'),
+            description='Sale',
+            created_at=timezone.now() - timedelta(days=20),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.good,
+            entry_type='debit',
+            amount=Decimal('100.00'),
+            description='Sale',
+            created_at=timezone.now() - timedelta(days=2),
+        )
+        CreditLedgerEntry.objects.create(
+            customer=self.good,
+            entry_type='credit',
+            amount=Decimal('100.00'),
+            description='Payment',
+            created_at=timezone.now() - timedelta(days=1),
+        )
+        # Sync balances
+        self.good.balance = Decimal('0.00')
+        self.good.save(update_fields=['balance'])
+        self.overdue.balance = Decimal('500.00')
+        self.overdue.save(update_fields=['balance'])
+
+    def test_export_accounts_excludes_totals_and_filters_status(self):
+        response = self.client.get(
+            '/api/v1/credit/ledger/export/?scope=accounts&collection_status=danger'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['scope'], 'accounts')
+        self.assertNotIn('totals', response.data)
+        self.assertNotIn('total_receivable', response.data)
+        names = [row['name'] for row in response.data['results']]
+        self.assertIn('Overdue ❤', names)
+        self.assertNotIn('Good Pay ❤', names)
+        for row in response.data['results']:
+            self.assertIn('outstanding', row)
+            self.assertNotIn('total_debit', row)
+            self.assertNotIn('total_credit', row)
+            self.assertNotIn('total_received', row)
+            self.assertNotIn('net_amount', row)
+
+    def test_export_entries_by_customer_and_date(self):
+        today = timezone.localdate()
+        response = self.client.get(
+            '/api/v1/credit/ledger/export/',
+            {
+                'scope': 'entries',
+                'customer': self.good.id,
+                'date_from': (today - timedelta(days=7)).isoformat(),
+                'date_to': today.isoformat(),
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['scope'], 'entries')
+        self.assertNotIn('totals', response.data)
+        self.assertGreaterEqual(response.data['count'], 1)
+        for row in response.data['results']:
+            self.assertEqual(row['customer_id'], self.good.id)
+            self.assertIn('debit', row)
+            self.assertIn('credit', row)
+            self.assertNotIn('running_balance', row)

@@ -158,14 +158,36 @@ export function balanceLabel(amount: string | number, side: string) {
 export function collectionStatusLabel(status: CollectionStatus | string | undefined): string {
   switch (status) {
     case 'good':
-      return 'Paying on time';
+      return 'Going good';
     case 'warning':
-      return 'No payment 7+ days';
+      return 'Low';
     case 'danger':
-      return 'No payment 12+ days';
+      return 'Very much overdue';
     default:
       return '—';
   }
+}
+
+/** Format a day count as "X years Y months" (or days when under a month). */
+export function formatDurationYearsMonths(days: number | null | undefined): string {
+  if (days == null || !Number.isFinite(days)) return '—';
+  const total = Math.max(0, Math.round(days));
+  if (total === 0) return '0 days';
+  if (total < 30) return total === 1 ? '1 day' : `${total} days`;
+
+  const years = Math.floor(total / 365);
+  const afterYears = total % 365;
+  const months = Math.floor(afterYears / 30);
+  const remDays = afterYears % 30;
+
+  const parts: string[] = [];
+  if (years > 0) parts.push(years === 1 ? '1 year' : `${years} years`);
+  if (months > 0) parts.push(months === 1 ? '1 month' : `${months} months`);
+  // Only show leftover days when there are no years (keep long spans as years + months)
+  if (years === 0 && remDays > 0) {
+    parts.push(remDays === 1 ? '1 day' : `${remDays} days`);
+  }
+  return parts.join(' ') || '0 days';
 }
 
 export function daysSincePaymentLabel(days: number | null | undefined, balance: number): string {
@@ -173,7 +195,8 @@ export function daysSincePaymentLabel(days: number | null | undefined, balance: 
   if (days == null) return 'No payment yet';
   if (days === 0) return 'Paid today';
   if (days === 1) return '1 day since pay';
-  return `${days} days since pay`;
+  if (days < 30) return `${days} days since pay`;
+  return `${formatDurationYearsMonths(days)} since pay`;
 }
 
 export function followUpDeltaLabel(delta: number | null | undefined): string {

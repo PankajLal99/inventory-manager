@@ -1,8 +1,25 @@
 import { describe, it, expect } from 'vitest'
 import {
   compareLedgerStatementRows,
+  formatDurationYearsMonths,
   ledgerEventTimeMs,
 } from '../src/pages/credit/creditLedgerUtils'
+
+describe('formatDurationYearsMonths', () => {
+  it('keeps short spans as days', () => {
+    expect(formatDurationYearsMonths(1)).toBe('1 day')
+    expect(formatDurationYearsMonths(29)).toBe('29 days')
+  })
+
+  it('formats months under a year', () => {
+    expect(formatDurationYearsMonths(45)).toBe('1 month 15 days')
+    expect(formatDurationYearsMonths(60)).toBe('2 months')
+  })
+
+  it('formats long spans as years then months', () => {
+    expect(formatDurationYearsMonths(2003)).toBe('5 years 5 months')
+  })
+})
 
 describe('ledgerEventTimeMs', () => {
   it('reads 10/06/2026 as 10 June, not 6 October', () => {

@@ -725,6 +725,17 @@ export const creditApi = {
       txn_type?: 'sale' | 'payment' | 'return' | '';
     }) => api.get('/credit/ledger/statement/', { params }),
     byCustomer: (params?: any) => api.get('/credit/ledger/by-customer/', { params }),
+    export: (params?: {
+      scope?: 'accounts' | 'entries';
+      search?: string;
+      customer?: number | string;
+      date_from?: string;
+      date_to?: string;
+      collection_status?: string;
+      customer_group?: string | number;
+      with_balance?: string;
+      with_heart?: string;
+    }) => api.get('/credit/ledger/export/', { params }),
     updateCollection: (
       customerId: number,
       data: { collection_reason?: string; reason?: string; next_follow_up_date?: string | null }

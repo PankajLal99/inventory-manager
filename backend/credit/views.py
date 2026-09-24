@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import (
     Case,
     Count,
+    Exists,
     F,
     OuterRef,
     Q,
@@ -1779,13 +1780,10 @@ def _parse_follow_up_date(raw):
         raise ValueError('Invalid next_follow_up_date') from exc
 
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def credit_ledger_by_customer(request):
-    """Summary list of credit customers with balances and collection status (ledger index)."""
+def _credit_ledger_list_filters(request):
+    """Parse shared credit-ledger list / export query params."""
     search = request.query_params.get('search', '').strip()
     only_with_balance = (request.query_params.get('with_balance') or '').strip().lower()
-    # Default: heart-marked only. Pass with_heart=0 / false / all to show everyone.
     with_heart_raw = (request.query_params.get('with_heart') or '1').strip().lower()
     only_with_heart = with_heart_raw not in ('0', 'false', 'all', 'no')
     follow_up_filter = (request.query_params.get('follow_up') or '').strip().lower()
@@ -1794,14 +1792,61 @@ def credit_ledger_by_customer(request):
         or request.query_params.get('status')
         or ''
     ).strip().lower()
-    # Map legacy follow_up values that meant “at risk” onto status filters if status not set
-    if not collection_status_filter and follow_up_filter in ('good', 'warning', 'danger', 'on_time', 'yellow', 'red'):
+    if not collection_status_filter and follow_up_filter in (
+        'good', 'warning', 'danger', 'on_time', 'yellow', 'red'
+    ):
         legacy_map = {
             'on_time': 'good',
             'yellow': 'warning',
             'red': 'danger',
         }
         collection_status_filter = legacy_map.get(follow_up_filter, follow_up_filter)
+
+    customer_raw = (
+        request.query_params.get('customer')
+        or request.query_params.get('credit_customer_id')
+        or ''
+    ).strip()
+    customer_id = None
+    if customer_raw:
+        try:
+            customer_id = int(customer_raw)
+        except (TypeError, ValueError):
+            customer_id = None
+
+    date_from_raw = (request.query_params.get('date_from') or '').strip()
+    date_to_raw = (request.query_params.get('date_to') or '').strip()
+    date_from = parse_date(date_from_raw) if date_from_raw else None
+    date_to = parse_date(date_to_raw) if date_to_raw else None
+    customer_group_id = request.query_params.get('customer_group', '').strip()
+
+    return {
+        'search': search,
+        'only_with_balance': only_with_balance,
+        'only_with_heart': only_with_heart,
+        'follow_up_filter': follow_up_filter,
+        'collection_status_filter': collection_status_filter,
+        'customer_id': customer_id,
+        'date_from': date_from,
+        'date_to': date_to,
+        'customer_group_id': customer_group_id,
+    }
+
+
+def _active_ledger_entry_q():
+    """ORM filter matching non-void ledger rows (same idea as _active_ledger_entries)."""
+    return (
+        (Q(invoice__isnull=True) | ~Q(invoice__status='void'))
+        & (Q(credit_return__isnull=True) | ~Q(credit_return__status='void'))
+    )
+
+
+def _credit_ledger_customer_rows(request):
+    """
+    Filtered credit-customer summary rows for the ledger index / export.
+    Does not include KPI totals — callers must not add aggregate footers.
+    """
+    f = _credit_ledger_list_filters(request)
 
     latest_desc = (
         CreditLedgerEntry.objects.filter(customer_id=OuterRef('pk'))
@@ -1840,7 +1885,9 @@ def credit_ledger_by_customer(request):
     )
 
     qs = CreditCustomer.objects.filter(is_active=True)
-    if only_with_heart:
+    if f['customer_id']:
+        qs = qs.filter(pk=f['customer_id'])
+    if f['only_with_heart']:
         qs = qs.filter(_credit_eligible_name_q())
     void_ledger_exclude = (
         (Q(ledger_entries__invoice__isnull=True) | ~Q(ledger_entries__invoice__status='void'))
@@ -1864,7 +1911,6 @@ def credit_ledger_by_customer(request):
             ),
             Decimal('0'),
         ),
-        # Payments received (CreditPayment-linked credits only — not returns)
         total_received=Coalesce(
             Sum(
                 Case(
@@ -1879,7 +1925,6 @@ def credit_ledger_by_customer(request):
             ),
             Decimal('0'),
         ),
-        # Sum of CreditReturn.total (completed) — not ledger / manual credits
         total_returns=Coalesce(Subquery(returns_total_sq), Decimal('0')),
         entry_count=Count('ledger_entries', distinct=True),
         latest_description=Subquery(latest_desc),
@@ -1888,16 +1933,26 @@ def credit_ledger_by_customer(request):
         last_sale_at=Subquery(last_sale),
     )
 
-    if search:
-        qs = qs.filter(Q(name__icontains=search) | Q(phone__icontains=search))
-    customer_group_id = request.query_params.get('customer_group', '').strip()
-    if customer_group_id:
-        qs = qs.filter(customer_group_id=customer_group_id)
-    if only_with_balance in ('1', 'true'):
+    if f['search']:
+        qs = qs.filter(Q(name__icontains=f['search']) | Q(phone__icontains=f['search']))
+    if f['customer_group_id']:
+        qs = qs.filter(customer_group_id=f['customer_group_id'])
+    if f['only_with_balance'] in ('1', 'true'):
         qs = qs.exclude(balance=0)
 
+    # Date range: accounts with at least one non-void ledger entry in the period
+    if f['date_from'] or f['date_to']:
+        activity = CreditLedgerEntry.objects.filter(
+            customer_id=OuterRef('pk')
+        ).filter(_active_ledger_entry_q())
+        if f['date_from']:
+            activity = activity.filter(created_at__date__gte=f['date_from'])
+        if f['date_to']:
+            activity = activity.filter(created_at__date__lte=f['date_to'])
+        qs = qs.filter(Exists(activity))
+
     today = timezone.localdate()
-    # Keep follow-up date filters for any deep links; UI now uses collection_status
+    follow_up_filter = f['follow_up_filter']
     if follow_up_filter in ('overdue', 'past'):
         qs = qs.filter(next_follow_up_date__lt=today)
     elif follow_up_filter in ('today', 'due_today'):
@@ -1909,9 +1964,9 @@ def credit_ledger_by_customer(request):
     elif follow_up_filter in ('set', 'scheduled'):
         qs = qs.filter(next_follow_up_date__isnull=False)
 
-    # Oldest ledger activity first; newest at the bottom; no-entry accounts last
     qs = qs.order_by(F('last_activity_at').asc(nulls_last=True), 'name')
 
+    collection_status_filter = f['collection_status_filter']
     out = []
     for row in qs:
         balance = row.balance or Decimal('0')
@@ -1948,7 +2003,136 @@ def credit_ledger_by_customer(request):
             'next_follow_up_date': row.next_follow_up_date.isoformat() if row.next_follow_up_date else None,
             'follow_up_delta_days': fu_delta,
         })
+    return out, f
+
+
+def _credit_ledger_export_account_row(row):
+    """Account export row — outstanding + collection fields only (no period aggregates)."""
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'phone': row.get('phone') or '',
+        'customer_group_name': row.get('customer_group_name') or '',
+        'outstanding': row.get('balance') or '0',
+        'collection_status': row.get('collection_status') or 'good',
+        'days_since_last_payment': row.get('days_since_last_payment'),
+        'collection_reason': row.get('collection_reason') or '',
+        'next_follow_up_date': row.get('next_follow_up_date'),
+        'last_payment_at': row.get('last_payment_at'),
+        'last_sale_at': row.get('last_sale_at'),
+    }
+
+
+def _credit_ledger_export_entry_rows(customer_rows, filters, *, limit=10000):
+    """Individual ledger entries for matching accounts — no running balance or totals."""
+    customer_ids = [r['id'] for r in customer_rows]
+    if not customer_ids:
+        return []
+
+    status_by_id = {r['id']: r.get('collection_status') or 'good' for r in customer_rows}
+    group_by_id = {r['id']: r.get('customer_group_name') or '' for r in customer_rows}
+
+    qs = (
+        CreditLedgerEntry.objects.filter(customer_id__in=customer_ids)
+        .filter(_active_ledger_entry_q())
+        .select_related(
+            'customer', 'customer__customer_group',
+            'invoice', 'credit_return', 'payment', 'created_by',
+        )
+    )
+    # Prefer event date for export range when available via payment/invoice/return
+    if filters['date_from'] or filters['date_to']:
+        # Keep created_at date filter as a fast pre-filter; precise event date applied below
+        if filters['date_from']:
+            qs = qs.filter(created_at__date__gte=filters['date_from'])
+        if filters['date_to']:
+            qs = qs.filter(created_at__date__lte=filters['date_to'])
+
+    entries = list(qs[: limit + 200])  # small buffer before event-date filter
+    entries.sort(key=_event_sort_key)
+
+    out = []
+    for entry in entries:
+        local_d = _event_local_date(_ledger_event_at(entry))
+        if filters['date_from'] and (local_d is None or local_d < filters['date_from']):
+            continue
+        if filters['date_to'] and local_d is not None and local_d > filters['date_to']:
+            continue
+        raw = CreditLedgerEntrySerializer(entry).data
+        out.append({
+            'id': raw['id'],
+            'date': _event_at_iso(_ledger_event_at(entry)),
+            'customer_id': entry.customer_id,
+            'customer_name': raw.get('customer_name') or '',
+            'customer_group_name': group_by_id.get(entry.customer_id, ''),
+            'collection_status': status_by_id.get(entry.customer_id, 'good'),
+            'entry_type': raw.get('entry_type'),
+            'txn_type': raw.get('txn_type'),
+            'vch_no': raw.get('vch_no') or '',
+            'particulars': raw.get('particulars') or '',
+            'narration': raw.get('narration') or '',
+            'debit': str(entry.amount) if entry.entry_type == 'debit' else '0',
+            'credit': str(entry.amount) if entry.entry_type == 'credit' else '0',
+            'amount': str(entry.amount),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_by_customer(request):
+    """Summary list of credit customers with balances and collection status (ledger index)."""
+    out, _filters = _credit_ledger_customer_rows(request)
     return Response(out)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def credit_ledger_export(request):
+    """
+    Export payload for Credit Ledger PDF/Excel.
+
+    Query params (same as by-customer, plus):
+      - scope: accounts (default) | entries
+      - date_from / date_to
+      - customer / credit_customer_id
+      - search, collection_status, customer_group, with_balance, with_heart
+
+    Returns row data only — never KPI / aggregate totals.
+    """
+    scope = (request.query_params.get('scope') or 'accounts').strip().lower()
+    if scope not in ('accounts', 'entries'):
+        return Response(
+            {'detail': 'scope must be accounts or entries'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    customer_rows, filters = _credit_ledger_customer_rows(request)
+    applied = {
+        'scope': scope,
+        'search': filters['search'] or None,
+        'customer': filters['customer_id'],
+        'date_from': filters['date_from'].isoformat() if filters['date_from'] else None,
+        'date_to': filters['date_to'].isoformat() if filters['date_to'] else None,
+        'collection_status': filters['collection_status_filter'] or None,
+        'customer_group': filters['customer_group_id'] or None,
+        'with_balance': filters['only_with_balance'] in ('1', 'true'),
+        'with_heart': filters['only_with_heart'],
+    }
+
+    if scope == 'entries':
+        results = _credit_ledger_export_entry_rows(customer_rows, filters)
+    else:
+        results = [_credit_ledger_export_account_row(r) for r in customer_rows]
+
+    return Response({
+        'scope': scope,
+        'count': len(results),
+        'filters': applied,
+        'results': results,
+    })
 
 
 @api_view(['PATCH'])

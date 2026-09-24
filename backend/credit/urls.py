@@ -37,6 +37,7 @@ urlpatterns = [
     ),
     path('credit/ledger/statement/', views.credit_ledger_statement, name='credit-ledger-statement'),
     path('credit/ledger/by-customer/', views.credit_ledger_by_customer, name='credit-ledger-by-customer'),
+    path('credit/ledger/export/', views.credit_ledger_export, name='credit-ledger-export'),
     path(
         'credit/ledger/customers/<int:pk>/collection/',
         views.credit_ledger_collection_update,
