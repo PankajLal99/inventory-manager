@@ -158,11 +158,11 @@ export function balanceLabel(amount: string | number, side: string) {
 export function collectionStatusLabel(status: CollectionStatus | string | undefined): string {
   switch (status) {
     case 'good':
-      return 'Going good';
+      return 'Paying on time';
     case 'warning':
-      return 'Low';
+      return 'No payment 7+ days';
     case 'danger':
-      return 'Very much overdue';
+      return 'No payment 12+ days';
     default:
       return '—';
   }
@@ -183,7 +183,6 @@ export function formatDurationYearsMonths(days: number | null | undefined): stri
   const parts: string[] = [];
   if (years > 0) parts.push(years === 1 ? '1 year' : `${years} years`);
   if (months > 0) parts.push(months === 1 ? '1 month' : `${months} months`);
-  // Only show leftover days when there are no years (keep long spans as years + months)
   if (years === 0 && remDays > 0) {
     parts.push(remDays === 1 ? '1 day' : `${remDays} days`);
   }

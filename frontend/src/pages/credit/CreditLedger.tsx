@@ -55,6 +55,7 @@ import {
 import { hydrateLedgerExportSplitFromServer } from './ledgerExportSettings';
 import CreditLedgerDeletePreview from './CreditLedgerDeletePreview';
 import {
+  downloadPdfDocument,
   nameHasCreditHeart,
   pdfHeartDidDrawCell,
   sanitizePdfText,
@@ -66,8 +67,6 @@ const tdClass = 'px-3 py-2.5 align-middle';
 
 /** Set true to show per-customer ledger delete (trash) on the list. */
 const SHOW_LEDGER_DELETE = false;
-
-type ExportScope = 'accounts' | 'entries';
 
 function customerInitial(name?: string | null) {
   const n = (name || '').trim();
@@ -99,12 +98,6 @@ export default function CreditLedger() {
     searchParams.get('collection_status') || searchParams.get('status') || ''
   );
   const [withHeartOnly, setWithHeartOnly] = useState(searchParams.get('with_heart') !== '0');
-  const [dateFrom, setDateFrom] = useState(searchParams.get('date_from') || '');
-  const [dateTo, setDateTo] = useState(searchParams.get('date_to') || '');
-  const [exportCustomerId, setExportCustomerId] = useState(searchParams.get('customer') || '');
-  const [exportScope, setExportScope] = useState<ExportScope>(
-    (searchParams.get('export_scope') as ExportScope) === 'entries' ? 'entries' : 'accounts'
-  );
   const [exporting, setExporting] = useState(false);
 
   const [historyCustomer, setHistoryCustomer] = useState<CreditLedgerCustomerRow | null>(null);
@@ -132,8 +125,6 @@ export default function CreditLedger() {
     if (customerGroup) params.set('customer_group', customerGroup);
     if (collectionStatusFilter) params.set('collection_status', collectionStatusFilter);
     if (!withHeartOnly) params.set('with_heart', '0');
-    if (dateFrom) params.set('date_from', dateFrom);
-    if (dateTo) params.set('date_to', dateTo);
     const query = params.toString();
     return query ? `/credit-ledger/${customerId}?${query}` : `/credit-ledger/${customerId}`;
   };
@@ -186,9 +177,6 @@ export default function CreditLedger() {
     customerGroup,
     withHeartOnly,
     collectionStatusFilter,
-    dateFrom,
-    dateTo,
-    exportCustomerId,
   ] as const;
 
   const buildListParams = (): Record<string, string> => {
@@ -198,9 +186,6 @@ export default function CreditLedger() {
     if (customerGroup) params.customer_group = customerGroup;
     if (collectionStatusFilter) params.collection_status = collectionStatusFilter;
     params.with_heart = withHeartOnly ? '1' : '0';
-    if (dateFrom) params.date_from = dateFrom;
-    if (dateTo) params.date_to = dateTo;
-    if (exportCustomerId) params.customer = exportCustomerId;
     return params;
   };
 
@@ -219,17 +204,6 @@ export default function CreditLedger() {
       return (res.data?.results || []) as CreditCollectionHistoryEvent[];
     },
     enabled: !!historyCustomer?.id,
-  });
-
-  const { data: accountOptions = [] } = useQuery({
-    queryKey: ['credit-ledger-account-options', withHeartOnly],
-    queryFn: async () => {
-      const res = await creditApi.ledger.byCustomer({
-        with_balance: '0',
-        with_heart: withHeartOnly ? '1' : '0',
-      });
-      return (res.data || []) as CreditLedgerCustomerRow[];
-    },
   });
 
   const {
@@ -425,9 +399,6 @@ export default function CreditLedger() {
     customerGroup,
     collectionStatusFilter,
     !withHeartOnly,
-    dateFrom,
-    dateTo,
-    exportCustomerId,
   ].filter(Boolean).length;
 
   const hasActiveFilters = activeFilterCount > 0;
@@ -447,43 +418,20 @@ export default function CreditLedger() {
     setCustomerGroup('');
     setCollectionStatusFilter('');
     setWithHeartOnly(true);
-    setDateFrom('');
-    setDateTo('');
-    setExportCustomerId('');
-    setExportScope('accounts');
     setSearchParams({});
   };
 
-  const buildExportParams = () => {
-    const params = buildListParams();
-    return {
-      ...params,
-      scope: exportScope,
-      customer: exportCustomerId || undefined,
-    };
-  };
-
-  const statusExportLabel = (status?: string) => {
-    switch (status) {
-      case 'good':
-        return 'Going good';
-      case 'warning':
-        return 'Low';
-      case 'danger':
-        return 'Very much overdue';
-      default:
-        return collectionStatusLabel(status);
-    }
-  };
+  const buildExportParams = () => ({
+    ...buildListParams(),
+    scope: 'accounts' as const,
+  });
 
   const runExport = async (kind: 'excel' | 'pdf') => {
     setExporting(true);
     try {
       const res = await creditApi.ledger.export(buildExportParams());
       const payload = res.data as {
-        scope?: ExportScope;
         count?: number;
-        filters?: Record<string, unknown>;
         results?: any[];
       };
       const rows = Array.isArray(payload?.results) ? payload.results : [];
@@ -493,131 +441,93 @@ export default function CreditLedger() {
       }
 
       const stamp = format(new Date(), 'yyyy-MM-dd');
-      const scope = payload.scope === 'entries' ? 'entries' : 'accounts';
       const filterBits: string[] = [];
-      if (dateFrom || dateTo) filterBits.push(`${dateFrom || '…'} → ${dateTo || '…'}`);
-      if (exportCustomerId) {
-        const name =
-          accountOptions.find((c) => String(c.id) === String(exportCustomerId))?.name ||
-          customers.find((c) => String(c.id) === String(exportCustomerId))?.name;
-        if (name) filterBits.push(name);
-      }
-      if (collectionStatusFilter) filterBits.push(statusExportLabel(collectionStatusFilter));
+      if (collectionStatusFilter) filterBits.push(collectionStatusLabel(collectionStatusFilter));
+      if (search.trim()) filterBits.push(search.trim());
       const subtitle = filterBits.length ? filterBits.join(' · ') : 'All matching accounts';
 
       if (kind === 'excel') {
-        const data =
-          scope === 'entries'
-            ? rows.map((row) => ({
-                Date: formatAppDate(row.date, { empty: '' }),
-                Customer: row.customer_name || '',
-                Group: row.customer_group_name || '',
-                Status: statusExportLabel(row.collection_status),
-                Type: String(row.entry_type || '').toUpperCase(),
-                'Txn type': row.txn_type || '',
-                Voucher: row.vch_no || '',
-                Particulars: row.particulars || '',
-                Narration: row.narration || '',
-                Debit: formatAmountINR(row.debit || 0),
-                Credit: formatAmountINR(row.credit || 0),
-              }))
-            : rows.map((row) => ({
-                Customer: row.name || '',
-                Phone: row.phone || '',
-                Group: row.customer_group_name || '',
-                Outstanding: formatAmountINR(row.outstanding || 0),
-                Status: statusExportLabel(row.collection_status),
-                'Since pay': formatDurationYearsMonths(row.days_since_last_payment),
-                Reason: row.collection_reason || '',
-                'Next follow-up': row.next_follow_up_date || '',
-                'Last pay': formatAppDate(row.last_payment_at, { empty: '' }),
-                'Last sale': formatAppDate(row.last_sale_at, { empty: '' }),
-              }));
+        const data = rows.map((row, index) => ({
+          '#': index + 1,
+          Customer: row.name || '',
+          Phone: row.phone || '',
+          Group: row.customer_group_name || '',
+          Outstanding: formatAmountINR(row.outstanding || 0),
+          Status: collectionStatusLabel(row.collection_status),
+          'Since pay': formatDurationYearsMonths(row.days_since_last_payment),
+          Reason: row.collection_reason || '',
+          'Next follow-up': row.next_follow_up_date || '',
+          'Last pay': formatAppDate(row.last_payment_at, { empty: '' }),
+          'Last sale': formatAppDate(row.last_sale_at, { empty: '' }),
+        }));
 
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, scope === 'entries' ? 'Entries' : 'Accounts');
-        XLSX.writeFile(wb, `credit_ledger_${scope}_${stamp}.xlsx`);
+        XLSX.utils.book_append_sheet(wb, ws, 'Accounts');
+        XLSX.writeFile(wb, `credit_ledger_accounts_${stamp}.xlsx`);
         toast(`Exported ${rows.length} row${rows.length === 1 ? '' : 's'} to Excel`, 'success');
         return;
       }
 
-      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-      doc.setFontSize(14);
-      doc.text(
-        sanitizePdfText(
-          scope === 'entries' ? 'Credit Ledger Entries' : 'Credit Ledger Accounts'
-        ),
-        14,
-        14
-      );
-      doc.setFontSize(9);
+      // Portrait A4 — tighter layout so it fits phones + print
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const marginX = 8;
+      const contentW = pageW - marginX * 2;
+
+      doc.setFontSize(12);
+      doc.setTextColor(40);
+      doc.text('Credit Ledger Accounts', marginX, 11);
+      doc.setFontSize(8);
       doc.setTextColor(100);
-      doc.text(sanitizePdfText(subtitle), 14, 20);
-      doc.text(`Rows: ${rows.length} (totals excluded)`, 14, 25);
+      doc.text(sanitizePdfText(subtitle), marginX, 16, { maxWidth: contentW });
+      doc.text(`${rows.length} row${rows.length === 1 ? '' : 's'} · totals excluded`, marginX, 20);
       doc.setTextColor(0);
 
-      if (scope === 'entries') {
-        const heartFlags = rows.map((row) => nameHasCreditHeart(row.customer_name));
-        autoTable(doc, {
-          startY: 28,
-          head: [[
-            'Date',
-            'Customer',
-            'Status',
-            'Type',
-            'Voucher',
-            'Particulars',
-            'Debit',
-            'Credit',
-          ]],
-          body: rows.map((row) => [
-            formatAppDate(row.date, { empty: '' }),
-            sanitizePdfText(row.customer_name || '') +
-              (nameHasCreditHeart(row.customer_name) ? '   ' : ''),
-            statusExportLabel(row.collection_status),
-            String(row.entry_type || '').toUpperCase(),
-            sanitizePdfText(row.vch_no || ''),
-            sanitizePdfText((row.particulars || '').slice(0, 48)),
-            formatAmountINR(row.debit || 0),
-            formatAmountINR(row.credit || 0),
-          ]),
-          styles: { fontSize: 7, cellPadding: 1.5 },
-          headStyles: { fillColor: [180, 83, 9] },
-          // Customer col index 1 — paint real ❤ emoji after the name
-          didDrawCell: (data) => pdfHeartDidDrawCell(doc, data, 1, heartFlags),
-        });
-      } else {
-        const heartFlags = rows.map((row) => nameHasCreditHeart(row.name));
-        autoTable(doc, {
-          startY: 28,
-          head: [[
-            'Customer',
-            'Group',
-            'Outstanding',
-            'Status',
-            'Since pay',
-            'Reason',
-            'Follow-up',
-            'Last pay',
-          ]],
-          body: rows.map((row) => [
-            sanitizePdfText(row.name || '') + (nameHasCreditHeart(row.name) ? '   ' : ''),
-            sanitizePdfText(row.customer_group_name || ''),
-            formatAmountINR(row.outstanding || 0),
-            statusExportLabel(row.collection_status),
-            formatDurationYearsMonths(row.days_since_last_payment),
-            sanitizePdfText((row.collection_reason || '').slice(0, 40)),
-            row.next_follow_up_date || '',
-            formatAppDate(row.last_payment_at, { empty: '' }),
-          ]),
-          styles: { fontSize: 7, cellPadding: 1.5 },
-          headStyles: { fillColor: [180, 83, 9] },
-          didDrawCell: (data) => pdfHeartDidDrawCell(doc, data, 0, heartFlags),
-        });
-      }
+      const heartFlags = rows.map((row) => nameHasCreditHeart(row.name));
+      autoTable(doc, {
+        startY: 22,
+        margin: { left: marginX, right: marginX },
+        tableWidth: contentW,
+        head: [['#', 'Customer', 'Outstanding', 'Status', 'Since', 'Reason', 'Follow-up', 'Last pay']],
+        body: rows.map((row, index) => [
+          String(index + 1),
+          sanitizePdfText(row.name || '') + (nameHasCreditHeart(row.name) ? '   ' : ''),
+          formatAmountINR(row.outstanding || 0),
+          collectionStatusLabel(row.collection_status),
+          formatDurationYearsMonths(row.days_since_last_payment),
+          sanitizePdfText((row.collection_reason || '').slice(0, 28)),
+          row.next_follow_up_date || '',
+          formatAppDate(row.last_payment_at, { empty: '', includeTime: false }),
+        ]),
+        styles: {
+          fontSize: 6.5,
+          cellPadding: { top: 0.9, right: 0.8, bottom: 0.9, left: 0.8 },
+          overflow: 'linebreak',
+          lineColor: [220, 220, 220],
+          lineWidth: 0.1,
+        },
+        headStyles: {
+          fillColor: [180, 83, 9],
+          textColor: 255,
+          fontSize: 6.5,
+          fontStyle: 'bold',
+          cellPadding: { top: 1.1, right: 0.8, bottom: 1.1, left: 0.8 },
+        },
+        columnStyles: {
+          0: { cellWidth: 8, halign: 'center' },
+          1: { cellWidth: 'auto' },
+          2: { cellWidth: 22, halign: 'right' },
+          3: { cellWidth: 22 },
+          4: { cellWidth: 22 },
+          5: { cellWidth: 28 },
+          6: { cellWidth: 20 },
+          7: { cellWidth: 18 },
+        },
+        didDrawCell: (data) => pdfHeartDidDrawCell(doc, data, 1, heartFlags),
+      });
 
-      doc.save(`credit_ledger_${scope}_${stamp}.pdf`);
+      await downloadPdfDocument(doc, `credit_ledger_accounts_${stamp}.pdf`);
       toast(`Exported ${rows.length} row${rows.length === 1 ? '' : 's'} to PDF`, 'success');
     } catch (err: any) {
       toast(err?.response?.data?.detail || 'Export failed', 'error');
@@ -848,15 +758,15 @@ export default function CreditLedger() {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className={`h-2 w-2 rounded-full ${collectionStatusDotClass('good')}`} />
-              Going good
+              On time
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className={`h-2 w-2 rounded-full ${collectionStatusDotClass('warning')}`} />
-              Low
+              No pay 7+
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className={`h-2 w-2 rounded-full ${collectionStatusDotClass('danger')}`} />
-              Very much overdue
+              No pay 12+
             </span>
           </div>
           {hasActiveFilters ? (
@@ -922,62 +832,9 @@ export default function CreditLedger() {
             className="!py-2 !pr-8 text-sm min-w-[170px] rounded-lg border-stone-300"
           >
             <option value="">All statuses</option>
-            <option value="good">Going good</option>
-            <option value="warning">Low</option>
-            <option value="danger">Very much overdue</option>
-          </Select>
-
-          <Select
-            value={exportCustomerId}
-            onChange={(e) => {
-              const value = e.target.value;
-              setExportCustomerId(value);
-              syncParams({ customer: value || null });
-            }}
-            className="!py-2 !pr-8 text-sm min-w-[180px] max-w-[240px] rounded-lg border-stone-300"
-          >
-            <option value="">All accounts</option>
-            {accountOptions.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            <DatePicker
-              value={dateFrom}
-              onChange={(value) => {
-                setDateFrom(value);
-                syncParams({ date_from: value || null });
-              }}
-              className="h-9 text-sm min-w-[140px]"
-              placeholder="From date"
-            />
-            <span className="text-stone-400 text-xs">to</span>
-            <DatePicker
-              value={dateTo}
-              onChange={(value) => {
-                setDateTo(value);
-                syncParams({ date_to: value || null });
-              }}
-              className="h-9 text-sm min-w-[140px]"
-              placeholder="To date"
-            />
-          </div>
-
-          <Select
-            value={exportScope}
-            onChange={(e) => {
-              const value = (e.target.value === 'entries' ? 'entries' : 'accounts') as ExportScope;
-              setExportScope(value);
-              syncParams({ export_scope: value === 'accounts' ? null : value });
-            }}
-            className="!py-2 !pr-8 text-sm min-w-[150px] rounded-lg border-stone-300"
-            title="What to export (PDF / Excel)"
-          >
-            <option value="accounts">Export: Accounts</option>
-            <option value="entries">Export: Entries</option>
+            <option value="good">On time</option>
+            <option value="warning">No pay 7+</option>
+            <option value="danger">No pay 12+</option>
           </Select>
 
           <Select
