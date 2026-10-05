@@ -40,6 +40,7 @@ import {
   collectionStatusLabel,
   collectionStatusRowClass,
   canManageCreditRecords,
+  canSeeCreditLedgerKpis,
   canSeeCreditReceivableKpi,
   daysSincePaymentLabel,
   followUpDeltaClass,
@@ -116,7 +117,7 @@ export default function CreditLedger() {
   const [creatingNewCustomer, setCreatingNewCustomer] = useState(false);
   const [deleteCustomer, setDeleteCustomer] = useState<CreditLedgerCustomerRow | null>(null);
   const canManage = canManageCreditRecords();
-  const canSeeReceivable = canSeeCreditReceivableKpi();
+  const canSeeReceivable = canSeeCreditReceivableKpi() && canSeeCreditLedgerKpis();
 
   const buildDetailPath = (customerId: number) => {
     const params = new URLSearchParams();
@@ -698,7 +699,7 @@ export default function CreditLedger() {
         </div>
       </div>
 
-      {/* KPI cards */}
+      {/* KPI cards — Receivable hidden for accounts-only and kpi-na users */}
       <div
         className={`grid grid-cols-2 gap-3 sm:gap-4 ${
           canSeeReceivable ? 'xl:grid-cols-4' : 'xl:grid-cols-3'

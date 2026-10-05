@@ -55,6 +55,11 @@ export function canSeeCreditReceivableKpi(user = auth.getUser()): boolean {
   return !isAccountsOnlyUser(user);
 }
 
+/** Credit Ledger top KPIs are hidden when the user is in group "kpi-na". */
+export function canSeeCreditLedgerKpis(user = auth.getUser()): boolean {
+  return !userGroupNames(user).includes('kpi-na');
+}
+
 export type CollectionStatus = 'good' | 'warning' | 'danger';
 
 export type CreditLedgerCustomerRow = {

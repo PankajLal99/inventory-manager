@@ -30,7 +30,7 @@ import ErrorState from '../../components/ui/ErrorState';
 import Modal from '../../components/ui/Modal';
 import CreditPOSModeToggle from './CreditPOSModeToggle';
 import CreditVoidLedgerPreview from './CreditVoidLedgerPreview';
-import { canEditCreditRecords, canManageCreditRecords, isAccountsOnlyUser } from './creditLedgerUtils';
+import { canEditCreditRecords, canManageCreditRecords, canSeeCreditLedgerKpis, isAccountsOnlyUser } from './creditLedgerUtils';
 
 type ListMode = 'sale' | 'return';
 
@@ -61,6 +61,7 @@ export default function CreditInvoices() {
   const canManage = canManageCreditRecords();
   const canEdit = canEditCreditRecords();
   const hideNetSummary = isAccountsOnlyUser();
+  const canSeeKpis = canSeeCreditLedgerKpis();
 
   const setMode = (next: ListMode) => {
     const params = new URLSearchParams(searchParams);
@@ -215,6 +216,7 @@ export default function CreditInvoices() {
         </div>
       </div>
 
+      {canSeeKpis ? (
       <div className="space-y-2">
         <p className="text-sm font-medium text-gray-500">Summary for selected date range</p>
         <div
@@ -286,6 +288,7 @@ export default function CreditInvoices() {
           </Card>
         </div>
       </div>
+      ) : null}
 
       <Card className="w-full">
         <div className="p-4 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
