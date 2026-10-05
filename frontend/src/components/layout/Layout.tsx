@@ -46,6 +46,7 @@ import {
   Coins,
   Boxes,
   Tags,
+  Wallet,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -312,6 +313,7 @@ export default function Layout() {
         { path: '/payment-reminders', icon: CalendarDays, label: 'Payment Reminders', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
         { path: '/expenses', icon: Coins, label: 'Expenses', showFor: ['Admin', 'Super', 'RetailAdmin', 'WholesaleAdmin', 'Temp', 'Retail', 'Wholesale'] },
         { path: '/payments', icon: Coins, label: 'Payments', showFor: ['Admin', 'RetailAdmin', 'Retail'] },
+        { path: '/salary-book', icon: Wallet, label: 'Salary Book', showFor: ['Admin'] },
       ],
     },
     {

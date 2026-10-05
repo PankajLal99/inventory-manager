@@ -441,25 +441,41 @@ export default function CreditLedger() {
       }
 
       const stamp = format(new Date(), 'yyyy-MM-dd');
+      const singleStatus =
+        collectionStatusFilter === 'good' ||
+        collectionStatusFilter === 'warning' ||
+        collectionStatusFilter === 'danger';
       const filterBits: string[] = [];
-      if (collectionStatusFilter) filterBits.push(collectionStatusLabel(collectionStatusFilter));
+      if (singleStatus) filterBits.push(collectionStatusLabel(collectionStatusFilter));
       if (search.trim()) filterBits.push(search.trim());
+      if (customerGroup) {
+        const groupName = customerGroups.find(
+          (g: { id: number; name: string }) => String(g.id) === String(customerGroup)
+        )?.name;
+        if (groupName) filterBits.push(groupName);
+      }
+      if (withBalanceOnly) filterBits.push('Outstanding only');
       const subtitle = filterBits.length ? filterBits.join(' · ') : 'All matching accounts';
 
       if (kind === 'excel') {
-        const data = rows.map((row, index) => ({
-          '#': index + 1,
-          Customer: row.name || '',
-          Phone: row.phone || '',
-          Group: row.customer_group_name || '',
-          Outstanding: formatAmountINR(row.outstanding || 0),
-          Status: collectionStatusLabel(row.collection_status),
-          'Since pay': formatDurationYearsMonths(row.days_since_last_payment),
-          Reason: row.collection_reason || '',
-          'Next follow-up': row.next_follow_up_date || '',
-          'Last pay': formatAppDate(row.last_payment_at, { empty: '' }),
-          'Last sale': formatAppDate(row.last_sale_at, { empty: '' }),
-        }));
+        const data = rows.map((row, index) => {
+          const base: Record<string, string | number> = {
+            '#': index + 1,
+            Customer: row.name || '',
+            Phone: row.phone || '',
+            Group: row.customer_group_name || '',
+            Outstanding: formatAmountINR(row.outstanding || 0),
+          };
+          if (!singleStatus) {
+            base.Status = collectionStatusLabel(row.collection_status);
+          }
+          base['Since pay'] = formatDurationYearsMonths(row.days_since_last_payment);
+          base.Reason = row.collection_reason || '';
+          base['Next follow-up'] = row.next_follow_up_date || '';
+          base['Last pay'] = formatAppDate(row.last_payment_at, { empty: '' });
+          base['Last sale'] = formatAppDate(row.last_sale_at, { empty: '' });
+          return base;
+        });
 
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
@@ -474,32 +490,72 @@ export default function CreditLedger() {
       const pageW = doc.internal.pageSize.getWidth();
       const marginX = 8;
       const contentW = pageW - marginX * 2;
+      const centerX = pageW / 2;
 
       doc.setFontSize(12);
       doc.setTextColor(40);
-      doc.text('Credit Ledger Accounts', marginX, 11);
+      doc.text('Credit Ledger Accounts', centerX, 11, { align: 'center' });
       doc.setFontSize(8);
       doc.setTextColor(100);
-      doc.text(sanitizePdfText(subtitle), marginX, 16, { maxWidth: contentW });
-      doc.text(`${rows.length} row${rows.length === 1 ? '' : 's'} · totals excluded`, marginX, 20);
+      doc.text(sanitizePdfText(subtitle), centerX, 16, {
+        align: 'center',
+        maxWidth: contentW,
+      });
+      doc.text(
+        `${rows.length} row${rows.length === 1 ? '' : 's'} · totals excluded`,
+        centerX,
+        20,
+        { align: 'center' }
+      );
       doc.setTextColor(0);
 
-      const heartFlags = rows.map((row) => nameHasCreditHeart(row.name));
-      autoTable(doc, {
-        startY: 22,
-        margin: { left: marginX, right: marginX },
-        tableWidth: contentW,
-        head: [['#', 'Customer', 'Outstanding', 'Status', 'Since', 'Reason', 'Follow-up', 'Last pay']],
-        body: rows.map((row, index) => [
+      const head = singleStatus
+        ? [['#', 'Customer', 'Outstanding', 'Since', 'Reason', 'Follow-up', 'Last pay']]
+        : [['#', 'Customer', 'Outstanding', 'Status', 'Since', 'Reason', 'Follow-up', 'Last pay']];
+      const body = rows.map((row, index) => {
+        const cells: string[] = [
           String(index + 1),
           sanitizePdfText(row.name || '') + (nameHasCreditHeart(row.name) ? '   ' : ''),
           formatAmountINR(row.outstanding || 0),
-          collectionStatusLabel(row.collection_status),
+        ];
+        if (!singleStatus) cells.push(collectionStatusLabel(row.collection_status));
+        cells.push(
           formatDurationYearsMonths(row.days_since_last_payment),
           sanitizePdfText((row.collection_reason || '').slice(0, 28)),
           row.next_follow_up_date || '',
-          formatAppDate(row.last_payment_at, { empty: '', includeTime: false }),
-        ]),
+          formatAppDate(row.last_payment_at, { empty: '', includeTime: false })
+        );
+        return cells;
+      });
+
+      const columnStyles = singleStatus
+        ? {
+            0: { cellWidth: 8, halign: 'center' as const },
+            1: { cellWidth: 'auto' as const },
+            2: { cellWidth: 24, halign: 'center' as const },
+            3: { cellWidth: 24 },
+            4: { cellWidth: 32 },
+            5: { cellWidth: 22 },
+            6: { cellWidth: 20 },
+          }
+        : {
+            0: { cellWidth: 8, halign: 'center' as const },
+            1: { cellWidth: 'auto' as const },
+            2: { cellWidth: 22, halign: 'center' as const },
+            3: { cellWidth: 22 },
+            4: { cellWidth: 22 },
+            5: { cellWidth: 28 },
+            6: { cellWidth: 20 },
+            7: { cellWidth: 18 },
+          };
+
+      const heartFlags = rows.map((row) => nameHasCreditHeart(row.name));
+      autoTable(doc, {
+        startY: 24,
+        margin: { left: marginX, right: marginX },
+        tableWidth: contentW,
+        head,
+        body,
         styles: {
           fontSize: 6.5,
           cellPadding: { top: 0.9, right: 0.8, bottom: 0.9, left: 0.8 },
@@ -513,17 +569,9 @@ export default function CreditLedger() {
           fontSize: 6.5,
           fontStyle: 'bold',
           cellPadding: { top: 1.1, right: 0.8, bottom: 1.1, left: 0.8 },
+          halign: 'center',
         },
-        columnStyles: {
-          0: { cellWidth: 8, halign: 'center' },
-          1: { cellWidth: 'auto' },
-          2: { cellWidth: 22, halign: 'right' },
-          3: { cellWidth: 22 },
-          4: { cellWidth: 22 },
-          5: { cellWidth: 28 },
-          6: { cellWidth: 20 },
-          7: { cellWidth: 18 },
-        },
+        columnStyles,
         didDrawCell: (data) => pdfHeartDidDrawCell(doc, data, 1, heartFlags),
       });
 
