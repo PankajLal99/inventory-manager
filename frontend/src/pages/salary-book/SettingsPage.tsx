@@ -28,6 +28,14 @@ function formatDeltaLabel(minutes: number) {
   return `${minutes > 0 ? '+' : '−'}${parts.join(' ')}`;
 }
 
+function formatClockTime(d: Date) {
+  return d.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   const [user, setUser] = useState(auth.getUser('salary_book'));
@@ -123,17 +131,14 @@ export default function SettingsPage() {
   const isGeoMode = captureMode === 'GEO';
   const isHardwareMode = captureMode === 'HARDWARE';
   const deltaMinutes = Number(form.machine_time_delta_minutes ?? 0);
-  const serverTimeLabel = serverNow.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  const serverTimeLabel = formatClockTime(serverNow);
+  // Example: if machine clock is `delta` minutes behind server, a punch "now" on device → stored + delta.
   const machinePreview = new Date(serverNow.getTime() - deltaMinutes * 60_000);
-  const machineTimeLabel = machinePreview.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  const machineTimeLabel = formatClockTime(machinePreview);
+  const storedAfterDeltaPreview = new Date(
+    machinePreview.getTime() + deltaMinutes * 60_000
+  );
+  const storedAfterDeltaLabel = formatClockTime(storedAfterDeltaPreview);
 
   return (
     <>
@@ -269,63 +274,95 @@ export default function SettingsPage() {
                 Locked at {formatDeltaLabel(savedDelta)}. Machine time delta can only be set once.
               </p>
             ) : null}
-            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
-              <Input
-                label="Delta (minutes)"
-                inputMode="numeric"
-                disabled={deltaLocked}
-                value={String(form.machine_time_delta_minutes ?? 0)}
-                onChange={(e) => {
-                  if (deltaLocked) return;
-                  const raw = e.target.value.trim();
-                  if (raw === '' || raw === '-' || raw === '+') {
-                    setForm({ ...form, machine_time_delta_minutes: 0 });
-                    return;
-                  }
-                  const next = Number(raw);
-                  if (Number.isNaN(next)) return;
-                  setForm({ ...form, machine_time_delta_minutes: Math.trunc(next) });
-                }}
-              />
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 px-3"
+            <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+              <div className="space-y-3">
+                <Input
+                  label="Delta (minutes)"
+                  inputMode="numeric"
                   disabled={deltaLocked}
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      machine_time_delta_minutes: deltaMinutes - 1,
-                    })
-                  }
-                >
-                  −1
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 px-3"
-                  disabled={deltaLocked}
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      machine_time_delta_minutes: deltaMinutes + 1,
-                    })
-                  }
-                >
-                  +1
-                </Button>
+                  value={String(form.machine_time_delta_minutes ?? 0)}
+                  onChange={(e) => {
+                    if (deltaLocked) return;
+                    const raw = e.target.value.trim();
+                    if (raw === '' || raw === '-' || raw === '+') {
+                      setForm({ ...form, machine_time_delta_minutes: 0 });
+                      return;
+                    }
+                    const next = Number(raw);
+                    if (Number.isNaN(next)) return;
+                    setForm({ ...form, machine_time_delta_minutes: Math.trunc(next) });
+                  }}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 px-3"
+                    disabled={deltaLocked}
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        machine_time_delta_minutes: deltaMinutes - 1,
+                      })
+                    }
+                  >
+                    −1
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 px-3"
+                    disabled={deltaLocked}
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        machine_time_delta_minutes: deltaMinutes + 1,
+                      })
+                    }
+                  >
+                    +1
+                  </Button>
+                </div>
               </div>
+              {!deltaLocked ? (
+                <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2.5 sm:min-w-[13.5rem] sm:mb-0 mb-1">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
+                    Punch now → saved time
+                  </p>
+                  <div className="mt-2 flex items-center gap-2 text-sm tabular-nums">
+                    <span className="text-gray-600" title="Estimated machine clock">
+                      {machineTimeLabel}
+                    </span>
+                    <span className="text-gray-400 shrink-0" aria-hidden>
+                      →
+                    </span>
+                    <span
+                      className="font-semibold text-emerald-800"
+                      title="Time stored in attendance after delta"
+                    >
+                      {storedAfterDeltaLabel}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-gray-500 leading-snug">
+                    Updates as you change delta. Match this saved time to server (
+                    {serverTimeLabel}) when the machine is that far off.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-amber-100 bg-amber-50/80 px-3 py-2.5 sm:min-w-[13.5rem]">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-amber-900/70">
+                    Saved time (locked)
+                  </p>
+                  <p className="mt-1 text-sm font-semibold tabular-nums text-amber-950">
+                    {formatDeltaLabel(savedDelta)} on each machine punch
+                  </p>
+                </div>
+              )}
             </div>
             <div className="text-xs text-gray-600 space-y-1">
               <div className="flex justify-between gap-3">
                 <span>Server time (correct)</span>
                 <span className="font-medium tabular-nums">{serverTimeLabel}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span>Machine would show</span>
-                <span className="font-medium tabular-nums">{machineTimeLabel}</span>
               </div>
               <div className="flex justify-between gap-3">
                 <span>Adjustment</span>
