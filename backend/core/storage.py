@@ -169,3 +169,10 @@ class SalaryBookImageStorage(ProductImageStorage):
         if self._use_azure() and str(name).startswith(self.folder):
             return super().url(name)
         return self._local().url(name)
+
+
+@deconstructible
+class CustomNavLogoStorage(SalaryBookImageStorage):
+    """Custom nav button logos under mt-images/custom-nav/ (Azure or local)."""
+
+    folder = "mt-images/custom-nav"

@@ -1,6 +1,19 @@
+import os
+import uuid
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
+
+from backend.core.storage import CustomNavLogoStorage
+
+
+def custom_nav_logo_upload(instance, filename):
+    ext = os.path.splitext(filename or '')[1].lower() or '.png'
+    if ext not in {'.jpg', '.jpeg', '.png', '.webp', '.gif'}:
+        ext = '.png'
+    return f'custom_nav/{uuid.uuid4().hex}{ext}'
 
 
 class SoftDeleteQuerySet(models.QuerySet):
@@ -63,6 +76,40 @@ class Setting(models.Model):
 
     class Meta:
         db_table = 'settings'
+
+
+class CustomNavLink(models.Model):
+    """Admin-configured sidebar shortcuts that open in a new tab."""
+
+    name = models.CharField(max_length=100)
+    url = models.URLField(max_length=500)
+    logo = models.ImageField(
+        storage=CustomNavLogoStorage(),
+        upload_to=custom_nav_logo_upload,
+        blank=True,
+        null=True,
+    )
+    users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name='custom_nav_links',
+    )
+    groups = models.ManyToManyField(
+        'auth.Group',
+        blank=True,
+        related_name='custom_nav_links',
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'custom_nav_links'
+        ordering = ['sort_order', 'name']
+
+    def __str__(self):
+        return self.name
 
 
 class AuditLog(models.Model):

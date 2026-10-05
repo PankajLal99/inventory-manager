@@ -65,6 +65,7 @@ import VendorPurchases from './pages/purchases/VendorPurchases';
 import VendorPurchaseDetail from './pages/purchases/VendorPurchaseDetail';
 import Vendors from './pages/vendors/Vendors';
 import CategoriesBrands from './pages/catalog/CategoriesBrands';
+import CustomNavLinks from './pages/admin/CustomNavLinks';
 import DefectiveMoveOuts from './pages/defective/DefectiveMoveOuts';
 import DefectiveAdjustedInvoices from './pages/defective/DefectiveAdjustedInvoices';
 import PaymentReminders from './pages/payment-reminders/PaymentReminders';
@@ -335,6 +336,7 @@ function App() {
                 <Route path="search" element={<FullAppOnly><Search /></FullAppOnly>} />
                 <Route path="vendors" element={<FullAppOnly><Vendors /></FullAppOnly>} />
                 <Route path="categories-brands" element={<FullAppOnly><CategoriesBrands /></FullAppOnly>} />
+                <Route path="custom-nav-links" element={<FullAppOnly><CustomNavLinks /></FullAppOnly>} />
                 <Route path="defective-move-outs" element={<FullAppOnly><DefectiveMoveOuts /></FullAppOnly>} />
                 <Route path="defective-move-outs/adjusted" element={<FullAppOnly><DefectiveAdjustedInvoices /></FullAppOnly>} />
               </Route>

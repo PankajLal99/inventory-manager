@@ -5,7 +5,7 @@ import { auth } from '../../lib/auth';
 import { clearPersonalLedgerUnlockIfLeaving } from '../../lib/personalLedgerUnlock';
 import { hydrateInvoiceExportSplitFromServer } from '../../pages/invoices/invoiceExportSettings';
 import { hydrateProductNameColorRulesFromServer } from '../../lib/productNameColorRules';
-import { productsApi, reportsApi } from '../../lib/api';
+import { productsApi, reportsApi, customNavLinksApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -47,6 +47,7 @@ import {
   Boxes,
   Tags,
   Wallet,
+  Link2,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -91,6 +92,29 @@ export default function Layout() {
     staleTime: 60_000,
     refetchOnWindowFocus: true,
   });
+
+  const { data: customNavLinksData } = useQuery({
+    queryKey: ['custom-nav-links-mine'],
+    queryFn: async () => {
+      const response = await customNavLinksApi.mine();
+      return response.data || response;
+    },
+    enabled: Boolean(user),
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const customNavLinks: Array<{
+    id: number;
+    name: string;
+    url: string;
+    logo_url?: string | null;
+    sort_order?: number;
+  }> = Array.isArray(customNavLinksData)
+    ? customNavLinksData
+    : Array.isArray(customNavLinksData?.results)
+      ? customNavLinksData.results
+      : [];
 
   const stockAlertCount = stockAlertsData?.total_count
     ?? ((stockAlertsData?.out_of_stock_count || 0) + (stockAlertsData?.low_stock_count || 0));
@@ -327,6 +351,7 @@ export default function Layout() {
         { path: '/pos-credit', icon: Coins, label: 'POS Credit', showFor: ['Admin'] },
         { path: '/credit-invoices', icon: FileText, label: 'Credit Invoices', showFor: ['Admin'] },
         { path: '/categories-brands', icon: Tags, label: 'Categories, Brands & Groups', showFor: ['Admin', 'RetailAdmin', 'WholesaleAdmin'] },
+        { path: '/custom-nav-links', icon: Link2, label: 'Manage Custom Links', showFor: ['Admin'] },
       ],
     },
   ];
@@ -453,6 +478,50 @@ export default function Layout() {
               </div>
             </div>
           ))}
+
+          {/* Custom Links — always last in nav, assigned per user/group */}
+          {customNavLinks.length > 0 && (
+            <div className="space-y-2">
+              <h3 className={`px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider ${sidebarCollapsed ? 'lg:hidden' : ''
+                }`}>
+                Custom Links
+              </h3>
+              <div className="space-y-1">
+                {customNavLinks.map((link) => (
+                  <a
+                    key={link.id}
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`group flex items-center rounded-xl transition-all duration-200 px-4 py-3 text-gray-700 hover:bg-gray-100 ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''
+                      }`}
+                    onClick={() => setSidebarOpen(false)}
+                    title={sidebarCollapsed ? link.name : undefined}
+                  >
+                    {link.logo_url ? (
+                      <img
+                        src={link.logo_url}
+                        alt=""
+                        className={`h-5 w-5 rounded object-contain flex-shrink-0 mr-3 ${sidebarCollapsed ? 'lg:mr-0' : ''
+                          }`}
+                      />
+                    ) : (
+                      <ExternalLink
+                        className={`h-5 w-5 transition-transform duration-200 mr-3 group-hover:scale-110 ${sidebarCollapsed ? 'lg:mr-0' : ''
+                          }`}
+                      />
+                    )}
+                    <span className={`font-medium truncate ${sidebarCollapsed ? 'lg:hidden' : ''
+                      }`}>{link.name}</span>
+                    <ExternalLink
+                      className={`ml-auto h-3.5 w-3.5 text-gray-400 flex-shrink-0 ${sidebarCollapsed ? 'lg:hidden' : ''
+                        }`}
+                    />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </nav>
 
         {/* User Section at Bottom */}

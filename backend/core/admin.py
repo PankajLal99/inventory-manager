@@ -6,7 +6,7 @@ from django.db import connection
 from django.db.models import TextField
 from django.db.models.functions import Cast
 
-from .models import User, Setting, AuditLog
+from .models import User, Setting, AuditLog, CustomNavLink
 
 
 @admin.register(User)
@@ -29,6 +29,16 @@ class SettingAdmin(admin.ModelAdmin):
     search_fields = ['key', 'description']
     ordering = ['key']
     readonly_fields = ['updated_at']
+
+
+@admin.register(CustomNavLink)
+class CustomNavLinkAdmin(admin.ModelAdmin):
+    list_display = ['name', 'url', 'sort_order', 'is_active', 'updated_at']
+    list_filter = ['is_active']
+    search_fields = ['name', 'url']
+    ordering = ['sort_order', 'name']
+    filter_horizontal = ['users', 'groups']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(AuditLog)

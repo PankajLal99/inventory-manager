@@ -864,3 +864,14 @@ export const salaryBookApi = {
   },
 };
 
+// Admin-managed custom sidebar links (open in new tab)
+export const customNavLinksApi = {
+  mine: () => api.get('/custom-nav-links/mine/'),
+  list: () => api.get('/custom-nav-links/'),
+  options: () => api.get('/custom-nav-links/options/'),
+  get: (id: number) => api.get(`/custom-nav-links/${id}/`),
+  create: (data: FormData) => api.post('/custom-nav-links/', data),
+  update: (id: number, data: FormData) => api.patch(`/custom-nav-links/${id}/`, data),
+  delete: (id: number) => api.delete(`/custom-nav-links/${id}/`),
+};
+

@@ -528,20 +528,22 @@ export default function CreditLedger() {
         return cells;
       });
 
-      const columnStyles = singleStatus
+      const columnStyles: {
+        [key: string]: { cellWidth: number | 'auto'; halign?: 'center' | 'left' | 'right' };
+      } = singleStatus
         ? {
-            0: { cellWidth: 8, halign: 'center' as const },
-            1: { cellWidth: 'auto' as const },
-            2: { cellWidth: 24, halign: 'center' as const },
+            0: { cellWidth: 8, halign: 'center' },
+            1: { cellWidth: 'auto' },
+            2: { cellWidth: 24, halign: 'center' },
             3: { cellWidth: 24 },
             4: { cellWidth: 32 },
             5: { cellWidth: 22 },
             6: { cellWidth: 20 },
           }
         : {
-            0: { cellWidth: 8, halign: 'center' as const },
-            1: { cellWidth: 'auto' as const },
-            2: { cellWidth: 22, halign: 'center' as const },
+            0: { cellWidth: 8, halign: 'center' },
+            1: { cellWidth: 'auto' },
+            2: { cellWidth: 22, halign: 'center' },
             3: { cellWidth: 22 },
             4: { cellWidth: 22 },
             5: { cellWidth: 28 },

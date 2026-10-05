@@ -1,11 +1,13 @@
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny, BasePermission
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
@@ -13,10 +15,11 @@ import json
 import re
 
 from backend.catalog.product_name_relevance import order_product_ids_by_name_relevance
-from .models import Setting, AuditLog
+from .models import Setting, AuditLog, CustomNavLink
 from .serializers import (
     UserSerializer, UserCreateSerializer,
-    SettingSerializer, AuditLogSerializer
+    SettingSerializer, AuditLogSerializer,
+    CustomNavLinkSerializer, CustomNavLinkMineSerializer,
 )
 
 User = get_user_model()
@@ -744,4 +747,91 @@ def global_search(request):
         add_to_results('purchases', purchases, PurchaseSerializer)
     
     return Response(results)
+
+
+def _is_admin_group_user(user):
+    """True only for Django group named Admin (not Admin2)."""
+    if not user or not user.is_authenticated:
+        return False
+    return user.groups.filter(name='Admin').exists()
+
+
+class IsAdminGroup(BasePermission):
+    """Allow only users in the Admin group."""
+
+    def has_permission(self, request, view):
+        return _is_admin_group_user(request.user)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def custom_nav_links_mine(request):
+    """Links visible to the current user (assigned by user id or group)."""
+    user = request.user
+    links = (
+        CustomNavLink.objects.filter(is_active=True)
+        .filter(Q(users=user) | Q(groups__in=user.groups.all()))
+        .distinct()
+        .order_by('sort_order', 'name')
+    )
+    serializer = CustomNavLinkMineSerializer(links, many=True, context={'request': request})
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated, IsAdminGroup])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def custom_nav_link_list_create(request):
+    """Admin: list all custom nav links or create one."""
+    if request.method == 'GET':
+        links = CustomNavLink.objects.all().prefetch_related('users', 'groups')
+        serializer = CustomNavLinkSerializer(links, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    serializer = CustomNavLinkSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        link = serializer.save()
+        return Response(
+            CustomNavLinkSerializer(link, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated, IsAdminGroup])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def custom_nav_link_detail(request, pk):
+    """Admin: retrieve, update, or delete a custom nav link."""
+    link = get_object_or_404(CustomNavLink.objects.prefetch_related('users', 'groups'), pk=pk)
+
+    if request.method == 'GET':
+        serializer = CustomNavLinkSerializer(link, context={'request': request})
+        return Response(serializer.data)
+
+    if request.method == 'DELETE':
+        link.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    partial = request.method == 'PATCH'
+    serializer = CustomNavLinkSerializer(
+        link, data=request.data, partial=partial, context={'request': request}
+    )
+    if serializer.is_valid():
+        link = serializer.save()
+        return Response(CustomNavLinkSerializer(link, context={'request': request}).data)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsAdminGroup])
+def custom_nav_link_options(request):
+    """Admin: users and groups for assignment multi-selects."""
+    users = User.objects.filter(is_active=True).order_by('username').values('id', 'username')
+    groups = Group.objects.all().order_by('name').values('id', 'name')
+    return Response({
+        'users': list(users),
+        'groups': list(groups),
+    })
+
 
