@@ -10,10 +10,22 @@ import { toast } from '../../lib/toast';
 import { apiError, getCurrentGps, gpsUserMessage } from './utils';
 import type { SalaryBookSettings } from './types';
 import { auth } from '../../lib/auth';
+import ConfirmDialog from './components/ConfirmDialog';
 
 function isAdminUser(user: { is_superuser?: boolean; groups?: string[] } | null) {
   if (!user) return false;
   return Boolean(user.is_superuser || user.groups?.includes('Admin'));
+}
+
+function formatDeltaLabel(minutes: number) {
+  if (!minutes) return 'No adjustment (0 min)';
+  const abs = Math.abs(minutes);
+  const hours = Math.floor(abs / 60);
+  const mins = abs % 60;
+  const parts: string[] = [];
+  if (hours) parts.push(`${hours}h`);
+  if (mins || !hours) parts.push(`${mins}m`);
+  return `${minutes > 0 ? '+' : '−'}${parts.join(' ')}`;
 }
 
 export default function SettingsPage() {
@@ -25,6 +37,8 @@ export default function SettingsPage() {
   });
   const [form, setForm] = useState<SalaryBookSettings | null>(null);
   const [locating, setLocating] = useState(false);
+  const [serverNow, setServerNow] = useState(() => new Date());
+  const [deltaConfirmOpen, setDeltaConfirmOpen] = useState(false);
 
   useEffect(() => {
     auth.loadUser('salary_book').then(setUser).catch(() => undefined);
@@ -34,8 +48,13 @@ export default function SettingsPage() {
     if (data) setForm(data);
   }, [data]);
 
+  useEffect(() => {
+    const id = window.setInterval(() => setServerNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const mutation = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (opts?: { confirmMachineTimeDelta?: boolean }) =>
       salaryBookApi.settings.update({
         salary_calculation_method: form?.salary_calculation_method,
         fixed_working_days: Number(form?.fixed_working_days),
@@ -47,16 +66,32 @@ export default function SettingsPage() {
         require_checkout_gps_photo: form?.require_checkout_gps_photo,
         default_check_in: form?.default_check_in,
         default_check_out: form?.default_check_out,
+        machine_time_delta_minutes: Number(form?.machine_time_delta_minutes ?? 0),
+        ...(opts?.confirmMachineTimeDelta ? { confirm_machine_time_delta: true } : {}),
         ...(isAdminUser(user)
           ? { attendance_capture_mode: form?.attendance_capture_mode }
           : {}),
       }),
     onSuccess: async () => {
+      setDeltaConfirmOpen(false);
       toast('Settings saved', 'success');
       await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
     },
     onError: (err) => toast(apiError(err, 'Unable to save settings.'), 'error'),
   });
+
+  const savedDelta = Number(data?.machine_time_delta_minutes ?? 0);
+  const deltaLocked = Boolean(data?.machine_time_delta_locked);
+  const formDelta = Number(form?.machine_time_delta_minutes ?? 0);
+  const deltaChanging = !deltaLocked && formDelta !== savedDelta;
+
+  const requestSave = () => {
+    if (deltaChanging) {
+      setDeltaConfirmOpen(true);
+      return;
+    }
+    mutation.mutate({});
+  };
 
   const useCurrentLocation = async () => {
     setLocating(true);
@@ -86,13 +121,27 @@ export default function SettingsPage() {
   const captureMode =
     form.attendance_capture_mode || (form.require_gps ? 'GEO' : 'MANUAL');
   const isGeoMode = captureMode === 'GEO';
+  const isHardwareMode = captureMode === 'HARDWARE';
+  const deltaMinutes = Number(form.machine_time_delta_minutes ?? 0);
+  const serverTimeLabel = serverNow.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const machinePreview = new Date(serverNow.getTime() - deltaMinutes * 60_000);
+  const machineTimeLabel = machinePreview.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 
   return (
+    <>
     <form
       className="space-y-4 lg:max-w-3xl"
       onSubmit={(e) => {
         e.preventDefault();
-        mutation.mutate();
+        requestSave();
       }}
     >
       <h1 className="text-xl lg:text-2xl font-bold">Settings</h1>
@@ -203,6 +252,88 @@ export default function SettingsPage() {
               ? 'Admins mark attendance without GPS or geofence.'
               : 'Employees must be inside the workplace geofence and provide a selfie when required.'}
         </p>
+        {isHardwareMode && (
+          <div className="rounded-lg border border-emerald-50 bg-emerald-50/40 p-3 space-y-3">
+            <div>
+              <h3 className="font-medium text-gray-900">Machine time delta</h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Correct biometric clock skew. If the machine is behind server time, enter a positive
+                value (e.g. +10). If ahead, enter negative (e.g. −10).
+                {' '}
+                This can only be changed once. Saving updates existing hardware attendance and can
+                affect late / salary calculations.
+              </p>
+            </div>
+            {deltaLocked ? (
+              <p className="text-xs font-medium text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                Locked at {formatDeltaLabel(savedDelta)}. Machine time delta can only be set once.
+              </p>
+            ) : null}
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+              <Input
+                label="Delta (minutes)"
+                inputMode="numeric"
+                disabled={deltaLocked}
+                value={String(form.machine_time_delta_minutes ?? 0)}
+                onChange={(e) => {
+                  if (deltaLocked) return;
+                  const raw = e.target.value.trim();
+                  if (raw === '' || raw === '-' || raw === '+') {
+                    setForm({ ...form, machine_time_delta_minutes: 0 });
+                    return;
+                  }
+                  const next = Number(raw);
+                  if (Number.isNaN(next)) return;
+                  setForm({ ...form, machine_time_delta_minutes: Math.trunc(next) });
+                }}
+              />
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 px-3"
+                  disabled={deltaLocked}
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      machine_time_delta_minutes: deltaMinutes - 1,
+                    })
+                  }
+                >
+                  −1
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 px-3"
+                  disabled={deltaLocked}
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      machine_time_delta_minutes: deltaMinutes + 1,
+                    })
+                  }
+                >
+                  +1
+                </Button>
+              </div>
+            </div>
+            <div className="text-xs text-gray-600 space-y-1">
+              <div className="flex justify-between gap-3">
+                <span>Server time (correct)</span>
+                <span className="font-medium tabular-nums">{serverTimeLabel}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span>Machine would show</span>
+                <span className="font-medium tabular-nums">{machineTimeLabel}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span>Adjustment</span>
+                <span className="font-medium">{formatDeltaLabel(deltaMinutes)}</span>
+              </div>
+            </div>
+          </div>
+        )}
         {isGeoMode && (
           <>
             <label className="flex items-center justify-between gap-3 cursor-pointer">
@@ -230,5 +361,20 @@ export default function SettingsPage() {
         Save Settings
       </Button>
     </form>
+    <ConfirmDialog
+      open={deltaConfirmOpen}
+      title="Change machine time delta?"
+      message={
+        `You are changing the machine time delta from ${formatDeltaLabel(savedDelta)} to ${formatDeltaLabel(formDelta)}.\n\n` +
+        'Existing hardware attendance entries will be updated, and late / worked-time / salary calculations may change.\n\n' +
+        'This can only be changed once. After you confirm, the delta will be locked permanently.'
+      }
+      confirmLabel="Confirm & lock"
+      danger
+      loading={mutation.isPending}
+      onCancel={() => setDeltaConfirmOpen(false)}
+      onConfirm={() => mutation.mutate({ confirmMachineTimeDelta: true })}
+    />
+    </>
   );
 }

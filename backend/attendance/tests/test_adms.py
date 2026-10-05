@@ -260,3 +260,26 @@ class BridgeTests(TestCase):
         att = Attendance.objects.get(employee=self.employee)
         self.assertEqual(att.status, Attendance.STATUS_PAID_LEAVE)
         self.assertIsNone(att.check_in_time)
+
+    def test_machine_time_delta_applied_on_bridge(self):
+        self.settings.machine_time_delta_minutes = 15
+        self.settings.machine_time_delta_locked = True
+        self.settings.save()
+        line = '1\t2026-09-17 09:00:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        self.client.post(
+            f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999',
+            data=line,
+            content_type='text/plain',
+        )
+        event = AttendanceEvent.objects.get()
+        att = Attendance.objects.get(employee=self.employee)
+        raw_local = timezone.localtime(event.punch_datetime)
+        adj_local = timezone.localtime(att.check_in_time)
+        self.assertEqual(raw_local.hour, 9)
+        self.assertEqual(raw_local.minute, 0)
+        self.assertEqual(adj_local.hour, 9)
+        self.assertEqual(adj_local.minute, 15)
+        self.assertEqual(
+            (att.check_in_time - event.punch_datetime).total_seconds(),
+            15 * 60,
+        )

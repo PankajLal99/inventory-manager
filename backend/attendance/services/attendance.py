@@ -183,7 +183,8 @@ def bridge_event_to_salary_book(event: AttendanceEvent) -> None:
         )
         return
 
-    punch = event.punch_datetime
+    # Raw device timestamp is kept on AttendanceEvent; adjust only for salary-book.
+    punch = settings_obj.apply_machine_time_delta(event.punch_datetime)
     att_date = timezone.localtime(punch).date()
 
     with transaction.atomic():

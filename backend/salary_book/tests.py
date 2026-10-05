@@ -402,6 +402,63 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         self.assertEqual(settings_obj.attendance_capture_mode, SalaryBookSettings.CAPTURE_HARDWARE)
         self.assertFalse(settings_obj.require_gps)
 
+    def test_machine_time_delta_requires_confirm_then_locks(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse('salary-book-settings')
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_HARDWARE
+        settings_obj.save()
+
+        emp = self.make_employee()
+        check_in = timezone.make_aware(
+            datetime(2026, 9, 17, 9, 0),
+            timezone.get_current_timezone(),
+        )
+        att = Attendance.objects.create(
+            employee=emp,
+            date=date(2026, 9, 17),
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=check_in,
+            attendance_method=Attendance.METHOD_HARDWARE,
+        )
+
+        denied = self.client.patch(url, {'machine_time_delta_minutes': 10}, format='json')
+        self.assertEqual(denied.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('confirm_machine_time_delta', denied.data)
+
+        ok = self.client.patch(
+            url,
+            {
+                'machine_time_delta_minutes': 10,
+                'confirm_machine_time_delta': True,
+            },
+            format='json',
+        )
+        self.assertEqual(ok.status_code, status.HTTP_200_OK)
+        self.assertEqual(ok.data['machine_time_delta_minutes'], 10)
+        self.assertTrue(ok.data['machine_time_delta_locked'])
+
+        att.refresh_from_db()
+        self.assertEqual(
+            timezone.localtime(att.check_in_time).strftime('%H:%M'),
+            '09:10',
+        )
+
+        locked = self.client.patch(
+            url,
+            {
+                'machine_time_delta_minutes': 20,
+                'confirm_machine_time_delta': True,
+            },
+            format='json',
+        )
+        self.assertEqual(locked.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('machine_time_delta_minutes', locked.data)
+        settings_obj.refresh_from_db()
+        self.assertEqual(settings_obj.machine_time_delta_minutes, 10)
+        self.assertTrue(settings_obj.machine_time_delta_locked)
+
     def test_admin_can_set_geo_mode(self):
         self.user.is_superuser = True
         self.user.save()

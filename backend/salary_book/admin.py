@@ -19,6 +19,8 @@ class SalaryBookSettingsAdmin(admin.ModelAdmin):
         'fixed_working_days',
         'default_check_in',
         'default_check_out',
+        'machine_time_delta_minutes',
+        'machine_time_delta_locked',
         'max_gps_accuracy_meters',
         'office_latitude',
         'office_longitude',

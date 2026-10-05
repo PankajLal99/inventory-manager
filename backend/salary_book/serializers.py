@@ -24,6 +24,10 @@ def _abs_url(request, path):
 
 
 class SalaryBookSettingsSerializer(serializers.ModelSerializer):
+    confirm_machine_time_delta = serializers.BooleanField(
+        required=False, write_only=True, default=False
+    )
+
     class Meta:
         model = SalaryBookSettings
         fields = [
@@ -40,9 +44,12 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
             'require_checkout_gps_photo',
             'default_check_in',
             'default_check_out',
+            'machine_time_delta_minutes',
+            'machine_time_delta_locked',
+            'confirm_machine_time_delta',
             'updated_at',
         ]
-        read_only_fields = ['id', 'updated_at']
+        read_only_fields = ['id', 'updated_at', 'machine_time_delta_locked']
 
     def validate(self, attrs):
         cin = attrs.get('default_check_in', getattr(self.instance, 'default_check_in', None))
@@ -58,9 +65,33 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
             SalaryBookSettings.CAPTURE_MANUAL,
         }:
             raise serializers.ValidationError({'attendance_capture_mode': 'Invalid capture mode.'})
+        if 'machine_time_delta_minutes' in attrs:
+            delta = attrs['machine_time_delta_minutes']
+            if delta is not None and abs(int(delta)) > 24 * 60:
+                raise serializers.ValidationError(
+                    {
+                        'machine_time_delta_minutes': (
+                            'Delta must be between -1440 and 1440 minutes (±24 hours).'
+                        )
+                    }
+                )
+            instance = self.instance
+            if instance is not None:
+                old_delta = int(instance.machine_time_delta_minutes or 0)
+                new_delta = int(delta if delta is not None else 0)
+                if new_delta != old_delta and instance.machine_time_delta_locked:
+                    raise serializers.ValidationError(
+                        {
+                            'machine_time_delta_minutes': (
+                                'Machine time delta can only be changed once and is now locked.'
+                            )
+                        }
+                    )
         return attrs
 
     def update(self, instance, validated_data):
+        confirm = bool(validated_data.pop('confirm_machine_time_delta', False))
+
         if 'attendance_capture_mode' in validated_data:
             mode = validated_data['attendance_capture_mode']
             validated_data['require_gps'] = mode == SalaryBookSettings.CAPTURE_GEO
@@ -71,7 +102,35 @@ class SalaryBookSettingsSerializer(serializers.ModelSerializer):
                 if validated_data['require_gps']
                 else SalaryBookSettings.CAPTURE_MANUAL
             )
-        return super().update(instance, validated_data)
+
+        shift_minutes = 0
+        if 'machine_time_delta_minutes' in validated_data:
+            old_delta = int(instance.machine_time_delta_minutes or 0)
+            new_delta = int(validated_data['machine_time_delta_minutes'] or 0)
+            if new_delta == old_delta:
+                validated_data.pop('machine_time_delta_minutes')
+            else:
+                if not confirm:
+                    raise serializers.ValidationError(
+                        {
+                            'confirm_machine_time_delta': (
+                                'Changing machine time delta updates existing hardware '
+                                'attendance and salary calculations, and can only be done once. '
+                                'Confirm to proceed.'
+                            )
+                        }
+                    )
+                shift_minutes = new_delta - old_delta
+                validated_data['machine_time_delta_locked'] = True
+
+        instance = super().update(instance, validated_data)
+        if shift_minutes:
+            from backend.salary_book.services.machine_time import (
+                shift_hardware_attendance_times,
+            )
+
+            shift_hardware_attendance_times(shift_minutes)
+        return instance
 
 
 class EmployeeSerializer(serializers.ModelSerializer):

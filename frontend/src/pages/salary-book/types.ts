@@ -188,6 +188,8 @@ export interface SalaryBookSettings {
   require_checkout_gps_photo: boolean;
   default_check_in: string;
   default_check_out: string;
+  machine_time_delta_minutes: number;
+  machine_time_delta_locked?: boolean;
 }
 
 export interface GpsFix {

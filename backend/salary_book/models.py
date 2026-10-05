@@ -1,7 +1,7 @@
 import os
 import re
 import uuid
-from datetime import time
+from datetime import timedelta, time
 from decimal import Decimal
 
 from django.conf import settings
@@ -69,6 +69,11 @@ class SalaryBookSettings(models.Model):
     require_checkout_gps_photo = models.BooleanField(default=True)
     default_check_in = models.TimeField(default=time(9, 0))
     default_check_out = models.TimeField(default=time(18, 0))
+    # Minutes added to biometric machine punch times before writing salary-book attendance.
+    # Positive = machine clock is behind server; negative = machine is ahead.
+    # Can only be changed once; after that machine_time_delta_locked is True.
+    machine_time_delta_minutes = models.IntegerField(default=0)
+    machine_time_delta_locked = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -76,6 +81,15 @@ class SalaryBookSettings(models.Model):
 
     def __str__(self):
         return 'Salary Book Settings'
+
+    def apply_machine_time_delta(self, punch_datetime):
+        """Return punch datetime adjusted by machine_time_delta_minutes."""
+        if punch_datetime is None:
+            return punch_datetime
+        delta = int(self.machine_time_delta_minutes or 0)
+        if not delta:
+            return punch_datetime
+        return punch_datetime + timedelta(minutes=delta)
 
     def clean(self):
         if self.fixed_working_days < 1:
@@ -89,6 +103,11 @@ class SalaryBookSettings(models.Model):
                 raise ValidationError(
                     {'default_check_out': 'Default check-out must be after default check-in.'}
                 )
+        delta = self.machine_time_delta_minutes
+        if delta is not None and abs(int(delta)) > 24 * 60:
+            raise ValidationError(
+                {'machine_time_delta_minutes': 'Delta must be between -1440 and 1440 minutes (±24 hours).'}
+            )
 
     def save(self, *args, **kwargs):
         # Keep legacy require_gps aligned with capture mode for existing GPS helpers.
