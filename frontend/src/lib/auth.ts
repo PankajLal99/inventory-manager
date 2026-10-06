@@ -39,6 +39,8 @@ export interface User {
   is_admin?: boolean;
   is_staff?: boolean;
   is_superuser?: boolean;
+  emergency_mask_active?: boolean;
+  emergency_mask_percent?: number;
 }
 
 const KEYS: Record<AuthScope, { access: string; refresh: string }> = {

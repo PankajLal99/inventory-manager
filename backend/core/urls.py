@@ -8,6 +8,7 @@ from .views import (
     global_search,
     custom_nav_links_mine, custom_nav_link_list_create, custom_nav_link_detail,
     custom_nav_link_options,
+    emergency_mask_status, emergency_mask_activate,
 )
 
 urlpatterns = [
@@ -28,6 +29,10 @@ urlpatterns = [
     path('ledger-export-settings/', ledger_export_settings, name='ledger-export-settings'),
     path('invoice-export-settings/', invoice_export_settings, name='invoice-export-settings'),
     path('product-name-color-rules/', product_name_color_rules, name='product-name-color-rules'),
+
+    # Emergency display mask (Admin activate only; no HTTP deactivate)
+    path('emergency-mask/', emergency_mask_status, name='emergency-mask-status'),
+    path('emergency-mask/activate/', emergency_mask_activate, name='emergency-mask-activate'),
     
     # Custom nav links (Admin-managed shortcuts)
     path('custom-nav-links/mine/', custom_nav_links_mine, name='custom-nav-links-mine'),

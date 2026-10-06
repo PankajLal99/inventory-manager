@@ -21,6 +21,11 @@ from .serializers import (
     SettingSerializer, AuditLogSerializer,
     CustomNavLinkSerializer, CustomNavLinkMineSerializer,
 )
+from .emergency_mask import (
+    SETTING_KEY as EMERGENCY_MASK_SETTING_KEY,
+    activate_emergency_mask,
+    get_emergency_mask_config,
+)
 
 User = get_user_model()
 
@@ -202,7 +207,13 @@ def user_me(request):
         user_data['can_access_customers'] = is_superuser_or_staff
         user_data['can_access_ledger'] = is_superuser_or_staff
         user_data['can_access_history'] = is_superuser_or_staff
-    
+
+    mask_cfg = get_emergency_mask_config()
+    user_data['emergency_mask_active'] = bool(mask_cfg.get('enabled'))
+    # Percent only for Admin group — avoids advertising the scale factor broadly
+    if _is_admin_group_user(user) or user_data.get('is_admin'):
+        user_data['emergency_mask_percent'] = mask_cfg.get('percent')
+
     return Response(user_data)
 
 
@@ -455,10 +466,15 @@ def product_name_color_rules(request):
 def setting_list_create(request):
     """List all settings or create a new setting"""
     if request.method == 'GET':
-        settings = Setting.objects.all()
+        settings = Setting.objects.exclude(key=EMERGENCY_MASK_SETTING_KEY)
         serializer = SettingSerializer(settings, many=True)
         return Response(serializer.data)
     else:
+        if request.data.get('key') == EMERGENCY_MASK_SETTING_KEY:
+            return Response(
+                {'detail': 'This setting cannot be managed via this API.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = SettingSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -471,6 +487,11 @@ def setting_list_create(request):
 def setting_detail(request, pk):
     """Retrieve, update or delete a setting"""
     setting = get_object_or_404(Setting, pk=pk)
+    if setting.key == EMERGENCY_MASK_SETTING_KEY:
+        return Response(
+            {'detail': 'This setting cannot be managed via this API.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
     
     if request.method == 'GET':
         serializer = SettingSerializer(setting)
@@ -832,6 +853,55 @@ def custom_nav_link_options(request):
     return Response({
         'users': list(users),
         'groups': list(groups),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def emergency_mask_status(request):
+    """Current emergency mask status. Percent only for Admin group."""
+    cfg = get_emergency_mask_config()
+    payload = {'enabled': bool(cfg.get('enabled'))}
+    if _is_admin_group_user(request.user):
+        payload['percent'] = cfg.get('percent')
+    return Response(payload)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsAdminGroup])
+def emergency_mask_activate(request):
+    """
+    One-way activate emergency display mask (Admin group only).
+    There is no HTTP deactivate — use shell deactivate_emergency_mask().
+    Optional body: {"percent": 3} to set threshold while activating.
+    """
+    percent = None
+    if isinstance(request.data, dict) and 'percent' in request.data:
+        percent = request.data.get('percent')
+
+    cfg = activate_emergency_mask(percent=percent)
+
+    # Audit trail (no secret beyond enabled/percent)
+    try:
+        AuditLog.objects.create(
+            user=request.user,
+            action='emergency_mask_activate',
+            model_name='Setting',
+            object_id=EMERGENCY_MASK_SETTING_KEY,
+            object_name='Emergency data mask',
+            changes={
+                'enabled': True,
+                'percent': cfg.get('percent'),
+            },
+            ip_address=request.META.get('REMOTE_ADDR'),
+        )
+    except Exception:
+        pass
+
+    return Response({
+        'enabled': True,
+        'percent': cfg.get('percent'),
+        'detail': 'Emergency data mask activated. Deactivate only via backend shell.',
     })
 
 

@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getStockInfo, toLocalDateString } from '../lib/utils';
+import { assertExportsAllowed } from '../lib/emergencyMaskGuard';
 
 export type ProductExportColumnId =
   | 'sr'
@@ -660,6 +661,8 @@ export function exportProductsToPdf({
   density: densityInput,
   pageBreak: pageBreakInput,
 }: ExportProductsPdfOptions): void {
+  assertExportsAllowed();
+
   const selectedColumns = PRODUCT_EXPORT_COLUMNS.filter((c) => columnIds.includes(c.id));
   const cols = selectedColumns.length
     ? selectedColumns

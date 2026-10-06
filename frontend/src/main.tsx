@@ -1,8 +1,9 @@
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import './index.css';
-import App from './App';
-import { auth } from './lib/auth';
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App'
+import { auth } from './lib/auth'
+import { installEmergencyMaskExportGuards } from './lib/emergencyMaskGuard'
 
 // Unregister stale workers, but keep the Salary Book installable PWA worker.
 if ('serviceWorker' in navigator) {
@@ -15,6 +16,8 @@ if ('serviceWorker' in navigator) {
     }
   });
 }
+
+void installEmergencyMaskExportGuards();
 
 // Load user on app start - handle invalid tokens gracefully
 if (auth.isAuthenticated()) {

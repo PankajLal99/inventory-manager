@@ -875,3 +875,12 @@ export const customNavLinksApi = {
   delete: (id: number) => api.delete(`/custom-nav-links/${id}/`),
 };
 
+export const emergencyMaskApi = {
+  status: () => api.get('/emergency-mask/'),
+  activate: (percent?: number) =>
+    api.post(
+      '/emergency-mask/activate/',
+      percent != null ? { percent } : {},
+    ),
+};
+

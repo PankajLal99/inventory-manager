@@ -156,6 +156,9 @@ export async function downloadPdfDocument(
   doc: { output: (type: 'blob') => Blob },
   fileName: string
 ): Promise<void> {
+  const { assertExportsAllowed } = await import('../../lib/emergencyMaskGuard');
+  assertExportsAllowed();
+
   const blob = doc.output('blob');
   const file = new File([blob], fileName, { type: 'application/pdf' });
   const nav = navigator as Navigator & {
