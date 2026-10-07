@@ -815,8 +815,11 @@ export const salaryBookApi = {
     list: (params?: any) => api.get('/salary-book/advances/', { params, ...sb } as any),
     create: (data: any) => api.post('/salary-book/advances/', data, sb as any),
     void: (id: number) => api.post(`/salary-book/advances/${id}/void/`, {}, sb as any),
+    unvoid: (id: number) => api.post(`/salary-book/advances/${id}/unvoid/`, {}, sb as any),
     markPaid: (id: number, data?: { amount?: string | number; remarks?: string }) =>
       api.post(`/salary-book/advances/${id}/mark-paid/`, data || {}, sb as any),
+    markUnpaid: (id: number, data?: { remarks?: string }) =>
+      api.post(`/salary-book/advances/${id}/mark-unpaid/`, data || {}, sb as any),
   },
   mtshopCustomers: (params?: { search?: string }) =>
     api.get('/salary-book/mtshop-customers/', { params, ...sb } as any),

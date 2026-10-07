@@ -9,6 +9,7 @@ import Textarea from '../../../components/ui/Textarea';
 import { toast } from '../../../lib/toast';
 import { apiError, formatDate, formatINR } from '../utils';
 import type { Paginated, SalaryAdvance } from '../types';
+import ConfirmDialog from './ConfirmDialog';
 import SalaryBookSheet from './SalaryBookSheet';
 
 function statusLabel(status: string) {
@@ -40,6 +41,10 @@ export default function EmployeeAdvanceLedger({
 }) {
   const queryClient = useQueryClient();
   const [payRow, setPayRow] = useState<SalaryAdvance | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    row: SalaryAdvance;
+    kind: 'void' | 'unvoid' | 'unpaid';
+  } | null>(null);
 
   const params = useMemo(() => {
     const p: Record<string, number> = { page_size: 100 };
@@ -72,6 +77,38 @@ export default function EmployeeAdvanceLedger({
       await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
     },
     onError: (err) => toast(apiError(err, 'Unable to mark advance as paid.'), 'error'),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: async ({ id, kind }: { id: number; kind: 'void' | 'unvoid' | 'unpaid' }) => {
+      if (kind === 'void') return salaryBookApi.advances.void(id);
+      if (kind === 'unvoid') return salaryBookApi.advances.unvoid(id);
+      return salaryBookApi.advances.markUnpaid(id);
+    },
+    onSuccess: async (_res, vars) => {
+      toast(
+        vars.kind === 'void'
+          ? 'Advance voided'
+          : vars.kind === 'unvoid'
+            ? 'Advance restored'
+            : 'Advance marked unpaid',
+        'success',
+      );
+      setConfirmAction(null);
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+    },
+    onError: (err, vars) =>
+      toast(
+        apiError(
+          err,
+          vars.kind === 'void'
+            ? 'Unable to void advance.'
+            : vars.kind === 'unvoid'
+              ? 'Unable to restore advance.'
+              : 'Unable to mark advance unpaid.',
+        ),
+        'error',
+      ),
   });
 
   const titleName = listQuery.data?.employee_name || employeeName || 'Employee';
@@ -117,16 +154,47 @@ export default function EmployeeAdvanceLedger({
                           {row.source === 'MTSHOP' ? ' · MT Shop' : ''}
                         </div>
                         {isActive && (
-                          <button
-                            type="button"
-                            className="mt-1 text-sm text-emerald-700"
-                            onClick={() => setPayRow(row)}
-                          >
-                            Mark paid
-                          </button>
+                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-emerald-700"
+                              onClick={() => setPayRow(row)}
+                            >
+                              Mark paid
+                            </button>
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-red-600"
+                              onClick={() => setConfirmAction({ row, kind: 'void' })}
+                            >
+                              Void
+                            </button>
+                          </div>
+                        )}
+                        {isPaid && (
+                          <div className="mt-1.5">
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-amber-700"
+                              onClick={() => setConfirmAction({ row, kind: 'unpaid' })}
+                            >
+                              Mark unpaid
+                            </button>
+                          </div>
+                        )}
+                        {isVoid && (
+                          <div className="mt-1.5">
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-emerald-700"
+                              onClick={() => setConfirmAction({ row, kind: 'unvoid' })}
+                            >
+                              Unvoid
+                            </button>
+                          </div>
                         )}
                       </div>
-                      <div className={`text-right w-24 font-medium ${isActive ? 'text-gray-900' : 'text-gray-300'}`}>
+                      <div className={`text-right w-24 font-medium ${isActive || isVoid ? 'text-gray-900' : 'text-gray-300'} ${isVoid ? 'line-through' : ''}`}>
                         {isActive || isVoid ? formatINR(row.amount) : '—'}
                       </div>
                       <div className={`text-right w-24 font-medium ${isPaid ? 'text-emerald-700' : 'text-gray-300'}`}>
@@ -165,6 +233,39 @@ export default function EmployeeAdvanceLedger({
           }
         />
       )}
+      <ConfirmDialog
+        open={Boolean(confirmAction)}
+        title={
+          confirmAction?.kind === 'void'
+            ? 'Void advance?'
+            : confirmAction?.kind === 'unvoid'
+              ? 'Restore advance?'
+              : 'Mark unpaid?'
+        }
+        message={
+          confirmAction
+            ? confirmAction.kind === 'void'
+              ? `${formatINR(confirmAction.row.amount)} · ${entryLabel(confirmAction.row)} will be voided.`
+              : confirmAction.kind === 'unvoid'
+                ? `${formatINR(confirmAction.row.amount)} · ${entryLabel(confirmAction.row)} will become active again.`
+                : `${formatINR(confirmAction.row.amount)} · ${entryLabel(confirmAction.row)} will return to outstanding.`
+            : ''
+        }
+        confirmLabel={
+          confirmAction?.kind === 'void'
+            ? 'Void'
+            : confirmAction?.kind === 'unvoid'
+              ? 'Unvoid'
+              : 'Mark unpaid'
+        }
+        danger={confirmAction?.kind === 'void'}
+        loading={statusMutation.isPending}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() =>
+          confirmAction &&
+          statusMutation.mutate({ id: confirmAction.row.id, kind: confirmAction.kind })
+        }
+      />
     </SalaryBookSheet>
   );
 }

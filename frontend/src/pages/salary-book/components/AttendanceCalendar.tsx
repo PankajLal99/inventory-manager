@@ -502,7 +502,11 @@ function SelectedDayPanel({
       </div>
 
       {(cell?.check_in_time || cell?.check_out_time) && (
-        <div className="grid grid-cols-2 gap-2">
+        <div
+          className={`grid gap-2 ${
+            iso < today || cell?.check_out_time ? 'grid-cols-2' : 'grid-cols-1'
+          }`}
+        >
           <div className="rounded-lg bg-white border border-emerald-100 px-3 py-2">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">In</div>
             <div className="text-base font-semibold tabular-nums text-gray-900">
@@ -512,15 +516,17 @@ function SelectedDayPanel({
               <div className="text-[11px] text-amber-700 font-medium">Late {cell.minutes_late}m</div>
             ) : null}
           </div>
-          <div className="rounded-lg bg-white border border-emerald-100 px-3 py-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Out</div>
-            <div className="text-base font-semibold tabular-nums text-gray-900">
-              {cell.check_out_time ? formatTime(cell.check_out_time) : '—'}
+          {(iso < today || cell?.check_out_time) && (
+            <div className="rounded-lg bg-white border border-emerald-100 px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Out</div>
+              <div className="text-base font-semibold tabular-nums text-gray-900">
+                {cell.check_out_time ? formatTime(cell.check_out_time) : '—'}
+              </div>
+              {cell.is_early && cell.minutes_early ? (
+                <div className="text-[11px] text-orange-700 font-medium">Early {cell.minutes_early}m</div>
+              ) : null}
             </div>
-            {cell.is_early && cell.minutes_early ? (
-              <div className="text-[11px] text-orange-700 font-medium">Early {cell.minutes_early}m</div>
-            ) : null}
-          </div>
+          )}
         </div>
       )}
 
@@ -677,15 +683,19 @@ export function EmployeeMonthGrid({
   );
 }
 
-/** Tiny status tile for admin mobile strip — day number + color only (~36px tall). */
-function AdminStripChip({
+/**
+ * Mobile admin day cell — in/out times always visible (no tap needed).
+ * Layout: day label + stacked in (top) / out (bottom) times.
+ */
+function AdminStripDay({
   year,
   month,
   day,
   cell,
   isToday,
   isPast,
-  onClick,
+  isFuture,
+  onAdd,
 }: {
   year: number;
   month: number;
@@ -693,61 +703,112 @@ function AdminStripChip({
   cell: CalendarDayCell | undefined;
   isToday: boolean;
   isPast: boolean;
-  onClick?: () => void;
+  isFuture: boolean;
+  onAdd?: () => void;
 }) {
   const sunday = isSunday(year, month, day);
   const status = cell?.status;
   const marked = Boolean(status && status !== 'BEFORE_JOINING');
   const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const inTime = shortTime(cell?.check_in_time);
+  const outTime = shortTime(cell?.check_out_time);
+  const hasPunches = Boolean(inTime || outTime);
 
-  let bg = 'bg-gray-100 text-gray-500';
-  if (sunday && !marked) {
-    bg = 'bg-rose-50 text-rose-600';
-  } else if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
-    if (status === 'HALF_DAY' || cell?.is_late) bg = 'bg-amber-400 text-amber-950';
-    else bg = 'bg-emerald-500 text-white';
-  } else if (!status || status === 'BEFORE_JOINING') {
-    if (isPast && status !== 'BEFORE_JOINING') bg = 'bg-red-500 text-white';
-    else if (status === 'BEFORE_JOINING') bg = 'bg-gray-50 text-gray-300';
-    else if (isToday) bg = 'bg-white text-emerald-700 ring-1 ring-dashed ring-emerald-400';
-    else bg = 'bg-gray-100 text-gray-400';
-  } else {
+  const lateIn = Boolean(cell?.is_late);
+  const earlyOut = Boolean(cell?.is_early && cell?.check_out_time);
+  const inBg = lateIn ? 'bg-amber-400 text-amber-950' : 'bg-emerald-500 text-white';
+  const outBg = !cell?.check_out_time
+    ? 'bg-slate-300 text-slate-700'
+    : earlyOut
+      ? 'bg-orange-500 text-white'
+      : 'bg-sky-600 text-white';
+
+  let body: ReactNode;
+  if (hasPunches && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
+    // Always show both rows so cell height stays even across days.
+    body = (
+      <div className="flex w-full flex-col overflow-hidden rounded">
+        <div className={`flex h-4 items-center justify-center px-px ${inBg}`}>
+          <span className="text-[9px] font-semibold leading-none tabular-nums">{inTime || '—'}</span>
+        </div>
+        <div className={`flex h-4 items-center justify-center px-px ${outBg}`}>
+          <span className="text-[9px] font-semibold leading-none tabular-nums">
+            {isFuture ? '—' : outTime || (isToday && !outTime ? '…' : '—')}
+          </span>
+        </div>
+      </div>
+    );
+  } else if (sunday && !marked) {
+    body = (
+      <div className="flex h-8 w-full items-center justify-center rounded bg-rose-50">
+        <span className="text-[9px] font-semibold text-rose-600">Sun</span>
+      </div>
+    );
+  } else if (status && status !== 'BEFORE_JOINING') {
     const style = STATUS_STYLE[status];
-    bg = `${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'}`;
+    body = (
+      <div
+        className={`flex h-8 w-full flex-col items-center justify-center rounded ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'}`}
+      >
+        <span className="text-[10px] font-bold leading-none">{style?.short || status}</span>
+      </div>
+    );
+  } else if (isFuture || status === 'BEFORE_JOINING') {
+    body = (
+      <div className="flex h-8 w-full items-center justify-center rounded bg-gray-50 text-gray-300">
+        <span className="text-xs leading-none">-</span>
+      </div>
+    );
+  } else if (isPast) {
+    body = (
+      <div className="flex h-8 w-full flex-col items-center justify-center rounded bg-red-500 text-white">
+        <span className="text-[10px] font-bold leading-none">A</span>
+        {onAdd && <span className="mt-0.5 text-[7px] font-medium leading-none opacity-90">Add</span>}
+      </div>
+    );
+  } else {
+    // Today unmarked
+    body = (
+      <div
+        className={`flex h-8 w-full items-center justify-center rounded bg-white text-emerald-700 ring-1 ring-dashed ring-emerald-400 ${
+          isToday ? 'ring-2 ring-emerald-500' : ''
+        }`}
+      >
+        <span className="text-[9px] font-medium leading-none">{onAdd ? 'Add' : '-'}</span>
+      </div>
+    );
   }
 
-  const className = `relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold tabular-nums ${bg} ${
-    isToday && marked ? 'ring-2 ring-emerald-700' : ''
-  }`;
-
-  const content = (
-    <>
-      {day}
-      {(cell?.rule_penalty_applied || cell?.is_late) && marked && (
-        <span className="absolute right-0 top-0 text-[7px] font-bold leading-none opacity-90">
-          {cell.rule_penalty_applied ? 'P' : 'L'}
-        </span>
-      )}
-    </>
+  const wrapClass = `w-full min-w-0 space-y-0.5 ${isFuture ? 'opacity-45' : ''}`;
+  const header = (
+    <div
+      className={`text-center leading-none ${
+        sunday ? 'text-rose-600' : isToday ? 'text-emerald-800' : 'text-gray-500'
+      }`}
+    >
+      <div className="text-[10px] font-semibold tabular-nums">{day}</div>
+    </div>
   );
 
-  if (onClick) {
+  if (onAdd) {
     return (
       <button
         type="button"
         title={cellTitle(cell, iso)}
-        onClick={onClick}
-        className={`${className} cursor-pointer active:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600`}
+        onClick={onAdd}
+        className={`${wrapClass} text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-md`}
         aria-label={`Day ${day}, add attendance`}
       >
-        {content}
+        {header}
+        {body}
       </button>
     );
   }
 
   return (
-    <div title={cellTitle(cell, iso)} className={className} aria-label={`Day ${day}`}>
-      {content}
+    <div title={cellTitle(cell, iso)} className={wrapClass} aria-label={`Day ${day}`}>
+      {header}
+      {body}
     </div>
   );
 }
@@ -788,8 +849,9 @@ export function AdminMonthGrid({
 
   return (
     <>
-      {/* Mobile: flat chip strip per employee (avoids tall day+status stacks) */}
+      {/* Mobile: wrapped day grid (~3 rows) with in/out times always visible */}
       <div className="lg:hidden space-y-2">
+        <p className="text-[11px] text-gray-500 px-0.5">Green = in · Blue = out</p>
         {employees.map((emp) => (
           <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 px-2.5 py-2">
             <div className="flex items-center gap-2 mb-1.5 min-h-8">
@@ -806,26 +868,25 @@ export function AdminMonthGrid({
                 {emp.counts.PRESENT}P
               </span>
             </div>
-            <div className="overflow-x-auto -mx-2.5 px-2.5 overscroll-x-contain">
-              <div className="flex gap-1 min-w-max">
-                {days.map((day) => {
-                  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const cell = emp.days[String(day)];
-                  const click = dayClickProps(emp, iso, cell);
-                  return (
-                    <AdminStripChip
-                      key={day}
-                      year={year}
-                      month={month}
-                      day={day}
-                      cell={cell}
-                      isToday={iso === today}
-                      isPast={iso < today}
-                      onClick={click.onClick}
-                    />
-                  );
-                })}
-              </div>
+            <div className="grid grid-cols-10 gap-1 sm:grid-cols-11">
+              {days.map((day) => {
+                const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const cell = emp.days[String(day)];
+                const click = dayClickProps(emp, iso, cell);
+                return (
+                  <AdminStripDay
+                    key={day}
+                    year={year}
+                    month={month}
+                    day={day}
+                    cell={cell}
+                    isToday={iso === today}
+                    isPast={iso < today}
+                    isFuture={iso > today}
+                    onAdd={click.onClick}
+                  />
+                );
+              })}
             </div>
           </div>
         ))}

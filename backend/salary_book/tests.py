@@ -1168,6 +1168,46 @@ class MtshopAdvanceSyncTests(SalaryBookMixin, APITestCase):
         self.assertEqual(Decimal(res.data['total_paid']), Decimal('400.00'))
         self.assertEqual(res.data['employee_name'], self.emp.name)
 
+    def test_advance_unvoid_restores_active(self):
+        adv = SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 4, 10),
+            amount=Decimal('800.00'),
+            reason='Cash advance',
+            status=SalaryAdvance.STATUS_VOID,
+            created_by=self.user,
+        )
+        res = self.client.post(reverse('salary-book-advance-unvoid', args=[adv.id]), {}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], SalaryAdvance.STATUS_ACTIVE)
+        adv.refresh_from_db()
+        self.assertEqual(adv.status, SalaryAdvance.STATUS_ACTIVE)
+
+    def test_advance_mark_unpaid_restores_active(self):
+        adv = SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 4, 10),
+            amount=Decimal('1200.00'),
+            reason='Cash advance',
+            status=SalaryAdvance.STATUS_PAID,
+            created_by=self.user,
+        )
+        Attendance.objects.bulk_create([
+            Attendance(
+                employee=self.emp, date=date(2026, 4, d), status=Attendance.STATUS_PRESENT,
+            )
+            for d in range(1, 31)
+        ])
+        res = self.client.post(
+            reverse('salary-book-advance-mark-unpaid', args=[adv.id]),
+            {},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], SalaryAdvance.STATUS_ACTIVE)
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['total_advances'], Decimal('1200.00'))
+
     def test_phone_match_without_explicit_link(self):
         from backend.parties.internal_ledger_utils import create_internal_ledger_entry_if_mtshop
 

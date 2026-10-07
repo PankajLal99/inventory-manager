@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Wallet } from 'lucide-react';
+import { ChevronRight, Wallet } from 'lucide-react';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -10,36 +10,49 @@ import Select from '../../components/ui/Select';
 import Input from '../../components/ui/Input';
 import Textarea from '../../components/ui/Textarea';
 import { toast } from '../../lib/toast';
-import { apiError, formatDate, formatINR, todayISO } from './utils';
-import ConfirmDialog from './components/ConfirmDialog';
+import { apiError, formatINR, todayISO } from './utils';
 import SalaryBookSheet from './components/SalaryBookSheet';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import type { Employee, Paginated, SalaryAdvance } from './types';
 
-function statusLabel(status: string) {
-  if (status === 'VOID') return 'Voided';
-  if (status === 'PAID') return 'Paid';
-  return 'Active';
-}
+type EmployeeAdvanceGroup = {
+  employeeId: number;
+  employeeName: string;
+  employeeCode: string;
+  outstanding: number;
+};
 
-function sourceLabel(row: SalaryAdvance) {
-  if (row.source === 'MTSHOP') {
-    return row.source_invoice_number
-      ? `MT Shop · ${row.source_invoice_number}`
-      : 'MT Shop';
+function groupAdvancesByEmployee(rows: SalaryAdvance[]): EmployeeAdvanceGroup[] {
+  const map = new Map<number, EmployeeAdvanceGroup>();
+  for (const row of rows) {
+    let group = map.get(row.employee);
+    if (!group) {
+      group = {
+        employeeId: row.employee,
+        employeeName: row.employee_name,
+        employeeCode: row.employee_code || '',
+        outstanding: 0,
+      };
+      map.set(row.employee, group);
+    }
+    if (row.status === 'ACTIVE') {
+      group.outstanding += Number(row.amount) || 0;
+    }
   }
-  return row.reason || '—';
+  return Array.from(map.values()).sort((a, b) =>
+    a.employeeName.localeCompare(b.employeeName, undefined, { sensitivity: 'base' })
+  );
 }
 
 export default function AdvanceList() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [voidRow, setVoidRow] = useState<SalaryAdvance | null>(null);
   const [ledgerEmp, setLedgerEmp] = useState<{ id: number; name: string } | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['salary-book', 'advances'],
-    queryFn: async () => (await salaryBookApi.advances.list({ page_size: 50 })).data as Paginated<SalaryAdvance>,
+    queryFn: async () =>
+      (await salaryBookApi.advances.list({ page_size: 200 })).data as Paginated<SalaryAdvance>,
   });
   const employeesQuery = useQuery({
     queryKey: ['salary-book', 'employees', 'ACTIVE'],
@@ -57,18 +70,13 @@ export default function AdvanceList() {
     onError: (err) => toast(apiError(err, 'Unable to save advance.'), 'error'),
   });
 
-  const voidMutation = useMutation({
-    mutationFn: async (id: number) => salaryBookApi.advances.void(id),
-    onSuccess: async () => {
-      toast('Advance voided', 'success');
-      setVoidRow(null);
-      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
-    },
-    onError: (err) => toast(apiError(err, 'Unable to void advance.'), 'error'),
-  });
+  const groups = useMemo(
+    () => groupAdvancesByEmployee(listQuery.data?.results || []),
+    [listQuery.data?.results]
+  );
 
-  const openLedger = (row: SalaryAdvance) =>
-    setLedgerEmp({ id: row.employee, name: row.employee_name });
+  const openLedger = (group: EmployeeAdvanceGroup) =>
+    setLedgerEmp({ id: group.employeeId, name: group.employeeName });
 
   return (
     <div className="space-y-4">
@@ -83,81 +91,65 @@ export default function AdvanceList() {
         </Button>
       </div>
       <p className="text-sm text-gray-600">
-        Tap an employee name to open their advance ledger. MT Shop purchases deduct from salary until marked paid (full or partial).
+        One row per employee. Tap to open their ledger and mark paid or void individual entries.
       </p>
       {listQuery.isLoading && <LoadingState message="Loading advances..." />}
       {listQuery.isError && <ErrorState onRetry={() => listQuery.refetch()} />}
-      {!listQuery.isLoading && (listQuery.data?.results.length ?? 0) === 0 && (
+      {!listQuery.isLoading && groups.length === 0 && (
         <EmptyState icon={Wallet} title="No salary advances recorded." />
       )}
       <div className="space-y-2 lg:hidden">
-        {listQuery.data?.results.map((row) => (
-          <div key={row.id} className="bg-white rounded-xl border border-emerald-100 p-4 flex justify-between gap-3">
-            <div>
-              <button
-                type="button"
-                className="font-semibold text-emerald-800 underline-offset-2 hover:underline text-left"
-                onClick={() => openLedger(row)}
-              >
-                {row.employee_name}
-              </button>
-              <div className="text-sm text-gray-500">{formatDate(row.date)} · {sourceLabel(row)}</div>
-              <div className="text-xs text-gray-400 mt-0.5">{statusLabel(row.status)}</div>
-              {row.status === 'ACTIVE' && (
-                <div className="mt-1 flex gap-3">
-                  <button type="button" className="text-sm text-emerald-700" onClick={() => openLedger(row)}>
-                    Mark paid
-                  </button>
-                  <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
-                    Void
-                  </button>
-                </div>
-              )}
+        {groups.map((group) => (
+          <button
+            key={group.employeeId}
+            type="button"
+            onClick={() => openLedger(group)}
+            className="w-full bg-white rounded-xl border border-emerald-100 p-4 flex items-center justify-between gap-3 text-left active:bg-emerald-50/40"
+          >
+            <div className="min-w-0">
+              <div className="font-semibold text-emerald-800">{group.employeeName}</div>
+              {group.employeeCode ? (
+                <div className="text-sm text-gray-500 mt-0.5">{group.employeeCode}</div>
+              ) : null}
             </div>
-            <div className="font-semibold">{formatINR(row.amount)}</div>
-          </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="text-right">
+                <div className="text-[11px] text-gray-500">Outstanding</div>
+                <div className="font-semibold tabular-nums">{formatINR(group.outstanding.toFixed(2))}</div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-gray-400" />
+            </div>
+          </button>
         ))}
       </div>
-      {(listQuery.data?.results.length ?? 0) > 0 && (
+      {groups.length > 0 && (
         <div className="hidden lg:block bg-white rounded-xl border border-emerald-100 overflow-hidden">
           <table className="min-w-full text-sm">
             <thead className="bg-emerald-50 text-left text-gray-600">
               <tr>
                 <th className="px-4 py-3 font-medium">Employee</th>
-                <th className="px-4 py-3 font-medium">Date</th>
-                <th className="px-4 py-3 font-medium">Reason</th>
-                <th className="px-4 py-3 font-medium">Amount</th>
-                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Outstanding</th>
                 <th className="px-4 py-3 font-medium" />
               </tr>
             </thead>
             <tbody>
-              {listQuery.data?.results.map((row) => (
-                <tr key={row.id} className="border-t border-emerald-50">
-                  <td className="px-4 py-3 font-medium">
-                    <button
-                      type="button"
-                      className="text-emerald-800 underline-offset-2 hover:underline"
-                      onClick={() => openLedger(row)}
-                    >
-                      {row.employee_name}
-                    </button>
+              {groups.map((group) => (
+                <tr
+                  key={group.employeeId}
+                  className="border-t border-emerald-50 cursor-pointer hover:bg-emerald-50/40"
+                  onClick={() => openLedger(group)}
+                >
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-emerald-800">{group.employeeName}</div>
+                    {group.employeeCode ? (
+                      <div className="text-xs text-gray-400">{group.employeeCode}</div>
+                    ) : null}
                   </td>
-                  <td className="px-4 py-3">{formatDate(row.date)}</td>
-                  <td className="px-4 py-3">{sourceLabel(row)}</td>
-                  <td className="px-4 py-3 font-medium">{formatINR(row.amount)}</td>
-                  <td className="px-4 py-3">{statusLabel(row.status)}</td>
-                  <td className="px-4 py-3 text-right space-x-3">
-                    {row.status === 'ACTIVE' && (
-                      <>
-                        <button type="button" className="text-sm text-emerald-700" onClick={() => openLedger(row)}>
-                          Mark paid
-                        </button>
-                        <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
-                          Void
-                        </button>
-                      </>
-                    )}
+                  <td className="px-4 py-3 font-semibold tabular-nums">
+                    {formatINR(group.outstanding.toFixed(2))}
+                  </td>
+                  <td className="px-4 py-3 text-right text-gray-400">
+                    <ChevronRight className="inline h-4 w-4" />
                   </td>
                 </tr>
               ))}
@@ -181,16 +173,6 @@ export default function AdvanceList() {
           onClose={() => setLedgerEmp(null)}
         />
       )}
-      <ConfirmDialog
-        open={Boolean(voidRow)}
-        title="Delete Advance?"
-        message={voidRow ? `${formatINR(voidRow.amount)} advance for ${voidRow.employee_name} will be voided.` : ''}
-        confirmLabel="Void"
-        danger
-        loading={voidMutation.isPending}
-        onCancel={() => setVoidRow(null)}
-        onConfirm={() => voidRow && voidMutation.mutate(voidRow.id)}
-      />
     </div>
   );
 }

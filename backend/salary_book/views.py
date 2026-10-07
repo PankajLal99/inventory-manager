@@ -920,6 +920,23 @@ def advance_void(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
+def advance_unvoid(request, pk):
+    """Restore a voided advance to ACTIVE so it deducts from salary again."""
+    advance = get_object_or_404(SalaryAdvance, pk=pk)
+    if advance.status != SalaryAdvance.STATUS_VOID:
+        return _err('Only voided advances can be restored.')
+    try:
+        _assert_month_open(advance.employee, advance.date)
+    except ValidationError as exc:
+        return _err(str(exc.detail if hasattr(exc, 'detail') else exc))
+    advance.status = SalaryAdvance.STATUS_ACTIVE
+    advance.updated_by = request.user
+    advance.save(update_fields=['status', 'updated_by', 'updated_at'])
+    return Response(SalaryAdvanceSerializer(advance, context={'request': request}).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
 def advance_mark_paid(request, pk):
     """
     Mark an advance as paid (full or partial).
@@ -994,6 +1011,25 @@ def advance_mark_paid(request, pk):
         'paid_entry': SalaryAdvanceSerializer(paid_entry, context=ctx).data,
         'partial': True,
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def advance_mark_unpaid(request, pk):
+    """Restore a paid advance to ACTIVE so it deducts from salary again."""
+    advance = get_object_or_404(SalaryAdvance, pk=pk)
+    if advance.status != SalaryAdvance.STATUS_PAID:
+        return _err('Only paid advances can be marked unpaid.')
+    try:
+        _assert_month_open(advance.employee, advance.date)
+    except ValidationError as exc:
+        return _err(str(exc.detail if hasattr(exc, 'detail') else exc))
+    advance.status = SalaryAdvance.STATUS_ACTIVE
+    advance.updated_by = request.user
+    note = (request.data.get('remarks') or '').strip() or 'Marked unpaid in Salary Book'
+    advance.remarks = ((advance.remarks + '\n') if advance.remarks else '') + note
+    advance.save(update_fields=['status', 'updated_by', 'remarks', 'updated_at'])
+    return Response(SalaryAdvanceSerializer(advance, context={'request': request}).data)
 
 
 @api_view(['GET'])
