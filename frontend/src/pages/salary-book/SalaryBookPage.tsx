@@ -7,12 +7,14 @@ import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import { formatINR, monthLabel, statusLabel } from './utils';
+import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import type { SalaryRecord } from './types';
 
 export default function SalaryBookPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [ledgerEmp, setLedgerEmp] = useState<{ id: number; name: string } | null>(null);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'salaries', year, month],
@@ -31,7 +33,7 @@ export default function SalaryBookPage() {
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-tutorial="sal-list">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-bold">Salary Book</h1>
         <select
@@ -70,13 +72,25 @@ export default function SalaryBookPage() {
           <div className="space-y-3 lg:hidden">
             {data.results.map((row) => (
               <div key={row.id} className="bg-white rounded-xl border border-emerald-100 p-4 space-y-1">
-                <div className="font-semibold text-gray-900">{row.employee_name}</div>
+                <button
+                  type="button"
+                  className="font-semibold text-emerald-800 underline-offset-2 hover:underline text-left"
+                  onClick={() => setLedgerEmp({ id: row.employee, name: row.employee_name })}
+                >
+                  {row.employee_name}
+                </button>
                 <Mini label="Salary" value={formatINR(row.gross_salary)} />
                 <Mini label="Present" value={row.present_days} />
                 <Mini label="Paid Leave" value={row.paid_leave_days} />
                 <Mini label="Unpaid Leave" value={row.unpaid_leave_days} />
                 <Mini label="Leave Deduction" value={formatINR(row.leave_deduction)} />
-                <Mini label="Advance" value={formatINR(row.total_advances)} />
+                <button
+                  type="button"
+                  className="w-full text-left"
+                  onClick={() => setLedgerEmp({ id: row.employee, name: row.employee_name })}
+                >
+                  <Mini label="Advance" value={formatINR(row.total_advances)} />
+                </button>
                 <div className="flex justify-between pt-2 font-semibold">
                   <span>NET PAYABLE</span>
                   <span>{formatINR(row.net_salary)}</span>
@@ -110,12 +124,29 @@ export default function SalaryBookPage() {
                 <tbody>
                   {data.results.map((row) => (
                     <tr key={row.id} className="border-t border-emerald-50">
-                      <td className="px-4 py-3 font-medium">{row.employee_name}</td>
+                      <td className="px-4 py-3 font-medium">
+                        <button
+                          type="button"
+                          className="text-emerald-800 underline-offset-2 hover:underline"
+                          onClick={() => setLedgerEmp({ id: row.employee, name: row.employee_name })}
+                        >
+                          {row.employee_name}
+                        </button>
+                      </td>
                       <td className="px-4 py-3">{formatINR(row.gross_salary)}</td>
                       <td className="px-4 py-3">{row.present_days}</td>
                       <td className="px-4 py-3">{row.paid_leave_days}</td>
                       <td className="px-4 py-3">{formatINR(row.leave_deduction)}</td>
-                      <td className="px-4 py-3">{formatINR(row.total_advances)}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          className="text-emerald-800 underline-offset-2 hover:underline font-medium"
+                          onClick={() => setLedgerEmp({ id: row.employee, name: row.employee_name })}
+                          title="View advance ledger"
+                        >
+                          {formatINR(row.total_advances)}
+                        </button>
+                      </td>
                       <td className="px-4 py-3 font-semibold">{formatINR(row.net_salary)}</td>
                       <td className="px-4 py-3">{statusLabel(row.payment_status)}</td>
                       <td className="px-4 py-3">
@@ -128,6 +159,15 @@ export default function SalaryBookPage() {
                 </tbody>
               </table>
             </div>
+          )}
+          {ledgerEmp && (
+            <EmployeeAdvanceLedger
+              employeeId={ledgerEmp.id}
+              employeeName={ledgerEmp.name}
+              year={year}
+              month={month}
+              onClose={() => setLedgerEmp(null)}
+            />
           )}
         </>
       )}

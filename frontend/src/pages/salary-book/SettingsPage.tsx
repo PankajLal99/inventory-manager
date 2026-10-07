@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Lightbulb } from 'lucide-react';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
@@ -11,6 +12,8 @@ import { apiError, getCurrentGps, gpsUserMessage } from './utils';
 import type { SalaryBookSettings } from './types';
 import { auth } from '../../lib/auth';
 import ConfirmDialog from './components/ConfirmDialog';
+import { useSalaryBookTutorialOptional } from './tutorial/SalaryBookTutorial';
+import { hasSeenSalaryBookTutorial } from './tutorial/storage';
 
 function isAdminUser(user: { is_superuser?: boolean; groups?: string[] } | null) {
   if (!user) return false;
@@ -38,6 +41,7 @@ function formatClockTime(d: Date) {
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
+  const tutorial = useSalaryBookTutorialOptional();
   const [user, setUser] = useState(auth.getUser('salary_book'));
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'settings'],
@@ -47,10 +51,27 @@ export default function SettingsPage() {
   const [locating, setLocating] = useState(false);
   const [serverNow, setServerNow] = useState(() => new Date());
   const [deltaConfirmOpen, setDeltaConfirmOpen] = useState(false);
+  const [tutorialSeen, setTutorialSeen] = useState(() =>
+    hasSeenSalaryBookTutorial(auth.getUser('salary_book')?.id)
+  );
 
   useEffect(() => {
     auth.loadUser('salary_book').then(setUser).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    setTutorialSeen(hasSeenSalaryBookTutorial(user?.id));
+  }, [user?.id]);
+
+  useEffect(() => {
+    const sync = () => setTutorialSeen(hasSeenSalaryBookTutorial(user?.id));
+    window.addEventListener('sb-tutorial-finished', sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener('sb-tutorial-finished', sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (data) setForm(data);
@@ -397,6 +418,38 @@ export default function SettingsPage() {
       <Button type="submit" className="w-full lg:w-auto min-h-12 px-8 bg-emerald-600 hover:bg-emerald-700" loading={mutation.isPending}>
         Save Settings
       </Button>
+
+      <div
+        data-tutorial="settings-tutorial"
+        className="bg-white rounded-xl border border-emerald-100 p-4 space-y-3 lg:max-w-xl"
+      >
+        <div className="flex items-start gap-3">
+          <span className="h-9 w-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+            <Lightbulb className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="font-semibold text-gray-900">Salary Book tutorial</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              {tutorialSeen
+                ? 'You have completed or skipped the guided tour for this account. Replay it anytime for a refresh on attendance, advances, and salary.'
+                : 'A guided tour walks through attendance, advances, salary deductions, and every main screen. It starts automatically the first time this account opens Salary Book.'}
+            </p>
+          </div>
+        </div>
+        {tutorial && (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full lg:w-auto min-h-11"
+            onClick={() => {
+              tutorial.start();
+              setTutorialSeen(false);
+            }}
+          >
+            {tutorialSeen ? 'Replay tutorial' : 'Start tutorial'}
+          </Button>
+        )}
+      </div>
     </form>
     <ConfirmDialog
       open={deltaConfirmOpen}

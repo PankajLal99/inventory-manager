@@ -8,6 +8,7 @@ import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated
 import { useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
 import ConfirmDialog from './components/ConfirmDialog';
+import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import { toast } from '../../lib/toast';
 
 type Tab = 'profile' | 'attendance' | 'leaves' | 'advances' | 'salaries';
@@ -127,7 +128,9 @@ export default function EmployeeDetails() {
       {tab === 'profile' && <EmployeeRules employeeId={empId} />}
       {tab === 'attendance' && <AttendanceHistory employeeId={empId} />}
       {tab === 'leaves' && <LeaveHistory employeeId={empId} />}
-      {tab === 'advances' && <AdvanceHistory employeeId={empId} />}
+      {tab === 'advances' && (
+        <AdvanceHistory employeeId={empId} employeeName={data.name} />
+      )}
       {tab === 'salaries' && <SalaryHistory employeeId={empId} />}
     </div>
   );
@@ -221,54 +224,53 @@ function LeaveHistory({ employeeId }: { employeeId: number }) {
   );
 }
 
-function AdvanceHistory({ employeeId }: { employeeId: number }) {
-  const queryClient = useQueryClient();
+function AdvanceHistory({ employeeId, employeeName }: { employeeId: number; employeeName: string }) {
+  const [open, setOpen] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['salary-book', 'emp-adv', employeeId],
     queryFn: async () => (await salaryBookApi.employees.advances(employeeId)).data as Paginated<SalaryAdvance>,
   });
-  const paidMutation = useMutation({
-    mutationFn: async (id: number) => salaryBookApi.advances.markPaid(id),
-    onSuccess: async () => {
-      toast('Advance marked as paid', 'success');
-      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
-    },
-    onError: (err) => toast(apiError(err, 'Unable to mark advance as paid.'), 'error'),
-  });
   if (isLoading) return <LoadingState message="Loading advances..." />;
   if (!data?.results.length) return <p className="text-sm text-gray-500">No salary advances recorded.</p>;
   return (
-    <div className="space-y-2">
-      {data.results.map((row) => (
-        <div key={row.id} className="bg-white rounded-xl border border-gray-100 p-3 flex justify-between gap-3">
-          <div>
-            <div className="font-medium">{formatDate(row.date)}</div>
-            <div className="text-sm text-gray-600">
-              {row.source === 'MTSHOP' ? 'MT Shop' : ''}
-              {row.source === 'MTSHOP' && row.reason ? ' · ' : ''}
-              {row.reason || row.status}
+    <div className="space-y-3">
+      <button
+        type="button"
+        className="w-full min-h-11 rounded-xl border border-emerald-200 text-emerald-800 font-medium"
+        onClick={() => setOpen(true)}
+      >
+        Open advance ledger
+      </button>
+      <div className="space-y-2">
+        {data.results.slice(0, 8).map((row) => (
+          <div key={row.id} className="bg-white rounded-xl border border-gray-100 p-3 flex justify-between gap-3">
+            <div>
+              <div className="font-medium">{formatDate(row.date)}</div>
+              <div className="text-sm text-gray-600">
+                {row.source === 'MTSHOP' ? 'MT Shop' : ''}
+                {row.source === 'MTSHOP' && row.reason ? ' · ' : ''}
+                {row.reason || row.status}
+              </div>
+              <div className="text-xs text-gray-400 mt-0.5">
+                {row.status === 'PAID' ? 'Paid' : row.status === 'VOID' ? 'Voided' : 'Active'}
+              </div>
             </div>
-            <div className="text-xs text-gray-400 mt-0.5">
-              {row.status === 'PAID' ? 'Paid' : row.status === 'VOID' ? 'Voided' : 'Active'}
-            </div>
-            {row.status === 'ACTIVE' && (
-              <button
-                type="button"
-                className="mt-1 text-sm text-emerald-700"
-                onClick={() => paidMutation.mutate(row.id)}
-              >
-                Mark paid
-              </button>
-            )}
+            <div className="font-semibold">{formatINR(row.amount)}</div>
           </div>
-          <div className="font-semibold">{formatINR(row.amount)}</div>
-        </div>
-      ))}
-      {data.total_active && (
-        <div className="flex justify-between px-1 pt-2 font-semibold">
-          <span>Total active</span>
-          <span>{formatINR(data.total_active)}</span>
-        </div>
+        ))}
+        {data.total_active && (
+          <div className="flex justify-between px-1 pt-2 font-semibold">
+            <span>Total active</span>
+            <span>{formatINR(data.total_active)}</span>
+          </div>
+        )}
+      </div>
+      {open && (
+        <EmployeeAdvanceLedger
+          employeeId={employeeId}
+          employeeName={employeeName}
+          onClose={() => setOpen(false)}
+        />
       )}
     </div>
   );

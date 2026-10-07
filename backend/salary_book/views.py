@@ -453,12 +453,20 @@ def employee_leave_history(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 def employee_advance_history(request, pk):
+    """Ledger-style advance history for one employee (optional year/month filter)."""
     employee = get_object_or_404(Employee, pk=pk)
-    qs = SalaryAdvance.objects.filter(employee=employee)
+    qs = SalaryAdvance.objects.filter(employee=employee).select_related('employee')
     qs = _employee_history_month_filter(qs, request, 'date')
-    total = qs.filter(status=SalaryAdvance.STATUS_ACTIVE).aggregate(total=Sum('amount'))['total'] or 0
+    # Ledger reads oldest-first so balances read top-to-bottom.
+    qs = qs.order_by('date', 'id')
+    total_active = qs.filter(status=SalaryAdvance.STATUS_ACTIVE).aggregate(total=Sum('amount'))['total'] or 0
+    total_paid = qs.filter(status=SalaryAdvance.STATUS_PAID).aggregate(total=Sum('amount'))['total'] or 0
     page = _paginate(qs, request, SalaryAdvanceSerializer)
-    page.data['total_active'] = str(total)
+    page.data['employee_id'] = employee.id
+    page.data['employee_name'] = employee.name
+    page.data['employee_code'] = employee.employee_id
+    page.data['total_active'] = str(total_active)
+    page.data['total_paid'] = str(total_paid)
     return page
 
 
@@ -913,7 +921,13 @@ def advance_void(request, pk):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 def advance_mark_paid(request, pk):
-    """Mark an advance as paid (e.g. employee settled an MT Shop purchase separately)."""
+    """
+    Mark an advance as paid (full or partial).
+
+    Optional body field `amount`:
+    - omitted / equal to outstanding → mark whole advance PAID
+    - less than outstanding → create a PAID slice and leave remaining ACTIVE
+    """
     advance = get_object_or_404(SalaryAdvance, pk=pk)
     if advance.status == SalaryAdvance.STATUS_PAID:
         return _err('This advance is already marked paid.')
@@ -923,15 +937,63 @@ def advance_mark_paid(request, pk):
         _assert_month_open(advance.employee, advance.date)
     except ValidationError as exc:
         return _err(str(exc.detail if hasattr(exc, 'detail') else exc))
-    advance.status = SalaryAdvance.STATUS_PAID
-    advance.updated_by = request.user
+
+    raw_amount = request.data.get('amount', None)
+    try:
+        if raw_amount is None or raw_amount == '':
+            pay_amount = advance.amount
+        else:
+            pay_amount = Decimal(str(raw_amount))
+    except Exception:
+        return _err('Enter a valid paid amount.')
+    if pay_amount <= 0:
+        return _err('Paid amount must be greater than zero.')
+    if pay_amount > advance.amount:
+        return _err('Paid amount cannot exceed the outstanding advance.')
+
     note = (request.data.get('remarks') or '').strip()
-    if note:
-        advance.remarks = ((advance.remarks + '\n') if advance.remarks else '') + note
-    elif not advance.remarks:
-        advance.remarks = 'Marked paid in Salary Book'
-    advance.save(update_fields=['status', 'updated_by', 'remarks', 'updated_at'])
-    return Response(SalaryAdvanceSerializer(advance, context={'request': request}).data)
+    ctx = {'request': request}
+
+    if pay_amount == advance.amount:
+        advance.status = SalaryAdvance.STATUS_PAID
+        advance.updated_by = request.user
+        if note:
+            advance.remarks = ((advance.remarks + '\n') if advance.remarks else '') + note
+        elif not advance.remarks:
+            advance.remarks = 'Marked paid in Salary Book'
+        advance.save(update_fields=['status', 'updated_by', 'remarks', 'updated_at'])
+        return Response({
+            'advance': SalaryAdvanceSerializer(advance, context=ctx).data,
+            'paid_entry': SalaryAdvanceSerializer(advance, context=ctx).data,
+            'partial': False,
+        })
+
+    # Partial: record a PAID slice; shrink the ACTIVE outstanding.
+    paid_entry = SalaryAdvance.objects.create(
+        employee=advance.employee,
+        date=advance.date,
+        amount=pay_amount,
+        reason=advance.reason or 'Partial advance payment',
+        remarks=(
+            note
+            or f'Partial payment of ₹{pay_amount} against advance #{advance.id}'
+        ),
+        status=SalaryAdvance.STATUS_PAID,
+        source=advance.source,
+        source_invoice_number=advance.source_invoice_number,
+        created_by=request.user,
+        updated_by=request.user,
+    )
+    advance.amount = advance.amount - pay_amount
+    advance.updated_by = request.user
+    partial_note = f'Partial paid ₹{pay_amount} (entry #{paid_entry.id})'
+    advance.remarks = ((advance.remarks + '\n') if advance.remarks else '') + partial_note
+    advance.save(update_fields=['amount', 'updated_by', 'remarks', 'updated_at'])
+    return Response({
+        'advance': SalaryAdvanceSerializer(advance, context=ctx).data,
+        'paid_entry': SalaryAdvanceSerializer(paid_entry, context=ctx).data,
+        'partial': True,
+    })
 
 
 @api_view(['GET'])

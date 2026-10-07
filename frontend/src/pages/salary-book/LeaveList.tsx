@@ -58,7 +58,11 @@ export default function LeaveList() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Leaves</h1>
-        <Button className="min-h-11 bg-emerald-600 hover:bg-emerald-700" onClick={() => setOpen(true)}>
+        <Button
+          data-tutorial="leave-add"
+          className="min-h-11 bg-emerald-600 hover:bg-emerald-700"
+          onClick={() => setOpen(true)}
+        >
           Add Leave
         </Button>
       </div>

@@ -116,7 +116,7 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-tutorial="reports-page">
       <h1 className="text-xl lg:text-2xl font-bold">Reports</h1>
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-2">
         {KINDS.map((k) => (

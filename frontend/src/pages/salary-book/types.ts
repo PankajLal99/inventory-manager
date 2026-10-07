@@ -217,6 +217,10 @@ export interface Paginated<T> {
   page_size: number;
   results: T[];
   total_active?: string;
+  total_paid?: string;
+  employee_id?: number;
+  employee_name?: string;
+  employee_code?: string;
 }
 
 export interface CalendarDayCell {

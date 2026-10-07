@@ -26,6 +26,7 @@ export default function EmployeeList() {
         <h1 className="text-xl lg:text-2xl font-bold text-gray-900">Employees</h1>
         <Link
           to="/salary-book/employees/new"
+          data-tutorial="emp-add"
           className="inline-flex items-center justify-center h-11 w-11 lg:w-auto lg:px-4 lg:gap-2 rounded-full lg:rounded-xl bg-emerald-600 text-white"
           aria-label="Add employee"
         >

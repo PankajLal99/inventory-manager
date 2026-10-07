@@ -13,6 +13,7 @@ import { toast } from '../../lib/toast';
 import { apiError, formatDate, formatINR, todayISO } from './utils';
 import ConfirmDialog from './components/ConfirmDialog';
 import SalaryBookSheet from './components/SalaryBookSheet';
+import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import type { Employee, Paginated, SalaryAdvance } from './types';
 
 function statusLabel(status: string) {
@@ -34,7 +35,7 @@ export default function AdvanceList() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [voidRow, setVoidRow] = useState<SalaryAdvance | null>(null);
-  const [paidRow, setPaidRow] = useState<SalaryAdvance | null>(null);
+  const [ledgerEmp, setLedgerEmp] = useState<{ id: number; name: string } | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['salary-book', 'advances'],
@@ -66,26 +67,23 @@ export default function AdvanceList() {
     onError: (err) => toast(apiError(err, 'Unable to void advance.'), 'error'),
   });
 
-  const paidMutation = useMutation({
-    mutationFn: async (id: number) => salaryBookApi.advances.markPaid(id),
-    onSuccess: async () => {
-      toast('Advance marked as paid', 'success');
-      setPaidRow(null);
-      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
-    },
-    onError: (err) => toast(apiError(err, 'Unable to mark advance as paid.'), 'error'),
-  });
+  const openLedger = (row: SalaryAdvance) =>
+    setLedgerEmp({ id: row.employee, name: row.employee_name });
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Advances</h1>
-        <Button className="min-h-11 bg-emerald-600 hover:bg-emerald-700" onClick={() => setOpen(true)}>
+        <Button
+          data-tutorial="adv-add"
+          className="min-h-11 bg-emerald-600 hover:bg-emerald-700"
+          onClick={() => setOpen(true)}
+        >
           Add Advance
         </Button>
       </div>
       <p className="text-sm text-gray-600">
-        MT Shop purchases for linked employees appear here automatically and reduce net salary until marked paid or voided.
+        Tap an employee name to open their advance ledger. MT Shop purchases deduct from salary until marked paid (full or partial).
       </p>
       {listQuery.isLoading && <LoadingState message="Loading advances..." />}
       {listQuery.isError && <ErrorState onRetry={() => listQuery.refetch()} />}
@@ -96,12 +94,18 @@ export default function AdvanceList() {
         {listQuery.data?.results.map((row) => (
           <div key={row.id} className="bg-white rounded-xl border border-emerald-100 p-4 flex justify-between gap-3">
             <div>
-              <div className="font-semibold">{row.employee_name}</div>
+              <button
+                type="button"
+                className="font-semibold text-emerald-800 underline-offset-2 hover:underline text-left"
+                onClick={() => openLedger(row)}
+              >
+                {row.employee_name}
+              </button>
               <div className="text-sm text-gray-500">{formatDate(row.date)} · {sourceLabel(row)}</div>
               <div className="text-xs text-gray-400 mt-0.5">{statusLabel(row.status)}</div>
               {row.status === 'ACTIVE' && (
                 <div className="mt-1 flex gap-3">
-                  <button type="button" className="text-sm text-emerald-700" onClick={() => setPaidRow(row)}>
+                  <button type="button" className="text-sm text-emerald-700" onClick={() => openLedger(row)}>
                     Mark paid
                   </button>
                   <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
@@ -130,7 +134,15 @@ export default function AdvanceList() {
             <tbody>
               {listQuery.data?.results.map((row) => (
                 <tr key={row.id} className="border-t border-emerald-50">
-                  <td className="px-4 py-3 font-medium">{row.employee_name}</td>
+                  <td className="px-4 py-3 font-medium">
+                    <button
+                      type="button"
+                      className="text-emerald-800 underline-offset-2 hover:underline"
+                      onClick={() => openLedger(row)}
+                    >
+                      {row.employee_name}
+                    </button>
+                  </td>
                   <td className="px-4 py-3">{formatDate(row.date)}</td>
                   <td className="px-4 py-3">{sourceLabel(row)}</td>
                   <td className="px-4 py-3 font-medium">{formatINR(row.amount)}</td>
@@ -138,7 +150,7 @@ export default function AdvanceList() {
                   <td className="px-4 py-3 text-right space-x-3">
                     {row.status === 'ACTIVE' && (
                       <>
-                        <button type="button" className="text-sm text-emerald-700" onClick={() => setPaidRow(row)}>
+                        <button type="button" className="text-sm text-emerald-700" onClick={() => openLedger(row)}>
                           Mark paid
                         </button>
                         <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
@@ -162,6 +174,13 @@ export default function AdvanceList() {
           onSave={(payload) => createMutation.mutate(payload)}
         />
       )}
+      {ledgerEmp && (
+        <EmployeeAdvanceLedger
+          employeeId={ledgerEmp.id}
+          employeeName={ledgerEmp.name}
+          onClose={() => setLedgerEmp(null)}
+        />
+      )}
       <ConfirmDialog
         open={Boolean(voidRow)}
         title="Delete Advance?"
@@ -171,19 +190,6 @@ export default function AdvanceList() {
         loading={voidMutation.isPending}
         onCancel={() => setVoidRow(null)}
         onConfirm={() => voidRow && voidMutation.mutate(voidRow.id)}
-      />
-      <ConfirmDialog
-        open={Boolean(paidRow)}
-        title="Mark advance as paid?"
-        message={
-          paidRow
-            ? `${formatINR(paidRow.amount)} for ${paidRow.employee_name} will no longer be deducted from salary (e.g. employee already paid the MT Shop bill).`
-            : ''
-        }
-        confirmLabel="Mark paid"
-        loading={paidMutation.isPending}
-        onCancel={() => setPaidRow(null)}
-        onConfirm={() => paidRow && paidMutation.mutate(paidRow.id)}
       />
     </div>
   );

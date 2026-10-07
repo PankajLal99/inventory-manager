@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { auth } from '../../lib/auth';
 import { applySalaryBookPwa, initials } from '../../lib/salaryBookPwa';
 import SalaryBookSplash from '../../pages/salary-book/components/SalaryBookSplash';
+import { SalaryBookTutorialProvider } from '../../pages/salary-book/tutorial/SalaryBookTutorial';
+import { isSalaryBookTutorialRunning } from '../../pages/salary-book/tutorial/activeFlag';
 import {
   Home,
   Users,
@@ -25,21 +27,22 @@ const PRIMARY: Array<{
   label: string;
   icon: typeof Home;
   exact?: boolean;
+  tutorial?: string;
 }> = [
-  { path: '/salary-book', label: 'Home', icon: Home, exact: true },
-  { path: '/salary-book/employees', label: 'Employees', icon: Users },
-  { path: '/salary-book/attendance', label: 'Attendance', icon: ClipboardCheck },
-  { path: '/salary-book/calendar', label: 'Calendar', icon: CalendarDays },
+  { path: '/salary-book', label: 'Home', icon: Home, exact: true, tutorial: 'nav-home' },
+  { path: '/salary-book/employees', label: 'Employees', icon: Users, tutorial: 'nav-employees' },
+  { path: '/salary-book/attendance', label: 'Attendance', icon: ClipboardCheck, tutorial: 'nav-attendance' },
+  { path: '/salary-book/calendar', label: 'Calendar', icon: CalendarDays, tutorial: 'nav-calendar' },
 ];
 
 const MORE = [
-  { path: '/salary-book/leaves', label: 'Leaves', icon: Umbrella },
-  { path: '/salary-book/advances', label: 'Advances', icon: Wallet },
-  { path: '/salary-book/salaries', label: 'Salary Book', icon: BookOpen },
-  { path: '/salary-book/reports', label: 'Reports', icon: BarChart3 },
-  { path: '/salary-book/devices', label: 'Devices', icon: Fingerprint },
-  { path: '/salary-book/settings', label: 'Settings', icon: Settings },
-  { path: '/salary-book/profile', label: 'Profile', icon: UserRound },
+  { path: '/salary-book/leaves', label: 'Leaves', icon: Umbrella, tutorial: 'nav-leaves' },
+  { path: '/salary-book/advances', label: 'Advances', icon: Wallet, tutorial: 'nav-advances' },
+  { path: '/salary-book/salaries', label: 'Salary Book', icon: BookOpen, tutorial: 'nav-salaries' },
+  { path: '/salary-book/reports', label: 'Reports', icon: BarChart3, tutorial: 'nav-reports' },
+  { path: '/salary-book/devices', label: 'Devices', icon: Fingerprint, tutorial: 'nav-devices' },
+  { path: '/salary-book/settings', label: 'Settings', icon: Settings, tutorial: 'nav-settings' },
+  { path: '/salary-book/profile', label: 'Profile', icon: UserRound, tutorial: 'nav-profile' },
 ];
 
 const SIDEBAR = [...PRIMARY, ...MORE];
@@ -56,6 +59,7 @@ function NavLink({
   exact,
   onClick,
   sidebar,
+  tutorial,
 }: {
   path: string;
   label: string;
@@ -63,6 +67,7 @@ function NavLink({
   exact?: boolean;
   onClick?: () => void;
   sidebar?: boolean;
+  tutorial?: string;
 }) {
   const location = useLocation();
   const active = isActive(location.pathname, path, exact);
@@ -71,6 +76,7 @@ function NavLink({
       <Link
         to={path}
         onClick={onClick}
+        data-tutorial={tutorial}
         className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium min-h-11 ${
           active ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-emerald-50'
         }`}
@@ -84,6 +90,7 @@ function NavLink({
     <Link
       to={path}
       onClick={onClick}
+      data-tutorial={tutorial}
       className={`flex flex-col items-center justify-center py-2 min-h-14 text-xs font-medium ${
         active ? 'text-emerald-700' : 'text-gray-500'
       }`}
@@ -156,6 +163,8 @@ export default function SalaryBookLayout() {
   }, [navigate]);
 
   useEffect(() => {
+    // Keep More open when the guided tour needs it across route settles.
+    if (isSalaryBookTutorialRunning()) return;
     setMoreOpen(false);
   }, [location.pathname]);
 
@@ -171,6 +180,7 @@ export default function SalaryBookLayout() {
   }
 
   return (
+    <SalaryBookTutorialProvider userId={user?.id} moreOpen={moreOpen} setMoreOpen={setMoreOpen}>
     <div className="min-h-[100dvh] bg-emerald-50/80 flex">
       {routeLoading && (
         <div className="fixed top-0 left-0 right-0 z-50 h-0.5 bg-emerald-100">
@@ -255,6 +265,7 @@ export default function SalaryBookLayout() {
           ))}
           <button
             type="button"
+            data-tutorial="nav-more"
             onClick={() => setMoreOpen(true)}
             className={`flex flex-col items-center justify-center py-2 min-h-14 text-xs font-medium ${
               moreActive ? 'text-emerald-700' : 'text-gray-500'
@@ -266,5 +277,6 @@ export default function SalaryBookLayout() {
         </div>
       </nav>
     </div>
+    </SalaryBookTutorialProvider>
   );
 }

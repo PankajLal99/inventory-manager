@@ -290,7 +290,7 @@ export default function AttendancePage() {
   const ageSec = gps ? Math.round(gpsAgeMs(gps, clock) / 1000) : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-tutorial="att-page">
       <div>
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-xl font-bold text-gray-900">Attendance</h1>

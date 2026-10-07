@@ -106,14 +106,16 @@ export default function SalaryBookDashboard() {
         ))}
       </div>
 
-      <LiveAttendanceList
-        filter={filter}
-        onFilter={setFilter}
-        items={liveItems}
-        updatedAt={dataUpdatedAt}
-        fetching={isFetching}
-        onRefresh={() => refetch()}
-      />
+      <div data-tutorial="dash-live">
+        <LiveAttendanceList
+          filter={filter}
+          onFilter={setFilter}
+          items={liveItems}
+          updatedAt={dataUpdatedAt}
+          fetching={isFetching}
+          onRefresh={() => refetch()}
+        />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-4">
         <div className="bg-white rounded-xl border border-emerald-100 p-4 lg:p-6 space-y-2">
@@ -123,7 +125,7 @@ export default function SalaryBookDashboard() {
           <Row label="Advances" value={formatINR(month.advances)} />
           <Row label="Salary Pending" value={formatINR(month.salary_pending)} />
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
+        <div data-tutorial="dash-actions" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
           <Action to="/salary-book/attendance" icon={ClipboardCheck} label="Mark Attendance" />
           <Action to="/salary-book/calendar" icon={CalendarDays} label="Attendance Calendar" />
           <Action to="/salary-book/employees/new" icon={UserPlus} label="Add Employee" />

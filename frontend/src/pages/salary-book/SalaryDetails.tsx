@@ -11,6 +11,7 @@ import { toast } from '../../lib/toast';
 import { apiError, formatDate, formatINR, monthLabel, statusLabel, todayISO } from './utils';
 import ConfirmDialog from './components/ConfirmDialog';
 import SalaryBookSheet from './components/SalaryBookSheet';
+import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
 import type { SalaryRecord } from './types';
 
 export default function SalaryDetails() {
@@ -20,6 +21,7 @@ export default function SalaryDetails() {
   const [payOpen, setPayOpen] = useState(false);
   const [confirm, setConfirm] = useState<'finalize' | 'reopen' | null>(null);
   const [voidPayment, setVoidPayment] = useState<number | null>(null);
+  const [advLedgerOpen, setAdvLedgerOpen] = useState(false);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'salary', recordId],
@@ -93,7 +95,19 @@ export default function SalaryDetails() {
         <Row label="Leave Deduction" value={formatINR(data.leave_deduction)} />
         <Row label="Other Deduction" value={formatINR(data.other_deductions)} />
         <Row label="Allowances" value={formatINR(data.allowances)} />
-        <Row label="Advance" value={formatINR(data.total_advances)} />
+        <button
+          type="button"
+          className="w-full text-left"
+          onClick={() => setAdvLedgerOpen(true)}
+          title="View advance ledger"
+        >
+          <div className="flex justify-between">
+            <span className="text-emerald-700">Advance</span>
+            <span className="font-medium text-emerald-800 underline-offset-2 hover:underline">
+              {formatINR(data.total_advances)}
+            </span>
+          </div>
+        </button>
         <div className="flex justify-between font-semibold pt-2 border-t">
           <span>Net Payable</span>
           <span>{formatINR(data.net_salary)}</span>
@@ -180,6 +194,15 @@ export default function SalaryDetails() {
         onCancel={() => setVoidPayment(null)}
         onConfirm={() => voidPayment && voidPay.mutate(voidPayment)}
       />
+      {advLedgerOpen && (
+        <EmployeeAdvanceLedger
+          employeeId={data.employee}
+          employeeName={data.employee_name}
+          year={data.year}
+          month={data.month}
+          onClose={() => setAdvLedgerOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -121,16 +121,16 @@ export default function CalendarPage() {
     '18:00';
 
   return (
-    <div className="space-y-4 lg:space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
+    <div className="space-y-3 sm:space-y-4 lg:space-y-6" data-tutorial="cal-page">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 sm:gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 truncate">
             {isEmployee ? `${selectedEmployee.name}'s Calendar` : 'Employee Attendance'}
           </h1>
-          <p className="text-sm lg:text-base text-gray-500 mt-1">
+          <p className="text-xs sm:text-sm lg:text-base text-gray-500 mt-1">
             {isEmployee
-              ? 'Personal month view with attendance summary. Tap an unmarked day to add in/out times.'
-              : 'Track daily attendance, leaves and working hours. Tap an unmarked day to add in/out times.'}
+              ? 'Tap a day for details. Unmarked days can get in/out times.'
+              : 'Swipe days per employee, or open one for the month grid.'}
           </p>
         </div>
         <MonthNav year={year} month={month} onChange={setMonth} />
@@ -147,7 +147,7 @@ export default function CalendarPage() {
           All employees
         </button>
         <select
-          className="min-h-11 rounded-xl border border-gray-300 bg-white px-3"
+          className="min-h-11 w-full sm:w-auto sm:min-w-[14rem] rounded-xl border border-gray-300 bg-white px-3"
           value={employeeId || ''}
           onChange={(e) => setEmployee(e.target.value)}
         >
