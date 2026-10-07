@@ -223,7 +223,7 @@ export default function SalaryBookLayout() {
         </header>
 
         <main className="flex-1 w-full pb-24 lg:pb-8">
-          <div className="w-full max-w-lg mx-auto lg:max-w-7xl px-3 py-4 lg:px-8 lg:py-6">
+          <div className="w-full max-w-lg mx-auto lg:max-w-none px-3 py-4 lg:px-6 xl:px-8 lg:py-6">
             <Outlet />
           </div>
         </main>

@@ -63,6 +63,7 @@ from .services.salary_calculator import (
     month_range,
     refresh_payment_status,
 )
+from .services.schedule_utils import combine_local, minutes_early_at, minutes_late_at
 
 
 def _paginate(queryset, request, serializer_class):
@@ -97,6 +98,36 @@ def _parse_date(value, field='date'):
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         raise ValidationError({field: 'Enter a valid date (YYYY-MM-DD).'})
+
+
+def _parse_attendance_datetime(value, att_date, field='check_in_time'):
+    """Parse HH:MM / HH:MM:SS / ISO datetime into an aware datetime on att_date."""
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        if timezone.is_naive(dt):
+            return timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
+
+    raw = str(value).strip()
+    if 'T' in raw or (len(raw) > 10 and ' ' in raw):
+        try:
+            parsed = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            if timezone.is_naive(parsed):
+                parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+            return parsed
+        except ValueError:
+            pass
+
+    for fmt, size in (('%H:%M:%S', 8), ('%H:%M', 5)):
+        try:
+            clock = datetime.strptime(raw[:size], fmt).time()
+            return combine_local(att_date, clock)
+        except ValueError:
+            continue
+
+    raise ValidationError({field: 'Enter a valid time (HH:MM).'})
 
 
 def _captured_at(data, key='location_captured_at'):
@@ -250,7 +281,7 @@ def settings_view(request):
 @parser_classes([MultiPartParser, FormParser, JSONParser])
 def employee_list_create(request):
     if request.method == 'GET':
-        qs = Employee.objects.all()
+        qs = Employee.objects.select_related('mtshop_customer').all()
         status_filter = request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter.upper())
@@ -276,13 +307,16 @@ def employee_list_create(request):
     )
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 @parser_classes([MultiPartParser, FormParser, JSONParser])
 def employee_detail(request, pk):
-    employee = get_object_or_404(Employee, pk=pk)
+    employee = get_object_or_404(Employee.objects.select_related('mtshop_customer'), pk=pk)
     if request.method == 'GET':
         return Response(EmployeeSerializer(employee, context={'request': request}).data)
+
+    if request.method == 'DELETE':
+        return _delete_salary_book_employee(employee)
 
     if 'monthly_salary' in request.data:
         try:
@@ -307,6 +341,35 @@ def employee_detail(request, pk):
 
         sync_employee_name_to_devices(employee.employee_id, employee.name)
     return Response(EmployeeSerializer(employee, context={'request': request}).data)
+
+
+def _delete_salary_book_employee(employee: Employee):
+    """Remove an employee and their salary-book history only (not main-app users)."""
+    from backend.attendance.models import DeviceUserMapping
+    from backend.attendance.services.commands import queue_delete_user
+
+    employee_code = employee.employee_id
+    with transaction.atomic():
+        mappings = list(
+            DeviceUserMapping.objects.select_related('device').filter(employee_id=employee_code)
+        )
+        for mapping in mappings:
+            if mapping.device.is_accepted and mapping.is_active:
+                queue_delete_user(
+                    mapping.device,
+                    mapping.device_user_id,
+                    employee_id=mapping.employee_id,
+                )
+            mapping.delete()
+
+        SalaryPayment.objects.filter(employee=employee).delete()
+        SalaryRecord.objects.filter(employee=employee).delete()
+        SalaryAdvance.objects.filter(employee=employee).delete()
+        Attendance.objects.filter(employee=employee).delete()
+        LeaveRecord.objects.filter(employee=employee).delete()
+        employee.delete()
+
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(['GET', 'POST'])
@@ -441,9 +504,34 @@ def attendance_list_create(request):
     if att_status not in dict(Attendance.STATUS_CHOICES):
         return _err('Invalid attendance status.')
 
+    manual_in_raw = data.get('check_in_time')
+    manual_out_raw = data.get('check_out_time')
+    timed_manual = bool(manual_in_raw or manual_out_raw)
+
     try:
         _assert_month_open(employee, att_date)
-        gps = validate_create_gps_and_photo(data, request.FILES, att_status)
+        if timed_manual:
+            if not manual_in_raw or not manual_out_raw:
+                return _err('Both check-in and check-out times are required.')
+            check_in = _parse_attendance_datetime(
+                manual_in_raw, att_date, 'check_in_time'
+            )
+            check_out = _parse_attendance_datetime(
+                manual_out_raw, att_date, 'check_out_time'
+            )
+            if check_out <= check_in:
+                return _err('Check-out must be after check-in.')
+            gps = {
+                'latitude': None,
+                'longitude': None,
+                'location_accuracy': None,
+                'photo': None,
+                'manual': True,
+            }
+        else:
+            check_in = None
+            check_out = None
+            gps = validate_create_gps_and_photo(data, request.FILES, att_status)
     except ValidationError as exc:
         detail = exc.detail if hasattr(exc, 'detail') else str(exc)
         if isinstance(detail, dict):
@@ -451,6 +539,8 @@ def attendance_list_create(request):
             if isinstance(msg, list):
                 msg = msg[0]
             return _err(str(msg))
+        if isinstance(detail, list) and detail:
+            return _err(str(detail[0]))
         return _err(str(detail))
 
     if Attendance.objects.filter(employee=employee, date=att_date).exists():
@@ -471,13 +561,23 @@ def attendance_list_create(request):
     method = Attendance.METHOD_MANUAL if is_manual else (
         Attendance.METHOD_CAMERA if photo else Attendance.METHOD_MANUAL
     )
-    check_in = None
-    if not is_manual and att_status in Attendance.PHOTO_STATUSES:
+    if timed_manual:
+        if att_status not in Attendance.PHOTO_STATUSES:
+            att_status = Attendance.STATUS_PRESENT
+        evaluated = evaluate_manual_attendance(employee, att_date, att_status)
+        late = minutes_late_at(check_in, employee, att_date)
+        evaluated.minutes_late = late
+        evaluated.is_late = late > 0
+    elif not is_manual and att_status in Attendance.PHOTO_STATUSES:
         check_in = timezone.now()
-
-    if is_manual:
+        check_out = None
+        evaluated = evaluate_check_in(employee, att_date, att_status, check_in)
+    elif is_manual:
+        check_in = None
+        check_out = None
         evaluated = evaluate_manual_attendance(employee, att_date, att_status)
     else:
+        check_out = None
         evaluated = evaluate_check_in(employee, att_date, att_status, check_in)
     remarks = data.get('remarks') or ''
     if evaluated.rule_penalty_applied:
@@ -491,6 +591,7 @@ def attendance_list_create(request):
         date=att_date,
         status=evaluated.status,
         check_in_time=check_in,
+        check_out_time=check_out,
         photo=photo,
         latitude=gps.get('latitude'),
         longitude=gps.get('longitude'),
@@ -506,6 +607,11 @@ def attendance_list_create(request):
         rule_remarks=evaluated.rule_remarks,
         created_by=request.user,
     )
+    if check_out is not None:
+        refresh_worked_minutes(attendance)
+        attendance.save(
+            update_fields=['worked_minutes', 'payable_minutes']
+        )
     return Response(
         AttendanceSerializer(attendance, context={'request': request}).data,
         status=status.HTTP_201_CREATED,
@@ -792,6 +898,8 @@ def advance_void(request, pk):
     advance = get_object_or_404(SalaryAdvance, pk=pk)
     if advance.status == SalaryAdvance.STATUS_VOID:
         return _err('This advance is already voided.')
+    if advance.status == SalaryAdvance.STATUS_PAID:
+        return _err('This advance is already marked paid. Void is not needed.')
     try:
         _assert_month_open(advance.employee, advance.date)
     except ValidationError as exc:
@@ -800,6 +908,63 @@ def advance_void(request, pk):
     advance.updated_by = request.user
     advance.save(update_fields=['status', 'updated_by', 'updated_at'])
     return Response(SalaryAdvanceSerializer(advance, context={'request': request}).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def advance_mark_paid(request, pk):
+    """Mark an advance as paid (e.g. employee settled an MT Shop purchase separately)."""
+    advance = get_object_or_404(SalaryAdvance, pk=pk)
+    if advance.status == SalaryAdvance.STATUS_PAID:
+        return _err('This advance is already marked paid.')
+    if advance.status == SalaryAdvance.STATUS_VOID:
+        return _err('Cannot mark a voided advance as paid.')
+    try:
+        _assert_month_open(advance.employee, advance.date)
+    except ValidationError as exc:
+        return _err(str(exc.detail if hasattr(exc, 'detail') else exc))
+    advance.status = SalaryAdvance.STATUS_PAID
+    advance.updated_by = request.user
+    note = (request.data.get('remarks') or '').strip()
+    if note:
+        advance.remarks = ((advance.remarks + '\n') if advance.remarks else '') + note
+    elif not advance.remarks:
+        advance.remarks = 'Marked paid in Salary Book'
+    advance.save(update_fields=['status', 'updated_by', 'remarks', 'updated_at'])
+    return Response(SalaryAdvanceSerializer(advance, context={'request': request}).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def mtshop_customers(request):
+    """List MTSHOP / Shop Boys customers for linking to Salary Book employees."""
+    from backend.parties.models import Customer
+
+    qs = Customer.objects.filter(
+        Q(customer_group__name__iexact='MTSHOP')
+        | Q(name__icontains='MT SHOP')
+        | Q(name__icontains='SHOP BOY')
+    ).filter(is_active=True).order_by('name')
+    search = (request.query_params.get('search') or '').strip()
+    if search:
+        qs = qs.filter(Q(name__icontains=search) | Q(phone__icontains=search))
+    customers = list(qs[:200])
+    linked_map = {
+        emp.mtshop_customer_id: emp.id
+        for emp in Employee.objects.filter(
+            mtshop_customer_id__in=[c.id for c in customers]
+        ).only('id', 'mtshop_customer_id')
+    }
+    results = [
+        {
+            'id': c.id,
+            'name': c.name,
+            'phone': c.phone or '',
+            'linked_employee_id': linked_map.get(c.id),
+        }
+        for c in customers
+    ]
+    return Response({'results': results, 'count': len(results)})
 
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +1194,7 @@ def attendance_calendar(request):
         employees = list(Employee.objects.filter(status=Employee.STATUS_ACTIVE).order_by('name'))
         view = 'admin'
 
+    settings_obj = SalaryBookSettings.get_solo()
     rows = Attendance.objects.filter(
         employee_id__in=[emp.id for emp in employees],
         date__gte=start,
@@ -1047,15 +1213,7 @@ def attendance_calendar(request):
 
     by_emp = {}
     for row in rows:
-        by_emp.setdefault(row['employee_id'], {})[row['date'].day] = {
-            'id': row['id'],
-            'status': row['status'],
-            'check_in_time': _dt_iso(row['check_in_time']),
-            'check_out_time': _dt_iso(row['check_out_time']),
-            'minutes_late': row['minutes_late'],
-            'is_late': row['is_late'],
-            'rule_penalty_applied': row['rule_penalty_applied'],
-        }
+        by_emp.setdefault(row['employee_id'], {})[row['date'].day] = row
 
     team = _status_counts()
     payload = []
@@ -1072,7 +1230,23 @@ def attendance_calendar(request):
                 continue
             marked = by_emp.get(emp.id, {}).get(day)
             if marked:
-                days[str(day)] = marked
+                early = minutes_early_at(
+                    marked['check_out_time'],
+                    emp,
+                    marked['date'],
+                    settings_obj,
+                )
+                days[str(day)] = {
+                    'id': marked['id'],
+                    'status': marked['status'],
+                    'check_in_time': _dt_iso(marked['check_in_time']),
+                    'check_out_time': _dt_iso(marked['check_out_time']),
+                    'minutes_late': marked['minutes_late'],
+                    'is_late': marked['is_late'],
+                    'minutes_early': early,
+                    'is_early': early > 0,
+                    'rule_penalty_applied': marked['rule_penalty_applied'],
+                }
                 counts[marked['status']] += 1
                 team[marked['status']] += 1
             else:

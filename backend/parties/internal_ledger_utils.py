@@ -89,10 +89,26 @@ def resolve_invoices_for_internal_entries(entries):
 
 
 def _customer_is_mtshop(customer):
-    """Return True if customer exists and name contains MT SHOP (case-insensitive)."""
-    if not customer or not getattr(customer, 'name', None):
+    """
+    Return True for Shop Boys / MT Shop customers.
+    Matches name containing "MT SHOP" or "SHOP BOY", or MTSHOP customer group.
+    """
+    if not customer:
         return False
-    return INTERNAL_LEDGER_NAME_CONTAINS.upper() in (customer.name or '').upper()
+    name = (getattr(customer, 'name', None) or '').upper()
+    if INTERNAL_LEDGER_NAME_CONTAINS.upper() in name:
+        return True
+    if 'SHOP BOY' in name or 'SHOPBOY' in name:
+        return True
+    group = getattr(customer, 'customer_group', None)
+    group_name = (getattr(group, 'name', None) or '').upper() if group else ''
+    if not group_name and getattr(customer, 'customer_group_id', None):
+        # Group may not be select_related; avoid extra query when name already matched.
+        try:
+            group_name = (customer.customer_group.name or '').upper()
+        except Exception:
+            group_name = ''
+    return group_name == 'MTSHOP'
 
 
 def create_internal_ledger_entry_if_mtshop(
@@ -114,7 +130,7 @@ def create_internal_ledger_entry_if_mtshop(
     if not _customer_is_mtshop(customer):
         return
     from .models import InternalLedgerEntry
-    InternalLedgerEntry.objects.create(
+    entry = InternalLedgerEntry.objects.create(
         customer=customer,
         entry_type=entry_type,
         amount=amount,
@@ -123,6 +139,8 @@ def create_internal_ledger_entry_if_mtshop(
         created_at=created_at or timezone.now(),
         source_ledger_entry_id=source_ledger_entry_id,
     )
+    _sync_salary_advance(entry, created_by)
+    return entry
 
 
 def reverse_internal_ledger_entries_for_ledger_entries(ledger_entries, created_by, reason='Reversal'):
@@ -139,7 +157,7 @@ def reverse_internal_ledger_entries_for_ledger_entries(ledger_entries, created_b
             continue
         from .models import InternalLedgerEntry
         reverse_type = 'credit' if entry.entry_type == 'debit' else 'debit'
-        InternalLedgerEntry.objects.create(
+        reverse_entry = InternalLedgerEntry.objects.create(
             customer=entry.customer,
             entry_type=reverse_type,
             amount=entry.amount,
@@ -147,3 +165,16 @@ def reverse_internal_ledger_entries_for_ledger_entries(ledger_entries, created_b
             created_by=created_by,
             created_at=timezone.now(),
         )
+        _sync_salary_advance(reverse_entry, created_by)
+
+
+def _sync_salary_advance(entry, created_by=None):
+    """Push MT Shop ledger activity into Salary Book advances (best-effort)."""
+    try:
+        from backend.salary_book.services.mtshop_advances import (
+            sync_salary_advance_from_internal_entry,
+        )
+        sync_salary_advance_from_internal_entry(entry, created_by=created_by)
+    except Exception:
+        # Never block POS / ledger flows if salary sync fails.
+        pass

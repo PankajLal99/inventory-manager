@@ -36,10 +36,11 @@ class SalaryBookSettingsAdmin(admin.ModelAdmin):
 class EmployeeAdmin(admin.ModelAdmin):
     list_display = [
         'employee_id', 'name', 'mobile', 'monthly_salary',
-        'expected_check_in', 'expected_check_out', 'status', 'date_of_joining',
+        'mtshop_customer', 'expected_check_in', 'expected_check_out', 'status', 'date_of_joining',
     ]
     list_filter = ['status', 'department']
-    search_fields = ['employee_id', 'name', 'mobile']
+    search_fields = ['employee_id', 'name', 'mobile', 'mtshop_customer__name']
+    raw_id_fields = ['mtshop_customer']
 
 
 @admin.register(EmployeeAttendanceRule)
@@ -69,8 +70,9 @@ class LeaveRecordAdmin(admin.ModelAdmin):
 
 @admin.register(SalaryAdvance)
 class SalaryAdvanceAdmin(admin.ModelAdmin):
-    list_display = ['employee', 'date', 'amount', 'status']
-    list_filter = ['status']
+    list_display = ['employee', 'date', 'amount', 'status', 'source', 'source_invoice_number']
+    list_filter = ['status', 'source']
+    search_fields = ['employee__name', 'reason', 'source_invoice_number']
 
 
 @admin.register(SalaryRecord)

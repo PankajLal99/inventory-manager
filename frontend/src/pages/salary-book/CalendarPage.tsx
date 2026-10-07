@@ -1,26 +1,34 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
 import { Users } from 'lucide-react';
-import type { CalendarResponse, Employee, Paginated } from './types';
+import { toast } from '../../lib/toast';
+import type { CalendarResponse, Employee, Paginated, SalaryBookSettings } from './types';
 import {
   AdminMonthGrid,
   CalendarLegend,
   EmployeeMonthGrid,
   KpiStrip,
   MonthNav,
+  type CalendarDayClick,
 } from './components/AttendanceCalendar';
+import ManualAttendanceDialog, {
+  type ManualAttendanceTarget,
+} from './components/ManualAttendanceDialog';
+import { apiError, toTimeInput } from './utils';
 
 export default function CalendarPage() {
   const [params, setParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const now = new Date();
   const year = Number(params.get('year')) || now.getFullYear();
   const month = Number(params.get('month')) || now.getMonth() + 1;
   const employeeId = params.get('employee') ? Number(params.get('employee')) : undefined;
+  const [manualTarget, setManualTarget] = useState<ManualAttendanceTarget | null>(null);
 
   const setMonth = (nextYear: number, nextMonth: number) => {
     const next = new URLSearchParams(params);
@@ -42,6 +50,11 @@ export default function CalendarPage() {
       (await salaryBookApi.employees.list({ status: 'ACTIVE', page_size: 100 })).data as Paginated<Employee>,
   });
 
+  const settingsQuery = useQuery({
+    queryKey: ['salary-book', 'settings'],
+    queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
+  });
+
   const calendarQuery = useQuery({
     queryKey: ['salary-book', 'calendar', year, month, employeeId],
     queryFn: async () =>
@@ -53,6 +66,44 @@ export default function CalendarPage() {
     [calendarQuery.data]
   );
 
+  const selectedEmployeeDetails = useMemo(
+    () => employeesQuery.data?.results.find((e) => e.id === manualTarget?.employeeId),
+    [employeesQuery.data, manualTarget?.employeeId]
+  );
+
+  const manualMutation = useMutation({
+    mutationFn: async ({
+      target,
+      checkIn,
+      checkOut,
+    }: {
+      target: ManualAttendanceTarget;
+      checkIn: string;
+      checkOut: string;
+    }) =>
+      salaryBookApi.attendance.create({
+        employee: target.employeeId,
+        date: target.date,
+        status: 'PRESENT',
+        check_in_time: checkIn,
+        check_out_time: checkOut,
+      }),
+    onSuccess: async () => {
+      toast('Attendance times saved', 'success');
+      setManualTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'calendar'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to save attendance times.'), 'error'),
+  });
+
+  const openManual = (payload: CalendarDayClick) => {
+    setManualTarget({
+      employeeId: payload.employeeId,
+      employeeName: payload.employeeName,
+      date: payload.date,
+    });
+  };
+
   if (calendarQuery.isLoading) return <LoadingState message="Loading calendar..." />;
   if (calendarQuery.isError || !calendarQuery.data) {
     return <ErrorState message="Unable to load calendar." onRetry={() => calendarQuery.refetch()} />;
@@ -60,18 +111,26 @@ export default function CalendarPage() {
 
   const data = calendarQuery.data;
   const isEmployee = data.view === 'employee' && selectedEmployee;
+  const defaultCheckIn =
+    toTimeInput(selectedEmployeeDetails?.effective_check_in) ||
+    toTimeInput(settingsQuery.data?.default_check_in) ||
+    '09:00';
+  const defaultCheckOut =
+    toTimeInput(selectedEmployeeDetails?.effective_check_out) ||
+    toTimeInput(settingsQuery.data?.default_check_out) ||
+    '18:00';
 
   return (
     <div className="space-y-4 lg:space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div>
-          <h1 className="text-xl lg:text-2xl font-bold text-gray-900">
-            {isEmployee ? `${selectedEmployee.name}'s Calendar` : 'Attendance Calendar'}
+          <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
+            {isEmployee ? `${selectedEmployee.name}'s Calendar` : 'Employee Attendance'}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm lg:text-base text-gray-500 mt-1">
             {isEmployee
-              ? 'Personal month view with attendance summary.'
-              : 'All employees for this month, with team KPIs.'}
+              ? 'Personal month view with attendance summary. Tap an unmarked day to add in/out times.'
+              : 'Track daily attendance, leaves and working hours. Tap an unmarked day to add in/out times.'}
           </p>
         </div>
         <MonthNav year={year} month={month} onChange={setMonth} />
@@ -116,6 +175,7 @@ export default function CalendarPage() {
             daysInMonth={data.days_in_month}
             today={data.today}
             employee={selectedEmployee}
+            onDayClick={openManual}
           />
           <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2 text-sm">
             <h2 className="font-semibold text-gray-900">This month</h2>
@@ -141,8 +201,21 @@ export default function CalendarPage() {
           daysInMonth={data.days_in_month}
           today={data.today}
           employees={data.employees}
+          onDayClick={openManual}
         />
       )}
+
+      <ManualAttendanceDialog
+        target={manualTarget}
+        loading={manualMutation.isPending}
+        defaultCheckIn={defaultCheckIn}
+        defaultCheckOut={defaultCheckOut}
+        onClose={() => setManualTarget(null)}
+        onSave={({ checkIn, checkOut }) => {
+          if (!manualTarget) return;
+          manualMutation.mutate({ target: manualTarget, checkIn, checkOut });
+        }}
+      />
     </div>
   );
 }

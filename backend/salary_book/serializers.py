@@ -140,6 +140,12 @@ class EmployeeSerializer(serializers.ModelSerializer):
     hourly_rate_preview = serializers.SerializerMethodField()
     effective_check_in = serializers.SerializerMethodField()
     effective_check_out = serializers.SerializerMethodField()
+    mtshop_customer_name = serializers.CharField(
+        source='mtshop_customer.name', read_only=True, allow_null=True
+    )
+    mtshop_customer_phone = serializers.CharField(
+        source='mtshop_customer.phone', read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Employee
@@ -166,6 +172,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'hourly_rate_preview',
             'profile_photo',
             'profile_photo_url',
+            'mtshop_customer',
+            'mtshop_customer_name',
+            'mtshop_customer_phone',
             'status',
             'notes',
             'created_at',
@@ -180,12 +189,15 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'hourly_rate_preview',
             'effective_check_in',
             'effective_check_out',
+            'mtshop_customer_name',
+            'mtshop_customer_phone',
         ]
         extra_kwargs = {
             'profile_photo': {'write_only': True, 'required': False},
             'employee_id': {'required': False, 'allow_blank': True},
             'expected_check_in': {'required': False, 'allow_null': True},
             'expected_check_out': {'required': False, 'allow_null': True},
+            'mtshop_customer': {'required': False, 'allow_null': True},
         }
 
     def _settings(self):
@@ -237,7 +249,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        for key in ('expected_check_in', 'expected_check_out'):
+        for key in ('expected_check_in', 'expected_check_out', 'mtshop_customer'):
             if attrs.get(key) == '':
                 attrs[key] = None
         cin = attrs.get('expected_check_in', getattr(self.instance, 'expected_check_in', None))
@@ -250,6 +262,15 @@ class EmployeeSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 'Set both expected check-in and check-out, or leave both blank to use company defaults.'
             )
+        mtshop = attrs.get('mtshop_customer', serializers.empty)
+        if mtshop is not serializers.empty and mtshop is not None:
+            qs = Employee.objects.filter(mtshop_customer=mtshop)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {'mtshop_customer': 'This Shop Boys customer is already linked to another employee.'}
+                )
         return attrs
 
 
@@ -428,10 +449,18 @@ class SalaryAdvanceSerializer(serializers.ModelSerializer):
             'reason',
             'remarks',
             'status',
+            'source',
+            'source_invoice_number',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['status', 'created_at', 'updated_at']
+        read_only_fields = [
+            'status',
+            'source',
+            'source_invoice_number',
+            'created_at',
+            'updated_at',
+        ]
 
 
 class SalaryPaymentSerializer(serializers.ModelSerializer):

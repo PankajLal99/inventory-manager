@@ -1,23 +1,38 @@
-import { useQuery } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
-import { formatINR, formatDate, statusLabel, toTimeInput } from './utils';
+import { apiError, formatINR, formatDate, statusLabel, toTimeInput } from './utils';
 import type { AttendanceRule, CalendarResponse, Employee, LeaveRecord, Paginated, SalaryAdvance, SalaryRecord } from './types';
 import { useState } from 'react';
 import { CalendarLegend, EmployeeMonthGrid, KpiStrip, MonthNav } from './components/AttendanceCalendar';
+import ConfirmDialog from './components/ConfirmDialog';
+import { toast } from '../../lib/toast';
 
 type Tab = 'profile' | 'attendance' | 'leaves' | 'advances' | 'salaries';
 
 export default function EmployeeDetails() {
   const { id } = useParams();
   const empId = Number(id);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('profile');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'employee', empId],
     queryFn: async () => (await salaryBookApi.employees.get(empId)).data as Employee,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => salaryBookApi.employees.delete(empId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+      toast('Employee removed from Salary Book', 'success');
+      navigate('/salary-book/employees');
+    },
+    onError: (err) => toast(apiError(err, 'Unable to delete employee.'), 'error'),
   });
 
   if (isLoading) return <LoadingState message="Loading employee..." />;
@@ -36,13 +51,33 @@ export default function EmployeeDetails() {
             {data.status === 'ACTIVE' ? 'Active' : 'Inactive'}
           </p>
         </div>
-        <Link
-          to={`/salary-book/employees/${data.id}/edit`}
-          className="mt-4 lg:mt-0 flex items-center justify-center min-h-12 px-5 rounded-xl bg-emerald-600 text-white font-medium"
-        >
-          Edit Employee
-        </Link>
+        <div className="mt-4 lg:mt-0 flex flex-col sm:flex-row gap-2 justify-center">
+          <Link
+            to={`/salary-book/employees/${data.id}/edit`}
+            className="flex items-center justify-center min-h-12 px-5 rounded-xl bg-emerald-600 text-white font-medium"
+          >
+            Edit Employee
+          </Link>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            className="flex items-center justify-center min-h-12 px-5 rounded-xl border border-red-200 text-red-700 bg-white font-medium"
+          >
+            Delete
+          </button>
+        </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete employee from Salary Book?"
+        message={`${data.name} and their Salary Book attendance, leaves, advances, and salary records will be removed. This does not affect anything outside Salary Book.`}
+        confirmLabel="Delete"
+        danger
+        loading={deleteMutation.isPending}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMutation.mutate()}
+      />
 
       <div className="flex gap-2 overflow-x-auto pb-1">
         {([
@@ -79,6 +114,14 @@ export default function EmployeeDetails() {
           <Field label="Per-hour rate" value={formatINR(data.hourly_rate_preview)} />
           <Field label="Joined" value={formatDate(data.date_of_joining)} />
           <Field label="Address" value={data.address || '—'} />
+          <Field
+            label="MT Shop ledger"
+            value={
+              data.mtshop_customer_name
+                ? `${data.mtshop_customer_name}${data.mtshop_customer_phone ? ` · ${data.mtshop_customer_phone}` : ''}`
+                : 'Not linked'
+            }
+          />
         </div>
       )}
       {tab === 'profile' && <EmployeeRules employeeId={empId} />}
@@ -179,26 +222,51 @@ function LeaveHistory({ employeeId }: { employeeId: number }) {
 }
 
 function AdvanceHistory({ employeeId }: { employeeId: number }) {
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['salary-book', 'emp-adv', employeeId],
     queryFn: async () => (await salaryBookApi.employees.advances(employeeId)).data as Paginated<SalaryAdvance>,
+  });
+  const paidMutation = useMutation({
+    mutationFn: async (id: number) => salaryBookApi.advances.markPaid(id),
+    onSuccess: async () => {
+      toast('Advance marked as paid', 'success');
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to mark advance as paid.'), 'error'),
   });
   if (isLoading) return <LoadingState message="Loading advances..." />;
   if (!data?.results.length) return <p className="text-sm text-gray-500">No salary advances recorded.</p>;
   return (
     <div className="space-y-2">
       {data.results.map((row) => (
-        <div key={row.id} className="bg-white rounded-xl border border-gray-100 p-3 flex justify-between">
+        <div key={row.id} className="bg-white rounded-xl border border-gray-100 p-3 flex justify-between gap-3">
           <div>
             <div className="font-medium">{formatDate(row.date)}</div>
-            <div className="text-sm text-gray-600">{row.reason || row.status}</div>
+            <div className="text-sm text-gray-600">
+              {row.source === 'MTSHOP' ? 'MT Shop' : ''}
+              {row.source === 'MTSHOP' && row.reason ? ' · ' : ''}
+              {row.reason || row.status}
+            </div>
+            <div className="text-xs text-gray-400 mt-0.5">
+              {row.status === 'PAID' ? 'Paid' : row.status === 'VOID' ? 'Voided' : 'Active'}
+            </div>
+            {row.status === 'ACTIVE' && (
+              <button
+                type="button"
+                className="mt-1 text-sm text-emerald-700"
+                onClick={() => paidMutation.mutate(row.id)}
+              >
+                Mark paid
+              </button>
+            )}
           </div>
           <div className="font-semibold">{formatINR(row.amount)}</div>
         </div>
       ))}
       {data.total_active && (
         <div className="flex justify-between px-1 pt-2 font-semibold">
-          <span>Total</span>
+          <span>Total active</span>
           <span>{formatINR(data.total_active)}</span>
         </div>
       )}

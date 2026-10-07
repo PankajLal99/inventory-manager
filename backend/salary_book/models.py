@@ -188,6 +188,14 @@ class Employee(models.Model):
         blank=True,
         null=True,
     )
+    # Optional link to Shop Boys (MTSHOP) customer — MT Shop purchases deduct as advances.
+    mtshop_customer = models.OneToOneField(
+        'parties.Customer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='salary_book_employee',
+    )
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -452,9 +460,18 @@ class Attendance(models.Model):
 class SalaryAdvance(models.Model):
     STATUS_ACTIVE = 'ACTIVE'
     STATUS_VOID = 'VOID'
+    STATUS_PAID = 'PAID'
     STATUS_CHOICES = [
         (STATUS_ACTIVE, 'Active'),
         (STATUS_VOID, 'Void'),
+        (STATUS_PAID, 'Paid'),
+    ]
+
+    SOURCE_MANUAL = 'MANUAL'
+    SOURCE_MTSHOP = 'MTSHOP'
+    SOURCE_CHOICES = [
+        (SOURCE_MANUAL, 'Manual'),
+        (SOURCE_MTSHOP, 'MT Shop'),
     ]
 
     employee = models.ForeignKey(
@@ -467,6 +484,14 @@ class SalaryAdvance(models.Model):
     reason = models.CharField(max_length=255, blank=True)
     remarks = models.TextField(blank=True)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    source = models.CharField(
+        max_length=16, choices=SOURCE_CHOICES, default=SOURCE_MANUAL, db_index=True
+    )
+    # When sourced from Shop Boys ledger debit; unique so we don't double-create.
+    source_internal_entry_id = models.PositiveIntegerField(
+        null=True, blank=True, unique=True, db_index=True
+    )
+    source_invoice_number = models.CharField(max_length=64, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -489,6 +514,7 @@ class SalaryAdvance(models.Model):
         indexes = [
             models.Index(fields=['employee', 'date']),
             models.Index(fields=['status']),
+            models.Index(fields=['source', 'status']),
         ]
 
     def __str__(self):

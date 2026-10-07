@@ -225,6 +225,46 @@ class BridgeTests(TestCase):
         self.assertGreater(att.check_out_time, att.check_in_time)
         self.assertGreater(att.worked_minutes, 0)
 
+    def test_second_punch_within_45_minutes_ignored(self):
+        line1 = '1\t2026-09-17 13:00:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        line2 = '1\t2026-09-17 13:10:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=line1, content_type='text/plain')
+        self.client.post(url, data=line2, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        self.assertIsNotNone(att.check_in_time)
+        self.assertIsNone(att.check_out_time)
+        self.assertEqual(AttendanceEvent.objects.count(), 2)
+
+    def test_second_punch_at_45_minutes_sets_check_out(self):
+        line1 = '1\t2026-09-17 13:00:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        line2 = '1\t2026-09-17 13:45:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=line1, content_type='text/plain')
+        self.client.post(url, data=line2, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        self.assertIsNotNone(att.check_in_time)
+        self.assertIsNotNone(att.check_out_time)
+        self.assertEqual(
+            (att.check_out_time - att.check_in_time).total_seconds(),
+            45 * 60,
+        )
+
+    def test_early_punch_then_valid_check_out(self):
+        line1 = '1\t2026-09-17 13:00:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        line2 = '1\t2026-09-17 13:02:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        line3 = '1\t2026-09-17 18:00:00\t0\t2\t0\t0\t0\t0\t0\t0'
+        url = f'/iclock/cdata?SN={DEVICE_SN}&table=ATTLOG&Stamp=9999'
+        self.client.post(url, data=line1, content_type='text/plain')
+        self.client.post(url, data=line2, content_type='text/plain')
+        self.client.post(url, data=line3, content_type='text/plain')
+        att = Attendance.objects.get(employee=self.employee)
+        self.assertIsNotNone(att.check_in_time)
+        self.assertIsNotNone(att.check_out_time)
+        local_out = timezone.localtime(att.check_out_time)
+        self.assertEqual(local_out.hour, 18)
+        self.assertEqual(local_out.minute, 0)
+
     def test_geo_mode_does_not_bridge(self):
         self.settings.attendance_capture_mode = SalaryBookSettings.CAPTURE_GEO
         self.settings.save()

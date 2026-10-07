@@ -15,10 +15,26 @@ import ConfirmDialog from './components/ConfirmDialog';
 import SalaryBookSheet from './components/SalaryBookSheet';
 import type { Employee, Paginated, SalaryAdvance } from './types';
 
+function statusLabel(status: string) {
+  if (status === 'VOID') return 'Voided';
+  if (status === 'PAID') return 'Paid';
+  return 'Active';
+}
+
+function sourceLabel(row: SalaryAdvance) {
+  if (row.source === 'MTSHOP') {
+    return row.source_invoice_number
+      ? `MT Shop · ${row.source_invoice_number}`
+      : 'MT Shop';
+  }
+  return row.reason || '—';
+}
+
 export default function AdvanceList() {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [voidRow, setVoidRow] = useState<SalaryAdvance | null>(null);
+  const [paidRow, setPaidRow] = useState<SalaryAdvance | null>(null);
 
   const listQuery = useQuery({
     queryKey: ['salary-book', 'advances'],
@@ -50,6 +66,16 @@ export default function AdvanceList() {
     onError: (err) => toast(apiError(err, 'Unable to void advance.'), 'error'),
   });
 
+  const paidMutation = useMutation({
+    mutationFn: async (id: number) => salaryBookApi.advances.markPaid(id),
+    onSuccess: async () => {
+      toast('Advance marked as paid', 'success');
+      setPaidRow(null);
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to mark advance as paid.'), 'error'),
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -58,6 +84,9 @@ export default function AdvanceList() {
           Add Advance
         </Button>
       </div>
+      <p className="text-sm text-gray-600">
+        MT Shop purchases for linked employees appear here automatically and reduce net salary until marked paid or voided.
+      </p>
       {listQuery.isLoading && <LoadingState message="Loading advances..." />}
       {listQuery.isError && <ErrorState onRetry={() => listQuery.refetch()} />}
       {!listQuery.isLoading && (listQuery.data?.results.length ?? 0) === 0 && (
@@ -68,12 +97,17 @@ export default function AdvanceList() {
           <div key={row.id} className="bg-white rounded-xl border border-emerald-100 p-4 flex justify-between gap-3">
             <div>
               <div className="font-semibold">{row.employee_name}</div>
-              <div className="text-sm text-gray-500">{formatDate(row.date)} · {row.reason || '—'}</div>
-              {row.status === 'VOID' && <div className="text-xs text-gray-400">Voided</div>}
+              <div className="text-sm text-gray-500">{formatDate(row.date)} · {sourceLabel(row)}</div>
+              <div className="text-xs text-gray-400 mt-0.5">{statusLabel(row.status)}</div>
               {row.status === 'ACTIVE' && (
-                <button type="button" className="mt-1 text-sm text-red-600" onClick={() => setVoidRow(row)}>
-                  Void
-                </button>
+                <div className="mt-1 flex gap-3">
+                  <button type="button" className="text-sm text-emerald-700" onClick={() => setPaidRow(row)}>
+                    Mark paid
+                  </button>
+                  <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
+                    Void
+                  </button>
+                </div>
               )}
             </div>
             <div className="font-semibold">{formatINR(row.amount)}</div>
@@ -98,14 +132,19 @@ export default function AdvanceList() {
                 <tr key={row.id} className="border-t border-emerald-50">
                   <td className="px-4 py-3 font-medium">{row.employee_name}</td>
                   <td className="px-4 py-3">{formatDate(row.date)}</td>
-                  <td className="px-4 py-3">{row.reason || '—'}</td>
+                  <td className="px-4 py-3">{sourceLabel(row)}</td>
                   <td className="px-4 py-3 font-medium">{formatINR(row.amount)}</td>
-                  <td className="px-4 py-3">{row.status === 'VOID' ? 'Voided' : 'Active'}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3">{statusLabel(row.status)}</td>
+                  <td className="px-4 py-3 text-right space-x-3">
                     {row.status === 'ACTIVE' && (
-                      <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
-                        Void
-                      </button>
+                      <>
+                        <button type="button" className="text-sm text-emerald-700" onClick={() => setPaidRow(row)}>
+                          Mark paid
+                        </button>
+                        <button type="button" className="text-sm text-red-600" onClick={() => setVoidRow(row)}>
+                          Void
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -132,6 +171,19 @@ export default function AdvanceList() {
         loading={voidMutation.isPending}
         onCancel={() => setVoidRow(null)}
         onConfirm={() => voidRow && voidMutation.mutate(voidRow.id)}
+      />
+      <ConfirmDialog
+        open={Boolean(paidRow)}
+        title="Mark advance as paid?"
+        message={
+          paidRow
+            ? `${formatINR(paidRow.amount)} for ${paidRow.employee_name} will no longer be deducted from salary (e.g. employee already paid the MT Shop bill).`
+            : ''
+        }
+        confirmLabel="Mark paid"
+        loading={paidMutation.isPending}
+        onCancel={() => setPaidRow(null)}
+        onConfirm={() => paidRow && paidMutation.mutate(paidRow.id)}
       />
     </div>
   );

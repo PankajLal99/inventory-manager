@@ -20,8 +20,18 @@ export interface Employee {
   daily_rate_preview: string;
   hourly_rate_preview: string;
   profile_photo_url: string | null;
+  mtshop_customer: number | null;
+  mtshop_customer_name: string | null;
+  mtshop_customer_phone: string | null;
   status: 'ACTIVE' | 'INACTIVE';
   notes: string;
+}
+
+export interface MtshopCustomerOption {
+  id: number;
+  name: string;
+  phone: string;
+  linked_employee_id: number | null;
 }
 
 export interface Attendance {
@@ -124,7 +134,9 @@ export interface SalaryAdvance {
   amount: string;
   reason: string;
   remarks: string;
-  status: string;
+  status: 'ACTIVE' | 'VOID' | 'PAID' | string;
+  source: 'MANUAL' | 'MTSHOP' | string;
+  source_invoice_number: string;
 }
 
 export interface SalaryRecord {
@@ -214,6 +226,8 @@ export interface CalendarDayCell {
   check_out_time?: string | null;
   minutes_late?: number;
   is_late?: boolean;
+  minutes_early?: number;
+  is_early?: boolean;
   rule_penalty_applied?: boolean;
 }
 

@@ -58,6 +58,19 @@ def minutes_late_at(check_in, employee: Employee, att_date: date, settings_obj=N
     return max(0, int(delta // 60))
 
 
+def minutes_early_at(check_out, employee: Employee, att_date: date, settings_obj=None) -> int:
+    """Minutes before scheduled check-out. 0 if on time or later."""
+    if not check_out:
+        return 0
+    _, cout = effective_schedule(employee, settings_obj)
+    expected = combine_local(att_date, cout)
+    actual = check_out
+    if timezone.is_naive(actual):
+        actual = timezone.make_aware(actual, timezone.get_current_timezone())
+    delta = (timezone.localtime(expected) - timezone.localtime(actual)).total_seconds()
+    return max(0, int(delta // 60))
+
+
 def worked_minutes(attendance: Attendance, employee: Employee, settings_obj=None) -> int:
     scheduled = scheduled_minutes(employee, settings_obj)
     cin, cout = effective_schedule(employee, settings_obj)

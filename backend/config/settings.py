@@ -429,6 +429,10 @@ if 'CACHES' not in globals() or not globals().get('CACHES'):
         print("✅ Using Database Cache (Shared across workers - GOOD PERFORMANCE)")
         print("   Run once: python manage.py createcachetable")
 
+# Hardware attendance (ADMS): ignore re-scans sooner than this after check-in.
+# Prevents accidental double finger-scans from becoming check-out.
+ATTENDANCE_MIN_CHECKOUT_MINUTES = int(os.getenv('ATTENDANCE_MIN_CHECKOUT_MINUTES', '45'))
+
 # Development override: Use local memory only if explicitly set
 # (Not recommended for production due to multi-worker issues)
 USE_LOCAL_CACHE = os.getenv('USE_LOCAL_CACHE', 'false').lower() == 'true'

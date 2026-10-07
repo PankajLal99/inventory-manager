@@ -10,7 +10,7 @@ import LoadingState from '../../components/ui/LoadingState';
 import { toast } from '../../lib/toast';
 import { apiError, formatINR, scheduledHoursFromTimes, todayISO, toTimeInput } from './utils';
 import ConfirmDialog from './components/ConfirmDialog';
-import type { AttendanceRule, Employee, SalaryBookSettings } from './types';
+import type { AttendanceRule, Employee, MtshopCustomerOption, SalaryBookSettings } from './types';
 
 const BLOOD = ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
@@ -29,6 +29,7 @@ const empty = {
   fixed_working_days: '',
   expected_check_in: '',
   expected_check_out: '',
+  mtshop_customer: '',
   status: 'ACTIVE',
   notes: '',
 };
@@ -53,6 +54,12 @@ export default function EmployeeForm() {
     queryFn: async () => (await salaryBookApi.settings.get()).data as SalaryBookSettings,
   });
 
+  const mtshopQuery = useQuery({
+    queryKey: ['salary-book', 'mtshop-customers'],
+    queryFn: async () =>
+      ((await salaryBookApi.mtshopCustomers()).data?.results || []) as MtshopCustomerOption[],
+  });
+
   useEffect(() => {
     if (!data) return;
     setOriginalSalary(String(data.monthly_salary));
@@ -71,6 +78,7 @@ export default function EmployeeForm() {
       fixed_working_days: data.fixed_working_days ? String(data.fixed_working_days) : '',
       expected_check_in: toTimeInput(data.expected_check_in),
       expected_check_out: toTimeInput(data.expected_check_out),
+      mtshop_customer: data.mtshop_customer ? String(data.mtshop_customer) : '',
       status: data.status,
       notes: data.notes || '',
     });
@@ -85,6 +93,7 @@ export default function EmployeeForm() {
         fixed_working_days: form.fixed_working_days ? Number(form.fixed_working_days) : null,
         expected_check_in: form.expected_check_in || null,
         expected_check_out: form.expected_check_out || null,
+        mtshop_customer: form.mtshop_customer ? Number(form.mtshop_customer) : null,
       };
       if (isEdit) return salaryBookApi.employees.update(Number(id), payload);
       return salaryBookApi.employees.create(payload);
@@ -177,6 +186,30 @@ export default function EmployeeForm() {
           <option value="INACTIVE">Inactive</option>
         </Select>
       )}
+      <div className="lg:col-span-2">
+        <Select
+          label="MT Shop / Shop Boy ledger"
+          value={form.mtshop_customer}
+          onChange={(e) => set('mtshop_customer', e.target.value)}
+        >
+          <option value="">Not linked (match by phone/name)</option>
+          {(mtshopQuery.data || [])
+            .filter(
+              (c) =>
+                !c.linked_employee_id ||
+                (isEdit && c.linked_employee_id === Number(id)) ||
+                String(c.id) === form.mtshop_customer,
+            )
+            .map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}{c.phone ? ` · ${c.phone}` : ''}
+              </option>
+            ))}
+        </Select>
+        <p className="mt-1 text-xs text-gray-500">
+          Purchases billed to this Shop Boys account are deducted as salary advances.
+        </p>
+      </div>
       <div className="lg:col-span-2 bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-sm grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Preview label="Scheduled hours" value={`${preview.hours ? preview.hours.toFixed(2) : '—'} h`} hint={form.expected_check_in ? undefined : `Company default ${preview.cin || '09:00'}–${preview.cout || '18:00'}`} />
         <Preview label="Per-day rate" value={formatINR(preview.daily)} />

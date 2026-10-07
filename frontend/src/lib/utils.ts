@@ -307,12 +307,15 @@ export function formatDateDDMMYYYY(date: Date | string | null | undefined): stri
   return formatAppDate(date, { includeTime: false, empty: '' });
 }
 
-/** True when customer belongs to MT SHOP (name or MTSHOP customer group). */
+/** True when customer belongs to MT SHOP / Shop Boy (name or MTSHOP customer group). */
 export function isMtShopCustomer(
   customerName?: string | null,
   customerGroupName?: string | null,
 ): boolean {
-  if (String(customerName || '').toUpperCase().includes('MT SHOP')) return true;
+  const name = String(customerName || '').toUpperCase();
+  if (name.includes('MT SHOP') || name.includes('SHOP BOY') || name.includes('SHOPBOY')) {
+    return true;
+  }
   const group = String(customerGroupName || '').toUpperCase().replace(/\s+/g, '');
   return group.includes('MTSHOP');
 }

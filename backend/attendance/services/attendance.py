@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -23,6 +25,16 @@ PROTECTED_STATUSES = frozenset({
     'UNPAID_LEAVE',
     'HOLIDAY',
 })
+
+
+def _min_checkout_interval() -> timedelta:
+    """Minimum time after check-in before a punch may become check-out."""
+    minutes = getattr(settings, 'ATTENDANCE_MIN_CHECKOUT_MINUTES', 45)
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        minutes = 45
+    return timedelta(minutes=max(0, minutes))
 
 
 def persist_attlog(
@@ -235,6 +247,20 @@ def bridge_event_to_salary_book(event: AttendanceEvent) -> None:
             return
 
         if punch == attendance.check_in_time:
+            return
+
+        # Ignore accidental re-scans until the minimum check-out window has elapsed.
+        min_checkout = _min_checkout_interval()
+        if punch - attendance.check_in_time < min_checkout:
+            logger.info(
+                'ADMS bridge skipped early check-out punch employee=%s date=%s '
+                'check_in=%s punch=%s min_interval_minutes=%s',
+                employee.employee_id,
+                att_date,
+                attendance.check_in_time.isoformat(),
+                punch.isoformat(),
+                int(min_checkout.total_seconds() // 60),
+            )
             return
 
         # Later punch → check-out

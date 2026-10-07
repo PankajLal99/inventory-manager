@@ -45,6 +45,8 @@ urlpatterns = [
 
     path('salary-book/advances/', views.advance_list_create, name='salary-book-advance-list-create'),
     path('salary-book/advances/<int:pk>/void/', views.advance_void, name='salary-book-advance-void'),
+    path('salary-book/advances/<int:pk>/mark-paid/', views.advance_mark_paid, name='salary-book-advance-mark-paid'),
+    path('salary-book/mtshop-customers/', views.mtshop_customers, name='salary-book-mtshop-customers'),
 
     path('salary-book/salaries/', views.salary_list, name='salary-book-salary-list'),
     path('salary-book/salaries/generate/', views.salary_generate, name='salary-book-salary-generate'),

@@ -1520,6 +1520,9 @@ def internal_ledger_entry_list_create(request):
                 elif entry.entry_type == 'debit':
                     entry.customer.credit_balance -= entry.amount
                 entry.customer.save()
+
+            from backend.parties.internal_ledger_utils import _sync_salary_advance
+            _sync_salary_advance(entry, request.user)
             
             return Response(
                 InternalLedgerEntrySerializer(
@@ -1552,13 +1555,26 @@ def internal_ledger_entry_retrieve_update_destroy(request, entry_id):
         if serializer.is_valid():
             entry = serializer.save()
             _apply_ledger_entry_balance(entry)
+            if entry.entry_type == 'debit':
+                from backend.parties.internal_ledger_utils import _sync_salary_advance
+                _sync_salary_advance(entry, request.user)
             invoice_map = resolve_invoices_for_internal_entries([entry])
             return Response(InternalLedgerEntrySerializer(entry, context={'invoice_map': invoice_map}).data)
         _apply_ledger_entry_balance(entry)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     if request.method == 'DELETE':
+        entry_id = entry.id
+        entry_type = entry.entry_type
         _reverse_ledger_entry_balance(entry)
         entry.delete()
+        if entry_type == 'debit':
+            try:
+                from backend.salary_book.services.mtshop_advances import (
+                    void_advance_for_internal_entry,
+                )
+                void_advance_for_internal_entry(entry_id, updated_by=request.user)
+            except Exception:
+                pass
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

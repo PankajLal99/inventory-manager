@@ -20,6 +20,7 @@ from backend.salary_book.models import (
     LeaveRecord,
     SalaryAdvance,
     SalaryBookSettings,
+    SalaryPayment,
     SalaryRecord,
 )
 from backend.salary_book.permissions import SALARY_BOOK_GROUP
@@ -119,11 +120,18 @@ class AuthTests(SalaryBookMixin, APITestCase):
         self.assertIn('refresh', res.data)
 
     def test_calendar_admin_and_employee(self):
-        emp = self.make_employee()
+        emp = self.make_employee(
+            expected_check_in=time(9, 0),
+            expected_check_out=time(18, 0),
+        )
         Attendance.objects.create(
             employee=emp,
             date=date(2026, 8, 1),
             status=Attendance.STATUS_PRESENT,
+            check_in_time=_local_dt(date(2026, 8, 1), 9, 30),
+            check_out_time=_local_dt(date(2026, 8, 1), 17, 0),
+            minutes_late=30,
+            is_late=True,
             latitude=Decimal('23.259900'),
             longitude=Decimal('77.412600'),
             location_accuracy=18,
@@ -142,7 +150,11 @@ class AuthTests(SalaryBookMixin, APITestCase):
         self.assertEqual(emp_view.status_code, status.HTTP_200_OK)
         self.assertEqual(emp_view.data['view'], 'employee')
         self.assertEqual(len(emp_view.data['employees']), 1)
-        self.assertEqual(emp_view.data['employees'][0]['days']['1']['status'], 'PRESENT')
+        day1 = emp_view.data['employees'][0]['days']['1']
+        self.assertEqual(day1['status'], 'PRESENT')
+        self.assertTrue(day1['is_late'])
+        self.assertTrue(day1['is_early'])
+        self.assertEqual(day1['minutes_early'], 60)
         missing = self.client.get(reverse('salary-book-calendar'), {'employee': 999999})
         self.assertEqual(missing.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -266,6 +278,54 @@ class EmployeeTests(SalaryBookMixin, APITestCase):
         ids = [row['id'] for row in res.data['results']]
         self.assertIn(active.id, ids)
         self.assertEqual(len(ids), 1)
+
+    def test_delete_removes_employee_and_related_salary_book_data(self):
+        emp = self.make_employee(employee_id='EMP-DEL')
+        Attendance.objects.create(
+            employee=emp,
+            date=date(2026, 4, 10),
+            status=Attendance.STATUS_ABSENT,
+        )
+        LeaveRecord.objects.create(
+            employee=emp,
+            leave_type=LeaveRecord.TYPE_UNPAID,
+            start_date=date(2026, 4, 11),
+            end_date=date(2026, 4, 11),
+            reason='Personal',
+            created_by=self.user,
+        )
+        SalaryAdvance.objects.create(
+            employee=emp,
+            date=date(2026, 4, 5),
+            amount=Decimal('500.00'),
+            reason='Advance',
+        )
+        record = SalaryRecord.objects.create(
+            employee=emp,
+            year=2026,
+            month=4,
+            gross_salary=Decimal('15000.00'),
+            net_salary=Decimal('14500.00'),
+            calculation_method=SalaryBookSettings.METHOD_FIXED,
+            divisor_days=30,
+            daily_salary=Decimal('500.0000'),
+        )
+        SalaryPayment.objects.create(
+            employee=emp,
+            salary_record=record,
+            amount=Decimal('1000.00'),
+            payment_date=date(2026, 4, 20),
+            payment_mode=SalaryPayment.MODE_CASH,
+        )
+        url = reverse('salary-book-employee-detail', args=[emp.id])
+        res = self.client.delete(url)
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Employee.objects.filter(pk=emp.id).exists())
+        self.assertEqual(Attendance.objects.filter(employee_id=emp.id).count(), 0)
+        self.assertEqual(LeaveRecord.objects.filter(employee_id=emp.id).count(), 0)
+        self.assertEqual(SalaryAdvance.objects.filter(employee_id=emp.id).count(), 0)
+        self.assertEqual(SalaryRecord.objects.filter(employee_id=emp.id).count(), 0)
+        self.assertEqual(SalaryPayment.objects.filter(employee_id=emp.id).count(), 0)
 
 
 class AttendanceGpsTests(SalaryBookMixin, APITestCase):
@@ -517,6 +577,43 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         att = Attendance.objects.get(employee=self.emp, date='2026-04-10')
         self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
         self.assertIsNone(att.latitude)
+
+    def test_manual_timed_attendance_creates_in_out(self):
+        self.user.is_superuser = True
+        self.user.save()
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_HARDWARE
+        settings_obj.save()
+        url = reverse('salary-book-attendance-list-create')
+        res = self.client.post(url, {
+            'employee': self.emp.id,
+            'date': '2026-04-11',
+            'status': 'PRESENT',
+            'check_in_time': '09:15',
+            'check_out_time': '18:30',
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        att = Attendance.objects.get(employee=self.emp, date='2026-04-11')
+        self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
+        self.assertEqual(timezone.localtime(att.check_in_time).strftime('%H:%M'), '09:15')
+        self.assertEqual(timezone.localtime(att.check_out_time).strftime('%H:%M'), '18:30')
+        self.assertGreater(att.worked_minutes, 0)
+
+    def test_manual_timed_attendance_rejects_partial_times(self):
+        self.user.is_superuser = True
+        self.user.save()
+        settings_obj = SalaryBookSettings.get_solo()
+        settings_obj.attendance_capture_mode = SalaryBookSettings.CAPTURE_HARDWARE
+        settings_obj.save()
+        url = reverse('salary-book-attendance-list-create')
+        res = self.client.post(url, {
+            'employee': self.emp.id,
+            'date': '2026-04-12',
+            'status': 'PRESENT',
+            'check_in_time': '09:00',
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Attendance.objects.filter(employee=self.emp, date='2026-04-12').count(), 0)
 
 
 class SalaryRuleTests(SalaryBookMixin, APITestCase):
@@ -945,3 +1042,94 @@ class SalaryBookIntegrationTests(SalaryBookMixin, APITestCase):
         self.assertIsNone(res.data['check_in_time'])
         att = Attendance.objects.get(employee=emp, date='2026-04-04')
         self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
+
+
+class MtshopAdvanceSyncTests(SalaryBookMixin, APITestCase):
+    def setUp(self):
+        self.user = self.make_user('mtshop-owner', admin=True)
+        self.client.force_authenticate(user=self.user)
+        from backend.parties.models import Customer, CustomerGroup, InternalLedgerEntry
+
+        self.Customer = Customer
+        self.InternalLedgerEntry = InternalLedgerEntry
+        self.mtshop_group = CustomerGroup.objects.create(name='MTSHOP', description='Shop boys')
+        self.customer = Customer.objects.create(
+            name='MT SHOP Ramesh Kumar',
+            phone='9876543210',
+            customer_group=self.mtshop_group,
+        )
+        self.emp = self.make_employee(
+            name='Ramesh Kumar',
+            mobile='9876543210',
+            mtshop_customer=self.customer,
+        )
+
+    def test_debit_creates_active_advance(self):
+        from backend.parties.internal_ledger_utils import create_internal_ledger_entry_if_mtshop
+
+        create_internal_ledger_entry_if_mtshop(
+            self.customer,
+            'debit',
+            Decimal('2000.00'),
+            'Invoice INV-1001 (CREDIT)',
+            self.user,
+        )
+        adv = SalaryAdvance.objects.get(employee=self.emp, source=SalaryAdvance.SOURCE_MTSHOP)
+        self.assertEqual(adv.amount, Decimal('2000.00'))
+        self.assertEqual(adv.status, SalaryAdvance.STATUS_ACTIVE)
+        self.assertEqual(adv.source_invoice_number, 'INV-1001')
+        self.assertIn('MT Shop', adv.remarks)
+
+    def test_credit_marks_advance_paid(self):
+        from backend.parties.internal_ledger_utils import create_internal_ledger_entry_if_mtshop
+
+        create_internal_ledger_entry_if_mtshop(
+            self.customer, 'debit', Decimal('2000.00'),
+            'Invoice INV-2002 (CREDIT)', self.user,
+        )
+        create_internal_ledger_entry_if_mtshop(
+            self.customer, 'credit', Decimal('2000.00'),
+            'Payment for Invoice INV-2002', self.user,
+        )
+        adv = SalaryAdvance.objects.get(employee=self.emp, source=SalaryAdvance.SOURCE_MTSHOP)
+        self.assertEqual(adv.status, SalaryAdvance.STATUS_PAID)
+
+    def test_mark_paid_endpoint_excludes_from_salary(self):
+        adv = SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=date(2026, 4, 10),
+            amount=Decimal('1500.00'),
+            reason='MT Shop purchase',
+            source=SalaryAdvance.SOURCE_MTSHOP,
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        Attendance.objects.bulk_create([
+            Attendance(
+                employee=self.emp, date=date(2026, 4, d), status=Attendance.STATUS_PRESENT,
+            )
+            for d in range(1, 31)
+        ])
+        res = self.client.post(reverse('salary-book-advance-mark-paid', args=[adv.id]), {}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], SalaryAdvance.STATUS_PAID)
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['total_advances'], Decimal('0.00'))
+
+    def test_phone_match_without_explicit_link(self):
+        from backend.parties.internal_ledger_utils import create_internal_ledger_entry_if_mtshop
+
+        other = self.Customer.objects.create(
+            name='MT SHOP Suresh',
+            phone='9123456789',
+            customer_group=self.mtshop_group,
+        )
+        emp2 = self.make_employee(name='Suresh', mobile='9123456789')
+        create_internal_ledger_entry_if_mtshop(
+            other, 'debit', Decimal('500.00'), 'Invoice INV-9 (CREDIT)', self.user,
+        )
+        self.assertTrue(
+            SalaryAdvance.objects.filter(
+                employee=emp2, source=SalaryAdvance.SOURCE_MTSHOP, amount=Decimal('500.00'),
+            ).exists()
+        )

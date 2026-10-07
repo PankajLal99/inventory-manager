@@ -225,6 +225,7 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
             'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
             'Half day is capped at half of daily salary.',
             'Active salary advances in this month reduce net payable.',
+            'MT Shop / Shop Boys purchases appear as advances; Paid or Voided advances are excluded.',
         ],
     }
 

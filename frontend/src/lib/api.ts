@@ -778,6 +778,7 @@ export const salaryBookApi = {
     get: (id: number) => api.get(`/salary-book/employees/${id}/`, sb as any),
     create: (data: any) => api.post('/salary-book/employees/', data, sb as any),
     update: (id: number, data: any) => api.patch(`/salary-book/employees/${id}/`, data, sb as any),
+    delete: (id: number) => api.delete(`/salary-book/employees/${id}/`, sb as any),
     attendance: (id: number, params?: any) =>
       api.get(`/salary-book/employees/${id}/attendance/`, { params, ...sb } as any),
     leaves: (id: number, params?: any) =>
@@ -814,7 +815,11 @@ export const salaryBookApi = {
     list: (params?: any) => api.get('/salary-book/advances/', { params, ...sb } as any),
     create: (data: any) => api.post('/salary-book/advances/', data, sb as any),
     void: (id: number) => api.post(`/salary-book/advances/${id}/void/`, {}, sb as any),
+    markPaid: (id: number, data?: { remarks?: string }) =>
+      api.post(`/salary-book/advances/${id}/mark-paid/`, data || {}, sb as any),
   },
+  mtshopCustomers: (params?: { search?: string }) =>
+    api.get('/salary-book/mtshop-customers/', { params, ...sb } as any),
   salaries: {
     list: (params?: { year?: number; month?: number }) =>
       api.get('/salary-book/salaries/', { params, ...sb } as any),
