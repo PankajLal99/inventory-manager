@@ -1,4 +1,5 @@
 import type { GpsFix, SalaryBookSettings } from './types';
+import { assertExportsAllowed } from '../../lib/emergencyMaskGuard';
 
 export function formatINR(value: string | number | null | undefined) {
   const n = Number(value ?? 0);
@@ -87,6 +88,8 @@ export function downloadCsv(
   headers: string[],
   rows: (string | number | null | undefined)[][],
 ) {
+  assertExportsAllowed();
+
   const lines = [
     headers.map(escapeCsv).join(','),
     ...rows.map((row) => row.map(escapeCsv).join(',')),

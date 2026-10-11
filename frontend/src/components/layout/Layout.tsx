@@ -5,7 +5,7 @@ import { auth } from '../../lib/auth';
 import { clearPersonalLedgerUnlockIfLeaving } from '../../lib/personalLedgerUnlock';
 import { hydrateInvoiceExportSplitFromServer } from '../../pages/invoices/invoiceExportSettings';
 import { hydrateProductNameColorRulesFromServer } from '../../lib/productNameColorRules';
-import { productsApi, reportsApi, customNavLinksApi } from '../../lib/api';
+import { productsApi, reportsApi, customNavLinksApi, emergencyMaskApi } from '../../lib/api';
 import BarcodeScanner from '../BarcodeScanner';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -48,6 +48,7 @@ import {
   Tags,
   Wallet,
   Link2,
+  AlertTriangle,
 } from 'lucide-react';
 
 export default function Layout() {
@@ -71,6 +72,9 @@ export default function Layout() {
   const [thermalPrintSettingsOpen, setThermalPrintSettingsOpen] = useState(false);
   const [productNameColorRulesOpen, setProductNameColorRulesOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const [emergencyMaskConfirmOpen, setEmergencyMaskConfirmOpen] = useState(false);
+  const [emergencyMaskActivating, setEmergencyMaskActivating] = useState(false);
+  const [emergencyMaskError, setEmergencyMaskError] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -157,6 +161,27 @@ export default function Layout() {
   const handleLogout = () => {
     auth.logout('main');
     navigate('/login');
+  };
+
+  const handleEmergencyMaskActivate = async () => {
+    setEmergencyMaskActivating(true);
+    setEmergencyMaskError(null);
+    try {
+      await emergencyMaskApi.activate();
+      await auth.loadUser('main');
+      setUser(auth.getUser('main'));
+      setEmergencyMaskConfirmOpen(false);
+      setUserMenuOpen(false);
+      window.location.reload();
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Failed to activate emergency mask.';
+      setEmergencyMaskError(String(detail));
+    } finally {
+      setEmergencyMaskActivating(false);
+    }
   };
 
   const handleBarcodeScan = async (barcode: string) => {
@@ -689,6 +714,22 @@ export default function Layout() {
                       <Keyboard className="h-4 w-4 mr-3 text-gray-400" />
                       Keyboard Shortcuts
                     </button>
+                    {isAdmin && !user?.emergency_mask_active && (
+                      <>
+                        <div className="my-1 border-t border-gray-100" />
+                        <button
+                          onClick={() => {
+                            setUserMenuOpen(false);
+                            setEmergencyMaskError(null);
+                            setEmergencyMaskConfirmOpen(true);
+                          }}
+                          className="w-full flex items-center px-4 py-2.5 text-sm text-red-700 hover:bg-red-50 transition-colors"
+                        >
+                          <AlertTriangle className="h-4 w-4 mr-3 text-red-500" />
+                          Emergency data mask
+                        </button>
+                      </>
+                    )}
                     <button
                       onClick={handleLogout}
                       className="w-full flex items-center px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
@@ -730,6 +771,68 @@ export default function Layout() {
         isOpen={shortcutsHelpOpen}
         onClose={() => setShortcutsHelpOpen(false)}
       />
+
+      {/* Emergency data mask confirm (Admin only, one-way) */}
+      <Modal
+        isOpen={emergencyMaskConfirmOpen}
+        onClose={() => {
+          if (!emergencyMaskActivating) {
+            setEmergencyMaskConfirmOpen(false);
+            setEmergencyMaskError(null);
+          }
+        }}
+        title="Activate emergency data mask?"
+        size="sm"
+        closeOnBackdropClick={!emergencyMaskActivating}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700">
+            This scales money and KPI numbers shown across the site (including Salary Book)
+            to a small percentage of real values. The database is not changed.
+          </p>
+          <p className="text-sm text-gray-700">
+            POS and credit cart recording responses stay unmasked so you can keep recording
+            with real amounts.
+          </p>
+          <p className="text-sm font-medium text-red-700">
+            This cannot be turned off from the website. Only a backend/shell change can
+            disable it.
+          </p>
+          {emergencyMaskError && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {emergencyMaskError}
+            </p>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={emergencyMaskActivating}
+              onClick={() => {
+                setEmergencyMaskConfirmOpen(false);
+                setEmergencyMaskError(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              disabled={emergencyMaskActivating}
+              onClick={handleEmergencyMaskActivate}
+            >
+              {emergencyMaskActivating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Activating…
+                </>
+              ) : (
+                'Activate mask'
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* QR Code Scanner Modal */}
       <Modal

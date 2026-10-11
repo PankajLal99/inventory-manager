@@ -438,3 +438,297 @@ class ProductNameColorRulesSettingsTests(APITestCase):
         self.client.force_authenticate(user=self.user_a)
         response = self.client.put(self.url, {'keyword': 'X'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class EmergencyMaskTests(APITestCase):
+    """Emergency display mask: activate, scale money fields, hide setting, skip carts."""
+
+    def setUp(self):
+        from django.contrib.auth.models import Group
+        from django.core.cache import cache
+        from backend.core.emergency_mask import SETTING_KEY, deactivate_emergency_mask
+
+        cache.clear()
+        deactivate_emergency_mask()
+
+        self.admin_group, _ = Group.objects.get_or_create(name='Admin')
+        self.admin = User.objects.create_user(username='maskadmin', password='password')
+        self.admin.groups.add(self.admin_group)
+
+        self.retail = User.objects.create_user(username='maskretail', password='password')
+        retail_group, _ = Group.objects.get_or_create(name='Retail')
+        self.retail.groups.add(retail_group)
+
+        self.setting_key = SETTING_KEY
+
+    def tearDown(self):
+        from django.core.cache import cache
+        from backend.core.emergency_mask import deactivate_emergency_mask
+        deactivate_emergency_mask()
+        cache.clear()
+
+    def test_mask_scales_money_not_ids_or_qty(self):
+        from backend.core.emergency_mask import apply_emergency_mask, activate_emergency_mask
+
+        activate_emergency_mask(percent=10)
+        data = {
+            'id': 42,
+            'count': 100,
+            'quantity': 5,
+            'total': '1000.00',
+            'paid_amount': 200.0,
+            'due_amount': Decimal('50.00'),
+            'customer': {'id': 7, 'credit_balance': '500.00', 'name': 'Ada'},
+            'kpis': {'total_sales': 10000, 'stock_value': 2500.5},
+            'results': [{'unit_price': '100.00', 'quantity': 2}],
+        }
+        masked = apply_emergency_mask(data)
+        self.assertEqual(masked['id'], 42)
+        self.assertEqual(masked['count'], 100)
+        self.assertEqual(masked['quantity'], 5)
+        self.assertEqual(masked['total'], '100.00')
+        self.assertEqual(masked['paid_amount'], 20.0)
+        self.assertEqual(masked['due_amount'], Decimal('5.00'))
+        self.assertEqual(masked['customer']['id'], 7)
+        self.assertEqual(masked['customer']['credit_balance'], '50.00')
+        self.assertEqual(masked['customer']['name'], 'Ada')
+        self.assertEqual(masked['kpis']['total_sales'], 1000)
+        self.assertEqual(masked['results'][0]['quantity'], 2)
+        self.assertEqual(masked['results'][0]['unit_price'], '10.00')
+
+    def test_skip_pos_and_credit_cart_paths(self):
+        from backend.core.emergency_mask import should_skip_path
+
+        self.assertTrue(should_skip_path('/api/v1/pos/carts/'))
+        self.assertTrue(should_skip_path('/api/v1/pos/carts/12/items/'))
+        self.assertTrue(should_skip_path('/api/v1/credit/carts/3/'))
+        # Overview is display-only — still masked
+        self.assertFalse(should_skip_path('/api/v1/pos/carts/overview/'))
+        self.assertFalse(should_skip_path('/api/v1/pos/invoices/'))
+        self.assertFalse(should_skip_path('/api/v1/reports/dashboard-kpis/'))
+
+    def test_mask_covers_dashboard_cash_upi_currency_and_hourly_rate(self):
+        from backend.core.emergency_mask import apply_emergency_mask, activate_emergency_mask
+
+        activate_emergency_mask(percent=10)
+        data = {
+            'kpis': {
+                'total_cash': 1000.0,
+                'cash_from_invoice_type_cash': 400.0,
+                'cash_from_mixed': 100.0,
+                'upi_from_invoice_type_upi': 300.0,
+                'upi_from_mixed': 200.0,
+                'cash_breakdown': {
+                    'retail_counter': 250.0,
+                    'repair': 50.0,
+                    'mix_cash': 40.0,
+                    'manual_cash': 10.0,
+                    'replacement_returns': 5.0,
+                },
+                'defective_purchase_value': 80.0,
+                'defective_product_count': 12,
+            },
+            'supplier_breakdown': [
+                {'price': '₹665', 'selling_price': '₹800', 'purchase_price_value': 665.0},
+            ],
+            'hourly_rate': '200.00',
+            'hourly_rate_preview': 200.0,
+            'tax_rate': 18.0,
+            'credit_limit': 5000,
+            'avg_order_value': 999.0,
+        }
+        masked = apply_emergency_mask(data)
+        kpis = masked['kpis']
+        self.assertEqual(kpis['total_cash'], 100.0)
+        self.assertEqual(kpis['cash_from_invoice_type_cash'], 40.0)
+        self.assertEqual(kpis['cash_from_mixed'], 10.0)
+        self.assertEqual(kpis['upi_from_invoice_type_upi'], 30.0)
+        self.assertEqual(kpis['upi_from_mixed'], 20.0)
+        self.assertEqual(kpis['cash_breakdown']['retail_counter'], 25.0)
+        self.assertEqual(kpis['cash_breakdown']['repair'], 5.0)
+        self.assertEqual(kpis['defective_purchase_value'], 8.0)
+        self.assertEqual(kpis['defective_product_count'], 12)  # count not scaled
+        self.assertEqual(masked['supplier_breakdown'][0]['price'], '₹67')
+        self.assertEqual(masked['supplier_breakdown'][0]['selling_price'], '₹80')
+        self.assertEqual(masked['supplier_breakdown'][0]['purchase_price_value'], 66.5)
+        self.assertEqual(masked['hourly_rate'], '20.00')
+        self.assertEqual(masked['hourly_rate_preview'], 20.0)
+        self.assertEqual(masked['tax_rate'], 18.0)  # non-money rate untouched
+        self.assertEqual(masked['credit_limit'], 500)
+        self.assertEqual(masked['avg_order_value'], 99.9)
+
+    def test_activate_admin_only_and_no_http_disable(self):
+        self.client.force_authenticate(user=self.retail)
+        denied = self.client.post('/api/v1/emergency-mask/activate/', {}, format='json')
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.admin)
+        ok = self.client.post(
+            '/api/v1/emergency-mask/activate/',
+            {'percent': 4},
+            format='json',
+        )
+        self.assertEqual(ok.status_code, status.HTTP_200_OK)
+        self.assertTrue(ok.data['enabled'])
+        self.assertEqual(ok.data['percent'], 4.0)
+
+        setting = Setting.objects.get(key=self.setting_key)
+        import json as _json
+        stored = _json.loads(setting.value)
+        self.assertTrue(stored['enabled'])
+        self.assertEqual(stored['percent'], 4.0)
+
+        # Setting hidden from list API
+        staff = User.objects.create_user(
+            username='maskstaff', password='password', is_staff=True
+        )
+        self.client.force_authenticate(user=staff)
+        listed = self.client.get('/api/v1/settings/')
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        keys = [row['key'] for row in listed.data]
+        self.assertNotIn(self.setting_key, keys)
+
+        me = self.client.get('/api/v1/auth/me/')
+        # staff without Admin group may not get percent; re-auth as admin
+        self.client.force_authenticate(user=self.admin)
+        me = self.client.get('/api/v1/auth/me/')
+        self.assertTrue(me.data.get('emergency_mask_active'))
+        self.assertEqual(me.data.get('emergency_mask_percent'), 4.0)
+
+    def test_export_api_blocked_when_mask_active(self):
+        from backend.core.emergency_mask import activate_emergency_mask
+
+        self.client.force_authenticate(user=self.admin)
+        before = self.client.get('/api/v1/credit/ledger/export/')
+        # May be 200 with empty rows or other status when mask off — just not 403 for mask
+        self.assertNotEqual(before.status_code, status.HTTP_403_FORBIDDEN)
+
+        activate_emergency_mask(percent=3)
+        blocked = self.client.get('/api/v1/credit/ledger/export/')
+        self.assertEqual(blocked.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('emergency data mask', str(blocked.json().get('detail', '')).lower())
+
+    def test_mask_off_is_noop_on_payload(self):
+        """When disabled, apply_emergency_mask must return the exact same object identity/values."""
+        from backend.core.emergency_mask import apply_emergency_mask, deactivate_emergency_mask
+        from copy import deepcopy
+
+        deactivate_emergency_mask()
+        original = {
+            'id': 1,
+            'total': '9999.99',
+            'paid_amount': 1234.56,
+            'quantity': 7,
+            'nested': {'credit_balance': '50.00', 'name': 'Bob'},
+            'results': [{'unit_price': '10.00', 'id': 9}],
+        }
+        before = deepcopy(original)
+        out = apply_emergency_mask(original)
+        self.assertIs(out, original)
+        self.assertEqual(out, before)
+
+    def test_renderer_mask_off_matches_stock_json_renderer(self):
+        """Default renderer must not alter bytes vs stock JSONRenderer when mask is off."""
+        from rest_framework.renderers import JSONRenderer
+        from rest_framework.request import Request
+        from django.test import RequestFactory
+        from backend.core.renderers import EmergencyMaskJSONRenderer
+        from backend.core.emergency_mask import deactivate_emergency_mask
+
+        deactivate_emergency_mask()
+        payload = {
+            'total': '1000.00',
+            'paid_amount': 250,
+            'quantity': 3,
+            'id': 5,
+            'results': [{'due_amount': '40.00', 'count': 2}],
+        }
+        factory = RequestFactory()
+        django_request = factory.get('/api/v1/pos/invoices/')
+        drf_request = Request(django_request)
+        context = {'request': drf_request}
+
+        masked_bytes = EmergencyMaskJSONRenderer().render(payload, renderer_context=context)
+        stock_bytes = JSONRenderer().render(payload, renderer_context=context)
+        self.assertEqual(masked_bytes, stock_bytes)
+
+    def test_renderer_skips_cart_paths_even_when_mask_on(self):
+        """POS/credit cart responses must stay real so recording is unaffected."""
+        import json as _json
+        from rest_framework.request import Request
+        from django.test import RequestFactory
+        from backend.core.renderers import EmergencyMaskJSONRenderer
+        from backend.core.emergency_mask import activate_emergency_mask
+
+        activate_emergency_mask(percent=10)
+        payload = {'unit_price': '100.00', 'total': '100.00', 'id': 1}
+        factory = RequestFactory()
+
+        for path in ('/api/v1/pos/carts/1/', '/api/v1/credit/carts/2/items/'):
+            django_request = factory.get(path)
+            drf_request = Request(django_request)
+            rendered = EmergencyMaskJSONRenderer().render(
+                payload, renderer_context={'request': drf_request}
+            )
+            data = _json.loads(rendered.decode('utf-8'))
+            self.assertEqual(data['unit_price'], '100.00', path)
+            self.assertEqual(data['total'], '100.00', path)
+
+        # Non-cart path is scaled
+        django_request = factory.get('/api/v1/pos/invoices/1/')
+        rendered = EmergencyMaskJSONRenderer().render(
+            payload, renderer_context={'request': Request(django_request)}
+        )
+        data = _json.loads(rendered.decode('utf-8'))
+        self.assertEqual(data['unit_price'], '10.00')
+        self.assertEqual(data['total'], '10.00')
+
+    def test_export_settings_not_blocked_when_mask_on(self):
+        """ledger/invoice export-settings URLs must keep working (not mistaken for /export/)."""
+        from backend.core.emergency_mask import activate_emergency_mask
+
+        activate_emergency_mask(percent=3)
+        self.client.force_authenticate(user=self.admin)
+
+        ledger_settings = self.client.get('/api/v1/ledger-export-settings/')
+        self.assertNotEqual(ledger_settings.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(ledger_settings.status_code, status.HTTP_200_OK)
+
+        invoice_settings = self.client.get('/api/v1/invoice-export-settings/')
+        self.assertNotEqual(invoice_settings.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(invoice_settings.status_code, status.HTTP_200_OK)
+
+    def test_auth_me_and_search_unaffected_when_mask_off(self):
+        self.client.force_authenticate(user=self.admin)
+        me = self.client.get('/api/v1/auth/me/')
+        self.assertEqual(me.status_code, status.HTTP_200_OK)
+        self.assertFalse(me.data.get('emergency_mask_active'))
+        self.assertEqual(me.data.get('username'), 'maskadmin')
+        self.assertIn('groups', me.data)
+
+        search = self.client.get('/api/v1/search/', {'q': 'zzz-no-match'})
+        self.assertEqual(search.status_code, status.HTTP_200_OK)
+
+    def test_deactivate_restores_unmasked_renderer_output(self):
+        import json as _json
+        from rest_framework.request import Request
+        from django.test import RequestFactory
+        from backend.core.renderers import EmergencyMaskJSONRenderer
+        from backend.core.emergency_mask import activate_emergency_mask, deactivate_emergency_mask
+
+        payload = {'total': '1000.00', 'id': 1}
+        factory = RequestFactory()
+        context = {'request': Request(factory.get('/api/v1/reports/dashboard-kpis/'))}
+
+        activate_emergency_mask(percent=10)
+        on_data = _json.loads(
+            EmergencyMaskJSONRenderer().render(payload, renderer_context=context).decode()
+        )
+        self.assertEqual(on_data['total'], '100.00')
+
+        deactivate_emergency_mask()
+        off_data = _json.loads(
+            EmergencyMaskJSONRenderer().render(payload, renderer_context=context).decode()
+        )
+        self.assertEqual(off_data['total'], '1000.00')
+        self.assertEqual(off_data['id'], 1)

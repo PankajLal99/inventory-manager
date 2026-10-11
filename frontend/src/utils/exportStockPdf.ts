@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { toLocalDateString } from '../lib/utils';
+import { assertExportsAllowed } from '../lib/emergencyMaskGuard';
 
 /** jsPDF Helvetica can't reliably render ₹ / emoji — keep printable Latin text */
 function sanitizePdfText(value?: string | number | null) {
@@ -274,6 +275,7 @@ export function exportStockAlertsToPdf(options: {
   columnIds?: StockAlertExportColumnId[];
   tabLabel?: string;
 }): void {
+  assertExportsAllowed();
   const { products, tabLabel, columnIds } = options;
   if (!products.length) return;
 
@@ -361,6 +363,7 @@ export function exportStockOverviewToPdf(options: {
   products: StockOverviewExportRow[];
   filterLabels?: string[];
 }): void {
+  assertExportsAllowed();
   const { products, filterLabels = [] } = options;
   if (!products.length) return;
 

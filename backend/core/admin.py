@@ -30,6 +30,10 @@ class SettingAdmin(admin.ModelAdmin):
     ordering = ['key']
     readonly_fields = ['updated_at']
 
+    def get_queryset(self, request):
+        from backend.core.emergency_mask import SETTING_KEY
+        return super().get_queryset(request).exclude(key=SETTING_KEY)
+
 
 @admin.register(CustomNavLink)
 class CustomNavLinkAdmin(admin.ModelAdmin):
