@@ -134,6 +134,7 @@ export interface SalaryAdvance {
   amount: string;
   reason: string;
   remarks: string;
+  payment_mode?: string;
   status: 'ACTIVE' | 'VOID' | 'PAID' | string;
   source: 'MANUAL' | 'MTSHOP' | string;
   source_invoice_number: string;
@@ -249,6 +250,9 @@ export interface CalendarEmployee {
     HOLIDAY: number;
     unmarked: number;
   };
+  salary_generated?: string;
+  taken?: string;
+  net_salary?: string;
 }
 
 export interface CalendarKpis {
@@ -263,6 +267,17 @@ export interface CalendarKpis {
   attendance_rate: string;
 }
 
+export interface CalendarTodayKpis {
+  total_employees: number;
+  present: number;
+  absent: number;
+  half_day: number;
+  paid_leave: number;
+  unpaid_leave: number;
+  holiday: number;
+  unmarked: number;
+}
+
 export interface CalendarResponse {
   year: number;
   month: number;
@@ -270,6 +285,7 @@ export interface CalendarResponse {
   today: string;
   view: 'admin' | 'employee';
   kpis: CalendarKpis;
+  today_kpis?: CalendarTodayKpis;
   employees: CalendarEmployee[];
 }
 

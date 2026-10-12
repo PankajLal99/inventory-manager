@@ -47,7 +47,15 @@ export function methodLabel(method?: string | null) {
 
 export function toTimeInput(value: string | null | undefined) {
   if (!value) return '';
-  return String(value).slice(0, 5);
+  const raw = String(value);
+  // HH:MM or HH:MM:SS
+  if (/^\d{1,2}:\d{2}/.test(raw)) return raw.slice(0, 5);
+  // ISO datetime → local HH:MM
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) {
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return raw.slice(0, 5);
 }
 
 export function scheduledHoursFromTimes(checkIn: string, checkOut: string) {

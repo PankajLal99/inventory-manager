@@ -88,9 +88,41 @@ def resolve_invoices_for_internal_entries(entries):
     return result
 
 
+def _customer_group_name(customer):
+    group = getattr(customer, 'customer_group', None)
+    group_name = (getattr(group, 'name', None) or '').upper() if group else ''
+    if not group_name and getattr(customer, 'customer_group_id', None):
+        try:
+            group_name = (customer.customer_group.name or '').upper()
+        except Exception:
+            group_name = ''
+    return group_name
+
+
+def _customer_is_empty_group(customer):
+    """True when customer has no group (or blank group name)."""
+    if not customer:
+        return False
+    return not _customer_group_name(customer)
+
+
+def _customer_links_to_salary_employee(customer):
+    """Best-effort: empty-group / repair customers matched to Salary Book employees."""
+    if not customer:
+        return False
+    try:
+        from backend.salary_book.services.mtshop_advances import (
+            find_employee_for_mtshop_customer,
+        )
+        return find_employee_for_mtshop_customer(customer) is not None
+    except Exception:
+        return False
+
+
 def _customer_is_mtshop(customer):
     """
-    Return True for Shop Boys / MT Shop customers.
+    Return True for Shop Boys / MT Shop customers, or empty-group customers
+    linked to a Salary Book employee (so repair/POS credits land in Taken).
     Matches name containing "MT SHOP" or "SHOP BOY", or MTSHOP customer group.
     """
     if not customer:
@@ -100,15 +132,13 @@ def _customer_is_mtshop(customer):
         return True
     if 'SHOP BOY' in name or 'SHOPBOY' in name:
         return True
-    group = getattr(customer, 'customer_group', None)
-    group_name = (getattr(group, 'name', None) or '').upper() if group else ''
-    if not group_name and getattr(customer, 'customer_group_id', None):
-        # Group may not be select_related; avoid extra query when name already matched.
-        try:
-            group_name = (customer.customer_group.name or '').upper()
-        except Exception:
-            group_name = ''
-    return group_name == 'MTSHOP'
+    group_name = _customer_group_name(customer)
+    if group_name == 'MTSHOP':
+        return True
+    # Empty group + salary employee match: mirror repair/POS activity into Taken.
+    if not group_name and _customer_links_to_salary_employee(customer):
+        return True
+    return False
 
 
 def create_internal_ledger_entry_if_mtshop(

@@ -474,6 +474,13 @@ class SalaryAdvance(models.Model):
         (SOURCE_MTSHOP, 'MT Shop'),
     ]
 
+    MODE_CASH = 'CASH'
+    MODE_UPI = 'UPI'
+    MODE_CHOICES = [
+        (MODE_CASH, 'Cash'),
+        (MODE_UPI, 'UPI'),
+    ]
+
     employee = models.ForeignKey(
         Employee, on_delete=models.PROTECT, related_name='advances'
     )
@@ -483,6 +490,9 @@ class SalaryAdvance(models.Model):
     )
     reason = models.CharField(max_length=255, blank=True)
     remarks = models.TextField(blank=True)
+    payment_mode = models.CharField(
+        max_length=16, choices=MODE_CHOICES, blank=True, default=''
+    )
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     source = models.CharField(
         max_length=16, choices=SOURCE_CHOICES, default=SOURCE_MANUAL, db_index=True

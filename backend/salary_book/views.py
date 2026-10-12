@@ -671,21 +671,64 @@ def attendance_detail(request, pk):
         attendance.save()
         return Response(AttendanceSerializer(attendance, context={'request': request}).data)
 
+    # Manual edit: status and/or in/out times (emergency early leave, corrections).
     new_status = data.get('status')
-    if new_status:
-        new_status = new_status.upper()
+    if new_status is not None:
+        new_status = str(new_status).upper()
         if new_status not in dict(Attendance.STATUS_CHOICES):
             return _err('Invalid attendance status.')
         attendance.status = new_status
-        if (
-            new_status in Attendance.PHOTO_STATUSES
+
+    manual_in_raw = data.get('check_in_time')
+    manual_out_raw = data.get('check_out_time')
+    has_time_payload = 'check_in_time' in data or 'check_out_time' in data
+
+    if has_time_payload:
+        if attendance.status not in Attendance.PHOTO_STATUSES:
+            # Non-present statuses should not keep punch times.
+            attendance.check_in_time = None
+            attendance.check_out_time = None
+            attendance.minutes_late = 0
+            attendance.is_late = False
+        else:
+            if not manual_in_raw or not manual_out_raw:
+                return _err('Both check-in and check-out times are required.')
+            try:
+                check_in = _parse_attendance_datetime(
+                    manual_in_raw, attendance.date, 'check_in_time'
+                )
+                check_out = _parse_attendance_datetime(
+                    manual_out_raw, attendance.date, 'check_out_time'
+                )
+            except ValidationError as exc:
+                detail = exc.detail if hasattr(exc, 'detail') else str(exc)
+                if isinstance(detail, dict):
+                    msg = next(iter(detail.values()))
+                    if isinstance(msg, list):
+                        msg = msg[0]
+                    return _err(str(msg))
+                return _err(str(detail))
+            if check_out <= check_in:
+                return _err('Check-out must be after check-in.')
+            attendance.check_in_time = check_in
+            attendance.check_out_time = check_out
+            late = minutes_late_at(check_in, attendance.employee, attendance.date)
+            attendance.minutes_late = late
+            attendance.is_late = late > 0
+            attendance.attendance_method = Attendance.METHOD_MANUAL
+    elif new_status is not None:
+        if attendance.status not in Attendance.PHOTO_STATUSES:
+            attendance.check_in_time = None
+            attendance.check_out_time = None
+            attendance.minutes_late = 0
+            attendance.is_late = False
+        elif (
+            attendance.status in Attendance.PHOTO_STATUSES
             and not attendance.check_in_time
             and attendance.attendance_method != Attendance.METHOD_MANUAL
         ):
             attendance.check_in_time = timezone.now()
-        elif new_status not in Attendance.PHOTO_STATUSES:
-            attendance.check_in_time = None
-            attendance.check_out_time = None
+
     if 'remarks' in data:
         attendance.remarks = data.get('remarks') or ''
     refresh_worked_minutes(attendance)
@@ -886,12 +929,20 @@ def advance_list_create(request):
     if amount <= 0:
         return _err('Advance amount must be greater than zero.')
 
+    payment_mode = (data.get('payment_mode') or '').upper().strip()
+    if payment_mode and payment_mode not in {
+        SalaryAdvance.MODE_CASH,
+        SalaryAdvance.MODE_UPI,
+    }:
+        return _err('Payment mode must be Cash or UPI.')
+
     advance = SalaryAdvance.objects.create(
         employee=employee,
         date=adv_date,
         amount=amount,
         reason=data.get('reason') or '',
         remarks=data.get('remarks') or '',
+        payment_mode=payment_mode,
         created_by=request.user,
     )
     return Response(
@@ -1351,12 +1402,18 @@ def attendance_calendar(request):
                 days[str(day)] = {'status': None}
                 counts['unmarked'] += 1
                 team['unmarked'] += 1
+        record, _ = _upsert_draft(emp, year, month)
+        breakdown = record.breakdown if isinstance(record.breakdown, dict) else {}
+        salary_generated = breakdown.get('earned_salary') or str(record.gross_salary)
         payload.append({
             'id': emp.id,
             'name': emp.name,
             'employee_id': emp.employee_id,
             'days': days,
             'counts': counts,
+            'salary_generated': str(salary_generated),
+            'taken': str(record.total_advances),
+            'net_salary': str(record.net_salary),
         })
 
     considered = (
@@ -1376,6 +1433,18 @@ def attendance_calendar(request):
     )
     rate = (paid_presence / considered * 100) if considered else Decimal('0')
 
+    # Today-only snapshot (for calendar header blocks)
+    active_employees = Employee.objects.filter(status=Employee.STATUS_ACTIVE)
+    today_rows = Attendance.objects.filter(
+        date=today,
+        employee_id__in=active_employees.values_list('id', flat=True),
+    )
+    today_counts = {key: 0 for key, _ in Attendance.STATUS_CHOICES}
+    for row in today_rows.values('status').annotate(n=Count('id')):
+        today_counts[row['status']] = row['n']
+    today_marked_ids = set(today_rows.values_list('employee_id', flat=True))
+    today_unmarked = active_employees.exclude(id__in=today_marked_ids).count()
+
     return Response({
         'year': year,
         'month': month,
@@ -1392,6 +1461,16 @@ def attendance_calendar(request):
             'holiday': team[Attendance.STATUS_HOLIDAY],
             'unmarked': team['unmarked'],
             'attendance_rate': str(rate.quantize(Decimal('0.1'))),
+        },
+        'today_kpis': {
+            'total_employees': active_employees.count(),
+            'present': today_counts.get(Attendance.STATUS_PRESENT, 0),
+            'absent': today_counts.get(Attendance.STATUS_ABSENT, 0),
+            'half_day': today_counts.get(Attendance.STATUS_HALF_DAY, 0),
+            'paid_leave': today_counts.get(Attendance.STATUS_PAID_LEAVE, 0),
+            'unpaid_leave': today_counts.get(Attendance.STATUS_UNPAID_LEAVE, 0),
+            'holiday': today_counts.get(Attendance.STATUS_HOLIDAY, 0),
+            'unmarked': today_unmarked,
         },
         'employees': payload,
     })

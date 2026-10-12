@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Umbrella } from 'lucide-react';
+import { Briefcase, ChevronLeft, ChevronRight, Plus, Umbrella, Wallet } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { formatTime, monthLabel, statusLabel } from '../utils';
-import type { CalendarEmployee, CalendarKpis, CalendarDayCell } from '../types';
+import { formatINR, formatTime, monthLabel, statusLabel } from '../utils';
+import type { CalendarEmployee, CalendarKpis, CalendarTodayKpis, CalendarDayCell } from '../types';
 
 export const STATUS_STYLE: Record<string, { bg: string; text: string; short: string }> = {
   PRESENT: { bg: 'bg-emerald-500', text: 'text-white', short: 'P' },
@@ -109,6 +109,61 @@ export function KpiStrip({ kpis, compact }: { kpis: CalendarKpis; compact?: bool
   );
 }
 
+/** Calendar header KPIs: today snapshot + month attendance rate (no duplicate present/absent). */
+export function CalendarSummaryStrip({
+  today,
+  kpis,
+}: {
+  today: CalendarTodayKpis;
+  kpis: CalendarKpis;
+}) {
+  const cards = [
+    { label: 'Total Employees', value: today.total_employees },
+    { label: 'Present Today', value: today.present },
+    { label: 'Absent Today', value: today.absent },
+    { label: 'Half Day Today', value: today.half_day },
+    { label: 'Month Attendance', value: `${Number(kpis.attendance_rate).toFixed(1)}%` },
+    { label: 'Unmarked (month)', value: kpis.unmarked },
+  ];
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+      {cards.map((card) => (
+        <div key={card.label} className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4">
+          <div className="text-[11px] sm:text-sm text-gray-500 leading-tight">{card.label}</div>
+          <div className="text-xl sm:text-2xl font-semibold text-gray-900 mt-0.5 tabular-nums">
+            {card.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EmployeeMoneyFooter({ emp }: { emp: CalendarEmployee }) {
+  return (
+    <div className="mt-2 grid grid-cols-2 gap-2">
+      <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2 flex items-center gap-2 min-w-0">
+        <Wallet className="h-4 w-4 text-emerald-700 shrink-0" />
+        <div className="min-w-0">
+          <div className="text-[10px] sm:text-xs text-emerald-800/80 leading-tight">Salary Generated</div>
+          <div className="text-sm font-semibold text-emerald-950 tabular-nums truncate">
+            {formatINR(emp.salary_generated || 0)}
+          </div>
+        </div>
+      </div>
+      <div className="rounded-xl bg-sky-50 border border-sky-100 px-3 py-2 flex items-center gap-2 min-w-0">
+        <Briefcase className="h-4 w-4 text-sky-700 shrink-0" />
+        <div className="min-w-0">
+          <div className="text-[10px] sm:text-xs text-sky-800/80 leading-tight">Taken</div>
+          <div className="text-sm font-semibold text-sky-950 tabular-nums truncate">
+            {formatINR(emp.taken || 0)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LegendItems({ className = '' }: { className?: string }) {
   return (
     <div className={`flex flex-wrap gap-x-3 gap-y-2 text-xs sm:text-sm text-gray-600 ${className}`}>
@@ -170,9 +225,15 @@ function hasPunchTimes(cell: CalendarDayCell | undefined) {
   return Boolean(cell?.check_in_time || cell?.check_out_time);
 }
 
-/** Days with no attendance record can receive manual in/out. Marked days are locked. */
+/** Days with no attendance record can receive manual in/out. */
 export function isUnmarkedCalendarDay(cell: CalendarDayCell | undefined) {
   return !cell?.status;
+}
+
+/** Any past/today day except before-joining can be edited (times and/or status). */
+export function canEditCalendarDayTimes(cell: CalendarDayCell | undefined) {
+  if (!cell?.status) return true;
+  return cell.status !== 'BEFORE_JOINING';
 }
 
 export type CalendarDayClick = {
@@ -282,7 +343,7 @@ function DayStatusCell({
           onClick?.();
         }}
         className={`block h-full w-full text-left cursor-pointer hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 rounded-lg ${className}`}
-        aria-label={`Add attendance for day ${day}`}
+        aria-label={`${marked ? 'Edit' : 'Add'} attendance for day ${day}`}
       >
         {node}
       </button>
@@ -309,7 +370,10 @@ function DayStatusCell({
   }
 
   if (hasPunchTimes(cell) && (status === 'PRESENT' || status === 'HALF_DAY' || !status)) {
-    return <InOutSplitCell cell={cell!} isToday={isToday} compact={compact} />;
+    return wrap(
+      <InOutSplitCell cell={cell!} isToday={isToday} compact={compact} />,
+      interactive ? 'ring-1 ring-dashed ring-emerald-300' : ''
+    );
   }
 
   if (!status || status === 'BEFORE_JOINING') {
@@ -345,11 +409,11 @@ function DayStatusCell({
   }
 
   const style = STATUS_STYLE[status];
-  return (
+  return wrap(
     <div
       className={`flex h-full w-full flex-col items-center justify-center rounded-lg ${minH} ${style?.bg || 'bg-gray-100'} ${style?.text || 'text-gray-500'} ${
         isToday ? 'ring-2 ring-emerald-700 ring-offset-1' : ''
-      }`}
+      } ${interactive ? 'ring-1 ring-dashed ring-white/50' : ''}`}
     >
       {status === 'HOLIDAY' ? (
         <Umbrella className={compact ? 'h-4 w-4' : 'h-5 w-5'} />
@@ -362,6 +426,9 @@ function DayStatusCell({
         <span className="mt-1 text-[10px] leading-none opacity-90">
           {cell.rule_penalty_applied ? 'P' : 'L'}
         </span>
+      )}
+      {interactive && (
+        <span className="mt-1 text-[9px] font-medium leading-none opacity-90">Edit</span>
       )}
     </div>
   );
@@ -473,7 +540,7 @@ function SelectedDayPanel({
 }) {
   const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const sunday = isSunday(year, month, day);
-  const canAdd = Boolean(onAdd) && isUnmarkedCalendarDay(cell) && iso <= today;
+  const canAdd = Boolean(onAdd) && canEditCalendarDayTimes(cell) && iso <= today;
   const status = cell?.status;
   const style = status ? STATUS_STYLE[status] : undefined;
 
@@ -547,7 +614,7 @@ function SelectedDayPanel({
             })
           }
         >
-          Add in / out times
+          {cell?.id ? 'Edit attendance' : 'Add in / out times'}
         </button>
       )}
     </div>
@@ -644,7 +711,7 @@ export function EmployeeMonthGrid({
             const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const cell = employee.days[String(day)];
             const sunday = isSunday(year, month, day);
-            const canAdd = Boolean(onDayClick) && isUnmarkedCalendarDay(cell) && iso <= today;
+            const canAdd = Boolean(onDayClick) && canEditCalendarDayTimes(cell) && iso <= today;
             return (
               <div key={day} title={cellTitle(cell, iso)} className="space-y-1.5">
                 <div
@@ -820,6 +887,7 @@ export function AdminMonthGrid({
   today,
   employees,
   onDayClick,
+  onAddAmount,
 }: {
   year: number;
   month: number;
@@ -827,11 +895,12 @@ export function AdminMonthGrid({
   today: string;
   employees: CalendarEmployee[];
   onDayClick?: (payload: CalendarDayClick) => void;
+  onAddAmount?: (emp: CalendarEmployee) => void;
 }) {
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
   const dayClickProps = (emp: CalendarEmployee, iso: string, cell: CalendarDayCell | undefined) => {
-    const canAdd = Boolean(onDayClick) && isUnmarkedCalendarDay(cell) && iso <= today;
+    const canAdd = Boolean(onDayClick) && canEditCalendarDayTimes(cell) && iso <= today;
     return {
       clickable: canAdd,
       isPast: iso < today,
@@ -864,6 +933,16 @@ export function AdminMonthGrid({
                 </span>
                 <span className="text-[11px] text-gray-400 shrink-0">{emp.employee_id}</span>
               </Link>
+              {onAddAmount && (
+                <button
+                  type="button"
+                  onClick={() => onAddAmount(emp)}
+                  className="shrink-0 inline-flex items-center gap-0.5 min-h-8 px-2 rounded-full border border-emerald-500 text-emerald-800 text-[11px] font-semibold"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add Amount
+                </button>
+              )}
               <span className="shrink-0 text-[11px] font-semibold text-emerald-800 tabular-nums">
                 {emp.counts.PRESENT}P
               </span>
@@ -888,82 +967,98 @@ export function AdminMonthGrid({
                 );
               })}
             </div>
+            <EmployeeMoneyFooter emp={emp} />
           </div>
         ))}
       </div>
 
-      <div className="hidden lg:block bg-white rounded-xl border border-emerald-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border-separate border-spacing-0">
-            <thead>
-              <tr className="bg-slate-50 text-gray-600">
-                <th className="sticky left-0 bg-slate-50 text-left px-4 py-3 font-semibold min-w-[14rem] z-20 border-b border-emerald-100">
-                  Employee
-                </th>
-                {days.map((day) => {
-                  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const sunday = isSunday(year, month, day);
-                  return (
-                    <th
-                      key={day}
-                      className={`px-1.5 py-3 font-medium min-w-[5.5rem] border-b border-emerald-100 ${
-                        sunday
-                          ? 'text-rose-600 bg-rose-50/60'
-                          : iso === today
-                            ? 'text-emerald-800'
-                            : ''
-                      }`}
-                    >
-                      <div className="text-base font-semibold leading-none">{day}</div>
-                      <div className="mt-1 text-xs font-normal leading-none">
-                        {weekdayShort(year, month, day)}
-                      </div>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((emp) => (
-                <tr key={emp.id} className="hover:bg-emerald-50/30">
-                  <td className="sticky left-0 bg-white px-4 py-2 z-10 border-t border-emerald-50">
-                    <Link
-                      to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
-                      className="font-semibold text-gray-900 hover:text-emerald-800"
-                    >
-                      {emp.name}
-                    </Link>
-                    <div className="text-xs text-gray-500">{emp.employee_id}</div>
-                  </td>
-                  {days.map((day) => {
-                    const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                    const cell = emp.days[String(day)];
-                    const sunday = isSunday(year, month, day);
-                    const click = dayClickProps(emp, iso, cell);
-                    return (
-                      <td
-                        key={day}
-                        className={`px-1.5 py-1.5 border-t border-emerald-50 align-middle ${
-                          sunday ? 'bg-rose-50/40' : ''
-                        }`}
-                        title={cellTitle(cell, iso)}
-                      >
-                        <DayStatusCell
-                          year={year}
-                          month={month}
-                          day={day}
-                          cell={cell}
-                          isToday={iso === today}
-                          {...click}
-                        />
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div className="hidden lg:block space-y-4">
+        {employees.map((emp) => (
+          <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
+            <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-emerald-50">
+              <Link
+                to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
+                className="min-w-0 flex-1"
+              >
+                <div className="font-semibold text-gray-900 hover:text-emerald-800">{emp.name}</div>
+                <div className="text-xs text-gray-500">{emp.employee_id}</div>
+              </Link>
+              {onAddAmount && (
+                <button
+                  type="button"
+                  onClick={() => onAddAmount(emp)}
+                  className="inline-flex items-center gap-1 min-h-10 px-3 rounded-full border border-emerald-500 text-emerald-800 text-sm font-semibold"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Amount
+                </button>
+              )}
+              <span className="text-sm font-semibold text-emerald-800 tabular-nums">
+                {emp.counts.PRESENT}P
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-separate border-spacing-0">
+                <thead>
+                  <tr className="bg-slate-50 text-gray-600">
+                    {days.map((day) => {
+                      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const sunday = isSunday(year, month, day);
+                      return (
+                        <th
+                          key={day}
+                          className={`px-1.5 py-3 font-medium min-w-[5.5rem] border-b border-emerald-100 ${
+                            sunday
+                              ? 'text-rose-600 bg-rose-50/60'
+                              : iso === today
+                                ? 'text-emerald-800'
+                                : ''
+                          }`}
+                        >
+                          <div className="text-base font-semibold leading-none">{day}</div>
+                          <div className="mt-1 text-xs font-normal leading-none">
+                            {weekdayShort(year, month, day)}
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="hover:bg-emerald-50/30">
+                    {days.map((day) => {
+                      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const cell = emp.days[String(day)];
+                      const sunday = isSunday(year, month, day);
+                      const click = dayClickProps(emp, iso, cell);
+                      return (
+                        <td
+                          key={day}
+                          className={`px-1.5 py-1.5 border-t border-emerald-50 align-middle ${
+                            sunday ? 'bg-rose-50/40' : ''
+                          }`}
+                          title={cellTitle(cell, iso)}
+                        >
+                          <DayStatusCell
+                            year={year}
+                            month={month}
+                            day={day}
+                            cell={cell}
+                            isToday={iso === today}
+                            {...click}
+                          />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="px-4 py-3 border-t border-emerald-50">
+              <EmployeeMoneyFooter emp={emp} />
+            </div>
+          </div>
+        ))}
       </div>
     </>
   );

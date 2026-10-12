@@ -118,9 +118,16 @@ def sync_salary_advance_from_internal_entry(entry, created_by=None):
 
     entry_type = (entry.entry_type or '').lower()
     if entry_type == 'debit':
+        # Purchase / goods on credit → Taken (salary advance).
         return _upsert_debit_advance(employee, entry, amount, created_by)
     if entry_type == 'credit':
-        return _apply_credit_to_advances(employee, entry, amount, created_by)
+        # POS settlement (linked invoice / source ledger) → mark advances paid.
+        # Manual Shop Boys "Credit (+)" with no invoice → cash/credit given → Taken.
+        invoice_number = _invoice_number_from_entry(entry)
+        has_source_ledger = bool(getattr(entry, 'source_ledger_entry_id', None))
+        if invoice_number or has_source_ledger:
+            return _apply_credit_to_advances(employee, entry, amount, created_by)
+        return _upsert_debit_advance(employee, entry, amount, created_by)
     return None
 
 

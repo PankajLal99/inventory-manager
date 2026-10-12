@@ -12,7 +12,6 @@ import {
   MoreHorizontal,
   LogOut,
   BookOpen,
-  Wallet,
   CalendarDays,
   Umbrella,
   BarChart3,
@@ -37,7 +36,6 @@ const PRIMARY: Array<{
 
 const MORE = [
   { path: '/salary-book/leaves', label: 'Leaves', icon: Umbrella, tutorial: 'nav-leaves' },
-  { path: '/salary-book/advances', label: 'Advances', icon: Wallet, tutorial: 'nav-advances' },
   { path: '/salary-book/salaries', label: 'Salary Book', icon: BookOpen, tutorial: 'nav-salaries' },
   { path: '/salary-book/reports', label: 'Reports', icon: BarChart3, tutorial: 'nav-reports' },
   { path: '/salary-book/devices', label: 'Devices', icon: Fingerprint, tutorial: 'nav-devices' },

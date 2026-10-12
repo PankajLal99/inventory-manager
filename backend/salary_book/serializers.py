@@ -448,6 +448,7 @@ class SalaryAdvanceSerializer(serializers.ModelSerializer):
             'amount',
             'reason',
             'remarks',
+            'payment_mode',
             'status',
             'source',
             'source_invoice_number',

@@ -16,9 +16,9 @@ import EmployeeForm from './pages/salary-book/EmployeeForm';
 import EmployeeDetails from './pages/salary-book/EmployeeDetails';
 import AttendancePage from './pages/salary-book/AttendancePage';
 import LeaveList from './pages/salary-book/LeaveList';
-import AdvanceList from './pages/salary-book/AdvanceList';
 import SalaryBookPage from './pages/salary-book/SalaryBookPage';
 import SalaryDetails from './pages/salary-book/SalaryDetails';
+import SalaryPageGate from './pages/salary-book/components/SalaryPageGate';
 import ReportsPage from './pages/salary-book/ReportsPage';
 import SettingsPage from './pages/salary-book/SettingsPage';
 import CalendarPage from './pages/salary-book/CalendarPage';
@@ -277,9 +277,23 @@ function App() {
                 <Route path="salary-book/attendance" element={<AttendancePage />} />
                 <Route path="salary-book/calendar" element={<CalendarPage />} />
                 <Route path="salary-book/leaves" element={<LeaveList />} />
-                <Route path="salary-book/advances" element={<AdvanceList />} />
-                <Route path="salary-book/salaries" element={<SalaryBookPage />} />
-                <Route path="salary-book/salaries/:id" element={<SalaryDetails />} />
+                <Route path="salary-book/advances" element={<Navigate to="/salary-book/calendar" replace />} />
+                <Route
+                  path="salary-book/salaries"
+                  element={
+                    <SalaryPageGate>
+                      <SalaryBookPage />
+                    </SalaryPageGate>
+                  }
+                />
+                <Route
+                  path="salary-book/salaries/:id"
+                  element={
+                    <SalaryPageGate>
+                      <SalaryDetails />
+                    </SalaryPageGate>
+                  }
+                />
                 <Route path="salary-book/reports" element={<ReportsPage />} />
                 <Route path="salary-book/devices" element={<DeviceMappingsPage />} />
                 <Route path="salary-book/settings" element={<SettingsPage />} />

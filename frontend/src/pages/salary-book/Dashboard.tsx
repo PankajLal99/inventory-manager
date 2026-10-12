@@ -16,7 +16,6 @@ import {
 import {
   ClipboardCheck,
   UserPlus,
-  Wallet,
   BookOpen,
   CalendarDays,
   Radio,
@@ -129,7 +128,6 @@ export default function SalaryBookDashboard() {
           <Action to="/salary-book/attendance" icon={ClipboardCheck} label="Mark Attendance" />
           <Action to="/salary-book/calendar" icon={CalendarDays} label="Attendance Calendar" />
           <Action to="/salary-book/employees/new" icon={UserPlus} label="Add Employee" />
-          <Action to="/salary-book/advances" icon={Wallet} label="Add Advance" />
           <Action to="/salary-book/salaries" icon={BookOpen} label="Salary Book" />
         </div>
       </div>

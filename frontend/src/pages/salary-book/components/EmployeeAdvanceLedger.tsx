@@ -26,6 +26,12 @@ function entryLabel(row: SalaryAdvance) {
   return row.reason || 'Advance';
 }
 
+function modeLabel(mode?: string) {
+  if (mode === 'CASH') return 'Cash';
+  if (mode === 'UPI') return 'UPI';
+  return '';
+}
+
 export default function EmployeeAdvanceLedger({
   employeeId,
   employeeName,
@@ -152,6 +158,7 @@ export default function EmployeeAdvanceLedger({
                         <div className="text-xs text-gray-500 mt-0.5">
                           {formatDate(row.date)} · {statusLabel(row.status)}
                           {row.source === 'MTSHOP' ? ' · MT Shop' : ''}
+                          {modeLabel(row.payment_mode) ? ` · ${modeLabel(row.payment_mode)}` : ''}
                         </div>
                         {isActive && (
                           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">

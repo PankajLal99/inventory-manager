@@ -1225,3 +1225,157 @@ class MtshopAdvanceSyncTests(SalaryBookMixin, APITestCase):
                 employee=emp2, source=SalaryAdvance.SOURCE_MTSHOP, amount=Decimal('500.00'),
             ).exists()
         )
+
+    def test_empty_group_debit_creates_taken_advance(self):
+        """Empty-group customer linked to employee → repair/POS debit lands in Taken."""
+        from backend.parties.internal_ledger_utils import create_internal_ledger_entry_if_mtshop
+
+        empty_customer = self.Customer.objects.create(
+            name='Abhishek',
+            phone='9000011111',
+            customer_group=None,
+        )
+        emp = self.make_employee(
+            name='Abhishek',
+            mobile='9000011111',
+            employee_id='EMP-EMPTY-1',
+            mtshop_customer=empty_customer,
+        )
+        create_internal_ledger_entry_if_mtshop(
+            empty_customer,
+            'debit',
+            Decimal('750.00'),
+            'Repair invoice REP-55 (CREDIT)',
+            self.user,
+        )
+        adv = SalaryAdvance.objects.get(employee=emp, source=SalaryAdvance.SOURCE_MTSHOP)
+        self.assertEqual(adv.amount, Decimal('750.00'))
+        self.assertEqual(adv.status, SalaryAdvance.STATUS_ACTIVE)
+
+    def test_manual_credit_without_invoice_creates_taken(self):
+        """Shop Boys Credit (+) with no invoice should increase Taken, not mark paid."""
+        from backend.parties.models import InternalLedgerEntry
+        from backend.salary_book.services.mtshop_advances import (
+            sync_salary_advance_from_internal_entry,
+        )
+
+        entry = InternalLedgerEntry.objects.create(
+            customer=self.customer,
+            entry_type='credit',
+            amount=Decimal('300.00'),
+            description='Cash given to shop boy',
+            created_by=self.user,
+        )
+        sync_salary_advance_from_internal_entry(entry, created_by=self.user)
+        adv = SalaryAdvance.objects.get(
+            employee=self.emp,
+            source=SalaryAdvance.SOURCE_MTSHOP,
+            source_internal_entry_id=entry.id,
+        )
+        self.assertEqual(adv.amount, Decimal('300.00'))
+        self.assertEqual(adv.status, SalaryAdvance.STATUS_ACTIVE)
+
+
+class CalendarTakenAndAttendanceEditTests(SalaryBookMixin, APITestCase):
+    def setUp(self):
+        self.user = self.make_user('cal-owner', admin=True)
+        self.client.force_authenticate(user=self.user)
+        self.emp = self.make_employee(
+            name='Ajay',
+            employee_id='EMP-CAL-1',
+            monthly_salary=Decimal('18500.00'),
+        )
+
+    def test_calendar_includes_today_kpis_and_taken(self):
+        today = timezone.localdate()
+        SalaryAdvance.objects.create(
+            employee=self.emp,
+            date=today.replace(day=1) if today.day > 1 else today,
+            amount=Decimal('1500.00'),
+            reason='Cash',
+            payment_mode=SalaryAdvance.MODE_CASH,
+            status=SalaryAdvance.STATUS_ACTIVE,
+            created_by=self.user,
+        )
+        Attendance.objects.create(
+            employee=self.emp,
+            date=today,
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=_local_dt(today, 9, 0),
+            check_out_time=_local_dt(today, 18, 0),
+        )
+        res = self.client.get(
+            reverse('salary-book-calendar'),
+            {'year': today.year, 'month': today.month},
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn('today_kpis', res.data)
+        self.assertGreaterEqual(res.data['today_kpis']['total_employees'], 1)
+        self.assertGreaterEqual(res.data['today_kpis']['present'], 1)
+        row = next(e for e in res.data['employees'] if e['id'] == self.emp.id)
+        self.assertIn('salary_generated', row)
+        self.assertEqual(Decimal(row['taken']), Decimal('1500.00'))
+
+    def test_advance_create_with_payment_mode(self):
+        res = self.client.post(
+            reverse('salary-book-advance-list-create'),
+            {
+                'employee': self.emp.id,
+                'date': '2026-10-05',
+                'amount': '500.00',
+                'reason': 'UPI advance',
+                'payment_mode': 'UPI',
+            },
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['payment_mode'], 'UPI')
+        adv = SalaryAdvance.objects.get(pk=res.data['id'])
+        self.assertEqual(adv.payment_mode, SalaryAdvance.MODE_UPI)
+
+    def test_edit_marked_attendance_times(self):
+        day = date(2026, 10, 6)
+        att = Attendance.objects.create(
+            employee=self.emp,
+            date=day,
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=_local_dt(day, 9, 0),
+            check_out_time=_local_dt(day, 18, 0),
+            attendance_method=Attendance.METHOD_HARDWARE,
+        )
+        res = self.client.patch(
+            reverse('salary-book-attendance-detail', args=[att.id]),
+            {
+                'status': 'PRESENT',
+                'check_in_time': '09:15',
+                'check_out_time': '14:00',
+            },
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        att.refresh_from_db()
+        self.assertEqual(att.attendance_method, Attendance.METHOD_MANUAL)
+        self.assertEqual(timezone.localtime(att.check_in_time).hour, 9)
+        self.assertEqual(timezone.localtime(att.check_in_time).minute, 15)
+        self.assertEqual(timezone.localtime(att.check_out_time).hour, 14)
+        self.assertEqual(timezone.localtime(att.check_out_time).minute, 0)
+
+    def test_edit_marked_attendance_to_absent(self):
+        day = date(2026, 10, 7)
+        att = Attendance.objects.create(
+            employee=self.emp,
+            date=day,
+            status=Attendance.STATUS_PRESENT,
+            check_in_time=_local_dt(day, 9, 0),
+            check_out_time=_local_dt(day, 18, 0),
+        )
+        res = self.client.patch(
+            reverse('salary-book-attendance-detail', args=[att.id]),
+            {'status': 'ABSENT'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        att.refresh_from_db()
+        self.assertEqual(att.status, Attendance.STATUS_ABSENT)
+        self.assertIsNone(att.check_in_time)
+        self.assertIsNone(att.check_out_time)

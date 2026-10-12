@@ -1,24 +1,25 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
+import { Search, ShoppingCart, Users } from 'lucide-react';
 import { salaryBookApi } from '../../lib/api';
 import LoadingState from '../../components/ui/LoadingState';
 import ErrorState from '../../components/ui/ErrorState';
 import EmptyState from '../../components/ui/EmptyState';
-import { Users } from 'lucide-react';
 import { toast } from '../../lib/toast';
-import type { CalendarResponse, Employee, Paginated, SalaryBookSettings } from './types';
+import type { CalendarEmployee, CalendarResponse, Employee, Paginated, SalaryBookSettings } from './types';
 import {
   AdminMonthGrid,
   CalendarLegend,
+  CalendarSummaryStrip,
   EmployeeMonthGrid,
-  KpiStrip,
   MonthNav,
   type CalendarDayClick,
 } from './components/AttendanceCalendar';
 import ManualAttendanceDialog, {
   type ManualAttendanceTarget,
 } from './components/ManualAttendanceDialog';
+import AddAmountDialog, { type AddAmountTarget } from './components/AddAmountDialog';
 import { apiError, toTimeInput } from './utils';
 
 export default function CalendarPage() {
@@ -28,7 +29,9 @@ export default function CalendarPage() {
   const year = Number(params.get('year')) || now.getFullYear();
   const month = Number(params.get('month')) || now.getMonth() + 1;
   const employeeId = params.get('employee') ? Number(params.get('employee')) : undefined;
+  const [search, setSearch] = useState('');
   const [manualTarget, setManualTarget] = useState<ManualAttendanceTarget | null>(null);
+  const [amountTarget, setAmountTarget] = useState<AddAmountTarget | null>(null);
 
   const setMonth = (nextYear: number, nextMonth: number) => {
     const next = new URLSearchParams(params);
@@ -66,34 +69,108 @@ export default function CalendarPage() {
     [calendarQuery.data]
   );
 
+  const filteredEmployees = useMemo(() => {
+    const rows = calendarQuery.data?.employees || [];
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (emp) =>
+        emp.name.toLowerCase().includes(q) ||
+        emp.employee_id.toLowerCase().includes(q)
+    );
+  }, [calendarQuery.data, search]);
+
+  const searchMatches = useMemo(() => {
+    const rows = employeesQuery.data?.results || [];
+    const q = search.trim().toLowerCase();
+    if (!q || q.length < 1) return [];
+    return rows
+      .filter(
+        (emp) =>
+          emp.name.toLowerCase().includes(q) ||
+          emp.employee_id.toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+  }, [employeesQuery.data, search]);
+
   const selectedEmployeeDetails = useMemo(
     () => employeesQuery.data?.results.find((e) => e.id === manualTarget?.employeeId),
     [employeesQuery.data, manualTarget?.employeeId]
   );
+
+  const invalidateCalendar = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['salary-book', 'calendar'] });
+    await queryClient.invalidateQueries({ queryKey: ['salary-book', 'salaries'] });
+  };
 
   const manualMutation = useMutation({
     mutationFn: async ({
       target,
       checkIn,
       checkOut,
+      status,
     }: {
       target: ManualAttendanceTarget;
       checkIn: string;
       checkOut: string;
-    }) =>
-      salaryBookApi.attendance.create({
+      status: string;
+    }) => {
+      const timed = status === 'PRESENT' || status === 'HALF_DAY';
+      if (target.attendanceId) {
+        const payload: Record<string, unknown> = { status };
+        if (timed) {
+          payload.check_in_time = checkIn;
+          payload.check_out_time = checkOut;
+        }
+        return salaryBookApi.attendance.update(target.attendanceId, payload);
+      }
+      return salaryBookApi.attendance.create({
         employee: target.employeeId,
         date: target.date,
-        status: 'PRESENT',
-        check_in_time: checkIn,
-        check_out_time: checkOut,
-      }),
-    onSuccess: async () => {
-      toast('Attendance times saved', 'success');
-      setManualTarget(null);
-      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'calendar'] });
+        status,
+        ...(timed
+          ? { check_in_time: checkIn, check_out_time: checkOut }
+          : {}),
+      });
     },
-    onError: (err) => toast(apiError(err, 'Unable to save attendance times.'), 'error'),
+    onSuccess: async () => {
+      toast('Attendance saved', 'success');
+      setManualTarget(null);
+      await invalidateCalendar();
+    },
+    onError: (err) => toast(apiError(err, 'Unable to save attendance.'), 'error'),
+  });
+
+  const amountMutation = useMutation({
+    mutationFn: async (payload: {
+      employee: number;
+      date: string;
+      reason: string;
+      remarks: string;
+      splits: Array<{ amount: string; payment_mode: 'CASH' | 'UPI' }>;
+    }) => {
+      const results = [];
+      for (const split of payload.splits) {
+        const res = await salaryBookApi.advances.create({
+          employee: payload.employee,
+          date: payload.date,
+          amount: split.amount,
+          reason: payload.reason,
+          remarks: payload.remarks,
+          payment_mode: split.payment_mode,
+        });
+        results.push(res);
+      }
+      return results;
+    },
+    onSuccess: async (_data, variables) => {
+      const n = variables.splits.length;
+      toast(n > 1 ? 'Cash + UPI amounts added to Taken' : 'Amount added to Taken', 'success');
+      setAmountTarget(null);
+      await invalidateCalendar();
+      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'advances'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to save amount.'), 'error'),
   });
 
   const openManual = (payload: CalendarDayClick) => {
@@ -101,7 +178,15 @@ export default function CalendarPage() {
       employeeId: payload.employeeId,
       employeeName: payload.employeeName,
       date: payload.date,
+      attendanceId: payload.cell?.id,
+      existingCheckIn: payload.cell?.check_in_time || undefined,
+      existingCheckOut: payload.cell?.check_out_time || undefined,
+      existingStatus: payload.cell?.status || undefined,
     });
+  };
+
+  const openAddAmount = (emp: CalendarEmployee) => {
+    setAmountTarget({ employeeId: emp.id, employeeName: emp.name });
   };
 
   if (calendarQuery.isLoading) return <LoadingState message="Loading calendar..." />;
@@ -112,10 +197,12 @@ export default function CalendarPage() {
   const data = calendarQuery.data;
   const isEmployee = data.view === 'employee' && selectedEmployee;
   const defaultCheckIn =
+    toTimeInput(manualTarget?.existingCheckIn) ||
     toTimeInput(selectedEmployeeDetails?.effective_check_in) ||
     toTimeInput(settingsQuery.data?.default_check_in) ||
     '09:00';
   const defaultCheckOut =
+    toTimeInput(manualTarget?.existingCheckOut) ||
     toTimeInput(selectedEmployeeDetails?.effective_check_out) ||
     toTimeInput(settingsQuery.data?.default_check_out) ||
     '18:00';
@@ -133,50 +220,107 @@ export default function CalendarPage() {
               : 'Swipe days per employee, or open one for the month grid.'}
           </p>
         </div>
-        <MonthNav year={year} month={month} onChange={setMonth} />
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="/pos"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 min-h-11 px-4 rounded-xl bg-white border border-emerald-200 text-emerald-800 font-medium text-sm"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            POS
+          </a>
+          <MonthNav year={year} month={month} onChange={setMonth} />
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2">
         <button
           type="button"
-          onClick={() => setEmployee('')}
+          onClick={() => {
+            setEmployee('');
+            setSearch('');
+          }}
           className={`min-h-11 px-4 rounded-xl text-sm font-medium ${
             !employeeId ? 'bg-emerald-600 text-white' : 'bg-white border border-gray-200 text-gray-700'
           }`}
         >
           All employees
         </button>
-        <select
-          className="min-h-11 w-full sm:w-auto sm:min-w-[14rem] rounded-xl border border-gray-300 bg-white px-3"
-          value={employeeId || ''}
-          onChange={(e) => setEmployee(e.target.value)}
-        >
-          <option value="">Select employee…</option>
-          {employeesQuery.data?.results.map((emp) => (
-            <option key={emp.id} value={emp.id}>
-              {emp.name}
-            </option>
-          ))}
-        </select>
+        <div className="relative flex-1 sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search employee..."
+            className="w-full min-h-11 pl-9 pr-3 rounded-xl border border-gray-300 bg-white"
+            autoComplete="off"
+          />
+          {!employeeId && search.trim() && searchMatches.length > 0 && (
+            <div className="absolute z-20 mt-1 w-full rounded-xl border border-emerald-100 bg-white shadow-lg overflow-hidden">
+              {searchMatches.map((emp) => (
+                <button
+                  key={emp.id}
+                  type="button"
+                  className="w-full text-left px-3 py-2.5 text-sm hover:bg-emerald-50 border-b border-emerald-50 last:border-0"
+                  onClick={() => {
+                    setEmployee(String(emp.id));
+                    setSearch(emp.name);
+                  }}
+                >
+                  <span className="font-medium text-gray-900">{emp.name}</span>
+                  <span className="text-gray-400 ml-2">{emp.employee_id}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      <KpiStrip kpis={data.kpis} />
+      {data.today_kpis ? (
+        <CalendarSummaryStrip today={data.today_kpis} kpis={data.kpis} />
+      ) : null}
       <CalendarLegend />
 
-      {data.employees.length === 0 && (
+      {(isEmployee ? [selectedEmployee] : filteredEmployees).length === 0 && (
         <EmptyState icon={Users} title="No employees to show." />
       )}
 
       {isEmployee ? (
         <div className="space-y-4 lg:grid lg:grid-cols-[minmax(0,1fr)_16rem] lg:gap-6 lg:space-y-0">
-          <EmployeeMonthGrid
-            year={data.year}
-            month={data.month}
-            daysInMonth={data.days_in_month}
-            today={data.today}
-            employee={selectedEmployee}
-            onDayClick={openManual}
-          />
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => openAddAmount(selectedEmployee)}
+                className="inline-flex items-center gap-1 min-h-10 px-3 rounded-full border border-emerald-500 text-emerald-800 text-sm font-semibold"
+              >
+                + Add Amount
+              </button>
+            </div>
+            <EmployeeMonthGrid
+              year={data.year}
+              month={data.month}
+              daysInMonth={data.days_in_month}
+              today={data.today}
+              employee={selectedEmployee}
+              onDayClick={openManual}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2">
+                <div className="text-xs text-emerald-800/80">Salary Generated</div>
+                <div className="text-sm font-semibold text-emerald-950 tabular-nums">
+                  ₹{Number(selectedEmployee.salary_generated || 0).toLocaleString('en-IN')}
+                </div>
+              </div>
+              <div className="rounded-xl bg-sky-50 border border-sky-100 px-3 py-2">
+                <div className="text-xs text-sky-800/80">Taken</div>
+                <div className="text-sm font-semibold text-sky-950 tabular-nums">
+                  ₹{Number(selectedEmployee.taken || 0).toLocaleString('en-IN')}
+                </div>
+              </div>
+            </div>
+          </div>
           <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2 text-sm">
             <h2 className="font-semibold text-gray-900">This month</h2>
             <Row label="Present" value={selectedEmployee.counts.PRESENT} />
@@ -200,8 +344,9 @@ export default function CalendarPage() {
           month={data.month}
           daysInMonth={data.days_in_month}
           today={data.today}
-          employees={data.employees}
+          employees={filteredEmployees}
           onDayClick={openManual}
+          onAddAmount={openAddAmount}
         />
       )}
 
@@ -211,10 +356,17 @@ export default function CalendarPage() {
         defaultCheckIn={defaultCheckIn}
         defaultCheckOut={defaultCheckOut}
         onClose={() => setManualTarget(null)}
-        onSave={({ checkIn, checkOut }) => {
+        onSave={({ checkIn, checkOut, status }) => {
           if (!manualTarget) return;
-          manualMutation.mutate({ target: manualTarget, checkIn, checkOut });
+          manualMutation.mutate({ target: manualTarget, checkIn, checkOut, status });
         }}
+      />
+
+      <AddAmountDialog
+        target={amountTarget}
+        loading={amountMutation.isPending}
+        onClose={() => setAmountTarget(null)}
+        onSave={(payload) => amountMutation.mutate(payload)}
       />
     </div>
   );
