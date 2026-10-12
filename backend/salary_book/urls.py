@@ -24,6 +24,11 @@ urlpatterns = [
     path('salary-book/employees/<int:pk>/attendance/', views.employee_attendance_history, name='salary-book-employee-attendance'),
     path('salary-book/employees/<int:pk>/leaves/', views.employee_leave_history, name='salary-book-employee-leaves'),
     path('salary-book/employees/<int:pk>/advances/', views.employee_advance_history, name='salary-book-employee-advances'),
+    path(
+        'salary-book/employees/<int:pk>/advances/reset-opening/',
+        views.employee_advance_reset_opening,
+        name='salary-book-employee-advance-reset-opening',
+    ),
     path('salary-book/employees/<int:pk>/salaries/', views.employee_salary_history, name='salary-book-employee-salaries'),
     path(
         'salary-book/employees/<int:pk>/attendance-rules/',

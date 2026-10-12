@@ -785,6 +785,11 @@ export const salaryBookApi = {
       api.get(`/salary-book/employees/${id}/leaves/`, { params, ...sb } as any),
     advances: (id: number, params?: any) =>
       api.get(`/salary-book/employees/${id}/advances/`, { params, ...sb } as any),
+    resetOpeningAdvances: (
+      id: number,
+      data: { amount: string | number; remarks?: string },
+    ) =>
+      api.post(`/salary-book/employees/${id}/advances/reset-opening/`, data, sb as any),
     salaries: (id: number, params?: any) =>
       api.get(`/salary-book/employees/${id}/salaries/`, { params, ...sb } as any),
     attendanceRules: {

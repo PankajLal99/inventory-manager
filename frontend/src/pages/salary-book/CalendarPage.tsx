@@ -70,15 +70,34 @@ export default function CalendarPage() {
   );
 
   const filteredEmployees = useMemo(() => {
-    const rows = calendarQuery.data?.employees || [];
+    const data = calendarQuery.data;
+    const rows = data?.employees || [];
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (emp) =>
-        emp.name.toLowerCase().includes(q) ||
-        emp.employee_id.toLowerCase().includes(q)
-    );
-  }, [calendarQuery.data, search]);
+    const filtered = q
+      ? rows.filter(
+          (emp) =>
+            emp.name.toLowerCase().includes(q) ||
+            emp.employee_id.toLowerCase().includes(q)
+        )
+      : rows;
+
+    // In the current month, unmarked-for-today stay on top; marked sink below.
+    const todayIso = data?.today;
+    if (!todayIso || !data || data.year !== year || data.month !== month) {
+      return filtered;
+    }
+    const [ty, tm] = todayIso.split('-').map(Number);
+    if (ty !== data.year || tm !== data.month) return filtered;
+    const dayKey = String(Number(todayIso.slice(8, 10)));
+    return [...filtered].sort((a, b) => {
+      const aStatus = a.days[dayKey]?.status;
+      const bStatus = b.days[dayKey]?.status;
+      const aMarked = Boolean(aStatus && aStatus !== 'BEFORE_JOINING');
+      const bMarked = Boolean(bStatus && bStatus !== 'BEFORE_JOINING');
+      if (aMarked !== bMarked) return aMarked ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [calendarQuery.data, search, year, month]);
 
   const searchMatches = useMemo(() => {
     const rows = employeesQuery.data?.results || [];

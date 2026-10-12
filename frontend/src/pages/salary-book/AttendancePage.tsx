@@ -149,6 +149,17 @@ export default function AttendancePage() {
     return map;
   }, [todayQuery.data]);
 
+  const sortedEmployees = useMemo(() => {
+    const rows = employeesQuery.data?.results || [];
+    // Unmarked stay on top; marked sink below after attendance is saved.
+    return [...rows].sort((a, b) => {
+      const aMarked = byEmployee.has(a.id);
+      const bMarked = byEmployee.has(b.id);
+      if (aMarked !== bMarked) return aMarked ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [employeesQuery.data, byEmployee]);
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     todayQuery.data?.results.forEach((row) => {
@@ -354,7 +365,7 @@ export default function AttendancePage() {
       )}
 
       <div className="space-y-2 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-3 lg:space-y-0">
-        {employeesQuery.data?.results.map((emp) => {
+        {sortedEmployees.map((emp) => {
           const row = byEmployee.get(emp.id);
           return (
             <button

@@ -1276,6 +1276,73 @@ class MtshopAdvanceSyncTests(SalaryBookMixin, APITestCase):
         self.assertEqual(adv.status, SalaryAdvance.STATUS_ACTIVE)
 
 
+class AdvanceResetOpeningTests(SalaryBookMixin, APITestCase):
+    def setUp(self):
+        self.user = self.make_user('reset-owner')
+        self.client.force_authenticate(user=self.user)
+        self.emp = self.make_employee(name='Reset Emp', employee_id='EMP-RST-1')
+
+    def test_reset_clears_history_and_creates_opening(self):
+        SalaryAdvance.objects.create(
+            employee=self.emp, date=date(2026, 4, 5), amount=Decimal('1000.00'),
+            status=SalaryAdvance.STATUS_ACTIVE, created_by=self.user,
+        )
+        SalaryAdvance.objects.create(
+            employee=self.emp, date=date(2026, 4, 8), amount=Decimal('400.00'),
+            status=SalaryAdvance.STATUS_PAID, created_by=self.user,
+        )
+        SalaryAdvance.objects.create(
+            employee=self.emp, date=date(2026, 3, 1), amount=Decimal('50.00'),
+            status=SalaryAdvance.STATUS_VOID, created_by=self.user,
+        )
+        today = timezone.localdate()
+        res = self.client.post(
+            reverse('salary-book-employee-advance-reset-opening', args=[self.emp.id]),
+            {'amount': '5000.00', 'remarks': 'Carry forward'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['deleted'], 3)
+        self.assertIsNotNone(res.data['opening'])
+        self.assertEqual(Decimal(res.data['opening']['amount']), Decimal('5000.00'))
+        self.assertEqual(res.data['opening']['status'], SalaryAdvance.STATUS_ACTIVE)
+        self.assertEqual(res.data['opening']['reason'], 'Opening balance')
+
+        remaining = list(SalaryAdvance.objects.filter(employee=self.emp))
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].amount, Decimal('5000.00'))
+        self.assertEqual(remaining[0].date, today)
+        self.assertEqual(remaining[0].remarks, 'Carry forward')
+
+        calc = calculate_employee_month(
+            self.emp, today.year, today.month, today=today,
+        )
+        self.assertEqual(calc['total_advances'], Decimal('5000.00'))
+
+    def test_reset_amount_zero_clears_only(self):
+        SalaryAdvance.objects.create(
+            employee=self.emp, date=date(2026, 4, 5), amount=Decimal('1000.00'),
+            status=SalaryAdvance.STATUS_ACTIVE, created_by=self.user,
+        )
+        res = self.client.post(
+            reverse('salary-book-employee-advance-reset-opening', args=[self.emp.id]),
+            {'amount': '0'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['deleted'], 1)
+        self.assertIsNone(res.data['opening'])
+        self.assertEqual(SalaryAdvance.objects.filter(employee=self.emp).count(), 0)
+
+    def test_reset_rejects_negative(self):
+        res = self.client.post(
+            reverse('salary-book-employee-advance-reset-opening', args=[self.emp.id]),
+            {'amount': '-10'},
+            format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
 class CalendarTakenAndAttendanceEditTests(SalaryBookMixin, APITestCase):
     def setUp(self):
         self.user = self.make_user('cal-owner', admin=True)

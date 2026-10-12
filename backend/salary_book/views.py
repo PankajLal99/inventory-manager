@@ -470,6 +470,70 @@ def employee_advance_history(request, pk):
     return page
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsSalaryBookUser])
+def employee_advance_reset_opening(request, pk):
+    """
+    Hard-delete all advances for an employee, then optionally create one ACTIVE
+    opening-balance advance that salary still deducts.
+    """
+    employee = get_object_or_404(Employee, pk=pk)
+    try:
+        amount = Decimal(str(request.data.get('amount', '0')))
+    except Exception:
+        return _err('Enter a valid opening amount.')
+    if amount < 0:
+        return _err('Opening amount cannot be negative.')
+
+    today = timezone.localdate()
+    if amount > 0:
+        try:
+            _assert_month_open(employee, today)
+        except ValidationError as exc:
+            return _err(str(exc.detail if hasattr(exc, 'detail') else exc))
+
+    remarks = (request.data.get('remarks') or '').strip()
+    deleted = 0
+    opening = None
+    with transaction.atomic():
+        deleted, _ = SalaryAdvance.objects.filter(employee=employee).delete()
+        if amount > 0:
+            opening = SalaryAdvance.objects.create(
+                employee=employee,
+                date=today,
+                amount=amount,
+                reason='Opening balance',
+                remarks=remarks,
+                status=SalaryAdvance.STATUS_ACTIVE,
+                source=SalaryAdvance.SOURCE_MANUAL,
+                created_by=request.user,
+            )
+
+        draft_months = list(
+            SalaryRecord.objects.filter(
+                employee=employee,
+                status=SalaryRecord.STATUS_DRAFT,
+            ).values_list('year', 'month')
+        )
+        if (today.year, today.month) not in draft_months:
+            draft_months.append((today.year, today.month))
+        refreshed = []
+        for year, month in draft_months:
+            record, _ = _upsert_draft(employee, year, month)
+            refreshed.append({'year': year, 'month': month, 'id': record.id})
+
+    payload = {
+        'deleted': deleted,
+        'opening': (
+            SalaryAdvanceSerializer(opening, context={'request': request}).data
+            if opening
+            else None
+        ),
+        'refreshed_drafts': refreshed,
+    }
+    return Response(payload)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 def employee_salary_history(request, pk):
@@ -1500,12 +1564,13 @@ def dashboard(request):
     unmarked_employees = list(
         employees.exclude(id__in=marked_ids).order_by('name').values('id', 'name', 'employee_id')
     )
+    # Oldest marked first so newly marked rows sink to the bottom of the marked group.
     live_marked = sorted(
         today_rows,
         key=lambda row: (
             0 if row.check_in_time else 1,
-            -(row.check_in_time.timestamp() if row.check_in_time else 0),
-            -(row.updated_at.timestamp() if row.updated_at else 0),
+            row.check_in_time.timestamp() if row.check_in_time else 0,
+            row.updated_at.timestamp() if row.updated_at else 0,
         ),
     )
     payroll = Decimal('0')

@@ -59,7 +59,8 @@ export default function SalaryBookDashboard() {
     if (!data?.live) return [];
     const marked = data.live.marked.map((row) => ({ kind: 'marked' as const, row }));
     const unmarked = data.live.unmarked.map((row) => ({ kind: 'unmarked' as const, row }));
-    if (filter === 'ALL') return [...marked, ...unmarked];
+    // Unmarked stay on top; marked sink below after attendance is saved.
+    if (filter === 'ALL') return [...unmarked, ...marked];
     if (filter === 'UNMARKED') return unmarked;
     return marked.filter((item) => item.row.status === filter);
   }, [data, filter]);

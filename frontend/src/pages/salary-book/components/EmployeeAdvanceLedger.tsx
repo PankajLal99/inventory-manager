@@ -47,6 +47,7 @@ export default function EmployeeAdvanceLedger({
 }) {
   const queryClient = useQueryClient();
   const [payRow, setPayRow] = useState<SalaryAdvance | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
     row: SalaryAdvance;
     kind: 'void' | 'unvoid' | 'unpaid';
@@ -115,6 +116,23 @@ export default function EmployeeAdvanceLedger({
         ),
         'error',
       ),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: async ({ amount, remarks }: { amount: string; remarks: string }) =>
+      salaryBookApi.employees.resetOpeningAdvances(employeeId, { amount, remarks }),
+    onSuccess: async (res) => {
+      const opening = res.data?.opening;
+      toast(
+        opening
+          ? `Cleared history · opening ${formatINR(opening.amount)}`
+          : 'All advances cleared',
+        'success',
+      );
+      setResetOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ['salary-book'] });
+    },
+    onError: (err) => toast(apiError(err, 'Unable to reset advances.'), 'error'),
   });
 
   const titleName = listQuery.data?.employee_name || employeeName || 'Employee';
@@ -225,9 +243,19 @@ export default function EmployeeAdvanceLedger({
           </div>
         )}
 
-        <Button type="button" variant="outline" className="w-full min-h-11" onClick={onClose}>
-          Close
-        </Button>
+        <div className="grid grid-cols-1 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full min-h-11 border-amber-200 text-amber-900 hover:bg-amber-50"
+            onClick={() => setResetOpen(true)}
+          >
+            Clear & set opening
+          </Button>
+          <Button type="button" variant="outline" className="w-full min-h-11" onClick={onClose}>
+            Close
+          </Button>
+        </div>
       </div>
 
       {payRow && (
@@ -238,6 +266,14 @@ export default function EmployeeAdvanceLedger({
           onSave={(payload) =>
             paidMutation.mutate({ id: payRow.id, amount: payload.amount, remarks: payload.remarks })
           }
+        />
+      )}
+      {resetOpen && (
+        <ResetOpeningForm
+          loading={resetMutation.isPending}
+          currentOutstanding={listQuery.data?.total_active || '0'}
+          onClose={() => setResetOpen(false)}
+          onSave={(payload) => resetMutation.mutate(payload)}
         />
       )}
       <ConfirmDialog
@@ -325,6 +361,62 @@ function MarkPaidForm({
           </Button>
           <Button type="submit" className="min-h-12 bg-emerald-600 hover:bg-emerald-700" loading={loading}>
             Save
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ResetOpeningForm({
+  loading,
+  currentOutstanding,
+  onClose,
+  onSave,
+}: {
+  loading: boolean;
+  currentOutstanding: string;
+  onClose: () => void;
+  onSave: (payload: { amount: string; remarks: string }) => void;
+}) {
+  const [amount, setAmount] = useState(String(currentOutstanding || '0'));
+  const [remarks, setRemarks] = useState('');
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center p-0 lg:p-4">
+      <div className="absolute inset-0 bg-gray-900/40" onClick={onClose} aria-hidden />
+      <form
+        className="relative bg-white w-full max-w-md rounded-t-2xl lg:rounded-2xl p-5 shadow-xl space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave({ amount, remarks });
+        }}
+      >
+        <h3 className="font-semibold text-lg">Clear & set opening</h3>
+        <p className="text-sm text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          Deletes all advance entries for this employee permanently. Then creates one outstanding
+          “Opening balance” that salary will still deduct. Use 0 to clear only.
+        </p>
+        <Input
+          label="Opening amount"
+          required
+          inputMode="decimal"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+        />
+        <Textarea
+          label="Remarks"
+          rows={2}
+          value={remarks}
+          onChange={(e) => setRemarks(e.target.value)}
+          placeholder="Optional note"
+        />
+        <div className="grid grid-cols-2 gap-3">
+          <Button type="button" variant="outline" className="min-h-12" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" className="min-h-12 bg-amber-700 hover:bg-amber-800" loading={loading}>
+            Clear & set
           </Button>
         </div>
       </form>
