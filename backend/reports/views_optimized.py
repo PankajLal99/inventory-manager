@@ -179,6 +179,8 @@ def optimized_dashboard_kpis(request):
     - defective_move_out_net_period: same net, filtered by move-out created_at date in the dashboard range (e.g. Delhi /
       move-outs in period).
     """
+    from backend.core.emergency_mask import clamp_emergency_date_from
+
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
 
@@ -191,6 +193,11 @@ def optimized_dashboard_kpis(request):
         date_to = timezone.now().date()
     else:
         date_to = datetime.strptime(date_to, '%Y-%m-%d').date()
+
+    # Emergency mask: cannot widen dashboard range beyond rolling visibility window
+    clamped_from = clamp_emergency_date_from(date_from)
+    if clamped_from is not None:
+        date_from = clamped_from
 
     money = DecimalField(max_digits=18, decimal_places=2)
 

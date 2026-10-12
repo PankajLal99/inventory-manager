@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from django.core.cache import cache
+from django.utils import timezone
 
 SETTING_KEY = 'emergency_data_mask'
 CACHE_KEY = 'emergency_data_mask:config'
@@ -22,6 +24,16 @@ CACHE_TTL_SECONDS = 30
 DEFAULT_PERCENT = 3.0
 MIN_PERCENT = 0.01
 MAX_PERCENT = 100.0
+
+DEFAULT_VISIBILITY_DAYS = 45
+MIN_VISIBILITY_DAYS = 1
+MAX_VISIBILITY_DAYS = 365
+
+# API path prefixes hidden entirely while mask is on (UI + API).
+HIDDEN_API_PREFIXES = (
+    '/api/v1/payment-reminders/',
+    '/api/v1/internal-ledger/',
+)
 
 # Paths whose responses must stay real so POS/credit cart recording can write back.
 # Overview endpoints are display-only and are still masked.
@@ -90,7 +102,11 @@ _CURRENCY_PREFIX_RE = re.compile(
 
 
 def default_config() -> dict:
-    return {'enabled': False, 'percent': DEFAULT_PERCENT}
+    return {
+        'enabled': False,
+        'percent': DEFAULT_PERCENT,
+        'visibility_days': DEFAULT_VISIBILITY_DAYS,
+    }
 
 
 def _clamp_percent(value: Any) -> float:
@@ -105,6 +121,18 @@ def _clamp_percent(value: Any) -> float:
     return pct
 
 
+def _clamp_visibility_days(value: Any) -> int:
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_VISIBILITY_DAYS
+    if days < MIN_VISIBILITY_DAYS:
+        return MIN_VISIBILITY_DAYS
+    if days > MAX_VISIBILITY_DAYS:
+        return MAX_VISIBILITY_DAYS
+    return days
+
+
 def _parse_config(raw: str | None) -> dict:
     cfg = default_config()
     if not raw:
@@ -117,6 +145,9 @@ def _parse_config(raw: str | None) -> dict:
         return cfg
     cfg['enabled'] = bool(data.get('enabled', False))
     cfg['percent'] = _clamp_percent(data.get('percent', DEFAULT_PERCENT))
+    cfg['visibility_days'] = _clamp_visibility_days(
+        data.get('visibility_days', DEFAULT_VISIBILITY_DAYS)
+    )
     return cfg
 
 
@@ -144,6 +175,9 @@ def _save_config(cfg: dict) -> dict:
     cleaned = {
         'enabled': bool(cfg.get('enabled', False)),
         'percent': _clamp_percent(cfg.get('percent', DEFAULT_PERCENT)),
+        'visibility_days': _clamp_visibility_days(
+            cfg.get('visibility_days', DEFAULT_VISIBILITY_DAYS)
+        ),
     }
     setting, _ = Setting.objects.get_or_create(
         key=SETTING_KEY,
@@ -160,16 +194,23 @@ def _save_config(cfg: dict) -> dict:
     return cleaned
 
 
-def activate_emergency_mask(percent: float | None = None) -> dict:
+def activate_emergency_mask(
+    percent: float | None = None,
+    visibility_days: int | None = None,
+) -> dict:
     """
     One-way activate. Does not expose a disable path for API/UI.
-    Optional percent overrides the stored threshold (still clamped).
+    Optional percent / visibility_days override stored values (still clamped).
     """
     current = get_emergency_mask_config(use_cache=False)
     if percent is not None:
         current['percent'] = _clamp_percent(percent)
     elif not current.get('percent'):
         current['percent'] = DEFAULT_PERCENT
+    if visibility_days is not None:
+        current['visibility_days'] = _clamp_visibility_days(visibility_days)
+    elif not current.get('visibility_days'):
+        current['visibility_days'] = DEFAULT_VISIBILITY_DAYS
     current['enabled'] = True
     return _save_config(current)
 
@@ -186,6 +227,76 @@ def set_emergency_mask_percent(percent: float) -> dict:
     current = get_emergency_mask_config(use_cache=False)
     current['percent'] = _clamp_percent(percent)
     return _save_config(current)
+
+
+def set_emergency_visibility_days(days: int) -> dict:
+    """Update rolling visibility window without toggling enabled. Shell/DB-oriented."""
+    current = get_emergency_mask_config(use_cache=False)
+    current['visibility_days'] = _clamp_visibility_days(days)
+    return _save_config(current)
+
+
+def get_emergency_visibility_cutoff(*, use_cache: bool = True) -> date | None:
+    """
+    When mask is enabled, return the earliest calendar date that may appear in lists.
+    Older rows stay in the DB but are hidden from API list/report queries.
+    """
+    cfg = get_emergency_mask_config(use_cache=use_cache)
+    if not cfg.get('enabled'):
+        return None
+    days = _clamp_visibility_days(cfg.get('visibility_days', DEFAULT_VISIBILITY_DAYS))
+    return timezone.localdate() - timedelta(days=days - 1)
+
+
+def _as_date(value: Any) -> date | None:
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value).strip()[:10], '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
+
+
+def clamp_emergency_date_from(date_from: Any = None) -> date | None:
+    """
+    Raise the floor of date_from to the emergency visibility cutoff when mask is on.
+    Returns a date, or None when mask is off and no date_from was provided.
+    """
+    cutoff = get_emergency_visibility_cutoff()
+    parsed = _as_date(date_from)
+    if cutoff is None:
+        return parsed
+    if parsed is None or parsed < cutoff:
+        return cutoff
+    return parsed
+
+
+def apply_emergency_visibility_window(queryset, field: str = 'created_at'):
+    """
+    Restrict a queryset to rows on/after the rolling visibility cutoff.
+    No-op when mask is disabled. Does not delete anything.
+    """
+    cutoff = get_emergency_visibility_cutoff()
+    if cutoff is None:
+        return queryset
+    # Support both DateField and DateTimeField via __date when needed
+    if field.endswith('__date') or field in ('purchase_date', 'date', 'due_date'):
+        return queryset.filter(**{f'{field}__gte': cutoff})
+    return queryset.filter(**{f'{field}__date__gte': cutoff})
+
+
+def is_emergency_hidden_api_path(path: str | None) -> bool:
+    if not path or not is_emergency_mask_enabled():
+        return False
+    normalized = path if path.endswith('/') else path + '/'
+    for prefix in HIDDEN_API_PREFIXES:
+        if path.startswith(prefix.rstrip('/')) or normalized.startswith(prefix):
+            return True
+    return False
 
 
 def should_skip_path(path: str | None) -> bool:

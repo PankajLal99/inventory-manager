@@ -748,6 +748,8 @@ def credit_cart_checkout(request, pk):
 # ── Invoices ────────────────────────────────────────────────────────────────
 
 def _credit_invoices_filtered_queryset(request):
+    from backend.core.emergency_mask import clamp_emergency_date_from
+
     qs = CreditInvoice.objects.select_related(
         'customer', 'customer__customer_group', 'store', 'created_by'
     ).all()
@@ -778,6 +780,9 @@ def _credit_invoices_filtered_queryset(request):
 
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
+    clamped_from = clamp_emergency_date_from(date_from)
+    if clamped_from is not None:
+        date_from = clamped_from.isoformat()
     if date_from:
         qs = qs.filter(created_at__date__gte=date_from)
     if date_to:
@@ -787,6 +792,8 @@ def _credit_invoices_filtered_queryset(request):
 
 
 def _credit_returns_filtered_queryset(request):
+    from backend.core.emergency_mask import clamp_emergency_date_from
+
     qs = CreditReturn.objects.select_related(
         'customer', 'customer__customer_group', 'store', 'created_by'
     ).prefetch_related('items')
@@ -812,6 +819,9 @@ def _credit_returns_filtered_queryset(request):
 
     date_from = request.query_params.get('date_from')
     date_to = request.query_params.get('date_to')
+    clamped_from = clamp_emergency_date_from(date_from)
+    if clamped_from is not None:
+        date_from = clamped_from.isoformat()
     if date_from:
         qs = qs.filter(created_at__date__gte=date_from)
     if date_to:

@@ -962,9 +962,12 @@ def pos_session_close(request, pk):
 def active_carts_overview(request):
     """List all active and held carts (read-only overview): which user, locked, items. Includes EDIT-* (invoice edit) carts.
     Barcodes that are already on a paid/credit invoice are excluded from display (stale cart data)."""
+    from backend.core.emergency_mask import apply_emergency_visibility_window
+
     carts = Cart.objects.filter(
         status__in=['active', 'held']
     ).select_related('store', 'customer', 'created_by').prefetch_related('items', 'items__product', 'items__variant').order_by('-updated_at')
+    carts = apply_emergency_visibility_window(carts, field='updated_at')
     store_id = request.query_params.get('store')
     if store_id:
         try:
@@ -1105,6 +1108,8 @@ def cart_resume_to_me(request, pk):
 def cart_list_create(request):
     """List all carts or create a new cart"""
     if request.method == 'GET':
+        from backend.core.emergency_mask import apply_emergency_visibility_window
+
         # If active parameter is provided, return active carts for current user
         if request.query_params.get('active') == 'true':
             # Return all active carts for the user, excluding invoice-edit carts (EDIT-* / edit-*)
@@ -1112,6 +1117,7 @@ def cart_list_create(request):
                 created_by=request.user,
                 status='active'
             ).exclude(cart_number__istartswith='edit-').order_by('-updated_at')
+            active_carts = apply_emergency_visibility_window(active_carts, field='updated_at')
             
             # If 'single' parameter is true, return only the most recent one (backward compatibility)
             if request.query_params.get('single') == 'true':
@@ -1125,7 +1131,7 @@ def cart_list_create(request):
             serializer = CartSerializer(active_carts, many=True)
             return Response(serializer.data)
         
-        carts = Cart.objects.all()
+        carts = apply_emergency_visibility_window(Cart.objects.all(), field='updated_at')
         serializer = CartSerializer(carts, many=True)
         return Response(serializer.data)
     else:  # POST
@@ -3351,6 +3357,8 @@ def cart_checkout(request, pk):
 def invoice_list_create(request):
     """List all invoices or create a new invoice"""
     if request.method == 'GET':
+        from backend.core.emergency_mask import clamp_emergency_date_from
+
         queryset = Invoice.objects.select_related(
             'customer__customer_group', 'store', 'created_by'
         ).prefetch_related('tags').all()
@@ -3363,6 +3371,11 @@ def invoice_list_create(request):
         date_to = request.query_params.get('date_to', None)
         search = request.query_params.get('search', None)
         include_replacement = str(request.query_params.get('include_replacement', '') or '').strip().lower()
+
+        # Emergency mask: only show rolling visibility window (no deletes)
+        clamped_from = clamp_emergency_date_from(date_from)
+        if clamped_from is not None:
+            date_from = clamped_from.isoformat()
 
         if date:
             queryset = queryset.filter(created_at__date=date)

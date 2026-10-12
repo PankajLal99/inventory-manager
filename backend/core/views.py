@@ -210,9 +210,10 @@ def user_me(request):
 
     mask_cfg = get_emergency_mask_config()
     user_data['emergency_mask_active'] = bool(mask_cfg.get('enabled'))
-    # Percent only for Admin group — avoids advertising the scale factor broadly
-    if _is_admin_group_user(user) or user_data.get('is_admin'):
+    if mask_cfg.get('enabled'):
+        # Needed site-wide for nav hiding + display-only cart scaling
         user_data['emergency_mask_percent'] = mask_cfg.get('percent')
+        user_data['emergency_mask_visibility_days'] = mask_cfg.get('visibility_days')
 
     return Response(user_data)
 

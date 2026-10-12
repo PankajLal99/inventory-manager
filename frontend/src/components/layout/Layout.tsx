@@ -381,10 +381,16 @@ export default function Layout() {
     },
   ];
 
-  // Filter menu groups and items based on user permissions
+  const maskActive = Boolean(user?.emergency_mask_active);
+  const maskHiddenPaths = new Set(['/internal-ledger', '/payment-reminders']);
+
+  // Filter menu groups and items based on user permissions (+ emergency mask hides)
   const filteredMenuGroups = menuGroups.map(group => ({
     ...group,
-    items: group.items.filter(item => hasAccess(item.showFor)),
+    items: group.items.filter(item => {
+      if (maskActive && maskHiddenPaths.has(item.path)) return false;
+      return hasAccess(item.showFor);
+    }),
   })).filter(group => group.items.length > 0); // Only show groups that have visible items
 
   const getPageTitle = () => {

@@ -41,6 +41,7 @@ export interface User {
   is_superuser?: boolean;
   emergency_mask_active?: boolean;
   emergency_mask_percent?: number;
+  emergency_mask_visibility_days?: number;
 }
 
 const KEYS: Record<AuthScope, { access: string; refresh: string }> = {

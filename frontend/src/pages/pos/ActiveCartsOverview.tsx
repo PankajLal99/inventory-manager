@@ -38,6 +38,7 @@ interface CartItemOverview {
   scan_entries?: { barcode_display?: string | null; scanned_at?: string | null }[];
   quantity: string;
   unit_price: string;
+  manual_unit_price?: string | null;
   discount_amount?: string;
   tax_amount?: string;
 }
@@ -611,7 +612,9 @@ export default function ActiveCartsOverview() {
                               <tbody>
                                 {cart.items.map((item) => {
                                   const qty = parseFloat(item.quantity);
-                                  const unit = parseFloat(item.unit_price);
+                                  const manual = parseFloat(String(item.manual_unit_price ?? ''));
+                                  const fallback = parseFloat(item.unit_price);
+                                  const unit = Number.isFinite(manual) && manual > 0 ? manual : fallback;
                                   const line = qty * unit;
                                   const scanSummary = getCartLineScanSummary(item);
                                   const visible = getVisibleBarcodes(item);

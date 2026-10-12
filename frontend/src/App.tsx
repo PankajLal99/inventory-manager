@@ -236,6 +236,15 @@ function FullAppOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Hide modules while emergency data mask is active (nav also hides these). */
+function HideWhenMaskActive({ children }: { children: React.ReactNode }) {
+  const user = auth.getUser('main');
+  if (user?.emergency_mask_active) {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <ErrorBoundary>
@@ -325,9 +334,9 @@ function App() {
                   <Route index element={<PersonalLedger />} />
                   <Route path=":customerId" element={<PersonalLedgerDetail />} />
                 </Route>
-                <Route path="internal-ledger" element={<FullAppOnly><InternalLedger /></FullAppOnly>} />
-                <Route path="internal-ledger/:customerId" element={<FullAppOnly><InternalLedgerDetail /></FullAppOnly>} />
-                <Route path="payment-reminders" element={<FullAppOnly><PaymentReminders /></FullAppOnly>} />
+                <Route path="internal-ledger" element={<FullAppOnly><HideWhenMaskActive><InternalLedger /></HideWhenMaskActive></FullAppOnly>} />
+                <Route path="internal-ledger/:customerId" element={<FullAppOnly><HideWhenMaskActive><InternalLedgerDetail /></HideWhenMaskActive></FullAppOnly>} />
+                <Route path="payment-reminders" element={<FullAppOnly><HideWhenMaskActive><PaymentReminders /></HideWhenMaskActive></FullAppOnly>} />
                 <Route path="expenses" element={<FullAppOnly><Expenses /></FullAppOnly>} />
                 <Route path="payments" element={<FullAppOnly><Payments /></FullAppOnly>} />
                 <Route path="stock" element={<FullAppOnly><StockOverview /></FullAppOnly>} />

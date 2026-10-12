@@ -588,6 +588,8 @@ def supplier_detail(request, pk):
 
 def _ledger_entries_base_queryset(request):
     """Build base LedgerEntry queryset from request query params (same filters as list view)."""
+    from backend.core.emergency_mask import clamp_emergency_date_from
+
     queryset = _exclude_standard_ledger_group_entries(LedgerEntry.objects.all())
     customer_id = request.query_params.get('customer', None)
     customer_group_id = request.query_params.get('customer_group', None)
@@ -599,6 +601,11 @@ def _ledger_entries_base_queryset(request):
     store_id = request.query_params.get('store', None)
     invoice_status = request.query_params.get('invoice_status', None)
     manual_only = (request.query_params.get('manual_only') or '').strip().lower() in {'1', 'true', 'yes'}
+
+    # Emergency mask: raise floor so older ledger rows are hidden (not deleted)
+    clamped_from = clamp_emergency_date_from(date_from)
+    if clamped_from is not None:
+        date_from = clamped_from.isoformat()
 
     # Ledger views should include:
     # - all invoice-linked entries

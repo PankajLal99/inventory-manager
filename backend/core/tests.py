@@ -608,6 +608,45 @@ class EmergencyMaskTests(APITestCase):
         self.assertEqual(blocked.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn('emergency data mask', str(blocked.json().get('detail', '')).lower())
 
+    def test_hidden_modules_and_visibility_window(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from backend.core.emergency_mask import (
+            activate_emergency_mask,
+            clamp_emergency_date_from,
+            get_emergency_visibility_cutoff,
+            is_emergency_hidden_api_path,
+        )
+
+        self.assertIsNone(get_emergency_visibility_cutoff())
+        self.assertFalse(is_emergency_hidden_api_path('/api/v1/payment-reminders/'))
+
+        activate_emergency_mask(percent=3, visibility_days=45)
+        cutoff = get_emergency_visibility_cutoff()
+        self.assertIsNotNone(cutoff)
+        self.assertEqual(cutoff, timezone.localdate() - timedelta(days=44))
+
+        # Older date_from is raised to cutoff; newer stays
+        older = (cutoff - timedelta(days=10)).isoformat()
+        self.assertEqual(clamp_emergency_date_from(older), cutoff)
+        newer = (cutoff + timedelta(days=2)).isoformat()
+        self.assertEqual(clamp_emergency_date_from(newer), cutoff + timedelta(days=2))
+        self.assertEqual(clamp_emergency_date_from(None), cutoff)
+
+        self.assertTrue(is_emergency_hidden_api_path('/api/v1/payment-reminders/'))
+        self.assertTrue(is_emergency_hidden_api_path('/api/v1/internal-ledger/summary/'))
+        self.assertFalse(is_emergency_hidden_api_path('/api/v1/pos/invoices/'))
+
+        self.client.force_authenticate(user=self.admin)
+        denied = self.client.get('/api/v1/payment-reminders/')
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+        denied2 = self.client.get('/api/v1/internal-ledger/summary/')
+        self.assertEqual(denied2.status_code, status.HTTP_403_FORBIDDEN)
+
+        me = self.client.get('/api/v1/auth/me/')
+        self.assertTrue(me.data.get('emergency_mask_active'))
+        self.assertEqual(me.data.get('emergency_mask_visibility_days'), 45)
+
     def test_mask_off_is_noop_on_payload(self):
         """When disabled, apply_emergency_mask must return the exact same object identity/values."""
         from backend.core.emergency_mask import apply_emergency_mask, deactivate_emergency_mask

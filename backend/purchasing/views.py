@@ -16,6 +16,8 @@ from decimal import Decimal
 def purchase_list_create(request):
     """List all purchases or create a new purchase"""
     if request.method == 'GET':
+        from backend.core.emergency_mask import clamp_emergency_date_from
+
         queryset = Purchase.objects.all().prefetch_related('items', 'items__product')
         
         # Filters
@@ -24,6 +26,10 @@ def purchase_list_create(request):
         date_from = request.query_params.get('date_from', None)
         date_to = request.query_params.get('date_to', None)
         status_filter = request.query_params.get('status', None)
+
+        clamped_from = clamp_emergency_date_from(date_from)
+        if clamped_from is not None:
+            date_from = clamped_from.isoformat()
 
         if supplier:
             queryset = queryset.filter(supplier_id=supplier)
