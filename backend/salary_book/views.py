@@ -573,6 +573,11 @@ def attendance_list_create(request):
     att_status = (data.get('status') or Attendance.STATUS_PRESENT).upper()
     if employee.status != Employee.STATUS_ACTIVE:
         return _err('Inactive employees cannot be marked in daily attendance.')
+    if employee.date_of_joining and att_date < employee.date_of_joining:
+        return _err(
+            f'Cannot mark attendance before date of joining '
+            f'({employee.date_of_joining.isoformat()}).'
+        )
     if att_status not in dict(Attendance.STATUS_CHOICES):
         return _err('Invalid attendance status.')
 

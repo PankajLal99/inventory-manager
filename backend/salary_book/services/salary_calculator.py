@@ -67,6 +67,20 @@ def iter_expected_dates(employee: Employee, year, month, today=None):
         cursor = date.fromordinal(cursor.toordinal() + 1)
 
 
+def iter_pre_join_dates(employee: Employee, year, month, today=None):
+    """Calendar days in the covered month window that fall before date_of_joining."""
+    start, _ = month_range(year, month)
+    end = coverage_end(year, month, today)
+    join = employee.date_of_joining
+    if join <= start:
+        return
+    last = min(end, date.fromordinal(join.toordinal() - 1))
+    cursor = start
+    while cursor <= last:
+        yield cursor
+        cursor = date.fromordinal(cursor.toordinal() + 1)
+
+
 def _status_counts(statuses):
     present = absent = paid = unpaid = half = holiday = unmarked = 0
     deduction_days = ZERO
@@ -145,12 +159,24 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         for row in Attendance.objects.filter(employee=employee, date__gte=start, date__lte=end)
     }
     expected = list(iter_expected_dates(employee, year, month, today))
+    pre_join = list(iter_pre_join_dates(employee, year, month, today))
     statuses = [rows.get(d).status if rows.get(d) else None for d in expected]
     counts = _status_counts(statuses)
 
     daily_breakdown = []
     credits_sum = ZERO
-    shortfall = ZERO
+    # Days before date_of_joining are unpaid — salary calculation starts from that date.
+    shortfall = daily * Decimal(len(pre_join))
+    for day in pre_join:
+        daily_breakdown.append({
+            'date': day.isoformat(),
+            'status': 'BEFORE_JOINING',
+            'worked_hours': '0.00',
+            'payable_hours': '0.00',
+            'day_credit': str(ZERO),
+            'minutes_late': 0,
+            'rule_penalty_applied': False,
+        })
     for day in expected:
         row = rows.get(day)
         credit = _day_credit(row, employee, daily, sched_mins)
@@ -180,7 +206,7 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
             'rule_penalty_applied': penalty,
         })
 
-    leave_deduction = _q(shortfall)
+    leave_deduction = _q(min(shortfall, gross))
     earned_salary = _q(gross - leave_deduction)
     other_deductions = ZERO
     allowances = ZERO
@@ -192,6 +218,22 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
     ).aggregate(total=Sum('amount'))['total'] or ZERO
     total_advances = _q(advances)
     net = _q(earned_salary - other_deductions - total_advances + allowances)
+
+    notes = [
+        'Pay is proportional to hours worked, capped at the scheduled shift (no overtime).',
+        'Paid leave and holidays count as a full day.',
+        'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
+        'Half day is capped at half of daily salary.',
+        'Salary calculation starts from the employee date of joining; earlier days are unpaid.',
+        'Active salary advances in this month reduce net payable.',
+        'MT Shop / Shop Boys purchases appear as advances; Paid or Voided advances are excluded.',
+    ]
+    if pre_join:
+        notes.insert(
+            0,
+            f'{len(pre_join)} day(s) before date of joining ({employee.date_of_joining.isoformat()}) '
+            'are unpaid.',
+        )
 
     breakdown = {
         'employee_id': employee.employee_id,
@@ -213,20 +255,15 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'holiday_days': str(counts['holiday_days']),
         'unmarked_days': str(counts['unmarked_days']),
         'deduction_days': str(counts['deduction_days']),
+        'pre_join_days': str(Decimal(len(pre_join))),
+        'date_of_joining': employee.date_of_joining.isoformat(),
         'leave_deduction': str(leave_deduction),
         'other_deductions': str(other_deductions),
         'allowances': str(allowances),
         'total_advances': str(total_advances),
         'net_salary': str(net),
         'daily_breakdown': daily_breakdown,
-        'notes': [
-            'Pay is proportional to hours worked, capped at the scheduled shift (no overtime).',
-            'Paid leave and holidays count as a full day.',
-            'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
-            'Half day is capped at half of daily salary.',
-            'Active salary advances in this month reduce net payable.',
-            'MT Shop / Shop Boys purchases appear as advances; Paid or Voided advances are excluded.',
-        ],
+        'notes': notes,
     }
 
     return {

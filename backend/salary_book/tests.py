@@ -402,6 +402,20 @@ class AttendanceGpsTests(SalaryBookMixin, APITestCase):
         second = self.client.post(url, payload, format='json')
         self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_attendance_rejected_before_date_of_joining(self):
+        self.emp.date_of_joining = date(2026, 4, 16)
+        self.emp.save(update_fields=['date_of_joining'])
+        url = reverse('salary-book-attendance-list-create')
+        res = self.client.post(url, {
+            'employee': self.emp.id,
+            'date': '2026-04-10',
+            'status': 'ABSENT',
+            **self.gps,
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('date of joining', res.data.get('error', '').lower())
+        self.assertEqual(Attendance.objects.filter(employee=self.emp, date='2026-04-10').count(), 0)
+
     def test_absent_rejected_outside_geofence(self):
         url = reverse('salary-book-attendance-list-create')
         res = self.client.post(url, {
@@ -730,6 +744,28 @@ class SalaryRuleTests(SalaryBookMixin, APITestCase):
         }, format='json')
         done = self.client.get(reverse('salary-book-salary-detail', args=[record_id]))
         self.assertEqual(done.data['payment_status'], SalaryRecord.PAY_PAID)
+
+    def test_mid_month_join_prorates_from_start_date(self):
+        """Present every day after joining mid-month → pay only from start date."""
+        self.emp.date_of_joining = date(2026, 4, 16)
+        self.emp.save(update_fields=['date_of_joining'])
+        Attendance.objects.bulk_create([
+            self._att(d, Attendance.STATUS_PRESENT) for d in range(16, 31)
+        ])
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        # 15 pre-join days unpaid at daily 15000/30 = 500 → 7500 deduction
+        self.assertEqual(calc['leave_deduction'], Decimal('7500.00'))
+        self.assertEqual(calc['net_salary'], Decimal('7500.00'))
+        self.assertEqual(calc['breakdown']['pre_join_days'], '15')
+        self.assertEqual(calc['present_days'], Decimal('15.0'))
+
+    def test_month_before_joining_earns_zero(self):
+        self.emp.date_of_joining = date(2026, 5, 1)
+        self.emp.save(update_fields=['date_of_joining'])
+        calc = calculate_employee_month(self.emp, 2026, 4, today=date(2026, 5, 1))
+        self.assertEqual(calc['leave_deduction'], Decimal('15000.00'))
+        self.assertEqual(calc['net_salary'], Decimal('0.00'))
+        self.assertEqual(calc['breakdown']['pre_join_days'], '30')
 
 
 class LeaveAdvanceTests(SalaryBookMixin, APITestCase):

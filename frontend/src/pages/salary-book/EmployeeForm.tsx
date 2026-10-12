@@ -156,7 +156,18 @@ export default function EmployeeForm() {
           <option key={b || 'none'} value={b}>{b || 'Select'}</option>
         ))}
       </Select>
-      <Input label="Date of Joining" type="date" required value={form.date_of_joining} onChange={(e) => set('date_of_joining', e.target.value)} />
+      <div>
+        <Input
+          label="Start Date (Date of Joining)"
+          type="date"
+          required
+          value={form.date_of_joining}
+          onChange={(e) => set('date_of_joining', e.target.value)}
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          Salary and attendance are calculated only from this date onward.
+        </p>
+      </div>
       <Input label="Designation" value={form.designation} onChange={(e) => set('designation', e.target.value)} />
       <Input label="Department" value={form.department} onChange={(e) => set('department', e.target.value)} />
       <Input label="Monthly Salary" required inputMode="decimal" value={form.monthly_salary} onChange={(e) => set('monthly_salary', e.target.value)} />

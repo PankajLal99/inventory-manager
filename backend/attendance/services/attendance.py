@@ -199,6 +199,15 @@ def bridge_event_to_salary_book(event: AttendanceEvent) -> None:
     punch = settings_obj.apply_machine_time_delta(event.punch_datetime)
     att_date = timezone.localtime(punch).date()
 
+    if employee.date_of_joining and att_date < employee.date_of_joining:
+        logger.info(
+            'ADMS bridge skipped: punch before date_of_joining employee=%s date=%s join=%s',
+            employee.employee_id,
+            att_date,
+            employee.date_of_joining,
+        )
+        return
+
     with transaction.atomic():
         attendance, created = Attendance.objects.select_for_update().get_or_create(
             employee=employee,

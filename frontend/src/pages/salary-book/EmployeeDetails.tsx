@@ -113,7 +113,7 @@ export default function EmployeeDetails() {
           <Field label="Scheduled hours" value={data.scheduled_hours ? `${data.scheduled_hours} h` : '—'} />
           <Field label="Per-day rate" value={formatINR(data.daily_rate_preview)} />
           <Field label="Per-hour rate" value={formatINR(data.hourly_rate_preview)} />
-          <Field label="Joined" value={formatDate(data.date_of_joining)} />
+          <Field label="Start Date" value={formatDate(data.date_of_joining)} />
           <Field label="Address" value={data.address || '—'} />
           <Field
             label="MT Shop ledger"
