@@ -270,12 +270,17 @@ export default function CalendarPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSearch(value);
+              // Stay on the all-employees calendar; search only filters rows.
+              if (employeeId) setEmployee('');
+            }}
             placeholder="Search employee..."
             className="w-full min-h-11 pl-9 pr-3 rounded-xl border border-gray-300 bg-white"
             autoComplete="off"
           />
-          {!employeeId && search.trim() && searchMatches.length > 0 && (
+          {search.trim() && searchMatches.length > 0 && (
             <div className="absolute z-20 mt-1 w-full rounded-xl border border-emerald-100 bg-white shadow-lg overflow-hidden">
               {searchMatches.map((emp) => (
                 <button
@@ -283,8 +288,8 @@ export default function CalendarPage() {
                   type="button"
                   className="w-full text-left px-3 py-2.5 text-sm hover:bg-emerald-50 border-b border-emerald-50 last:border-0"
                   onClick={() => {
-                    setEmployee(String(emp.id));
                     setSearch(emp.name);
+                    if (employeeId) setEmployee('');
                   }}
                 >
                   <span className="font-medium text-gray-900">{emp.name}</span>
