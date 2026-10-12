@@ -11,6 +11,7 @@ import type { CalendarEmployee, CalendarResponse, Employee, Paginated, SalaryBoo
 import {
   AdminMonthGrid,
   CalendarLegend,
+  CalendarRefreshButton,
   CalendarSummaryStrip,
   EmployeeMonthGrid,
   MonthNav,
@@ -249,6 +250,14 @@ export default function CalendarPage() {
             <ShoppingCart className="h-4 w-4" />
             POS
           </a>
+          <CalendarRefreshButton
+            fetching={calendarQuery.isFetching}
+            updatedAt={calendarQuery.dataUpdatedAt}
+            onRefresh={() => {
+              void calendarQuery.refetch();
+              void employeesQuery.refetch();
+            }}
+          />
           <MonthNav year={year} month={month} onChange={setMonth} />
         </div>
       </div>

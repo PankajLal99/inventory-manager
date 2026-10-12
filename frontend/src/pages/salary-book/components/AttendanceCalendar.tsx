@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Briefcase, ChevronLeft, ChevronRight, Plus, Umbrella, Wallet } from 'lucide-react';
+import { Briefcase, ChevronLeft, ChevronRight, Plus, RefreshCw, Umbrella, Wallet } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatINR, formatTime, monthLabel, statusLabel } from '../utils';
 import type { CalendarEmployee, CalendarKpis, CalendarTodayKpis, CalendarDayCell } from '../types';
@@ -74,6 +74,38 @@ export function MonthNav({
         <ChevronRight className="h-5 w-5" />
       </button>
     </div>
+  );
+}
+
+export function CalendarRefreshButton({
+  onRefresh,
+  fetching,
+  updatedAt,
+}: {
+  onRefresh: () => void;
+  fetching?: boolean;
+  updatedAt?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={fetching}
+      className="inline-flex items-center gap-2 min-h-11 px-3 sm:px-4 rounded-xl bg-white border border-emerald-200 text-emerald-800 font-medium text-sm disabled:opacity-60"
+      aria-label="Refresh calendar"
+      title={
+        updatedAt
+          ? `Updated ${new Date(updatedAt).toLocaleTimeString('en-IN', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            })}`
+          : 'Refresh calendar'
+      }
+    >
+      <RefreshCw className={`h-4 w-4 ${fetching ? 'animate-spin' : ''}`} />
+      <span className="hidden sm:inline">Refresh</span>
+    </button>
   );
 }
 
