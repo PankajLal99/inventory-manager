@@ -171,6 +171,12 @@ class Employee(models.Model):
     address = models.TextField(blank=True)
     blood_group = models.CharField(max_length=8, blank=True, choices=BLOOD_GROUP_CHOICES)
     date_of_joining = models.DateField()
+    # Day of month the salary cycle starts/ends (e.g. 9 → 9th to next 9th). 1 = calendar month.
+    salary_cycle_start_day = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text='Salary cycle start/end day (1–28). Example: 9 means 9th → next 9th.',
+    )
     designation = models.CharField(max_length=100, blank=True)
     department = models.CharField(max_length=100, blank=True)
     monthly_salary = models.DecimalField(
@@ -182,6 +188,11 @@ class Employee(models.Model):
     fixed_working_days = models.PositiveSmallIntegerField(null=True, blank=True)
     expected_check_in = models.TimeField(null=True, blank=True)
     expected_check_out = models.TimeField(null=True, blank=True)
+    # Grace minutes after expected check-in before counting as late (0 = exact time).
+    check_in_buffer_minutes = models.PositiveSmallIntegerField(
+        default=0,
+        help_text='Grace minutes after expected check-in. Example: 10 AM + 10 min buffer → on time until 10:10.',
+    )
     profile_photo = models.ImageField(
         storage=SalaryBookImageStorage(),
         upload_to=employee_photo_upload,
@@ -220,6 +231,14 @@ class Employee(models.Model):
                 raise ValidationError(
                     {'alternate_contact': 'Enter a valid 10-digit Indian mobile number.'}
                 )
+        if self.salary_cycle_start_day is not None and not (1 <= int(self.salary_cycle_start_day) <= 28):
+            raise ValidationError(
+                {'salary_cycle_start_day': 'Must be between 1 and 28.'}
+            )
+        if self.check_in_buffer_minutes is not None and int(self.check_in_buffer_minutes) > 120:
+            raise ValidationError(
+                {'check_in_buffer_minutes': 'Buffer cannot exceed 120 minutes.'}
+            )
         if self.salary_calculation_method == self.METHOD_FIXED and not self.fixed_working_days:
             raise ValidationError(
                 {'fixed_working_days': 'Required when using fixed working days.'}

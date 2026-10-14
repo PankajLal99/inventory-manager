@@ -89,9 +89,10 @@ export default function SalaryBookDashboard() {
         </Link>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-8 gap-3">
         {[
           { label: 'Present', value: today.present },
+          { label: 'Out', value: today.out ?? 0 },
           { label: 'Absent', value: today.absent },
           { label: 'Half Day', value: today.half_day ?? 0 },
           { label: 'Paid Leave', value: today.paid_leave },

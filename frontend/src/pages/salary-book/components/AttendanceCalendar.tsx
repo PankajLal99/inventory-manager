@@ -152,13 +152,14 @@ export function CalendarSummaryStrip({
   const cards = [
     { label: 'Total Employees', value: today.total_employees },
     { label: 'Present Today', value: today.present },
+    { label: 'Out Today', value: today.out ?? 0 },
     { label: 'Absent Today', value: today.absent },
     { label: 'Half Day Today', value: today.half_day },
     { label: 'Month Attendance', value: `${Number(kpis.attendance_rate).toFixed(1)}%` },
     { label: 'Unmarked (month)', value: kpis.unmarked },
   ];
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 sm:gap-3">
       {cards.map((card) => (
         <div key={card.label} className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4">
           <div className="text-[11px] sm:text-sm text-gray-500 leading-tight">{card.label}</div>

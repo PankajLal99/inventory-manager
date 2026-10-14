@@ -35,8 +35,9 @@ class SalaryBookSettingsAdmin(admin.ModelAdmin):
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
     list_display = [
-        'employee_id', 'name', 'mobile', 'monthly_salary',
-        'mtshop_customer', 'expected_check_in', 'expected_check_out', 'status', 'date_of_joining',
+        'employee_id', 'name', 'mobile', 'monthly_salary', 'salary_cycle_start_day',
+        'mtshop_customer', 'expected_check_in', 'expected_check_out',
+        'check_in_buffer_minutes', 'status', 'date_of_joining',
     ]
     list_filter = ['status', 'department']
     search_fields = ['employee_id', 'name', 'mobile', 'mtshop_customer__name']

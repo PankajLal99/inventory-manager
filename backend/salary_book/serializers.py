@@ -158,6 +158,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'address',
             'blood_group',
             'date_of_joining',
+            'salary_cycle_start_day',
             'designation',
             'department',
             'monthly_salary',
@@ -165,6 +166,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'fixed_working_days',
             'expected_check_in',
             'expected_check_out',
+            'check_in_buffer_minutes',
             'effective_check_in',
             'effective_check_out',
             'scheduled_hours',
@@ -229,10 +231,30 @@ class EmployeeSerializer(serializers.ModelSerializer):
     def _daily_preview(self, obj):
         today = timezone.localdate()
         method, fixed_days = effective_method(obj, self._settings())
-        divisor = divisor_for(today.year, today.month, method, fixed_days)
+        from backend.salary_book.services.salary_calculator import period_containing
+
+        year, month = period_containing(obj, today)
+        divisor = divisor_for(year, month, method, fixed_days, employee=obj)
         if not divisor:
             return ZERO
         return _q(Decimal(obj.monthly_salary) / Decimal(divisor), FOUR)
+
+    def validate_salary_cycle_start_day(self, value):
+        if value is None:
+            return 1
+        if not (1 <= int(value) <= 28):
+            raise serializers.ValidationError('Must be between 1 and 28.')
+        return int(value)
+
+    def validate_check_in_buffer_minutes(self, value):
+        if value is None:
+            return 0
+        value = int(value)
+        if value < 0:
+            raise serializers.ValidationError('Buffer cannot be negative.')
+        if value > 120:
+            raise serializers.ValidationError('Buffer cannot exceed 120 minutes.')
+        return value
 
     def get_daily_rate_preview(self, obj):
         return str(self._daily_preview(obj))
@@ -436,6 +458,7 @@ class LeaveRecordSerializer(serializers.ModelSerializer):
 class SalaryAdvanceSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.name', read_only=True)
     employee_code = serializers.CharField(source='employee.employee_id', read_only=True)
+    source_invoice_id = serializers.SerializerMethodField()
 
     class Meta:
         model = SalaryAdvance
@@ -452,6 +475,7 @@ class SalaryAdvanceSerializer(serializers.ModelSerializer):
             'status',
             'source',
             'source_invoice_number',
+            'source_invoice_id',
             'created_at',
             'updated_at',
         ]
@@ -459,9 +483,27 @@ class SalaryAdvanceSerializer(serializers.ModelSerializer):
             'status',
             'source',
             'source_invoice_number',
+            'source_invoice_id',
             'created_at',
             'updated_at',
         ]
+
+    def get_source_invoice_id(self, obj):
+        number = (obj.source_invoice_number or '').strip()
+        if not number:
+            return None
+        cache = self.context.setdefault('_invoice_id_by_number', {})
+        if number in cache:
+            return cache[number]
+        from backend.pos.models import Invoice
+
+        inv_id = (
+            Invoice.objects.filter(invoice_number=number)
+            .values_list('id', flat=True)
+            .first()
+        )
+        cache[number] = inv_id
+        return inv_id
 
 
 class SalaryPaymentSerializer(serializers.ModelSerializer):

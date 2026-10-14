@@ -110,10 +110,26 @@ export default function EmployeeDetails() {
           <Field label="Monthly Salary" value={formatINR(data.monthly_salary)} />
           <Field label="Check-in" value={toTimeInput(data.effective_check_in) || '—'} />
           <Field label="Check-out" value={toTimeInput(data.effective_check_out) || '—'} />
+          <Field
+            label="Check-in buffer"
+            value={
+              data.check_in_buffer_minutes
+                ? `${data.check_in_buffer_minutes} min (on time until then)`
+                : '0 min (exact check-in)'
+            }
+          />
           <Field label="Scheduled hours" value={data.scheduled_hours ? `${data.scheduled_hours} h` : '—'} />
           <Field label="Per-day rate" value={formatINR(data.daily_rate_preview)} />
           <Field label="Per-hour rate" value={formatINR(data.hourly_rate_preview)} />
           <Field label="Start Date" value={formatDate(data.date_of_joining)} />
+          <Field
+            label="Salary cycle day"
+            value={
+              data.salary_cycle_start_day && data.salary_cycle_start_day > 1
+                ? `${data.salary_cycle_start_day}th → next ${data.salary_cycle_start_day}th`
+                : '1st (calendar month)'
+            }
+          />
           <Field label="Address" value={data.address || '—'} />
           <Field
             label="MT Shop ledger"
@@ -239,7 +255,7 @@ function AdvanceHistory({ employeeId, employeeName }: { employeeId: number; empl
         className="w-full min-h-11 rounded-xl border border-emerald-200 text-emerald-800 font-medium"
         onClick={() => setOpen(true)}
       >
-        Open advance ledger
+        Open salary ledger
       </button>
       <div className="space-y-2">
         {data.results.slice(0, 8).map((row) => (
@@ -251,8 +267,24 @@ function AdvanceHistory({ employeeId, employeeName }: { employeeId: number; empl
                 {row.source === 'MTSHOP' && row.reason ? ' · ' : ''}
                 {row.reason || row.status}
               </div>
-              <div className="text-xs text-gray-400 mt-0.5">
-                {row.status === 'PAID' ? 'Paid' : row.status === 'VOID' ? 'Voided' : 'Active'}
+              <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-1">
+                <span>
+                  {row.status === 'PAID' ? 'Paid' : row.status === 'VOID' ? 'Voided' : 'Active'}
+                </span>
+                {row.source_invoice_number ? (
+                  row.source_invoice_id ? (
+                    <a
+                      href={`/invoices/${row.source_invoice_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-700 font-medium underline-offset-2 hover:underline"
+                    >
+                      · {row.source_invoice_number}
+                    </a>
+                  ) : (
+                    <span>· {row.source_invoice_number}</span>
+                  )
+                ) : null}
               </div>
             </div>
             <div className="font-semibold">{formatINR(row.amount)}</div>

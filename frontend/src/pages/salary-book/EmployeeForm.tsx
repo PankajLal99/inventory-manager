@@ -22,6 +22,7 @@ const empty = {
   address: '',
   blood_group: '',
   date_of_joining: todayISO(),
+  salary_cycle_start_day: '1',
   designation: '',
   department: '',
   monthly_salary: '',
@@ -29,6 +30,7 @@ const empty = {
   fixed_working_days: '',
   expected_check_in: '',
   expected_check_out: '',
+  check_in_buffer_minutes: '0',
   mtshop_customer: '',
   status: 'ACTIVE',
   notes: '',
@@ -71,6 +73,7 @@ export default function EmployeeForm() {
       address: data.address || '',
       blood_group: data.blood_group || '',
       date_of_joining: data.date_of_joining,
+      salary_cycle_start_day: String(data.salary_cycle_start_day || 1),
       designation: data.designation || '',
       department: data.department || '',
       monthly_salary: String(data.monthly_salary),
@@ -78,6 +81,7 @@ export default function EmployeeForm() {
       fixed_working_days: data.fixed_working_days ? String(data.fixed_working_days) : '',
       expected_check_in: toTimeInput(data.expected_check_in),
       expected_check_out: toTimeInput(data.expected_check_out),
+      check_in_buffer_minutes: String(data.check_in_buffer_minutes ?? 0),
       mtshop_customer: data.mtshop_customer ? String(data.mtshop_customer) : '',
       status: data.status,
       notes: data.notes || '',
@@ -90,9 +94,11 @@ export default function EmployeeForm() {
         ...form,
         employee_id: form.employee_id || undefined,
         monthly_salary: form.monthly_salary,
+        salary_cycle_start_day: Math.min(28, Math.max(1, Number(form.salary_cycle_start_day) || 1)),
         fixed_working_days: form.fixed_working_days ? Number(form.fixed_working_days) : null,
         expected_check_in: form.expected_check_in || null,
         expected_check_out: form.expected_check_out || null,
+        check_in_buffer_minutes: Math.min(120, Math.max(0, Number(form.check_in_buffer_minutes) || 0)),
         mtshop_customer: form.mtshop_customer ? Number(form.mtshop_customer) : null,
       };
       if (isEdit) return salaryBookApi.employees.update(Number(id), payload);
@@ -168,6 +174,20 @@ export default function EmployeeForm() {
           Salary and attendance are calculated only from this date onward.
         </p>
       </div>
+      <div>
+        <Input
+          label="Salary cycle day (1–28)"
+          type="number"
+          min={1}
+          max={28}
+          required
+          value={form.salary_cycle_start_day}
+          onChange={(e) => set('salary_cycle_start_day', e.target.value)}
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          Example: 9 = salary month runs 9th → next 9th. Use 1 for a normal calendar month.
+        </p>
+      </div>
       <Input label="Designation" value={form.designation} onChange={(e) => set('designation', e.target.value)} />
       <Input label="Department" value={form.department} onChange={(e) => set('department', e.target.value)} />
       <Input label="Monthly Salary" required inputMode="decimal" value={form.monthly_salary} onChange={(e) => set('monthly_salary', e.target.value)} />
@@ -191,6 +211,19 @@ export default function EmployeeForm() {
         value={form.expected_check_out}
         onChange={(e) => set('expected_check_out', e.target.value)}
       />
+      <div>
+        <Input
+          label="Check-in buffer (minutes)"
+          type="number"
+          min={0}
+          max={120}
+          value={form.check_in_buffer_minutes}
+          onChange={(e) => set('check_in_buffer_minutes', e.target.value)}
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          Grace after check-in. Example: 10:00 + 10 min → on time until 10:10. Use 0 for exact time.
+        </p>
+      </div>
       {isEdit && (
         <Select label="Status" value={form.status} onChange={(e) => set('status', e.target.value)}>
           <option value="ACTIVE">Active</option>

@@ -34,8 +34,13 @@ export default function SalaryBookPage() {
 
   return (
     <div className="space-y-4" data-tutorial="sal-list">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">Salary Book</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-bold">Salary Book</h1>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Month = each employee&apos;s cycle end month (e.g. day 9 → previous 9th to this 9th).
+          </p>
+        </div>
         <select
           className="min-h-11 rounded-xl border border-gray-300 bg-white px-3"
           value={`${year}-${month}`}

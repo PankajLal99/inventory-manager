@@ -1,5 +1,5 @@
 import calendar
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import Sum
@@ -33,6 +33,67 @@ def month_range(year, month):
     return date(year, month, 1), date(year, month, last)
 
 
+def clamp_cycle_day(day) -> int:
+    """Salary cycle day is 1–28 so every month has that calendar day."""
+    try:
+        value = int(day or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(28, value))
+
+
+def cycle_day_for(employee: Employee) -> int:
+    return clamp_cycle_day(getattr(employee, 'salary_cycle_start_day', 1))
+
+
+def _safe_day(year: int, month: int, day: int) -> date:
+    last = calendar.monthrange(year, month)[1]
+    return date(year, month, min(day, last))
+
+
+def _shift_month(year: int, month: int, delta: int):
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def cycle_range(employee: Employee, year: int, month: int):
+    """
+    Inclusive start/end for the salary period keyed by (year, month).
+
+    (year, month) is the month of the period end marker (payday day).
+    Example day=9, period Feb 2026 → 9 Jan … 8 Feb (ends on the 9th marker).
+    Day=1 keeps a normal calendar month (1st … last day).
+    """
+    day = cycle_day_for(employee)
+    if day == 1:
+        return month_range(year, month)
+    end_marker = _safe_day(year, month, day)
+    prev_y, prev_m = _shift_month(year, month, -1)
+    start = _safe_day(prev_y, prev_m, day)
+    inclusive_end = end_marker - timedelta(days=1)
+    return start, inclusive_end
+
+
+def cycle_end_marker(employee: Employee, year: int, month: int) -> date:
+    """The 'ends on this date' marker (e.g. 9 Feb for a 9→9 cycle)."""
+    day = cycle_day_for(employee)
+    if day == 1:
+        _, end = month_range(year, month)
+        return end
+    return _safe_day(year, month, day)
+
+
+def period_containing(employee: Employee, for_date: date):
+    """Return (year, month) period key that contains for_date for this employee."""
+    day = cycle_day_for(employee)
+    if day == 1:
+        return for_date.year, for_date.month
+    if for_date.day < day:
+        return for_date.year, for_date.month
+    next_y, next_m = _shift_month(for_date.year, for_date.month, 1)
+    return next_y, next_m
+
+
 def effective_method(employee: Employee, settings_obj: SalaryBookSettings):
     method = employee.salary_calculation_method
     if method == Employee.METHOD_INHERIT:
@@ -43,14 +104,22 @@ def effective_method(employee: Employee, settings_obj: SalaryBookSettings):
     return SalaryBookSettings.METHOD_CALENDAR, None
 
 
-def divisor_for(year, month, method, fixed_days):
+def divisor_for(year, month, method, fixed_days, employee: Employee | None = None):
     if method == SalaryBookSettings.METHOD_FIXED:
         return int(fixed_days or 26)
+    if employee is not None:
+        start, end = cycle_range(employee, year, month)
+        return (end - start).days + 1
     return calendar.monthrange(year, month)[1]
 
 
-def coverage_end(year, month, today=None):
+def coverage_end(year, month, today=None, employee: Employee | None = None):
     today = today or timezone.localdate()
+    if employee is not None:
+        start, end = cycle_range(employee, year, month)
+        if start <= today <= end:
+            return today
+        return end
     start, end = month_range(year, month)
     if year == today.year and month == today.month:
         return min(end, today)
@@ -58,8 +127,8 @@ def coverage_end(year, month, today=None):
 
 
 def iter_expected_dates(employee: Employee, year, month, today=None):
-    start, _ = month_range(year, month)
-    end = coverage_end(year, month, today)
+    start, _ = cycle_range(employee, year, month)
+    end = coverage_end(year, month, today, employee=employee)
     join = employee.date_of_joining
     cursor = max(start, join)
     while cursor <= end:
@@ -68,9 +137,9 @@ def iter_expected_dates(employee: Employee, year, month, today=None):
 
 
 def iter_pre_join_dates(employee: Employee, year, month, today=None):
-    """Calendar days in the covered month window that fall before date_of_joining."""
-    start, _ = month_range(year, month)
-    end = coverage_end(year, month, today)
+    """Days in the covered cycle window that fall before date_of_joining."""
+    start, _ = cycle_range(employee, year, month)
+    end = coverage_end(year, month, today, employee=employee)
     join = employee.date_of_joining
     if join <= start:
         return
@@ -146,14 +215,16 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
     """Return a transparent salary breakdown. Never called from the frontend."""
     settings_obj = SalaryBookSettings.get_solo()
     method, fixed_days = effective_method(employee, settings_obj)
-    divisor = divisor_for(year, month, method, fixed_days)
+    divisor = divisor_for(year, month, method, fixed_days, employee=employee)
     gross = _q(employee.monthly_salary)
     daily = _q(gross / Decimal(divisor), FOUR) if divisor else ZERO
     sched_mins = scheduled_minutes(employee, settings_obj)
     sched_hours = scheduled_hours(employee, settings_obj)
     hourly = _q(daily / sched_hours, FOUR) if sched_hours else ZERO
 
-    start, end = month_range(year, month)
+    start, end = cycle_range(employee, year, month)
+    end_marker = cycle_end_marker(employee, year, month)
+    cycle_day = cycle_day_for(employee)
     rows = {
         row.date: row
         for row in Attendance.objects.filter(employee=employee, date__gte=start, date__lte=end)
@@ -225,7 +296,9 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'Unpaid leave, absent, unmarked, and consecutive-late penalty days are unpaid.',
         'Half day is capped at half of daily salary.',
         'Salary calculation starts from the employee date of joining; earlier days are unpaid.',
-        'Active salary advances in this month reduce net payable.',
+        f'Salary cycle starts on day {cycle_day} and ends on day {cycle_day} '
+        f'({start.isoformat()} → {end_marker.isoformat()}).',
+        'Active salary advances in this cycle reduce net payable.',
         'MT Shop / Shop Boys purchases appear as advances; Paid or Voided advances are excluded.',
     ]
     if pre_join:
@@ -240,6 +313,10 @@ def calculate_employee_month(employee: Employee, year: int, month: int, today=No
         'employee_name': employee.name,
         'year': year,
         'month': month,
+        'period_start': start.isoformat(),
+        'period_end': end.isoformat(),
+        'period_end_marker': end_marker.isoformat(),
+        'salary_cycle_start_day': cycle_day,
         'gross_salary': str(gross),
         'calculation_method': method,
         'divisor_days': divisor,
@@ -328,9 +405,10 @@ def refresh_payment_status(record: SalaryRecord):
 
 
 def month_is_finalized(employee: Employee, for_date: date) -> bool:
+    year, month = period_containing(employee, for_date)
     return SalaryRecord.objects.filter(
         employee=employee,
-        year=for_date.year,
-        month=for_date.month,
+        year=year,
+        month=month,
         status=SalaryRecord.STATUS_FINALIZED,
     ).exists()

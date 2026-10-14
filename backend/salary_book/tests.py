@@ -767,6 +767,44 @@ class SalaryRuleTests(SalaryBookMixin, APITestCase):
         self.assertEqual(calc['net_salary'], Decimal('0.00'))
         self.assertEqual(calc['breakdown']['pre_join_days'], '30')
 
+    def test_salary_cycle_day_9_uses_previous_9_to_this_9(self):
+        """Cycle day 9 for May period → 9 Apr … 8 May; calendar-day divisor = 30."""
+        from backend.salary_book.services.salary_calculator import cycle_range, period_containing
+
+        self.emp.salary_cycle_start_day = 9
+        self.emp.salary_calculation_method = Employee.METHOD_CALENDAR
+        self.emp.save(update_fields=['salary_cycle_start_day', 'salary_calculation_method'])
+        start, end = cycle_range(self.emp, 2026, 5)
+        self.assertEqual(start, date(2026, 4, 9))
+        self.assertEqual(end, date(2026, 5, 8))
+        self.assertEqual(period_containing(self.emp, date(2026, 4, 15)), (2026, 5))
+        self.assertEqual(period_containing(self.emp, date(2026, 5, 9)), (2026, 6))
+
+        # Present every day in the Apr9–May8 window
+        rows = []
+        cursor = start
+        while cursor <= end:
+            rows.append(
+                Attendance(
+                    employee=self.emp,
+                    date=cursor,
+                    status=Attendance.STATUS_PRESENT,
+                    latitude=Decimal('23.259900'),
+                    longitude=Decimal('77.412600'),
+                    location_accuracy=Decimal('18.00'),
+                    location_captured_at=datetime(2026, 4, 9, 9, 0, tzinfo=dt_timezone.utc),
+                    attendance_method=Attendance.METHOD_MANUAL,
+                )
+            )
+            cursor = date.fromordinal(cursor.toordinal() + 1)
+        Attendance.objects.bulk_create(rows)
+        calc = calculate_employee_month(self.emp, 2026, 5, today=date(2026, 5, 10))
+        self.assertEqual(calc['divisor_days'], 30)
+        self.assertEqual(calc['breakdown']['period_start'], '2026-04-09')
+        self.assertEqual(calc['breakdown']['period_end_marker'], '2026-05-09')
+        self.assertEqual(calc['leave_deduction'], Decimal('0.00'))
+        self.assertEqual(calc['net_salary'], Decimal('15000.00'))
+
 
 class LeaveAdvanceTests(SalaryBookMixin, APITestCase):
     def setUp(self):
@@ -947,6 +985,47 @@ class ConsecutiveLateRuleTests(SalaryBookMixin, APITestCase):
         result = evaluate_check_in(self.emp, date(2026, 4, 4), Attendance.STATUS_PRESENT, late)
         self.assertEqual(result.status, Attendance.STATUS_PRESENT)
         self.assertFalse(result.rule_penalty_applied)
+
+    def test_check_in_buffer_treats_grace_as_on_time(self):
+        """Expected 09:00 + 10 min buffer → 09:10 is not late; 09:15 is 5 min late."""
+        from backend.salary_book.services.schedule_utils import minutes_late_at
+
+        self.emp.check_in_buffer_minutes = 10
+        self.emp.save(update_fields=['check_in_buffer_minutes'])
+        within = minutes_late_at(_local_dt(date(2026, 4, 1), 9, 10), self.emp, date(2026, 4, 1))
+        self.assertEqual(within, 0)
+        over = minutes_late_at(_local_dt(date(2026, 4, 1), 9, 15), self.emp, date(2026, 4, 1))
+        self.assertEqual(over, 5)
+        result = evaluate_check_in(
+            self.emp, date(2026, 4, 1), Attendance.STATUS_PRESENT, _local_dt(date(2026, 4, 1), 9, 10)
+        )
+        self.assertFalse(result.is_late)
+        self.assertEqual(result.minutes_late, 0)
+
+    def test_buffer_zero_requires_exact_check_in(self):
+        from backend.salary_book.services.schedule_utils import minutes_late_at
+
+        self.emp.check_in_buffer_minutes = 0
+        self.emp.save(update_fields=['check_in_buffer_minutes'])
+        late = minutes_late_at(_local_dt(date(2026, 4, 1), 9, 1), self.emp, date(2026, 4, 1))
+        self.assertEqual(late, 1)
+
+    def test_holiday_breaks_consecutive_late_streak(self):
+        """Holiday in between resets streak — next working day does not inherit prior lates."""
+        self._seed_day(1, 9, 40, 40)
+        self._seed_day(2, 9, 45, 45)
+        Attendance.objects.create(
+            employee=self.emp,
+            date=date(2026, 4, 3),
+            status=Attendance.STATUS_HOLIDAY,
+            attendance_method=Attendance.METHOD_MANUAL,
+        )
+        # Day 4 late should only count as streak=1 (holiday broke days 1–2).
+        late = _local_dt(date(2026, 4, 4), 9, 40)
+        result = evaluate_check_in(self.emp, date(2026, 4, 4), Attendance.STATUS_PRESENT, late)
+        self.assertEqual(result.status, Attendance.STATUS_PRESENT)
+        self.assertFalse(result.rule_penalty_applied)
+        self.assertTrue(result.is_late)
 
     def test_rule_api_crud(self):
         url = reverse('salary-book-employee-attendance-rules', args=[self.emp.id])

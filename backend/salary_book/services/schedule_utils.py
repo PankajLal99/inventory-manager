@@ -46,7 +46,20 @@ def combine_local(day: date, clock: time):
     return timezone.localtime(naive, tz)
 
 
+def check_in_buffer_minutes(employee: Employee) -> int:
+    try:
+        return max(0, min(120, int(getattr(employee, 'check_in_buffer_minutes', 0) or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def minutes_late_at(check_in, employee: Employee, att_date: date, settings_obj=None) -> int:
+    """
+    Minutes late after expected check-in, minus the employee's buffer grace.
+
+    Example: expected 10:00, buffer 10 → arrival at 10:10 is 0 late (on time).
+    Arrival at 10:15 → 5 minutes late. Buffer 0 → must be at/before exact check-in.
+    """
     if not check_in:
         return 0
     cin, _ = effective_schedule(employee, settings_obj)
@@ -54,8 +67,8 @@ def minutes_late_at(check_in, employee: Employee, att_date: date, settings_obj=N
     actual = check_in
     if timezone.is_naive(actual):
         actual = timezone.make_aware(actual, timezone.get_current_timezone())
-    delta = (timezone.localtime(actual) - timezone.localtime(expected)).total_seconds()
-    return max(0, int(delta // 60))
+    raw = max(0, int((timezone.localtime(actual) - timezone.localtime(expected)).total_seconds() // 60))
+    return max(0, raw - check_in_buffer_minutes(employee))
 
 
 def minutes_early_at(check_out, employee: Employee, att_date: date, settings_obj=None) -> int:

@@ -21,7 +21,7 @@ import ManualAttendanceDialog, {
   type ManualAttendanceTarget,
 } from './components/ManualAttendanceDialog';
 import AddAmountDialog, { type AddAmountTarget } from './components/AddAmountDialog';
-import { apiError, toTimeInput } from './utils';
+import { apiError, cyclePeriodLabel, toTimeInput } from './utils';
 
 export default function CalendarPage() {
   const [params, setParams] = useSearchParams();
@@ -239,6 +239,16 @@ export default function CalendarPage() {
               ? 'Tap a day for details. Unmarked days can get in/out times.'
               : 'Swipe days per employee, or open one for the month grid.'}
           </p>
+          {isEmployee && selectedEmployee?.period_start && selectedEmployee?.period_end_marker ? (
+            <p className="text-xs sm:text-sm text-emerald-800 mt-1 font-medium">
+              Salary cycle:{' '}
+              {cyclePeriodLabel(
+                selectedEmployee.period_start,
+                selectedEmployee.period_end_marker,
+                selectedEmployee.salary_cycle_start_day,
+              )}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <a

@@ -79,6 +79,19 @@ export function monthLabel(year: number, month: number) {
   });
 }
 
+/** e.g. "9 Jan 2026 → 9 Feb 2026" for cycle banners. */
+export function cyclePeriodLabel(
+  periodStart?: string | null,
+  periodEndMarker?: string | null,
+  cycleDay?: number | null,
+) {
+  if (!periodStart || !periodEndMarker) return '';
+  const start = formatDate(periodStart);
+  const end = formatDate(periodEndMarker);
+  const day = cycleDay && cycleDay > 1 ? ` · day ${cycleDay}` : '';
+  return `${start} → ${end}${day}`;
+}
+
 export function todayISO() {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');

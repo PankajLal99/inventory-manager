@@ -59,8 +59,12 @@ from .services.image_utils import maybe_compress, validate_and_compress_image
 from .services.salary_calculator import (
     apply_calculation_to_record,
     calculate_employee_month,
+    cycle_day_for,
+    cycle_end_marker,
+    cycle_range,
     month_is_finalized,
     month_range,
+    period_containing,
     refresh_payment_status,
 )
 from .services.schedule_utils import combine_local, minutes_early_at, minutes_late_at
@@ -417,16 +421,41 @@ def employee_photo(request, pk):
     return FileResponse(handle, content_type='image/jpeg')
 
 
-def _employee_history_month_filter(qs, request, date_field):
+def _employee_history_month_filter(qs, request, date_field, employee=None):
     month = request.query_params.get('month')
     year = request.query_params.get('year')
     if month and year:
         try:
-            start, end = month_range(int(year), int(month))
+            y, m = int(year), int(month)
+            if employee is not None:
+                start, end = cycle_range(employee, y, m)
+            else:
+                start, end = month_range(y, m)
             qs = qs.filter(**{f'{date_field}__gte': start, f'{date_field}__lte': end})
         except (TypeError, ValueError, calendar.IllegalMonthError):
             pass
     return qs
+
+
+def _filter_qs_by_employee_cycles(qs, year, month, date_field='date', employee_id=None):
+    """Filter rows so each employee uses their own salary cycle for (year, month)."""
+    if employee_id:
+        employee = Employee.objects.filter(pk=employee_id).first()
+        if not employee:
+            return qs.none()
+        start, end = cycle_range(employee, year, month)
+        return qs.filter(**{f'{date_field}__gte': start, f'{date_field}__lte': end})
+
+    q = Q()
+    has_any = False
+    for emp in Employee.objects.only('id', 'salary_cycle_start_day'):
+        start, end = cycle_range(emp, year, month)
+        q |= Q(**{'employee_id': emp.id, f'{date_field}__gte': start, f'{date_field}__lte': end})
+        has_any = True
+    if not has_any:
+        start, end = month_range(year, month)
+        return qs.filter(**{f'{date_field}__gte': start, f'{date_field}__lte': end})
+    return qs.filter(q)
 
 
 @api_view(['GET'])
@@ -434,7 +463,7 @@ def _employee_history_month_filter(qs, request, date_field):
 def employee_attendance_history(request, pk):
     employee = get_object_or_404(Employee, pk=pk)
     qs = Attendance.objects.filter(employee=employee)
-    qs = _employee_history_month_filter(qs, request, 'date')
+    qs = _employee_history_month_filter(qs, request, 'date', employee=employee)
     status_filter = request.query_params.get('status')
     if status_filter:
         qs = qs.filter(status=status_filter.upper())
@@ -446,7 +475,7 @@ def employee_attendance_history(request, pk):
 def employee_leave_history(request, pk):
     employee = get_object_or_404(Employee, pk=pk)
     qs = LeaveRecord.objects.filter(employee=employee)
-    qs = _employee_history_month_filter(qs, request, 'start_date')
+    qs = _employee_history_month_filter(qs, request, 'start_date', employee=employee)
     return _paginate(qs, request, LeaveRecordSerializer)
 
 
@@ -456,15 +485,28 @@ def employee_advance_history(request, pk):
     """Ledger-style advance history for one employee (optional year/month filter)."""
     employee = get_object_or_404(Employee, pk=pk)
     qs = SalaryAdvance.objects.filter(employee=employee).select_related('employee')
-    qs = _employee_history_month_filter(qs, request, 'date')
+    qs = _employee_history_month_filter(qs, request, 'date', employee=employee)
     # Ledger reads oldest-first so balances read top-to-bottom.
     qs = qs.order_by('date', 'id')
     total_active = qs.filter(status=SalaryAdvance.STATUS_ACTIVE).aggregate(total=Sum('amount'))['total'] or 0
     total_paid = qs.filter(status=SalaryAdvance.STATUS_PAID).aggregate(total=Sum('amount'))['total'] or 0
+    start = end = end_marker = None
+    year = request.query_params.get('year')
+    month = request.query_params.get('month')
+    if year and month:
+        try:
+            start, end = cycle_range(employee, int(year), int(month))
+            end_marker = cycle_end_marker(employee, int(year), int(month))
+        except (TypeError, ValueError, calendar.IllegalMonthError):
+            pass
     page = _paginate(qs, request, SalaryAdvanceSerializer)
     page.data['employee_id'] = employee.id
     page.data['employee_name'] = employee.name
     page.data['employee_code'] = employee.employee_id
+    page.data['salary_cycle_start_day'] = cycle_day_for(employee)
+    page.data['period_start'] = start.isoformat() if start else None
+    page.data['period_end'] = end.isoformat() if end else None
+    page.data['period_end_marker'] = end_marker.isoformat() if end_marker else None
     page.data['total_active'] = str(total_active)
     page.data['total_paid'] = str(total_paid)
     return page
@@ -515,8 +557,9 @@ def employee_advance_reset_opening(request, pk):
                 status=SalaryRecord.STATUS_DRAFT,
             ).values_list('year', 'month')
         )
-        if (today.year, today.month) not in draft_months:
-            draft_months.append((today.year, today.month))
+        current_period = period_containing(employee, today)
+        if current_period not in draft_months:
+            draft_months.append(current_period)
         refreshed = []
         for year, month in draft_months:
             record, _ = _upsert_draft(employee, year, month)
@@ -848,8 +891,20 @@ def leave_list_create(request):
         month = request.query_params.get('month')
         year = request.query_params.get('year')
         if month and year:
-            start, end = month_range(int(year), int(month))
-            qs = qs.filter(start_date__lte=end, end_date__gte=start)
+            y, m = int(year), int(month)
+            if employee_id:
+                emp = Employee.objects.filter(pk=employee_id).first()
+                if emp:
+                    start, end = cycle_range(emp, y, m)
+                    qs = qs.filter(start_date__lte=end, end_date__gte=start)
+                else:
+                    qs = qs.none()
+            else:
+                q = Q()
+                for emp in Employee.objects.only('id', 'salary_cycle_start_day'):
+                    start, end = cycle_range(emp, y, m)
+                    q |= Q(employee_id=emp.id, start_date__lte=end, end_date__gte=start)
+                qs = qs.filter(q) if q else qs.none()
         return _paginate(qs, request, LeaveRecordSerializer)
 
     data = request.data
@@ -978,8 +1033,9 @@ def advance_list_create(request):
         month = request.query_params.get('month')
         year = request.query_params.get('year')
         if month and year:
-            start, end = month_range(int(year), int(month))
-            qs = qs.filter(date__gte=start, date__lte=end)
+            qs = _filter_qs_by_employee_cycles(
+                qs, int(year), int(month), date_field='date', employee_id=employee_id
+            )
         return _paginate(qs, request, SalaryAdvanceSerializer)
 
     data = request.data
@@ -1387,6 +1443,26 @@ def _dt_iso(value):
     return str(value)
 
 
+def _calendar_day_cell(marked, emp, settings_obj):
+    early = minutes_early_at(
+        marked['check_out_time'],
+        emp,
+        marked['date'],
+        settings_obj,
+    )
+    return {
+        'id': marked['id'],
+        'status': marked['status'],
+        'check_in_time': _dt_iso(marked['check_in_time']),
+        'check_out_time': _dt_iso(marked['check_out_time']),
+        'minutes_late': marked['minutes_late'],
+        'is_late': marked['is_late'],
+        'minutes_early': early,
+        'is_early': early > 0,
+        'rule_penalty_applied': marked['rule_penalty_applied'],
+    }
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsSalaryBookUser])
 def attendance_calendar(request):
@@ -1397,7 +1473,7 @@ def attendance_calendar(request):
     except (TypeError, ValueError):
         year, month = today.year, today.month
     try:
-        start, end = month_range(year, month)
+        calendar_start, calendar_end = month_range(year, month)
     except (calendar.IllegalMonthError, ValueError):
         return _err('Invalid month.')
 
@@ -1408,15 +1484,22 @@ def attendance_calendar(request):
         if not employees:
             return _err('Employee not found.', status.HTTP_404_NOT_FOUND)
         view = 'employee'
+        # Single-employee view follows their salary cycle (e.g. 9→9).
+        period_start, period_end = cycle_range(employees[0], year, month)
+        period_end_marker = cycle_end_marker(employees[0], year, month)
+        range_start, range_end = period_start, period_end
     else:
         employees = list(Employee.objects.filter(status=Employee.STATUS_ACTIVE).order_by('name'))
         view = 'admin'
+        period_start, period_end = calendar_start, calendar_end
+        period_end_marker = calendar_end
+        range_start, range_end = calendar_start, calendar_end
 
     settings_obj = SalaryBookSettings.get_solo()
     rows = Attendance.objects.filter(
         employee_id__in=[emp.id for emp in employees],
-        date__gte=start,
-        date__lte=end,
+        date__gte=range_start,
+        date__lte=range_end,
     ).values(
         'id',
         'employee_id',
@@ -1429,56 +1512,75 @@ def attendance_calendar(request):
         'rule_penalty_applied',
     )
 
-    by_emp = {}
+    by_emp_date = {}
     for row in rows:
-        by_emp.setdefault(row['employee_id'], {})[row['date'].day] = row
+        by_emp_date.setdefault(row['employee_id'], {})[row['date']] = row
 
     team = _status_counts()
     payload = []
     for emp in employees:
         counts = _status_counts()
         days = {}
+        emp_start, emp_end = cycle_range(emp, year, month) if view == 'admin' else (period_start, period_end)
+        # Grid always shows the selected calendar month days; cycle days outside
+        # this month are still counted in salary but marked on the month grid.
         for day in range(1, days_in_month + 1):
             cell_date = date(year, month, day)
+            in_cycle = emp_start <= cell_date <= emp_end
             if emp.date_of_joining and cell_date < emp.date_of_joining:
-                days[str(day)] = {'status': 'BEFORE_JOINING'}
+                days[str(day)] = {'status': 'BEFORE_JOINING', 'in_cycle': in_cycle}
                 continue
             if cell_date > today:
-                days[str(day)] = {'status': None}
+                days[str(day)] = {'status': None, 'in_cycle': in_cycle}
                 continue
-            marked = by_emp.get(emp.id, {}).get(day)
+            marked = by_emp_date.get(emp.id, {}).get(cell_date)
             if marked:
-                early = minutes_early_at(
-                    marked['check_out_time'],
-                    emp,
-                    marked['date'],
-                    settings_obj,
-                )
-                days[str(day)] = {
-                    'id': marked['id'],
-                    'status': marked['status'],
-                    'check_in_time': _dt_iso(marked['check_in_time']),
-                    'check_out_time': _dt_iso(marked['check_out_time']),
-                    'minutes_late': marked['minutes_late'],
-                    'is_late': marked['is_late'],
-                    'minutes_early': early,
-                    'is_early': early > 0,
-                    'rule_penalty_applied': marked['rule_penalty_applied'],
-                }
-                counts[marked['status']] += 1
-                team[marked['status']] += 1
+                cell = _calendar_day_cell(marked, emp, settings_obj)
+                cell['in_cycle'] = in_cycle
+                days[str(day)] = cell
+                if in_cycle or view == 'admin':
+                    counts[marked['status']] += 1
+                    team[marked['status']] += 1
             else:
-                days[str(day)] = {'status': None}
-                counts['unmarked'] += 1
-                team['unmarked'] += 1
+                days[str(day)] = {'status': None, 'in_cycle': in_cycle}
+                if in_cycle or view == 'admin':
+                    counts['unmarked'] += 1
+                    team['unmarked'] += 1
+
+        # Employee cycle view: also expose days outside this calendar month that
+        # belong to the cycle (previous/next month spill).
+        cycle_days = {}
+        cursor = emp_start
+        while cursor <= emp_end:
+            iso = cursor.isoformat()
+            if emp.date_of_joining and cursor < emp.date_of_joining:
+                cycle_days[iso] = {'status': 'BEFORE_JOINING', 'in_cycle': True}
+            elif cursor > today:
+                cycle_days[iso] = {'status': None, 'in_cycle': True}
+            else:
+                marked = by_emp_date.get(emp.id, {}).get(cursor)
+                if marked:
+                    cell = _calendar_day_cell(marked, emp, settings_obj)
+                    cell['in_cycle'] = True
+                    cycle_days[iso] = cell
+                else:
+                    cycle_days[iso] = {'status': None, 'in_cycle': True}
+            cursor = cursor + timedelta(days=1)
+
         record, _ = _upsert_draft(emp, year, month)
         breakdown = record.breakdown if isinstance(record.breakdown, dict) else {}
         salary_generated = breakdown.get('earned_salary') or str(record.gross_salary)
+        emp_end_marker = cycle_end_marker(emp, year, month)
         payload.append({
             'id': emp.id,
             'name': emp.name,
             'employee_id': emp.employee_id,
+            'salary_cycle_start_day': cycle_day_for(emp),
+            'period_start': emp_start.isoformat(),
+            'period_end': emp_end.isoformat(),
+            'period_end_marker': emp_end_marker.isoformat(),
             'days': days,
+            'cycle_days': cycle_days,
             'counts': counts,
             'salary_generated': str(salary_generated),
             'taken': str(record.total_advances),
@@ -1513,11 +1615,18 @@ def attendance_calendar(request):
         today_counts[row['status']] = row['n']
     today_marked_ids = set(today_rows.values_list('employee_id', flat=True))
     today_unmarked = active_employees.exclude(id__in=today_marked_ids).count()
+    today_out = today_rows.exclude(check_out_time__isnull=True).count()
 
     return Response({
         'year': year,
         'month': month,
         'days_in_month': days_in_month,
+        'period_start': period_start.isoformat(),
+        'period_end': period_end.isoformat(),
+        'period_end_marker': period_end_marker.isoformat(),
+        'salary_cycle_start_day': (
+            cycle_day_for(employees[0]) if view == 'employee' and employees else 1
+        ),
         'today': today.isoformat(),
         'view': view,
         'kpis': {
@@ -1529,6 +1638,7 @@ def attendance_calendar(request):
             'unpaid_leave': team[Attendance.STATUS_UNPAID_LEAVE],
             'holiday': team[Attendance.STATUS_HOLIDAY],
             'unmarked': team['unmarked'],
+            'out': today_out,
             'attendance_rate': str(rate.quantize(Decimal('0.1'))),
         },
         'today_kpis': {
@@ -1540,6 +1650,7 @@ def attendance_calendar(request):
             'unpaid_leave': today_counts.get(Attendance.STATUS_UNPAID_LEAVE, 0),
             'holiday': today_counts.get(Attendance.STATUS_HOLIDAY, 0),
             'unmarked': today_unmarked,
+            'out': today_out,
         },
         'employees': payload,
     })
@@ -1563,6 +1674,7 @@ def dashboard(request):
     counts = {key: 0 for key, _ in Attendance.STATUS_CHOICES}
     for row in today_rows.values('status').annotate(n=Count('id')):
         counts[row['status']] = row['n']
+    checked_out = today_rows.exclude(check_out_time__isnull=True).count()
 
     employees = Employee.objects.filter(status=Employee.STATUS_ACTIVE)
     marked_ids = set(today_rows.values_list('employee_id', flat=True))
@@ -1582,6 +1694,8 @@ def dashboard(request):
     advances = Decimal('0')
     pending = Decimal('0')
     for emp in employees:
+        # Each employee rolls into the period that contains today when no override,
+        # but honour explicit year/month (period end month) from the query.
         record, _ = _upsert_draft(emp, year, month)
         payroll += record.gross_salary
         advances += record.total_advances
@@ -1612,6 +1726,7 @@ def dashboard(request):
             'half_day': counts.get(Attendance.STATUS_HALF_DAY, 0),
             'holiday': counts.get(Attendance.STATUS_HOLIDAY, 0),
             'unmarked': len(unmarked_employees),
+            'out': checked_out,
         },
         'live': {
             'updated_at': timezone.localtime().isoformat(),
@@ -1653,8 +1768,9 @@ def report_attendance(request):
     if date_to:
         qs = qs.filter(date__lte=_parse_date(date_to, 'date_to'))
     if month and year:
-        start, end = month_range(int(year), int(month))
-        qs = qs.filter(date__gte=start, date__lte=end)
+        qs = _filter_qs_by_employee_cycles(
+            qs, int(year), int(month), date_field='date', employee_id=params.get('employee_id')
+        )
     status_filter = request.query_params.get('status')
     if status_filter:
         qs = qs.filter(status=status_filter.upper())
@@ -1669,8 +1785,21 @@ def report_leaves(request):
     if params.get('employee_id'):
         qs = qs.filter(employee_id=params['employee_id'])
     if month and year:
-        start, end = month_range(int(year), int(month))
-        qs = qs.filter(start_date__lte=end, end_date__gte=start)
+        y, m = int(year), int(month)
+        emp_id = params.get('employee_id')
+        if emp_id:
+            employee = Employee.objects.filter(pk=emp_id).first()
+            if employee:
+                start, end = cycle_range(employee, y, m)
+                qs = qs.filter(start_date__lte=end, end_date__gte=start)
+            else:
+                qs = qs.none()
+        else:
+            q = Q()
+            for emp in Employee.objects.only('id', 'salary_cycle_start_day'):
+                start, end = cycle_range(emp, y, m)
+                q |= Q(employee_id=emp.id, start_date__lte=end, end_date__gte=start)
+            qs = qs.filter(q) if q else qs.none()
     return _paginate(qs, request, LeaveRecordSerializer)
 
 
@@ -1682,8 +1811,9 @@ def report_advances(request):
     if params.get('employee_id'):
         qs = qs.filter(employee_id=params['employee_id'])
     if month and year:
-        start, end = month_range(int(year), int(month))
-        qs = qs.filter(date__gte=start, date__lte=end)
+        qs = _filter_qs_by_employee_cycles(
+            qs, int(year), int(month), date_field='date', employee_id=params.get('employee_id')
+        )
     if date_from:
         qs = qs.filter(date__gte=_parse_date(date_from, 'date_from'))
     if date_to:

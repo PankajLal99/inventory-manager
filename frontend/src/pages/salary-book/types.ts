@@ -7,6 +7,8 @@ export interface Employee {
   address: string;
   blood_group: string;
   date_of_joining: string;
+  /** Day of month salary cycle starts/ends (1–28). 9 = 9th → next 9th. */
+  salary_cycle_start_day: number;
   designation: string;
   department: string;
   monthly_salary: string;
@@ -14,6 +16,8 @@ export interface Employee {
   fixed_working_days: number | null;
   expected_check_in: string | null;
   expected_check_out: string | null;
+  /** Grace minutes after expected check-in before counting late (0 = exact). */
+  check_in_buffer_minutes: number;
   effective_check_in: string | null;
   effective_check_out: string | null;
   scheduled_hours: string;
@@ -138,6 +142,7 @@ export interface SalaryAdvance {
   status: 'ACTIVE' | 'VOID' | 'PAID' | string;
   source: 'MANUAL' | 'MTSHOP' | string;
   source_invoice_number: string;
+  source_invoice_id?: number | null;
 }
 
 export interface SalaryRecord {
@@ -222,6 +227,10 @@ export interface Paginated<T> {
   employee_id?: number;
   employee_name?: string;
   employee_code?: string;
+  salary_cycle_start_day?: number;
+  period_start?: string | null;
+  period_end?: string | null;
+  period_end_marker?: string | null;
 }
 
 export interface CalendarDayCell {
@@ -234,13 +243,19 @@ export interface CalendarDayCell {
   minutes_early?: number;
   is_early?: boolean;
   rule_penalty_applied?: boolean;
+  in_cycle?: boolean;
 }
 
 export interface CalendarEmployee {
   id: number;
   name: string;
   employee_id: string;
+  salary_cycle_start_day?: number;
+  period_start?: string;
+  period_end?: string;
+  period_end_marker?: string;
   days: Record<string, CalendarDayCell>;
+  cycle_days?: Record<string, CalendarDayCell>;
   counts: {
     PRESENT: number;
     ABSENT: number;
@@ -264,6 +279,7 @@ export interface CalendarKpis {
   unpaid_leave: number;
   holiday: number;
   unmarked: number;
+  out?: number;
   attendance_rate: string;
 }
 
@@ -276,12 +292,17 @@ export interface CalendarTodayKpis {
   unpaid_leave: number;
   holiday: number;
   unmarked: number;
+  out?: number;
 }
 
 export interface CalendarResponse {
   year: number;
   month: number;
   days_in_month: number;
+  period_start?: string;
+  period_end?: string;
+  period_end_marker?: string;
+  salary_cycle_start_day?: number;
   today: string;
   view: 'admin' | 'employee';
   kpis: CalendarKpis;
@@ -306,6 +327,7 @@ export interface DashboardResponse {
     half_day: number;
     holiday: number;
     unmarked: number;
+    out?: number;
   };
   live: {
     updated_at: string;

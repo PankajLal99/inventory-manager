@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileDown, Printer } from 'lucide-react';
 import { salaryBookApi } from '../../../lib/api';
 import LoadingState from '../../../components/ui/LoadingState';
 import ErrorState from '../../../components/ui/ErrorState';
@@ -11,6 +12,11 @@ import { apiError, formatDate, formatINR } from '../utils';
 import type { Paginated, SalaryAdvance } from '../types';
 import ConfirmDialog from './ConfirmDialog';
 import SalaryBookSheet from './SalaryBookSheet';
+import {
+  buildSalaryLedgerRows,
+  exportSalaryLedgerPdf,
+  printSalaryLedger,
+} from './salaryLedgerExport';
 
 function statusLabel(status: string) {
   if (status === 'VOID') return 'Voided';
@@ -20,10 +26,28 @@ function statusLabel(status: string) {
 
 function entryLabel(row: SalaryAdvance) {
   if (row.source === 'MTSHOP') {
-    const inv = row.source_invoice_number ? ` · ${row.source_invoice_number}` : '';
-    return `MT Shop${inv}${row.reason ? ` — ${row.reason}` : ''}`;
+    return `MT Shop${row.reason ? ` — ${row.reason}` : ''}`;
   }
   return row.reason || 'Advance';
+}
+
+function InvoiceLink({ row }: { row: SalaryAdvance }) {
+  const number = row.source_invoice_number?.trim();
+  if (!number) return null;
+  if (row.source_invoice_id) {
+    return (
+      <a
+        href={`/invoices/${row.source_invoice_id}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-emerald-700 font-medium underline-offset-2 hover:underline"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {number}
+      </a>
+    );
+  }
+  return <span className="text-gray-600">{number}</span>;
 }
 
 function modeLabel(mode?: string) {
@@ -54,7 +78,7 @@ export default function EmployeeAdvanceLedger({
   } | null>(null);
 
   const params = useMemo(() => {
-    const p: Record<string, number> = { page_size: 100 };
+    const p: Record<string, number> = { page_size: 500 };
     if (year && month) {
       p.year = year;
       p.month = month;
@@ -67,10 +91,56 @@ export default function EmployeeAdvanceLedger({
     queryFn: async () =>
       (await salaryBookApi.employees.advances(employeeId, params)).data as Paginated<SalaryAdvance> & {
         employee_name?: string;
+        employee_code?: string;
         total_active?: string;
         total_paid?: string;
+        period_start?: string | null;
+        period_end_marker?: string | null;
       },
   });
+
+  const ledgerRows = useMemo(
+    () => buildSalaryLedgerRows(listQuery.data?.results || []),
+    [listQuery.data?.results],
+  );
+
+  const periodLabel = useMemo(() => {
+    const start = listQuery.data?.period_start;
+    const end = listQuery.data?.period_end_marker;
+    if (start && end) return `${formatDate(start)} → ${formatDate(end)}`;
+    if (year && month) return `${String(month).padStart(2, '0')}/${year}`;
+    return 'All periods';
+  }, [listQuery.data?.period_start, listQuery.data?.period_end_marker, year, month]);
+
+  const exportMeta = useMemo(
+    () => ({
+      employeeName: listQuery.data?.employee_name || employeeName || 'Employee',
+      employeeCode: listQuery.data?.employee_code,
+      periodLabel,
+      totalActive: listQuery.data?.total_active || '0',
+      totalPaid: listQuery.data?.total_paid || '0',
+    }),
+    [listQuery.data, employeeName, periodLabel],
+  );
+
+  const handlePdf = () => {
+    const rows = listQuery.data?.results || [];
+    if (!rows.length) {
+      toast('No ledger entries to export.', 'error');
+      return;
+    }
+    exportSalaryLedgerPdf(rows, exportMeta);
+    toast('PDF downloaded', 'success');
+  };
+
+  const handlePrint = () => {
+    const rows = listQuery.data?.results || [];
+    if (!rows.length) {
+      toast('No ledger entries to print.', 'error');
+      return;
+    }
+    printSalaryLedger(rows, exportMeta);
+  };
 
   const paidMutation = useMutation({
     mutationFn: async ({ id, amount, remarks }: { id: number; amount: string; remarks?: string }) =>
@@ -135,115 +205,173 @@ export default function EmployeeAdvanceLedger({
     onError: (err) => toast(apiError(err, 'Unable to reset advances.'), 'error'),
   });
 
-  const titleName = listQuery.data?.employee_name || employeeName || 'Employee';
-  const period =
-    year && month ? ` · ${String(month).padStart(2, '0')}/${year}` : '';
+  const titleName = exportMeta.employeeName;
+  const rows = listQuery.data?.results || [];
 
   return (
     <SalaryBookSheet onClose={onClose}>
       <div className="space-y-4">
-        <div>
-          <h2 className="font-semibold text-lg">Advance ledger</h2>
-          <p className="text-sm text-gray-500">
-            {titleName}{period}
-          </p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="font-semibold text-lg">Salary ledger</h2>
+            <p className="text-sm text-gray-500">
+              {titleName}
+              {listQuery.data?.employee_code ? ` · ${listQuery.data.employee_code}` : ''}
+            </p>
+            <p className="text-xs text-emerald-800 font-medium mt-0.5">{periodLabel}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Ledger hisab — Taken (Dr), Settled (Cr), running balance. PDF / Print for employee copy.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-10 gap-1.5"
+              disabled={!rows.length}
+              onClick={handlePrint}
+            >
+              <Printer className="h-4 w-4" />
+              Print
+            </Button>
+            <Button
+              type="button"
+              className="min-h-10 gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+              disabled={!rows.length}
+              onClick={handlePdf}
+            >
+              <FileDown className="h-4 w-4" />
+              PDF
+            </Button>
+          </div>
         </div>
 
-        {listQuery.isLoading && <LoadingState message="Loading entries..." />}
+        {listQuery.isLoading && <LoadingState message="Loading ledger..." />}
         {listQuery.isError && <ErrorState onRetry={() => listQuery.refetch()} />}
 
-        {!listQuery.isLoading && (listQuery.data?.results.length ?? 0) === 0 && (
-          <p className="text-sm text-gray-500">No advance entries for this period.</p>
+        {!listQuery.isLoading && rows.length === 0 && (
+          <p className="text-sm text-gray-500">No ledger entries for this period.</p>
         )}
 
-        {(listQuery.data?.results.length ?? 0) > 0 && (
+        {rows.length > 0 && (
           <div className="border border-emerald-100 rounded-xl overflow-hidden">
-            <div className="bg-emerald-50 px-3 py-2 grid grid-cols-[1fr_auto_auto] gap-2 text-xs font-medium text-gray-600">
-              <span>Entry</span>
-              <span className="text-right w-24">Debit</span>
-              <span className="text-right w-24">Paid</span>
-            </div>
-            <div className="divide-y divide-emerald-50 max-h-[50vh] overflow-y-auto">
-              {listQuery.data?.results.map((row) => {
-                const isPaid = row.status === 'PAID';
-                const isVoid = row.status === 'VOID';
-                const isActive = row.status === 'ACTIVE';
-                return (
-                  <div key={row.id} className={`px-3 py-3 text-sm ${isVoid ? 'opacity-50' : ''}`}>
-                    <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-start">
-                      <div className="min-w-0">
-                        <div className="font-medium text-gray-900 truncate">{entryLabel(row)}</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          {formatDate(row.date)} · {statusLabel(row.status)}
-                          {row.source === 'MTSHOP' ? ' · MT Shop' : ''}
-                          {modeLabel(row.payment_mode) ? ` · ${modeLabel(row.payment_mode)}` : ''}
-                        </div>
-                        {isActive && (
-                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                            <button
-                              type="button"
-                              className="text-sm font-medium text-emerald-700"
-                              onClick={() => setPayRow(row)}
-                            >
-                              Mark paid
-                            </button>
-                            <button
-                              type="button"
-                              className="text-sm font-medium text-red-600"
-                              onClick={() => setConfirmAction({ row, kind: 'void' })}
-                            >
-                              Void
-                            </button>
+            <div className="overflow-x-auto max-h-[50vh]">
+              <table className="w-full text-sm min-w-[640px]">
+                <thead className="bg-emerald-50 text-xs font-medium text-gray-600 sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2">Date</th>
+                    <th className="text-left px-3 py-2">Particulars</th>
+                    <th className="text-left px-3 py-2">Invoice</th>
+                    <th className="text-right px-3 py-2 whitespace-nowrap">Taken (Dr)</th>
+                    <th className="text-right px-3 py-2 whitespace-nowrap">Settled (Cr)</th>
+                    <th className="text-right px-3 py-2">Balance</th>
+                    <th className="text-left px-3 py-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-emerald-50">
+                  {rows.map((row, idx) => {
+                    const isPaid = row.status === 'PAID';
+                    const isVoid = row.status === 'VOID';
+                    const isActive = row.status === 'ACTIVE';
+                    const line = ledgerRows[idx];
+                    return (
+                      <tr key={row.id} className={isVoid ? 'opacity-50' : ''}>
+                        <td className="px-3 py-2.5 whitespace-nowrap align-top">
+                          {formatDate(row.date)}
+                        </td>
+                        <td className="px-3 py-2.5 align-top min-w-0">
+                          <div className={`font-medium text-gray-900 ${isVoid ? 'line-through' : ''}`}>
+                            {entryLabel(row)}
                           </div>
-                        )}
-                        {isPaid && (
-                          <div className="mt-1.5">
-                            <button
-                              type="button"
-                              className="text-sm font-medium text-amber-700"
-                              onClick={() => setConfirmAction({ row, kind: 'unpaid' })}
-                            >
-                              Mark unpaid
-                            </button>
+                          <div className="text-xs text-gray-500 mt-0.5">
+                            {statusLabel(row.status)}
+                            {row.source === 'MTSHOP' ? ' · MT Shop' : ''}
+                            {modeLabel(row.payment_mode) ? ` · ${modeLabel(row.payment_mode)}` : ''}
                           </div>
-                        )}
-                        {isVoid && (
-                          <div className="mt-1.5">
-                            <button
-                              type="button"
-                              className="text-sm font-medium text-emerald-700"
-                              onClick={() => setConfirmAction({ row, kind: 'unvoid' })}
-                            >
-                              Unvoid
-                            </button>
+                        </td>
+                        <td className="px-3 py-2.5 align-top">
+                          <InvoiceLink row={row} />
+                          {!row.source_invoice_number ? (
+                            <span className="text-gray-300">—</span>
+                          ) : null}
+                        </td>
+                        <td
+                          className={`px-3 py-2.5 text-right tabular-nums align-top ${
+                            isVoid ? 'line-through text-gray-400' : 'text-red-700'
+                          }`}
+                        >
+                          {line?.debit ? formatINR(line.debit) : '—'}
+                        </td>
+                        <td
+                          className={`px-3 py-2.5 text-right tabular-nums align-top ${
+                            line?.credit ? 'text-emerald-700' : 'text-gray-300'
+                          }`}
+                        >
+                          {line?.credit ? formatINR(line.credit) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums font-medium align-top">
+                          {formatINR(line?.balance ?? 0)}
+                        </td>
+                        <td className="px-3 py-2.5 align-top">
+                          <div className="flex flex-col gap-1 items-start">
+                            {isActive && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="text-sm font-medium text-emerald-700"
+                                  onClick={() => setPayRow(row)}
+                                >
+                                  Mark paid
+                                </button>
+                                <button
+                                  type="button"
+                                  className="text-sm font-medium text-red-600"
+                                  onClick={() => setConfirmAction({ row, kind: 'void' })}
+                                >
+                                  Void
+                                </button>
+                              </>
+                            )}
+                            {isPaid && (
+                              <button
+                                type="button"
+                                className="text-sm font-medium text-amber-700"
+                                onClick={() => setConfirmAction({ row, kind: 'unpaid' })}
+                              >
+                                Mark unpaid
+                              </button>
+                            )}
+                            {isVoid && (
+                              <button
+                                type="button"
+                                className="text-sm font-medium text-emerald-700"
+                                onClick={() => setConfirmAction({ row, kind: 'unvoid' })}
+                              >
+                                Unvoid
+                              </button>
+                            )}
                           </div>
-                        )}
-                      </div>
-                      <div className={`text-right w-24 font-medium ${isActive || isVoid ? 'text-gray-900' : 'text-gray-300'} ${isVoid ? 'line-through' : ''}`}>
-                        {isActive || isVoid ? formatINR(row.amount) : '—'}
-                      </div>
-                      <div className={`text-right w-24 font-medium ${isPaid ? 'text-emerald-700' : 'text-gray-300'}`}>
-                        {isPaid ? formatINR(row.amount) : '—'}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
             <div className="bg-emerald-50/70 px-3 py-2.5 grid grid-cols-2 gap-2 text-sm font-semibold">
               <div className="flex justify-between">
                 <span className="text-gray-600 font-medium">Outstanding</span>
-                <span>{formatINR(listQuery.data?.total_active || '0')}</span>
+                <span className="text-amber-800">{formatINR(listQuery.data?.total_active || '0')}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600 font-medium">Paid</span>
+                <span className="text-gray-600 font-medium">Settled / Paid</span>
                 <span className="text-emerald-700">{formatINR(listQuery.data?.total_paid || '0')}</span>
               </div>
             </div>
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Button
             type="button"
             variant="outline"
