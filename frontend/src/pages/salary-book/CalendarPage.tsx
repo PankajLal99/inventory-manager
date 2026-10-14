@@ -374,7 +374,20 @@ export default function CalendarPage() {
             />
           </div>
           <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2 text-sm">
-            <h2 className="font-semibold text-gray-900">This month</h2>
+            <h2 className="font-semibold text-gray-900">
+              {(selectedEmployee.salary_cycle_start_day || 1) > 1 ? 'This cycle' : 'This month'}
+            </h2>
+            {(selectedEmployee.salary_cycle_start_day || 1) > 1 &&
+            selectedEmployee.period_start &&
+            selectedEmployee.period_end_marker ? (
+              <p className="text-xs text-emerald-800 pb-1">
+                {cyclePeriodLabel(
+                  selectedEmployee.period_start,
+                  selectedEmployee.period_end_marker,
+                  selectedEmployee.salary_cycle_start_day,
+                )}
+              </p>
+            ) : null}
             <Row label="Present" value={selectedEmployee.counts.PRESENT} />
             <Row label="Absent" value={selectedEmployee.counts.ABSENT} />
             <Row label="Half Day" value={selectedEmployee.counts.HALF_DAY} />

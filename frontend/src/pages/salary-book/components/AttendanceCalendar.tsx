@@ -654,6 +654,30 @@ function SelectedDayPanel({
   );
 }
 
+/** Build ordered ISO dates for the employee's salary cycle (or fall back to calendar month). */
+function employeeCycleDayList(
+  employee: CalendarEmployee,
+  year: number,
+  month: number,
+  daysInMonth: number,
+): Array<{ iso: string; y: number; m: number; d: number; cell: CalendarDayCell | undefined }> {
+  const cycle = employee.cycle_days;
+  if (cycle && Object.keys(cycle).length > 0) {
+    return Object.keys(cycle)
+      .sort()
+      .map((iso) => {
+        const [y, m, d] = iso.split('-').map(Number);
+        return { iso, y, m, d, cell: cycle[iso] };
+      });
+  }
+  // Fallback: plain calendar month
+  return Array.from({ length: daysInMonth }, (_, i) => {
+    const d = i + 1;
+    const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    return { iso, y: year, m: month, d, cell: employee.days[String(d)] };
+  });
+}
+
 export function EmployeeMonthGrid({
   year,
   month,
@@ -669,21 +693,38 @@ export function EmployeeMonthGrid({
   employee: CalendarEmployee;
   onDayClick?: (payload: CalendarDayClick) => void;
 }) {
-  const firstWeekday = new Date(year, month - 1, 1).getDay();
+  const dayList = employeeCycleDayList(employee, year, month, daysInMonth);
+  const first = dayList[0];
+  const firstWeekday = first
+    ? new Date(first.y, first.m - 1, first.d).getDay()
+    : new Date(year, month - 1, 1).getDay();
   const blanks = Array.from({ length: firstWeekday });
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
-  const todayDay = today.startsWith(`${year}-${String(month).padStart(2, '0')}-`)
-    ? Number(today.slice(-2))
-    : null;
-  const [selectedDay, setSelectedDay] = useState<number | null>(todayDay);
+  const cycleDay = employee.salary_cycle_start_day || 1;
+  const usesCycle = Boolean(employee.cycle_days && Object.keys(employee.cycle_days).length > 0);
+
+  const defaultIso =
+    dayList.find((x) => x.iso === today)?.iso ||
+    dayList.find((x) => x.iso <= today)?.iso ||
+    dayList[0]?.iso ||
+    null;
+
+  const [selectedIso, setSelectedIso] = useState<string | null>(defaultIso);
   useEffect(() => {
-    setSelectedDay(todayDay ?? 1);
-  }, [year, month, todayDay]);
-  const selectedCell = selectedDay != null ? employee.days[String(selectedDay)] : undefined;
+    setSelectedIso(defaultIso);
+  }, [year, month, employee.id, defaultIso]);
+
+  const selected = dayList.find((x) => x.iso === selectedIso);
 
   return (
-    <div className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4 lg:p-6">
-      {/* Mobile: dense status chips + selected-day detail (avoids mushy IN/OUT in 7 cols) */}
+    <div className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4 lg:p-6 space-y-2">
+      {usesCycle && employee.period_start && employee.period_end_marker ? (
+        <p className="text-xs text-emerald-800 font-medium px-0.5">
+          Salary cycle day {cycleDay}: grid shows{' '}
+          {employee.period_start} → {employee.period_end_marker} (not 1st–last of calendar month)
+        </p>
+      ) : null}
+
+      {/* Mobile: dense status chips + selected-day detail */}
       <div className="md:hidden">
         <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-medium text-gray-500 mb-2">
           {WEEKDAY_NARROW.map((d, i) => (
@@ -696,30 +737,26 @@ export function EmployeeMonthGrid({
           {blanks.map((_, i) => (
             <div key={`mb-${i}`} />
           ))}
-          {days.map((day) => {
-            const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const cell = employee.days[String(day)];
-            return (
-              <MobileDayChip
-                key={day}
-                year={year}
-                month={month}
-                day={day}
-                cell={cell}
-                isToday={iso === today}
-                isPast={iso < today}
-                selected={selectedDay === day}
-                onSelect={() => setSelectedDay(day)}
-              />
-            );
-          })}
+          {dayList.map((item) => (
+            <MobileDayChip
+              key={item.iso}
+              year={item.y}
+              month={item.m}
+              day={item.d}
+              cell={item.cell}
+              isToday={item.iso === today}
+              isPast={item.iso < today}
+              selected={selectedIso === item.iso}
+              onSelect={() => setSelectedIso(item.iso)}
+            />
+          ))}
         </div>
-        {selectedDay != null && (
+        {selected && (
           <SelectedDayPanel
-            year={year}
-            month={month}
-            day={selectedDay}
-            cell={selectedCell}
+            year={selected.y}
+            month={selected.m}
+            day={selected.d}
+            cell={selected.cell}
             today={today}
             employee={employee}
             onAdd={onDayClick}
@@ -727,7 +764,7 @@ export function EmployeeMonthGrid({
         )}
       </div>
 
-      {/* Desktop / tablet: full IN/OUT month grid */}
+      {/* Desktop / tablet: full IN/OUT cycle grid */}
       <div className="hidden md:block">
         <div className="grid grid-cols-7 gap-2 text-center text-sm font-medium text-gray-500 mb-3">
           {WEEKDAY_SHORT.map((d) => (
@@ -740,27 +777,32 @@ export function EmployeeMonthGrid({
           {blanks.map((_, i) => (
             <div key={`b-${i}`} />
           ))}
-          {days.map((day) => {
-            const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const cell = employee.days[String(day)];
-            const sunday = isSunday(year, month, day);
-            const canAdd = Boolean(onDayClick) && canEditCalendarDayTimes(cell) && iso <= today;
+          {dayList.map((item) => {
+            const sunday = isSunday(item.y, item.m, item.d);
+            const canAdd =
+              Boolean(onDayClick) && canEditCalendarDayTimes(item.cell) && item.iso <= today;
+            const monthChanged = item.d === 1 || item.iso === dayList[0]?.iso;
             return (
-              <div key={day} title={cellTitle(cell, iso)} className="space-y-1.5">
+              <div key={item.iso} title={cellTitle(item.cell, item.iso)} className="space-y-1.5">
                 <div
                   className={`text-center text-sm font-semibold ${
-                    sunday ? 'text-rose-600' : iso === today ? 'text-emerald-800' : 'text-gray-600'
+                    sunday ? 'text-rose-600' : item.iso === today ? 'text-emerald-800' : 'text-gray-600'
                   }`}
                 >
-                  {day}
+                  {item.d}
+                  {monthChanged && usesCycle ? (
+                    <span className="block text-[10px] font-medium text-gray-400 leading-none mt-0.5">
+                      {monthLabel(item.y, item.m).split(' ')[0]}
+                    </span>
+                  ) : null}
                 </div>
                 <DayStatusCell
-                  year={year}
-                  month={month}
-                  day={day}
-                  cell={cell}
-                  isToday={iso === today}
-                  isPast={iso < today}
+                  year={item.y}
+                  month={item.m}
+                  day={item.d}
+                  cell={item.cell}
+                  isToday={item.iso === today}
+                  isPast={item.iso < today}
                   clickable={canAdd}
                   onClick={
                     canAdd
@@ -768,8 +810,8 @@ export function EmployeeMonthGrid({
                           onDayClick?.({
                             employeeId: employee.id,
                             employeeName: employee.name,
-                            date: iso,
-                            cell,
+                            date: item.iso,
+                            cell: item.cell,
                           })
                       : undefined
                   }
