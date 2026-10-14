@@ -654,28 +654,51 @@ function SelectedDayPanel({
   );
 }
 
-/** Build ordered ISO dates for the employee's salary cycle (or fall back to calendar month). */
+type CycleDayItem = {
+  iso: string;
+  y: number;
+  m: number;
+  d: number;
+  cell: CalendarDayCell | undefined;
+};
+
+/**
+ * Days to show for one employee:
+ * 1) Prefer salary cycle window (e.g. 14th → next 14th) from cycle_days
+ * 2) Else calendar month
+ * 3) Drop leading BEFORE_JOINING so the strip starts on join / cycle start (e.g. 14), not day 1
+ */
 function employeeCycleDayList(
   employee: CalendarEmployee,
   year: number,
   month: number,
   daysInMonth: number,
-): Array<{ iso: string; y: number; m: number; d: number; cell: CalendarDayCell | undefined }> {
+): CycleDayItem[] {
   const cycle = employee.cycle_days;
+  let list: CycleDayItem[];
   if (cycle && Object.keys(cycle).length > 0) {
-    return Object.keys(cycle)
+    list = Object.keys(cycle)
       .sort()
       .map((iso) => {
         const [y, m, d] = iso.split('-').map(Number);
         return { iso, y, m, d, cell: cycle[iso] };
       });
+  } else {
+    const cycleDay = employee.salary_cycle_start_day || 1;
+    // Calendar-month fallback: start from cycle day when > 1 (UI: don't show 1…13 if start is 14)
+    const startDay = cycleDay > 1 ? Math.min(cycleDay, daysInMonth) : 1;
+    list = Array.from({ length: daysInMonth - startDay + 1 }, (_, i) => {
+      const d = startDay + i;
+      const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      return { iso, y: year, m: month, d, cell: employee.days[String(d)] };
+    });
   }
-  // Fallback: plain calendar month
-  return Array.from({ length: daysInMonth }, (_, i) => {
-    const d = i + 1;
-    const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    return { iso, y: year, m: month, d, cell: employee.days[String(d)] };
-  });
+
+  // Hide empty pre-join columns — first visible day is joining / first real day
+  const firstReal = list.findIndex((item) => item.cell?.status !== 'BEFORE_JOINING');
+  if (firstReal > 0) return list.slice(firstReal);
+  if (firstReal === -1) return list.slice(-1); // all before join — keep last day as anchor
+  return list;
 }
 
 export function EmployeeMonthGrid({
@@ -972,8 +995,6 @@ export function AdminMonthGrid({
   onDayClick?: (payload: CalendarDayClick) => void;
   onAddAmount?: (emp: CalendarEmployee) => void;
 }) {
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
-
   const dayClickProps = (emp: CalendarEmployee, iso: string, cell: CalendarDayCell | undefined) => {
     const canAdd = Boolean(onDayClick) && canEditCalendarDayTimes(cell) && iso <= today;
     return {
@@ -993,147 +1014,156 @@ export function AdminMonthGrid({
 
   return (
     <>
-      {/* Mobile: wrapped day grid (~3 rows) with in/out times always visible */}
+      {/* Mobile: wrapped day grid with in/out — each employee starts at their cycle/join day */}
       <div className="lg:hidden space-y-2">
-        <p className="text-[11px] text-gray-500 px-0.5">Green = in · Blue = out</p>
-        {employees.map((emp) => (
-          <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 px-2.5 py-2">
-            <div className="flex items-center gap-2 mb-1.5 min-h-8">
-              <Link
-                to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
-                className="min-w-0 flex-1 flex items-baseline gap-1.5"
-              >
-                <span className="font-semibold text-sm text-gray-900 hover:text-emerald-800 truncate">
-                  {emp.name}
-                </span>
-                <span className="text-[11px] text-gray-400 shrink-0">{emp.employee_id}</span>
-              </Link>
-              {onAddAmount && (
-                <button
-                  type="button"
-                  onClick={() => onAddAmount(emp)}
-                  className="shrink-0 inline-flex items-center gap-0.5 min-h-8 px-2 rounded-full border border-emerald-500 text-emerald-800 text-[11px] font-semibold"
+        <p className="text-[11px] text-gray-500 px-0.5">
+          Green = in · Blue = out · Each row starts on that employee&apos;s cycle / join day
+        </p>
+        {employees.map((emp) => {
+          const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
+          return (
+            <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 px-2.5 py-2">
+              <div className="flex items-center gap-2 mb-1.5 min-h-8">
+                <Link
+                  to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
+                  className="min-w-0 flex-1 flex items-baseline gap-1.5"
                 >
-                  <Plus className="h-3 w-3" />
-                  Add Amount
-                </button>
-              )}
-              <span className="shrink-0 text-[11px] font-semibold text-emerald-800 tabular-nums">
-                {emp.counts.PRESENT}P
-              </span>
+                  <span className="font-semibold text-sm text-gray-900 hover:text-emerald-800 truncate">
+                    {emp.name}
+                  </span>
+                  <span className="text-[11px] text-gray-400 shrink-0">{emp.employee_id}</span>
+                </Link>
+                {onAddAmount && (
+                  <button
+                    type="button"
+                    onClick={() => onAddAmount(emp)}
+                    className="shrink-0 inline-flex items-center gap-0.5 min-h-8 px-2 rounded-full border border-emerald-500 text-emerald-800 text-[11px] font-semibold"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add Amount
+                  </button>
+                )}
+                <span className="shrink-0 text-[11px] font-semibold text-emerald-800 tabular-nums">
+                  {emp.counts.PRESENT}P
+                </span>
+              </div>
+              <div className="grid grid-cols-10 gap-1 sm:grid-cols-11">
+                {dayList.map((item) => {
+                  const click = dayClickProps(emp, item.iso, item.cell);
+                  return (
+                    <AdminStripDay
+                      key={item.iso}
+                      year={item.y}
+                      month={item.m}
+                      day={item.d}
+                      cell={item.cell}
+                      isToday={item.iso === today}
+                      isPast={item.iso < today}
+                      isFuture={item.iso > today}
+                      onAdd={click.onClick}
+                    />
+                  );
+                })}
+              </div>
+              <EmployeeMoneyFooter emp={emp} />
             </div>
-            <div className="grid grid-cols-10 gap-1 sm:grid-cols-11">
-              {days.map((day) => {
-                const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const cell = emp.days[String(day)];
-                const click = dayClickProps(emp, iso, cell);
-                return (
-                  <AdminStripDay
-                    key={day}
-                    year={year}
-                    month={month}
-                    day={day}
-                    cell={cell}
-                    isToday={iso === today}
-                    isPast={iso < today}
-                    isFuture={iso > today}
-                    onAdd={click.onClick}
-                  />
-                );
-              })}
-            </div>
-            <EmployeeMoneyFooter emp={emp} />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="hidden lg:block space-y-4">
-        {employees.map((emp) => (
-          <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
-            <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-emerald-50">
-              <Link
-                to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
-                className="min-w-0 flex-1"
-              >
-                <div className="font-semibold text-gray-900 hover:text-emerald-800">{emp.name}</div>
-                <div className="text-xs text-gray-500">{emp.employee_id}</div>
-              </Link>
-              {onAddAmount && (
-                <button
-                  type="button"
-                  onClick={() => onAddAmount(emp)}
-                  className="inline-flex items-center gap-1 min-h-10 px-3 rounded-full border border-emerald-500 text-emerald-800 text-sm font-semibold"
+        {employees.map((emp) => {
+          const dayList = employeeCycleDayList(emp, year, month, daysInMonth);
+          const cycleDay = emp.salary_cycle_start_day || 1;
+          return (
+            <div key={emp.id} className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-emerald-50">
+                <Link
+                  to={`/salary-book/calendar?employee=${emp.id}&year=${year}&month=${month}`}
+                  className="min-w-0 flex-1"
                 >
-                  <Plus className="h-4 w-4" />
-                  Add Amount
-                </button>
-              )}
-              <span className="text-sm font-semibold text-emerald-800 tabular-nums">
-                {emp.counts.PRESENT}P
-              </span>
+                  <div className="font-semibold text-gray-900 hover:text-emerald-800">{emp.name}</div>
+                  <div className="text-xs text-gray-500">
+                    {emp.employee_id}
+                    {cycleDay > 1 || (emp.period_start && emp.period_end_marker)
+                      ? ` · from ${dayList[0] ? `${dayList[0].d} ${monthLabel(dayList[0].y, dayList[0].m).split(' ')[0]}` : cycleDay}`
+                      : ''}
+                  </div>
+                </Link>
+                {onAddAmount && (
+                  <button
+                    type="button"
+                    onClick={() => onAddAmount(emp)}
+                    className="inline-flex items-center gap-1 min-h-10 px-3 rounded-full border border-emerald-500 text-emerald-800 text-sm font-semibold"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add Amount
+                  </button>
+                )}
+                <span className="text-sm font-semibold text-emerald-800 tabular-nums">
+                  {emp.counts.PRESENT}P
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-separate border-spacing-0">
+                  <thead>
+                    <tr className="bg-slate-50 text-gray-600">
+                      {dayList.map((item) => {
+                        const sunday = isSunday(item.y, item.m, item.d);
+                        return (
+                          <th
+                            key={item.iso}
+                            className={`px-1.5 py-3 font-medium min-w-[5.5rem] border-b border-emerald-100 ${
+                              sunday
+                                ? 'text-rose-600 bg-rose-50/60'
+                                : item.iso === today
+                                  ? 'text-emerald-800'
+                                  : ''
+                            }`}
+                          >
+                            <div className="text-base font-semibold leading-none">{item.d}</div>
+                            <div className="mt-1 text-xs font-normal leading-none">
+                              {weekdayShort(item.y, item.m, item.d)}
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="hover:bg-emerald-50/30">
+                      {dayList.map((item) => {
+                        const sunday = isSunday(item.y, item.m, item.d);
+                        const click = dayClickProps(emp, item.iso, item.cell);
+                        return (
+                          <td
+                            key={item.iso}
+                            className={`px-1.5 py-1.5 border-t border-emerald-50 align-middle ${
+                              sunday ? 'bg-rose-50/40' : ''
+                            }`}
+                            title={cellTitle(item.cell, item.iso)}
+                          >
+                            <DayStatusCell
+                              year={item.y}
+                              month={item.m}
+                              day={item.d}
+                              cell={item.cell}
+                              isToday={item.iso === today}
+                              {...click}
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-4 py-3 border-t border-emerald-50">
+                <EmployeeMoneyFooter emp={emp} />
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-separate border-spacing-0">
-                <thead>
-                  <tr className="bg-slate-50 text-gray-600">
-                    {days.map((day) => {
-                      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                      const sunday = isSunday(year, month, day);
-                      return (
-                        <th
-                          key={day}
-                          className={`px-1.5 py-3 font-medium min-w-[5.5rem] border-b border-emerald-100 ${
-                            sunday
-                              ? 'text-rose-600 bg-rose-50/60'
-                              : iso === today
-                                ? 'text-emerald-800'
-                                : ''
-                          }`}
-                        >
-                          <div className="text-base font-semibold leading-none">{day}</div>
-                          <div className="mt-1 text-xs font-normal leading-none">
-                            {weekdayShort(year, month, day)}
-                          </div>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="hover:bg-emerald-50/30">
-                    {days.map((day) => {
-                      const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                      const cell = emp.days[String(day)];
-                      const sunday = isSunday(year, month, day);
-                      const click = dayClickProps(emp, iso, cell);
-                      return (
-                        <td
-                          key={day}
-                          className={`px-1.5 py-1.5 border-t border-emerald-50 align-middle ${
-                            sunday ? 'bg-rose-50/40' : ''
-                          }`}
-                          title={cellTitle(cell, iso)}
-                        >
-                          <DayStatusCell
-                            year={year}
-                            month={month}
-                            day={day}
-                            cell={cell}
-                            isToday={iso === today}
-                            {...click}
-                          />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div className="px-4 py-3 border-t border-emerald-50">
-              <EmployeeMoneyFooter emp={emp} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </>
   );
