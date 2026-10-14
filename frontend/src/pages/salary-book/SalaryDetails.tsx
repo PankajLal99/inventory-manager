@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { salaryBookApi } from '../../lib/api';
@@ -12,7 +12,9 @@ import { apiError, formatDate, formatINR, monthLabel, statusLabel, todayISO } fr
 import ConfirmDialog from './components/ConfirmDialog';
 import SalaryBookSheet from './components/SalaryBookSheet';
 import EmployeeAdvanceLedger from './components/EmployeeAdvanceLedger';
-import type { SalaryRecord } from './types';
+import type { Paginated, SalaryAdvance, SalaryRecord } from './types';
+
+type DetailTab = 'advances' | 'daily';
 
 export default function SalaryDetails() {
   const { id } = useParams();
@@ -22,6 +24,7 @@ export default function SalaryDetails() {
   const [confirm, setConfirm] = useState<'finalize' | 'reopen' | null>(null);
   const [voidPayment, setVoidPayment] = useState<number | null>(null);
   const [advLedgerOpen, setAdvLedgerOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<DetailTab>('advances');
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['salary-book', 'salary', recordId],
@@ -65,6 +68,14 @@ export default function SalaryDetails() {
     onError: (err) => toast(apiError(err), 'error'),
   });
 
+  const hasAdvances = Number(data?.total_advances || 0) > 0;
+
+  useEffect(() => {
+    if (!data) return;
+    // When salary has advance deduction, open Advances tab by default (like daily breakdown).
+    setDetailTab(Number(data.total_advances || 0) > 0 ? 'advances' : 'daily');
+  }, [data?.id, data?.total_advances]);
+
   if (isLoading) return <LoadingState message="Loading salary details..." />;
   if (isError || !data) return <ErrorState onRetry={() => refetch()} />;
 
@@ -98,7 +109,10 @@ export default function SalaryDetails() {
         <button
           type="button"
           className="w-full text-left"
-          onClick={() => setAdvLedgerOpen(true)}
+          onClick={() => {
+            setDetailTab('advances');
+            setAdvLedgerOpen(true);
+          }}
           title="View advance ledger"
         >
           <div className="flex justify-between">
@@ -141,7 +155,46 @@ export default function SalaryDetails() {
 
       </div>
 
-      <DailyBreakdown breakdown={data.breakdown} />
+      <div className="bg-white rounded-xl border border-emerald-100 overflow-hidden">
+        <div className="flex border-b border-emerald-50">
+          <button
+            type="button"
+            onClick={() => setDetailTab('advances')}
+            className={`flex-1 min-h-11 px-4 text-sm font-semibold ${
+              detailTab === 'advances'
+                ? 'bg-emerald-50 text-emerald-900 border-b-2 border-emerald-600'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            Advances{hasAdvances ? ` · ${formatINR(data.total_advances)}` : ''}
+          </button>
+          <button
+            type="button"
+            onClick={() => setDetailTab('daily')}
+            className={`flex-1 min-h-11 px-4 text-sm font-semibold ${
+              detailTab === 'daily'
+                ? 'bg-emerald-50 text-emerald-900 border-b-2 border-emerald-600'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            Daily breakdown
+          </button>
+        </div>
+        <div className="p-4">
+          {detailTab === 'advances' ? (
+            <AdvancesPanel
+              employeeId={data.employee}
+              employeeName={data.employee_name}
+              year={data.year}
+              month={data.month}
+              totalAdvances={data.total_advances}
+              onOpenLedger={() => setAdvLedgerOpen(true)}
+            />
+          ) : (
+            <DailyBreakdownTable breakdown={data.breakdown} />
+          )}
+        </div>
+      </div>
 
       <div className="flex flex-col lg:flex-row gap-3">
       <Button className="w-full lg:w-auto min-h-12 px-6 bg-emerald-600 hover:bg-emerald-700" onClick={() => setPayOpen(true)}>
@@ -225,8 +278,147 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DailyBreakdown({ breakdown }: { breakdown: Record<string, unknown> }) {
-  const [open, setOpen] = useState(false);
+function advanceLabel(row: SalaryAdvance) {
+  if (row.source === 'MTSHOP') {
+    return `MT Shop${row.reason ? ` — ${row.reason}` : ''}`.trim();
+  }
+  return row.reason || 'Advance';
+}
+
+function AdvancesPanel({
+  employeeId,
+  employeeName,
+  year,
+  month,
+  totalAdvances,
+  onOpenLedger,
+}: {
+  employeeId: number;
+  employeeName: string;
+  year: number;
+  month: number;
+  totalAdvances: string;
+  onOpenLedger: () => void;
+}) {
+  const listQuery = useQuery({
+    queryKey: ['salary-book', 'salary-detail-advances', employeeId, year, month],
+    queryFn: async () =>
+      (await salaryBookApi.employees.advances(employeeId, {
+        year,
+        month,
+        page_size: 500,
+      })).data as Paginated<SalaryAdvance>,
+  });
+
+  const rows = useMemo(() => {
+    // Active advances drive the salary deduction; show paid/void too for full hisab.
+    return listQuery.data?.results || [];
+  }, [listQuery.data?.results]);
+
+  const activeRows = rows.filter((r) => r.status === 'ACTIVE');
+  const activeTotal = activeRows.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+  if (listQuery.isLoading) {
+    return <LoadingState message="Loading advances..." />;
+  }
+
+  if (!rows.length) {
+    return (
+      <div className="text-sm text-gray-500 space-y-2">
+        <p>No advance entries in this salary cycle.</p>
+        {Number(totalAdvances) > 0 ? (
+          <p className="text-amber-800">
+            Record shows {formatINR(totalAdvances)} deducted — refresh or reopen salary if ledger was updated.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <p className="text-sm text-gray-600">
+          Active advances deducted from this month:{' '}
+          <span className="font-semibold text-amber-900 tabular-nums">{formatINR(activeTotal)}</span>
+          {listQuery.data?.period_start && listQuery.data?.period_end_marker ? (
+            <span className="text-xs text-gray-500">
+              {' '}
+              · {formatDate(listQuery.data.period_start)} → {formatDate(listQuery.data.period_end_marker)}
+            </span>
+          ) : null}
+        </p>
+        <button
+          type="button"
+          onClick={onOpenLedger}
+          className="text-sm font-medium text-emerald-800 min-h-9 px-3 rounded-lg border border-emerald-200 hover:bg-emerald-50"
+        >
+          Full ledger / PDF
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500">
+              <th className="py-1 pr-3">Date</th>
+              <th className="py-1 pr-3">Particulars</th>
+              <th className="py-1 pr-3">Invoice</th>
+              <th className="py-1 pr-3">Status</th>
+              <th className="py-1 pr-3 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.id}
+                className={`border-t border-emerald-50 ${row.status === 'VOID' ? 'opacity-50' : ''}`}
+              >
+                <td className="py-1.5 pr-3 whitespace-nowrap">{formatDate(row.date)}</td>
+                <td className={`py-1.5 pr-3 ${row.status === 'VOID' ? 'line-through' : ''}`}>
+                  {advanceLabel(row)}
+                </td>
+                <td className="py-1.5 pr-3">
+                  {row.source_invoice_id && row.source_invoice_number ? (
+                    <a
+                      href={`/invoices/${row.source_invoice_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-700 font-medium underline-offset-2 hover:underline"
+                    >
+                      {row.source_invoice_number}
+                    </a>
+                  ) : (
+                    row.source_invoice_number || '—'
+                  )}
+                </td>
+                <td className="py-1.5 pr-3">
+                  {row.status === 'ACTIVE'
+                    ? 'Deducted'
+                    : row.status === 'PAID'
+                      ? 'Settled'
+                      : 'Voided'}
+                </td>
+                <td
+                  className={`py-1.5 pr-3 text-right tabular-nums font-medium ${
+                    row.status === 'ACTIVE' ? 'text-amber-900' : 'text-gray-700'
+                  }`}
+                >
+                  {formatINR(row.amount)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-gray-500">
+        Only <span className="font-medium">Deducted (Active)</span> rows reduce net salary for{' '}
+        {employeeName}.
+      </p>
+    </div>
+  );
+}
+
+function DailyBreakdownTable({ breakdown }: { breakdown: Record<string, unknown> }) {
   const rows = (breakdown?.daily_breakdown || []) as Array<{
     date: string;
     status: string | null;
@@ -236,42 +428,37 @@ function DailyBreakdown({ breakdown }: { breakdown: Record<string, unknown> }) {
     minutes_late: number;
     rule_penalty_applied: boolean;
   }>;
-  if (!rows.length) return null;
+  if (!rows.length) {
+    return <p className="text-sm text-gray-500">No daily breakdown for this period.</p>;
+  }
   return (
-    <div className="bg-white rounded-xl border border-emerald-100 p-4">
-      <button type="button" className="font-semibold w-full text-left" onClick={() => setOpen((v) => !v)}>
-        Daily breakdown {open ? '▾' : '▸'}
-      </button>
-      {open && (
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left text-gray-500">
-                <th className="py-1 pr-3">Date</th>
-                <th className="py-1 pr-3">Status</th>
-                <th className="py-1 pr-3">Worked</th>
-                <th className="py-1 pr-3">Payable</th>
-                <th className="py-1 pr-3">Credit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.date} className="border-t border-emerald-50">
-                  <td className="py-1 pr-3">{formatDate(row.date)}</td>
-                  <td className="py-1 pr-3">
-                    {row.status ? statusLabel(row.status) : 'Unmarked'}
-                    {row.rule_penalty_applied ? ' · Penalty' : ''}
-                    {row.minutes_late ? ` · Late ${row.minutes_late}m` : ''}
-                  </td>
-                  <td className="py-1 pr-3">{row.worked_hours}h</td>
-                  <td className="py-1 pr-3">{row.payable_hours}h</td>
-                  <td className="py-1 pr-3">{formatINR(row.day_credit)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-sm">
+        <thead>
+          <tr className="text-left text-gray-500">
+            <th className="py-1 pr-3">Date</th>
+            <th className="py-1 pr-3">Status</th>
+            <th className="py-1 pr-3">Worked</th>
+            <th className="py-1 pr-3">Payable</th>
+            <th className="py-1 pr-3">Credit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.date} className="border-t border-emerald-50">
+              <td className="py-1 pr-3">{formatDate(row.date)}</td>
+              <td className="py-1 pr-3">
+                {row.status ? statusLabel(row.status) : 'Unmarked'}
+                {row.rule_penalty_applied ? ' · Penalty' : ''}
+                {row.minutes_late ? ` · Late ${row.minutes_late}m` : ''}
+              </td>
+              <td className="py-1 pr-3">{row.worked_hours}h</td>
+              <td className="py-1 pr-3">{row.payable_hours}h</td>
+              <td className="py-1 pr-3">{formatINR(row.day_credit)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

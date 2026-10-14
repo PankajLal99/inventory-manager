@@ -21,6 +21,7 @@ import ManualAttendanceDialog, {
   type ManualAttendanceTarget,
 } from './components/ManualAttendanceDialog';
 import AddAmountDialog, { type AddAmountTarget } from './components/AddAmountDialog';
+import TakenHistoryByDate from './components/TakenHistoryByDate';
 import { apiError, cyclePeriodLabel, toTimeInput } from './utils';
 
 export default function CalendarPage() {
@@ -189,6 +190,8 @@ export default function CalendarPage() {
       setAmountTarget(null);
       await invalidateCalendar();
       await queryClient.invalidateQueries({ queryKey: ['salary-book', 'advances'] });
+      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'taken-history'] });
+      await queryClient.invalidateQueries({ queryKey: ['salary-book', 'emp-adv-ledger'] });
     },
     onError: (err) => toast(apiError(err, 'Unable to save amount.'), 'error'),
   });
@@ -363,6 +366,12 @@ export default function CalendarPage() {
                 </div>
               </div>
             </div>
+            <TakenHistoryByDate
+              employeeId={selectedEmployee.id}
+              employeeName={selectedEmployee.name}
+              year={data.year}
+              month={data.month}
+            />
           </div>
           <div className="bg-white rounded-xl border border-emerald-100 p-4 space-y-2 text-sm">
             <h2 className="font-semibold text-gray-900">This month</h2>
