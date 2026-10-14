@@ -662,11 +662,64 @@ type CycleDayItem = {
   cell: CalendarDayCell | undefined;
 };
 
+/** Add calendar days (can cross months). */
+function addCalendarDays(y: number, m: number, d: number, delta: number) {
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  return { y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate() };
+}
+
+function isoFromParts(y: number, m: number, d: number) {
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/**
+ * Build 14 → next 14 (inclusive) for cycleDay > 1; else calendar 1…last.
+ */
+function buildCycleWindowList(
+  employee: CalendarEmployee,
+  year: number,
+  month: number,
+  daysInMonth: number,
+  cycleDay: number,
+): CycleDayItem[] {
+  if (cycleDay <= 1) {
+    return Array.from({ length: daysInMonth }, (_, i) => {
+      const d = i + 1;
+      const iso = isoFromParts(year, month, d);
+      return {
+        iso,
+        y: year,
+        m: month,
+        d,
+        cell: employee.cycle_days?.[iso] || employee.days[String(d)],
+      };
+    });
+  }
+
+  // Period ending this month: previous month's cycleDay → this month's cycleDay
+  const prev = month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 };
+  const startD = Math.min(cycleDay, new Date(prev.y, prev.m, 0).getDate());
+  const endD = Math.min(cycleDay, daysInMonth);
+  const endIso = isoFromParts(year, month, endD);
+  const list: CycleDayItem[] = [];
+  let cur = { y: prev.y, m: prev.m, d: startD };
+  while (true) {
+    const iso = isoFromParts(cur.y, cur.m, cur.d);
+    const cell =
+      employee.cycle_days?.[iso] ||
+      (cur.y === year && cur.m === month ? employee.days[String(cur.d)] : undefined);
+    list.push({ iso, y: cur.y, m: cur.m, d: cur.d, cell });
+    if (iso >= endIso) break;
+    cur = addCalendarDays(cur.y, cur.m, cur.d, 1);
+  }
+  return list;
+}
+
 /**
  * Days to show for one employee:
- * 1) Prefer salary cycle window (e.g. 14th → next 14th) from cycle_days
- * 2) Else calendar month
- * 3) Drop leading BEFORE_JOINING so the strip starts on join / cycle start (e.g. 14), not day 1
+ * Cycle day 14 → strip is 14th → next month's 14th (not 14…31 of same month).
+ * Prefer API cycle_days when it already spans that window; else build locally.
  */
 function employeeCycleDayList(
   employee: CalendarEmployee,
@@ -674,8 +727,10 @@ function employeeCycleDayList(
   month: number,
   daysInMonth: number,
 ): CycleDayItem[] {
+  const cycleDay = employee.salary_cycle_start_day || 1;
   const cycle = employee.cycle_days;
   let list: CycleDayItem[];
+
   if (cycle && Object.keys(cycle).length > 0) {
     list = Object.keys(cycle)
       .sort()
@@ -683,21 +738,31 @@ function employeeCycleDayList(
         const [y, m, d] = iso.split('-').map(Number);
         return { iso, y, m, d, cell: cycle[iso] };
       });
+
+    // Guard: if API only returned this month through the 31st, rebuild 14→next 14.
+    if (cycleDay > 1) {
+      const last = list[list.length - 1];
+      const expectedEndD = Math.min(cycleDay, daysInMonth);
+      const endsOnMonthLast =
+        last && last.y === year && last.m === month && last.d === daysInMonth;
+      const endsOnCycleMarker =
+        last && last.y === year && last.m === month && last.d === expectedEndD;
+      const hasMarker = list.some((item) => item.cell?.is_cycle_end_marker);
+      if (endsOnMonthLast && !endsOnCycleMarker && !hasMarker) {
+        list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
+      }
+    }
   } else {
-    const cycleDay = employee.salary_cycle_start_day || 1;
-    // Calendar-month fallback: start from cycle day when > 1 (UI: don't show 1…13 if start is 14)
-    const startDay = cycleDay > 1 ? Math.min(cycleDay, daysInMonth) : 1;
-    list = Array.from({ length: daysInMonth - startDay + 1 }, (_, i) => {
-      const d = startDay + i;
-      const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      return { iso, y: year, m: month, d, cell: employee.days[String(d)] };
-    });
+    list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
   }
 
-  // Hide empty pre-join columns — first visible day is joining / first real day
-  const firstReal = list.findIndex((item) => item.cell?.status !== 'BEFORE_JOINING');
-  if (firstReal > 0) return list.slice(firstReal);
-  if (firstReal === -1) return list.slice(-1); // all before join — keep last day as anchor
+  // For cycle strips only: hide empty pre-join columns (keep end on next cycle day).
+  // Calendar-month employees (day 1) keep 1…last so join mid-month does not look like 14→31.
+  if (cycleDay > 1) {
+    const firstReal = list.findIndex((item) => item.cell?.status !== 'BEFORE_JOINING');
+    if (firstReal > 0) return list.slice(firstReal);
+    if (firstReal === -1) return list.slice(-1);
+  }
   return list;
 }
 
@@ -740,10 +805,11 @@ export function EmployeeMonthGrid({
 
   return (
     <div className="bg-white rounded-xl border border-emerald-100 p-3 sm:p-4 lg:p-6 space-y-2">
-      {usesCycle && employee.period_start && employee.period_end_marker ? (
+      {cycleDay > 1 && dayList.length > 0 ? (
         <p className="text-xs text-emerald-800 font-medium px-0.5">
           Salary cycle day {cycleDay}: grid shows{' '}
-          {employee.period_start} → {employee.period_end_marker} (not 1st–last of calendar month)
+          {dayList[0].iso} → {dayList[dayList.length - 1].iso} (through next {cycleDay}
+          th, not month-end)
         </p>
       ) : null}
 
@@ -805,17 +871,29 @@ export function EmployeeMonthGrid({
             const canAdd =
               Boolean(onDayClick) && canEditCalendarDayTimes(item.cell) && item.iso <= today;
             const monthChanged = item.d === 1 || item.iso === dayList[0]?.iso;
+            const isEndMarker = Boolean(item.cell?.is_cycle_end_marker) || item.iso === dayList[dayList.length - 1]?.iso;
             return (
               <div key={item.iso} title={cellTitle(item.cell, item.iso)} className="space-y-1.5">
                 <div
                   className={`text-center text-sm font-semibold ${
-                    sunday ? 'text-rose-600' : item.iso === today ? 'text-emerald-800' : 'text-gray-600'
+                    sunday
+                      ? 'text-rose-600'
+                      : item.iso === today
+                        ? 'text-emerald-800'
+                        : isEndMarker && cycleDay > 1
+                          ? 'text-emerald-700'
+                          : 'text-gray-600'
                   }`}
                 >
                   {item.d}
                   {monthChanged && usesCycle ? (
                     <span className="block text-[10px] font-medium text-gray-400 leading-none mt-0.5">
                       {monthLabel(item.y, item.m).split(' ')[0]}
+                    </span>
+                  ) : null}
+                  {isEndMarker && cycleDay > 1 && !monthChanged ? (
+                    <span className="block text-[10px] font-medium text-emerald-600 leading-none mt-0.5">
+                      cycle end
                     </span>
                   ) : null}
                 </div>
@@ -1085,8 +1163,8 @@ export function AdminMonthGrid({
                   <div className="font-semibold text-gray-900 hover:text-emerald-800">{emp.name}</div>
                   <div className="text-xs text-gray-500">
                     {emp.employee_id}
-                    {cycleDay > 1 || (emp.period_start && emp.period_end_marker)
-                      ? ` · from ${dayList[0] ? `${dayList[0].d} ${monthLabel(dayList[0].y, dayList[0].m).split(' ')[0]}` : cycleDay}`
+                    {cycleDay > 1 && dayList.length > 0
+                      ? ` · ${dayList[0].d} ${monthLabel(dayList[0].y, dayList[0].m).split(' ')[0]} → ${dayList[dayList.length - 1].d} ${monthLabel(dayList[dayList.length - 1].y, dayList[dayList.length - 1].m).split(' ')[0]}`
                       : ''}
                   </div>
                 </Link>

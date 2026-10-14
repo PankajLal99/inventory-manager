@@ -1484,16 +1484,25 @@ def attendance_calendar(request):
         if not employees:
             return _err('Employee not found.', status.HTTP_404_NOT_FOUND)
         view = 'employee'
-        # Single-employee view follows their salary cycle (e.g. 9→9).
+        # Single-employee view follows their salary cycle (e.g. 14→ next 14).
         period_start, period_end = cycle_range(employees[0], year, month)
         period_end_marker = cycle_end_marker(employees[0], year, month)
-        range_start, range_end = period_start, period_end
+        # Calendar UI includes the end marker day (next cycle date).
+        range_start, range_end = period_start, period_end_marker
     else:
         employees = list(Employee.objects.filter(status=Employee.STATUS_ACTIVE).order_by('name'))
         view = 'admin'
         period_start, period_end = calendar_start, calendar_end
         period_end_marker = calendar_end
         range_start, range_end = calendar_start, calendar_end
+        # Pull enough days so each employee's 14→14 cycle strip can render.
+        for emp in employees:
+            s, _ = cycle_range(emp, year, month)
+            em = cycle_end_marker(emp, year, month)
+            if s < range_start:
+                range_start = s
+            if em > range_end:
+                range_end = em
 
     settings_obj = SalaryBookSettings.get_solo()
     rows = Attendance.objects.filter(
@@ -1547,30 +1556,43 @@ def attendance_calendar(request):
                     counts['unmarked'] += 1
                     team['unmarked'] += 1
 
-        # Employee cycle view: also expose days outside this calendar month that
-        # belong to the cycle (previous/next month spill).
+        # Full UI cycle: start day → next start day (inclusive end marker), e.g. 14 Sep → 14 Oct.
+        emp_end_marker = cycle_end_marker(emp, year, month)
         cycle_days = {}
         cursor = emp_start
-        while cursor <= emp_end:
+        while cursor <= emp_end_marker:
             iso = cursor.isoformat()
+            in_salary_window = emp_start <= cursor <= emp_end
             if emp.date_of_joining and cursor < emp.date_of_joining:
-                cycle_days[iso] = {'status': 'BEFORE_JOINING', 'in_cycle': True}
+                cycle_days[iso] = {
+                    'status': 'BEFORE_JOINING',
+                    'in_cycle': in_salary_window,
+                    'is_cycle_end_marker': cursor == emp_end_marker,
+                }
             elif cursor > today:
-                cycle_days[iso] = {'status': None, 'in_cycle': True}
+                cycle_days[iso] = {
+                    'status': None,
+                    'in_cycle': in_salary_window,
+                    'is_cycle_end_marker': cursor == emp_end_marker,
+                }
             else:
                 marked = by_emp_date.get(emp.id, {}).get(cursor)
                 if marked:
                     cell = _calendar_day_cell(marked, emp, settings_obj)
-                    cell['in_cycle'] = True
+                    cell['in_cycle'] = in_salary_window
+                    cell['is_cycle_end_marker'] = cursor == emp_end_marker
                     cycle_days[iso] = cell
                 else:
-                    cycle_days[iso] = {'status': None, 'in_cycle': True}
+                    cycle_days[iso] = {
+                        'status': None,
+                        'in_cycle': in_salary_window,
+                        'is_cycle_end_marker': cursor == emp_end_marker,
+                    }
             cursor = cursor + timedelta(days=1)
 
         record, _ = _upsert_draft(emp, year, month)
         breakdown = record.breakdown if isinstance(record.breakdown, dict) else {}
         salary_generated = breakdown.get('earned_salary') or str(record.gross_salary)
-        emp_end_marker = cycle_end_marker(emp, year, month)
         payload.append({
             'id': emp.id,
             'name': emp.name,

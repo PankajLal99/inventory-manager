@@ -244,6 +244,8 @@ export interface CalendarDayCell {
   is_early?: boolean;
   rule_penalty_applied?: boolean;
   in_cycle?: boolean;
+  /** Last day of the cycle strip (e.g. next 14th). */
+  is_cycle_end_marker?: boolean;
 }
 
 export interface CalendarEmployee {
