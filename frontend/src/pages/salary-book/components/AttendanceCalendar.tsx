@@ -673,6 +673,19 @@ function isoFromParts(y: number, m: number, d: number) {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+/** "14 October" from an ISO date or a cycle day item. */
+function formatCycleBound(
+  iso: string | null | undefined,
+  fallback?: { y: number; m: number; d: number } | null,
+) {
+  if (iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    if (y && m && d) return `${d} ${monthLabel(y, m).split(' ')[0]}`;
+  }
+  if (fallback) return `${fallback.d} ${monthLabel(fallback.y, fallback.m).split(' ')[0]}`;
+  return '';
+}
+
 /**
  * Build 14 → next 14 (inclusive) for cycleDay > 1; else calendar 1…last.
  */
@@ -739,7 +752,8 @@ function employeeCycleDayList(
         return { iso, y, m, d, cell: cycle[iso] };
       });
 
-    // Guard: if API only returned this month through the 31st, rebuild 14→next 14.
+    // Guard: rebuild when API strip is wrong length (e.g. only end-marker day,
+    // or calendar month 1…31 instead of 14→next 14).
     if (cycleDay > 1) {
       const last = list[list.length - 1];
       const expectedEndD = Math.min(cycleDay, daysInMonth);
@@ -748,7 +762,8 @@ function employeeCycleDayList(
       const endsOnCycleMarker =
         last && last.y === year && last.m === month && last.d === expectedEndD;
       const hasMarker = list.some((item) => item.cell?.is_cycle_end_marker);
-      if (endsOnMonthLast && !endsOnCycleMarker && !hasMarker) {
+      const tooShort = list.length < 28;
+      if (tooShort || (endsOnMonthLast && !endsOnCycleMarker && !hasMarker)) {
         list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
       }
     }
@@ -756,11 +771,9 @@ function employeeCycleDayList(
     list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
   }
 
-  // Hide empty pre-join columns — every employee starts on their first real day.
-  // Cycle strips still end on the next cycle day (e.g. 5 Sep → 5 Oct).
-  const firstReal = list.findIndex((item) => item.cell?.status !== 'BEFORE_JOINING');
-  if (firstReal > 0) return list.slice(firstReal);
-  if (firstReal === -1) return list.slice(-1);
+  // Always keep the full cycle window (e.g. 14 Sep → 14 Oct).
+  // Do NOT slice away BEFORE_JOINING — that collapsed Ajay/Ankush to one day
+  // when join fell on the cycle end marker. Pre-join days stay muted in-strip.
   return list;
 }
 
@@ -806,8 +819,9 @@ export function EmployeeMonthGrid({
       {cycleDay > 1 && dayList.length > 0 ? (
         <p className="text-xs text-emerald-800 font-medium px-0.5">
           Salary cycle day {cycleDay}: grid shows{' '}
-          {dayList[0].iso} → {dayList[dayList.length - 1].iso} (through next {cycleDay}
-          th, not month-end)
+          {employee.period_start || dayList[0].iso} →{' '}
+          {employee.period_end_marker || dayList[dayList.length - 1].iso} (through next{' '}
+          {cycleDay}th, not month-end)
         </p>
       ) : null}
 
@@ -1161,8 +1175,8 @@ export function AdminMonthGrid({
                   <div className="font-semibold text-gray-900 hover:text-emerald-800">{emp.name}</div>
                   <div className="text-xs text-gray-500">
                     {emp.employee_id}
-                    {cycleDay > 1 && dayList.length > 0
-                      ? ` · ${dayList[0].d} ${monthLabel(dayList[0].y, dayList[0].m).split(' ')[0]} → ${dayList[dayList.length - 1].d} ${monthLabel(dayList[dayList.length - 1].y, dayList[dayList.length - 1].m).split(' ')[0]}`
+                    {cycleDay > 1 && (emp.period_start || dayList[0]) && (emp.period_end_marker || dayList[dayList.length - 1])
+                      ? ` · ${formatCycleBound(emp.period_start, dayList[0])} → ${formatCycleBound(emp.period_end_marker, dayList[dayList.length - 1])}`
                       : ''}
                   </div>
                 </Link>
