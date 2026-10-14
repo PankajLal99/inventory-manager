@@ -14,6 +14,13 @@ import type { AttendanceRule, Employee, MtshopCustomerOption, SalaryBookSettings
 
 const BLOOD = ['', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 
+function cycleDayFromISO(iso: string) {
+  const day = Number(String(iso || '').slice(8, 10));
+  if (!Number.isFinite(day) || day < 1) return '1';
+  return String(Math.min(28, day));
+}
+
+const emptyJoin = todayISO();
 const empty = {
   employee_id: '',
   name: '',
@@ -21,8 +28,8 @@ const empty = {
   alternate_contact: '',
   address: '',
   blood_group: '',
-  date_of_joining: todayISO(),
-  salary_cycle_start_day: '1',
+  date_of_joining: emptyJoin,
+  salary_cycle_start_day: cycleDayFromISO(emptyJoin),
   designation: '',
   department: '',
   monthly_salary: '',
@@ -144,7 +151,15 @@ export default function EmployeeForm() {
 
   if (isEdit && isLoading) return <LoadingState message="Loading employee..." />;
 
-  const set = (key: string, value: string) => setForm((f) => ({ ...f, [key]: value }));
+  const set = (key: string, value: string) =>
+    setForm((f) => {
+      const next = { ...f, [key]: value };
+      // Changing start date defaults cycle day to that day-of-month.
+      if (key === 'date_of_joining' && value) {
+        next.salary_cycle_start_day = cycleDayFromISO(value);
+      }
+      return next;
+    });
 
   return (
     <form onSubmit={submit} className="space-y-4 lg:max-w-4xl">
@@ -185,7 +200,8 @@ export default function EmployeeForm() {
           onChange={(e) => set('salary_cycle_start_day', e.target.value)}
         />
         <p className="mt-1 text-xs text-gray-500">
-          Example: 9 = salary month runs 9th → next 9th. Use 1 for a normal calendar month.
+          Defaults from start date (e.g. joined on 5th → 5th → next 5th). Use 1 for a normal calendar
+          month.
         </p>
       </div>
       <Input label="Designation" value={form.designation} onChange={(e) => set('designation', e.target.value)} />

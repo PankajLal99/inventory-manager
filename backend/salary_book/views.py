@@ -1597,6 +1597,7 @@ def attendance_calendar(request):
             'id': emp.id,
             'name': emp.name,
             'employee_id': emp.employee_id,
+            'date_of_joining': emp.date_of_joining.isoformat() if emp.date_of_joining else None,
             'salary_cycle_start_day': cycle_day_for(emp),
             'period_start': emp_start.isoformat(),
             'period_end': emp_end.isoformat(),

@@ -252,6 +252,7 @@ export interface CalendarEmployee {
   id: number;
   name: string;
   employee_id: string;
+  date_of_joining?: string | null;
   salary_cycle_start_day?: number;
   period_start?: string;
   period_end?: string;

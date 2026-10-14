@@ -756,13 +756,11 @@ function employeeCycleDayList(
     list = buildCycleWindowList(employee, year, month, daysInMonth, cycleDay);
   }
 
-  // For cycle strips only: hide empty pre-join columns (keep end on next cycle day).
-  // Calendar-month employees (day 1) keep 1…last so join mid-month does not look like 14→31.
-  if (cycleDay > 1) {
-    const firstReal = list.findIndex((item) => item.cell?.status !== 'BEFORE_JOINING');
-    if (firstReal > 0) return list.slice(firstReal);
-    if (firstReal === -1) return list.slice(-1);
-  }
+  // Hide empty pre-join columns — every employee starts on their first real day.
+  // Cycle strips still end on the next cycle day (e.g. 5 Sep → 5 Oct).
+  const firstReal = list.findIndex((item) => item.cell?.status !== 'BEFORE_JOINING');
+  if (firstReal > 0) return list.slice(firstReal);
+  if (firstReal === -1) return list.slice(-1);
   return list;
 }
 
