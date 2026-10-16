@@ -15,6 +15,29 @@ export function isEmergencyMaskActive(): boolean {
   );
 }
 
+/** Percent used for display-only scaling on POS/cart UI. Null when mask is off. */
+export function getEmergencyMaskPercent(): number | null {
+  if (!isEmergencyMaskActive()) return null;
+  const user =
+    auth.getUser('main') ||
+    auth.getUser('credit') ||
+    auth.getUser('salary_book');
+  const pct = Number(user?.emergency_mask_percent);
+  if (!Number.isFinite(pct) || pct <= 0) return null;
+  return pct;
+}
+
+/**
+ * Scale a money value for display when emergency mask is active.
+ * Cart APIs stay unmasked at the wire — use this only for UI money displays
+ * (row prices, totals, Sell/Cost), never for values written back to the server.
+ */
+export function scaleForEmergencyMask(value: number): number {
+  const pct = getEmergencyMaskPercent();
+  if (pct == null || !Number.isFinite(value)) return value;
+  return Math.round(((value * pct) / 100) * 100) / 100;
+}
+
 export function assertExportsAllowed(): void {
   if (!isEmergencyMaskActive()) return;
   if (typeof window !== 'undefined') {

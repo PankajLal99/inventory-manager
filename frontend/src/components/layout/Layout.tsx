@@ -720,7 +720,7 @@ export default function Layout() {
                       <Keyboard className="h-4 w-4 mr-3 text-gray-400" />
                       Keyboard Shortcuts
                     </button>
-                    {isAdmin && !user?.emergency_mask_active && (
+                    {!user?.emergency_mask_active && (
                       <>
                         <div className="my-1 border-t border-gray-100" />
                         <button
@@ -778,7 +778,7 @@ export default function Layout() {
         onClose={() => setShortcutsHelpOpen(false)}
       />
 
-      {/* Emergency data mask confirm (Admin only, one-way) */}
+      {/* Emergency data mask confirm (any signed-in user, one-way) */}
       <Modal
         isOpen={emergencyMaskConfirmOpen}
         onClose={() => {
@@ -797,8 +797,8 @@ export default function Layout() {
             to a small percentage of real values. The database is not changed.
           </p>
           <p className="text-sm text-gray-700">
-            POS and credit cart recording responses stay unmasked so you can keep recording
-            with real amounts.
+            POS cart rows show scaled prices and totals (unit price, Sell/Cost, line total, summary).
+            Carts stay editable and checkout remains available.
           </p>
           <p className="text-sm font-medium text-red-700">
             This cannot be turned off from the website. Only a backend/shell change can

@@ -557,10 +557,20 @@ class EmergencyMaskTests(APITestCase):
         self.assertEqual(masked['credit_limit'], 500)
         self.assertEqual(masked['avg_order_value'], 99.9)
 
-    def test_activate_admin_only_and_no_http_disable(self):
+    def test_activate_any_authenticated_user_and_no_http_disable(self):
+        # Non-admin profiles can activate (one-way); no HTTP deactivate.
         self.client.force_authenticate(user=self.retail)
-        denied = self.client.post('/api/v1/emergency-mask/activate/', {}, format='json')
-        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+        ok_retail = self.client.post(
+            '/api/v1/emergency-mask/activate/',
+            {'percent': 4},
+            format='json',
+        )
+        self.assertEqual(ok_retail.status_code, status.HTTP_200_OK)
+        self.assertTrue(ok_retail.data['enabled'])
+        self.assertEqual(ok_retail.data['percent'], 4.0)
+
+        from backend.core.emergency_mask import deactivate_emergency_mask
+        deactivate_emergency_mask()
 
         self.client.force_authenticate(user=self.admin)
         ok = self.client.post(

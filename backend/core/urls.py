@@ -30,7 +30,7 @@ urlpatterns = [
     path('invoice-export-settings/', invoice_export_settings, name='invoice-export-settings'),
     path('product-name-color-rules/', product_name_color_rules, name='product-name-color-rules'),
 
-    # Emergency display mask (Admin activate only; no HTTP deactivate)
+    # Emergency display mask (any authenticated user can activate; no HTTP deactivate)
     path('emergency-mask/', emergency_mask_status, name='emergency-mask-status'),
     path('emergency-mask/activate/', emergency_mask_activate, name='emergency-mask-activate'),
     

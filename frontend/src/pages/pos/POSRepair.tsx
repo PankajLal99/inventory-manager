@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { posApi, productsApi, catalogApi, customersApi } from '../../lib/api';
 import { parseBarcodesFromInput, looksLikeBarcode, sanitizeScannedBarcode } from '../../lib/scanningQueue';
 import { auth } from '../../lib/auth';
+import { scaleForEmergencyMask } from '../../lib/emergencyMaskGuard';
 import {
   loadUserCarts,
   saveUserCarts,
@@ -1219,7 +1220,7 @@ export default function POS() {
           const purchasePrice = errorData.purchase_price ? parseFloat(errorData.purchase_price || '0') : 0;
           setPriceErrors({
             ...priceErrors,
-            [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${formatNumber(purchasePrice)})`
+            [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${formatNumber(scaleForEmergencyMask(purchasePrice))})`
           });
           // Keep editing state so user can see the error and fix it
           // Don't clear editingManualPrice - let user see what they entered
@@ -3771,7 +3772,7 @@ export default function POS() {
                                 <span className="text-xs font-semibold text-gray-700">Qty: {formatNumber(item.quantity, 3)}</span>
                               </div>
                             )}
-                            {/* Display selling price or purchase price */}
+                            {/* Display selling price or purchase price (scaled when emergency mask is on) */}
                             {(() => {
                               const sellingPrice = item.product_selling_price && parseFloat(item.product_selling_price) > 0
                                 ? parseFloat(item.product_selling_price)
@@ -3784,7 +3785,7 @@ export default function POS() {
                               if (displayPrice !== null) {
                                 return (
                                   <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={sellingPrice !== null ? "Selling Price" : "Purchase Price"}>
-                                    <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPrice)}</span>
+                                    <span className="text-xs font-medium text-blue-700">₹{formatNumber(scaleForEmergencyMask(displayPrice))}</span>
                                   </div>
                                 );
                               }
@@ -3828,7 +3829,7 @@ export default function POS() {
                                         if (minPrice > 0 && price < minPrice) {
                                           setPriceErrors({
                                             ...priceErrors,
-                                            [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
+                                            [item.id]: `Price cannot be less than purchase price (₹${formatNumber(scaleForEmergencyMask(minPrice))})`
                                           });
                                         } else if (minPrice === 0) {
                                           // Purchase price not available - clear error but backend will validate
@@ -3890,7 +3891,7 @@ export default function POS() {
                                           if (minPrice > 0 && price < minPrice) {
                                             setPriceErrors({
                                               ...priceErrors,
-                                              [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
+                                              [item.id]: `Price cannot be less than purchase price (₹${formatNumber(scaleForEmergencyMask(minPrice))})`
                                             });
                                             // Don't save if validation fails - clear editing state to revert to saved value
                                             const newEditingPrices = { ...editingManualPrice };

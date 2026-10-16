@@ -7,6 +7,7 @@ import ProductName from '../../components/ProductName';
 import { creditAmountInWords } from '../credit/CreditInvoiceDocument';
 import CartLineScannedTime, { getCartLineScanSummary } from '../../components/pos/CartLineScannedTime';
 import { auth } from '../../lib/auth';
+import { isEmergencyMaskActive, scaleForEmergencyMask } from '../../lib/emergencyMaskGuard';
 import {
   loadUserCarts,
   saveUserCarts,
@@ -1941,7 +1942,7 @@ export default function POS() {
           const purchasePrice = errorData.purchase_price ? parseFloat(errorData.purchase_price || '0') : 0;
           setPriceErrors((prev) => ({
             ...prev,
-            [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${formatNumber(purchasePrice)})`
+            [variables.itemId]: errorMessage || `Price cannot be less than purchase price (₹${formatNumber(scaleForEmergencyMask(purchasePrice))})`
           }));
           // Keep editing state so user can see the error and fix it
           // Don't clear editingManualPrice - let user see what they entered
@@ -4105,9 +4106,9 @@ export default function POS() {
                           <div>
                             <span className="text-gray-600">Total: </span>
                             <span className={`font-semibold ${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount)) === formatNumber(calculateTotal()) ? 'text-green-600' : 'text-red-600'}`}>
-                              {showPurchasePrice ? `₹${formatNumber(parseFloat(cashAmount) + parseFloat(upiAmount))}` : '•••'}
+                              {showPurchasePrice ? `₹${formatNumber(scaleForEmergencyMask(parseFloat(cashAmount) + parseFloat(upiAmount)))}` : '•••'}
                             </span>
-                            <span className="text-gray-600"> / Invoice Total: {showPurchasePrice ? `₹${formatNumber(calculateTotal())}` : '•••'}</span>
+                            <span className="text-gray-600"> / Invoice Total: {showPurchasePrice ? `₹${formatNumber(scaleForEmergencyMask(calculateTotal()))}` : '•••'}</span>
                           </div>
                         )}
                       </div>
@@ -5027,6 +5028,10 @@ export default function POS() {
                   const isBarcodesExpanded = expandedBarcodes[item.id] || false;
                   const scanSummary = getCartLineScanSummary(item);
                   const lineTotal = effectivePrice * (parseInt(item.quantity || '0') || 0);
+                  // Emergency mask: scale money shown on the row; inputs stay editable for checkout.
+                  const maskActive = isEmergencyMaskActive();
+                  const displayUnitPrice = scaleForEmergencyMask(effectivePrice);
+                  const displayLineTotal = scaleForEmergencyMask(lineTotal);
                   const srNo = itemIndex + 1;
                   return (
                     <div key={item.id} className="bg-white border border-gray-300 rounded-lg p-3 shadow-sm hover:shadow-md transition-all">
@@ -5128,6 +5133,8 @@ export default function POS() {
                               const hasValidSellingPrice = !Number.isNaN(rawSelling) && rawSelling > 0;
                               const hasValidPurchasePriceFromApi = !Number.isNaN(rawPurchaseFromApi) && rawPurchaseFromApi > 0;
                               const displayPriceFromApi = hasValidSellingPrice ? rawSelling : (hasValidPurchasePriceFromApi ? rawPurchaseFromApi : null);
+                              const displaySelling = hasValidSellingPrice ? scaleForEmergencyMask(rawSelling) : rawSelling;
+                              const displayPurchase = hasValidPurchasePriceFromApi ? scaleForEmergencyMask(rawPurchaseFromApi) : rawPurchaseFromApi;
                               // For custom products: always show the input so user can type full amount (e.g. "50") and can re-edit cost anytime
                               const isCustomProduct = item.product_name?.startsWith('Other -');
                               const showPurchaseInput = displayPriceFromApi === null || isCustomProduct;
@@ -5144,13 +5151,13 @@ export default function POS() {
                                   <div className="px-2 py-1 bg-blue-50 rounded-md border border-blue-200" title={hasValidSellingPrice ? (hasValidPurchasePriceFromApi ? 'Selling & cost' : 'Selling Price') : 'Purchase Price (cost)'}>
                                     <div className="flex flex-col gap-0.5">
                                       {hasValidSellingPrice && (
-                                        <span className="text-xs font-medium text-blue-700">Sell: ₹{formatNumber(rawSelling)}</span>
+                                        <span className="text-xs font-medium text-blue-700">Sell: ₹{formatNumber(displaySelling)}</span>
                                       )}
                                       {hasValidPurchasePriceFromApi && (
-                                        <span className="text-xs font-medium text-blue-600">Cost: ₹{formatNumber(rawPurchaseFromApi)}</span>
+                                        <span className="text-xs font-medium text-blue-600">Cost: ₹{formatNumber(displayPurchase)}</span>
                                       )}
                                       {!hasValidSellingPrice && !hasValidPurchasePriceFromApi && (
-                                        <span className="text-xs font-medium text-blue-700">₹{formatNumber(displayPriceFromApi ?? 0)}</span>
+                                        <span className="text-xs font-medium text-blue-700">₹{formatNumber(scaleForEmergencyMask(displayPriceFromApi ?? 0))}</span>
                                       )}
                                     </div>
                                   </div>
@@ -5212,7 +5219,7 @@ export default function POS() {
                         {/* Row 2 on Mobile: Price, Total, Delete */}
                         {/* Desktop: In same row */}
                         <div className="flex items-center gap-2 sm:gap-3 flex-1 sm:flex-initial sm:order-3">
-                          {/* Price Input */}
+                          {/* Price Input — while masked, show scaled amount until focused for editing. */}
                           <div className="flex-shrink-0 flex-1 sm:flex-initial sm:w-28">
                             <div className="relative">
                               <div className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs font-medium">₹</div>
@@ -5225,7 +5232,11 @@ export default function POS() {
                                 min="0"
                                 placeholder="0.00"
                                 readOnly={isCartLocked}
-                                value={editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null && item.manual_unit_price !== '' ? parseFloat(String(item.manual_unit_price)).toString() : '')}
+                                value={
+                                  maskActive && editingManualPrice[item.id] === undefined
+                                    ? (effectivePrice > 0 ? String(displayUnitPrice) : '')
+                                    : (editingManualPrice[item.id] ?? (item.manual_unit_price !== undefined && item.manual_unit_price !== null && item.manual_unit_price !== '' ? parseFloat(String(item.manual_unit_price)).toString() : ''))
+                                }
                                 onChange={(e) => {
                                   if (isCartLocked) return;
                                   // Mark that user is typing in price input
@@ -5251,7 +5262,7 @@ export default function POS() {
                                       if (!canGoBelow && minPrice > 0 && price < minPrice) {
                                         setPriceErrors((prev) => ({
                                           ...prev,
-                                          [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
+                                          [item.id]: `Price cannot be less than purchase price (₹${formatNumber(scaleForEmergencyMask(minPrice))})`
                                         }));
                                       } else {
                                         setPriceErrors((prev) => {
@@ -5319,7 +5330,7 @@ export default function POS() {
                                           if (minPrice > 0 && price < minPrice) {
                                             setPriceErrors((prev) => ({
                                               ...prev,
-                                              [item.id]: `Price cannot be less than purchase price (₹${formatNumber(minPrice)})`
+                                              [item.id]: `Price cannot be less than purchase price (₹${formatNumber(scaleForEmergencyMask(minPrice))})`
                                             }));
                                             // Don't save if validation fails - clear editing state to revert to saved value
                                             setEditingManualPrice((prev) => {
@@ -5364,6 +5375,13 @@ export default function POS() {
                                 onFocus={(e) => {
                                   // Mark that user is focusing on price input
                                   isTypingInPriceInput.current = true;
+                                  // When masked, swap displayed scaled value for the real amount so edits stay correct.
+                                  if (maskActive && editingManualPrice[item.id] === undefined) {
+                                    const real = item.manual_unit_price !== undefined && item.manual_unit_price !== null && item.manual_unit_price !== ''
+                                      ? parseFloat(String(item.manual_unit_price)).toString()
+                                      : '';
+                                    setEditingManualPrice((prev) => ({ ...prev, [item.id]: real }));
+                                  }
                                   // Prevent auto-focus to barcode input when user clicks on price input
                                   e.stopPropagation();
                                 }}
@@ -5389,7 +5407,7 @@ export default function POS() {
                             {invoiceType !== 'pending' || effectivePrice > 0 ? (
                               <div className="px-2 py-1.5 bg-blue-50 border border-blue-200 rounded-md">
                                 <span className="text-xs font-bold text-blue-700">
-                                  ₹{formatNumber(lineTotal)}
+                                  ₹{formatNumber(displayLineTotal)}
                                 </span>
                               </div>
                             ) : (
@@ -5545,17 +5563,17 @@ export default function POS() {
                   )}
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(scaleForEmergencyMask(cartGrossSubtotal))}</span>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
-                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
+                      <span className="text-sm font-semibold">−₹{formatNumber(scaleForEmergencyMask(tradeInCredit))}</span>
                     </div>
                   )}
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
+                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(scaleForEmergencyMask(calculateTotal()))}</span>
                   </div>
                 </>
               ) : (
@@ -5563,12 +5581,12 @@ export default function POS() {
                 <>
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm font-medium text-gray-600">Items subtotal</span>
-                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(cartGrossSubtotal)}</span>
+                    <span className="text-sm font-semibold text-gray-900">₹{formatNumber(scaleForEmergencyMask(cartGrossSubtotal))}</span>
                   </div>
                   {tradeInCredit > 0 && (
                     <div className="flex justify-between items-center py-2 text-green-800">
                       <span className="text-sm font-medium">Trade-in credit</span>
-                      <span className="text-sm font-semibold">−₹{formatNumber(tradeInCredit)}</span>
+                      <span className="text-sm font-semibold">−₹{formatNumber(scaleForEmergencyMask(tradeInCredit))}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center py-2">
@@ -5577,7 +5595,7 @@ export default function POS() {
                   </div>
                   <div className="border-t-2 border-gray-200 pt-3 mt-3 flex justify-between items-center">
                     <span className="text-base font-bold text-gray-900">Total</span>
-                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(calculateTotal())}</span>
+                    <span className="text-xl font-bold text-blue-600">₹{formatNumber(scaleForEmergencyMask(calculateTotal()))}</span>
                   </div>
                 </>
               )}

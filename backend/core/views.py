@@ -869,10 +869,10 @@ def emergency_mask_status(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsAdminGroup])
+@permission_classes([IsAuthenticated])
 def emergency_mask_activate(request):
     """
-    One-way activate emergency display mask (Admin group only).
+    One-way activate emergency display mask (any authenticated user).
     There is no HTTP deactivate — use shell deactivate_emergency_mask().
     Optional body: {"percent": 3} to set threshold while activating.
     """

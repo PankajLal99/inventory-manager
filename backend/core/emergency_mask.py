@@ -4,7 +4,7 @@ Emergency site-wide display mask.
 When enabled, outbound JSON money fields are scaled by ``percent / 100``.
 Database values and business logic are never mutated.
 
-Activate via Admin-only API. Deactivate only via shell / DB (no UI disable).
+Activate via authenticated API. Deactivate only via shell / DB (no UI disable).
 """
 from __future__ import annotations
 

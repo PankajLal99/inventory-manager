@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { posApi, productsApi } from '../../lib/api';
 import { formatNumber } from '../../lib/utils';
+import { scaleForEmergencyMask } from '../../lib/emergencyMaskGuard';
 import ProductName from '../../components/ProductName';
 import { getPriceValidationError } from '../pos/priceValidation';
 import { parseBarcodesFromInput, looksLikeBarcode } from '../../lib/scanningQueue';
@@ -885,10 +886,10 @@ export default function InvoiceEdit() {
                     <TableCell>
                       <div className="flex flex-col gap-0.5">
                         {item.product_selling_price != null && parseFloat(String(item.product_selling_price)) > 0 && (
-                          <span className="text-sm font-semibold text-blue-600">Sell: ₹{formatNumber(item.product_selling_price)}</span>
+                          <span className="text-sm font-semibold text-blue-600">Sell: ₹{formatNumber(scaleForEmergencyMask(parseFloat(String(item.product_selling_price))))}</span>
                         )}
                         {(item.product_purchase_price != null || item.purchase_price != null) && (
-                          <span className="text-xs text-gray-600">Cost: ₹{formatNumber(item.product_purchase_price ?? item.purchase_price ?? 0)}</span>
+                          <span className="text-xs text-gray-600">Cost: ₹{formatNumber(scaleForEmergencyMask(parseFloat(String(item.product_purchase_price ?? item.purchase_price ?? 0))))}</span>
                         )}
                         {(!item.product_selling_price || parseFloat(String(item.product_selling_price)) <= 0) && item.product_purchase_price == null && item.purchase_price == null && (
                           <span className="text-sm font-semibold text-blue-600">₹0</span>
